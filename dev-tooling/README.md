@@ -5,10 +5,20 @@ Postgres database and running processes vanish. **All code lives in git**, so
 nothing is ever lost permanently. To bring the full live app back:
 
 ```bash
-git fetch origin arena/01a00bff-gomina360-app-v1 && git reset FETCH_HEAD
+git fetch origin arena/01a07f36-gomina360-app-v1-1 && git reset FETCH_HEAD
 printf 'DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/app_db\n' > .env
 bash dev-tooling/recover.sh
 ```
+
+The branch above is this repo's current session branch. Arena names one branch
+per session, so if this document outlives the session it was written in, replace
+it with the session branch that holds the newest commit
+(`git ls-remote --heads origin` lists them all).
+
+Earlier revisions of this section said `arena/01a00bff-gomina360-app-v1`. That
+branch belongs to the previous `GoMinaGRP/gomina360_app_V1` repository, which is
+superseded by this one (`gomina360_app_V1.1`); it does not exist on this remote,
+so fetching it here fails.
 
 Then verify everything (real headless-browser E2E, cleans up after itself):
 
