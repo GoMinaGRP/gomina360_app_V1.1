@@ -1,0 +1,77 @@
+{
+  "transfer": "gomina360-current-version-git-bundle",
+  "bundleRef": "refs/heads/snapshot-import",
+  "snapshotCommit": "f7f12e32c9d3fb0508adc3bcffd8ba4ed48ddce7",
+  "expectedTree": "54e09279218129d391b6117b5027f3fbc2c9bf62",
+  "expectedFiles": 228,
+  "bundleBytes": 2883854,
+  "bundleSha256": "839b69fb93459768ac3b1899c64b6a314b41c15d20cb23c22f40100e78208f8c",
+  "base64Chars": 3845140,
+  "parts": 8,
+  "list": [
+    {
+      "file": "gomina360-transfer-part-01.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "8294eb724c4e359f6235cc8416a46f6518039fc005b72bf8ff3cd2e27cab885c",
+      "dataChars": 512000,
+      "dataSha256": "20baef682d780b2d4a9d58306d2b08b4fd65a43da25b56ebaeeb9adc0a2463ac"
+    },
+    {
+      "file": "gomina360-transfer-part-02.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "2221c1f15e8914cc924a9fe7816858c6f9c1b0eda4af00828d2c3e442cf7efc5",
+      "dataChars": 512000,
+      "dataSha256": "fc0004aac2485e490f237060abfe427d778a83a3bcefc1c6dd4e2f7dca42eb45"
+    },
+    {
+      "file": "gomina360-transfer-part-03.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "cf8f5f91570d002bcc9969b8b7f8050ec414af9977470286b56244a22748fa35",
+      "dataChars": 512000,
+      "dataSha256": "cb37566ce5604ed13a5edda3779d0e5724a4dade96d044dbb219c5d31ec3e0ae"
+    },
+    {
+      "file": "gomina360-transfer-part-04.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "f415349fdbf2735035cf15ef7296093000be73ffbc5918e3843fb9027a84f87f",
+      "dataChars": 512000,
+      "dataSha256": "6da80a4ec64a02a4ded0b3acb9f8d5af94ff6173dec792dd4fc6265b8a86e7a3"
+    },
+    {
+      "file": "gomina360-transfer-part-05.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "46363bd493d9a6363b26889a2b10dcd7cae5d5d3c47994ade976b7cbbbda8685",
+      "dataChars": 512000,
+      "dataSha256": "5f0f29046a2ab9237c00910d5313120f9ef352bf1fc14c42a1aa7aae6ebb2821"
+    },
+    {
+      "file": "gomina360-transfer-part-06.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "2f612a2c1d808362572c2e4773201c940773b6ea7bbfc6a917629bde17321d20",
+      "dataChars": 512000,
+      "dataSha256": "a1878ee2e8d21769b2ecc87b54390205ae4bcdf62a0e61cd2e8c728344867c94"
+    },
+    {
+      "file": "gomina360-transfer-part-07.json",
+      "jsonBytes": 512217,
+      "jsonSha256": "6468af8426e42ac4645d1aa198edc250197f657a09e1f7b05f5604e701c3fdc9",
+      "dataChars": 512000,
+      "dataSha256": "694ea3ee6ea9f6dcf005fb3ce8e6c4d125cacb616712b0c4033f123ded10a45a"
+    },
+    {
+      "file": "gomina360-transfer-part-08.json",
+      "jsonBytes": 261357,
+      "jsonSha256": "1b0a838de87c142971ed00bd8c0db8c906ffcd8389df1a68f54bedd8fee89f1c",
+      "dataChars": 261140,
+      "dataSha256": "dee26f422b6220417f28275e2891e78ac4ea624676a332c2c8721b4234369c76"
+    }
+  ],
+  "reassembly": "Concatenate the data field of all parts in part order, base64-decode, sha256 must equal bundleSha256, then git bundle verify and fetch ref refs/heads/snapshot-import.",
+  "markerFiles": [
+    "src/lib/scenarioEngine.ts",
+    "src/lib/push.ts",
+    "public/sw.js",
+    "drizzle.config.ts",
+    "dev-tooling/verify-az-app-audit.mjs"
+  ]
+}
