@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100;
+  }
+}
+
+/* Custom scrollbars for enterprise tables & sidebars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #10b981;
+}
+
+/* ── Responsive & mobile safety ──────────────────────────────────────────
+   The app shell (sidebar + main) and every module grid are built responsive;
+   these base rules are a safety net so no page can ever sprout a horizontal
+   scrollbar on any device, touch targets stay usable, and mobile browsers
+   don't auto-zoom into form fields. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip; /* never let decorative overflow produce page-level h-scroll */
+}
+
+/* Mobile browsers zoom when an input's font-size < 16px; keep form fields
+   at 16px on phones so forms stay put while typing. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Comfortable tap targets on coarse pointers (phones/tablets) */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  select,
+  input[type="checkbox"],
+  input[type="radio"],
+  a {
+    min-height: 36px;
+  }
+}
+
+/* Collapsed STATIC left menu — icon-only rail: center the icons and hide
+   labels, corner badges, section headers and helper text. Scoped strictly
+   to the sidebar via its data-collapsed attribute. */
+aside[data-testid="nav-sidebar"][data-collapsed="true"] button {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+aside[data-testid="nav-sidebar"][data-collapsed="true"] button span,
+aside[data-testid="nav-sidebar"][data-collapsed="true"] [class*="uppercase"],
+aside[data-testid="nav-sidebar"][data-collapsed="true"] [class*="text-[11px]"],
+aside[data-testid="nav-sidebar"][data-collapsed="true"] .mt-auto p,
+aside[data-testid="nav-sidebar"][data-collapsed="true"] .mt-auto span {
+  display: none;
+}
+aside[data-testid="nav-sidebar"][data-collapsed="true"] .mt-auto {
+  display: flex;
+  justify-content: center;
+}
+
+/* ── Mobile form stability (iOS/Android) ──────────────────────────────
+   Inputs/selects/textareas below 16px trigger iOS Safari's focus
+   auto-zoom, which makes the inventory registration form shake, jump and
+   block scrolling on phones. Force ≥16px inside module forms on touch
+   layouts, keep the compact 14px desktop look at ≥640px, and stop the
+   browser from vertically resizing text on orientation change.        */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+.gm-form input,
+.gm-form select,
+.gm-form textarea {
+  font-size: 16px;
+}
+@media (min-width: 640px) {
+  .gm-form input,
+  .gm-form select,
+  .gm-form textarea {
+    font-size: 14px;
+  }
+}
