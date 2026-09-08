@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { resolvedDbEnvName } from "@/db";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ function hintFor(root: any): string | null {
 
   // Our own configuration errors (missing env / loopback on a managed host).
   if (/not configured|misconfiguration/i.test(msg)) {
-    return "Set DATABASE_URL to your MANAGED PostgreSQL connection string in Vercel → Project → Settings → Environment Variables (Production AND Preview), then redeploy. 127.0.0.1/localhost can never work on Vercel — that address means the serverless function itself.";
+    return "Set DATABASE_URL to your MANAGED PostgreSQL connection string in Vercel → Project → Settings → Environment Variables (Production AND Preview), then redeploy — OR attach the database via the Storage tab so Vercel auto-creates POSTGRES_URL / POSTGRES_PRISMA_URL (also accepted). 127.0.0.1/localhost can never work on Vercel — that address means the serverless function itself.";
   }
   // Schema was never pushed to this database.
   if (code === "42P01" || /relation "?[a-z_]+"? does not exist/.test(m)) {
@@ -24,11 +25,11 @@ function hintFor(root: any): string | null {
   }
   // Database name in the URL doesn't exist on that server.
   if (code === "3D000" || /database "[^"]+" does not exist/.test(m)) {
-    return "The database NAME in DATABASE_URL does not exist on that server — create the database, or fix the path segment of the URL (the part after the last '/').";
+    return "The database NAME in your connection string does not exist on that server — create the database, or fix the path segment of the URL (the part after the last '/').";
   }
   // Wrong credentials.
   if (code === "28P01" || m.includes("password authentication failed")) {
-    return "DATABASE_URL credentials rejected — wrong username or password. Re-copy the full connection string from your Postgres provider (URL-encode special characters in the password, e.g. @ → %40).";
+    return "Database credentials rejected — wrong username or password in your connection string. Re-copy the full connection string from your Postgres provider (URL-encode special characters in the password, e.g. @ → %40).";
   }
   // Connection-slot exhaustion.
   if (code === "53300" || /too many (client|connection)|remaining connection slots/.test(m)) {
@@ -36,11 +37,11 @@ function hintFor(root: any): string | null {
   }
   // DNS.
   if (/enotfound|eai_again/.test(m)) {
-    return "DNS cannot resolve the database host — the hostname in DATABASE_URL is wrong or truncated. (If it is 127.0.0.1/localhost you copied the local sandbox URL — use the MANAGED one instead.)";
+    return "DNS cannot resolve the database host — the hostname in your connection string is wrong or truncated. (If it is 127.0.0.1/localhost you copied the local sandbox URL — use the MANAGED one instead.)";
   }
   // TCP refused.
   if (m.includes("econnrefused")) {
-    return "TCP connection refused — wrong host or port, the database is stopped, or DATABASE_URL points at 127.0.0.1/localhost (on Vercel nothing listens there).";
+    return "TCP connection refused — wrong host or port, the database is stopped, or the connection string points at 127.0.0.1/localhost (on Vercel nothing listens there).";
   }
   // Network timeout / reset.
   if (/etimedout|timed? out|econnreset/.test(m)) {
@@ -48,16 +49,20 @@ function hintFor(root: any): string | null {
   }
   // TLS.
   if (/self.signed|certificate|ssl|tls/.test(m)) {
-    return "TLS handshake problem — append ?sslmode=no-verify to DATABASE_URL, or remove ssl parameters from the URL and set PGSSLMODE=require as a separate variable.";
+    return "TLS handshake problem — append ?sslmode=no-verify to your connection string, or remove ssl parameters from the URL and set PGSSLMODE=require as a separate variable.";
   }
   return null;
 }
 
 // Sanitized snapshot of where the app THINKS the database lives (no creds).
 function connectionDiag(): Record<string, unknown> | null {
-  const url = process.env.DATABASE_URL;
+  const viaEnv = resolvedDbEnvName();
+  const url = viaEnv ? process.env[viaEnv] : undefined;
   const base: Record<string, unknown> = {
-    databaseUrlSet: !!url?.trim(),
+    dbUrlEnv: viaEnv, // which variable name supplies the connection (null = none set)
+    databaseUrlSet: !!process.env.DATABASE_URL?.trim(),
+    postgresUrlSet: !!process.env.POSTGRES_URL?.trim(),
+    postgresPrismaUrlSet: !!process.env.POSTGRES_PRISMA_URL?.trim(),
     vercel: !!process.env.VERCEL,
     requireExternalDb: process.env.REQUIRE_EXTERNAL_DB === "true",
     poolMax: Math.max(1, Number(process.env.PG_POOL_MAX) || (process.env.VERCEL ? 2 : 10)),

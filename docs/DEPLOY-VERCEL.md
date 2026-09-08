@@ -18,7 +18,7 @@ Both are the SAME root problem: **the deployed app cannot reach a real PostgreSQ
 
 | # | Cause | Health JSON shows | Fix |
 |---|---|---|---|
-| 1 | `DATABASE_URL` **not set** in Vercel | `error: "…NOT configured…"`, hint mentions Environment Variables | Set the env var (step 3), redeploy |
+| 1 | **No connection string** in Vercel (neither `DATABASE_URL` nor the `POSTGRES_*` integration vars) | `error: "…NOT configured…"`, hint mentions Environment Variables | Set the env var (step 3), redeploy |
 | 2 | `DATABASE_URL` points at **127.0.0.1 / localhost** (the copied local sandbox URL) | `error: "…local/loopback host ("127.0.0.1")…"` | Use the MANAGED Postgres URL — loopback on Vercel means the serverless function itself, nothing listens there |
 | 3 | **Wrong credentials / host / DB name** in the URL | `code: "28P01"` (bad password) · `ENOTFOUND` (bad host) · `3D000` (DB name missing) | Re-copy the full URL from your provider |
 | 4 | **Schema never pushed** → tables don't exist | `code: "42P01"` (`relation "users" does not exist`) | Run `drizzle-kit push` against the managed DB (step 4), then `/api/init` (step 5) |
@@ -89,6 +89,11 @@ Vercel → Project → **Settings → Environment Variables**:
 | `DATABASE_URL` | **Production AND Preview** | the pooled URL from step A |
 | `PG_POOL_MAX` | Production + Preview | `2` (raise only if your plan allows) |
 | `DB_DEBUG` | Production (temporary) | `true` — remove after diagnosis |
+
+Shortcut: if you attached the database via the **Storage tab**, Vercel
+auto-created `POSTGRES_URL` / `POSTGRES_PRISMA_URL` / `POSTGRES_URL_NON_POOLING`
+for you — the app accepts those automatically, so you may skip adding
+`DATABASE_URL` manually. An explicit `DATABASE_URL` always wins when set.
 
 ### C. Redeploy
 Deployments → ⋯ → **Redeploy** → uncheck *Use existing build cache*.
