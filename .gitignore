@@ -1,0 +1,15 @@
+# dependencies / build output
+node_modules/
+.next/
+out/
+build/
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# misc
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
