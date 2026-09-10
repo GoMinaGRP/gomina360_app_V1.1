@@ -21,6 +21,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { businessManageIdsOf } from "@/lib/permissions";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
@@ -241,6 +242,17 @@ export default function SharedEnterpriseModule({
   // edit/delete; every other user only while the OWNER has granted the
   // expense-management permission.
   const canManageExp = isOwnerUser || currentUser?.canManageExpenses === true;
+
+  // ─── OWNER-delegated "Manage Business / Unit" power ─────────────────────
+  // A user the OWNER granted a unit may manage/edit/delete THAT unit's records
+  // with owner-equivalent power (strictly the granted unit). The OWNER manages
+  // all units; the flags above still grant their original user-level powers.
+  const managedBizIds = useMemo(
+    () => new Set(businessManageIdsOf(currentUser)),
+    [currentUser]
+  );
+  const bizOwnerLike = (bid?: number | null) =>
+    isOwnerUser || (bid != null && managedBizIds.has(Number(bid)));
   const MANAGEABLE =
     moduleType === "TRANSACTIONS" ||
     moduleType === "SUPPLIERS" ||
@@ -470,7 +482,7 @@ export default function SharedEnterpriseModule({
   // permission; every other record uses the shared-record permission.
   const RecordActions = ({ r, prefix, onProfile }: { r: any; prefix: string; onProfile?: (r: any) => void }) => {
     const isExpense = r?.type === "EXPENSE";
-    const permitted = isExpense ? canManageExp : canManageShared;
+    const permitted = (isExpense ? canManageExp : canManageShared) || bizOwnerLike(r?.businessId);
     const lockHint = isExpense
       ? "Only the OWNER, or a manager granted the expense-management permission by the OWNER, can manage or delete expenses"
       : "Only the OWNER, or a manager granted permission by the OWNER, can manage records";
@@ -2150,7 +2162,7 @@ export default function SharedEnterpriseModule({
                       </td>
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex justify-end gap-1.5">
-                          {isExecutiveUser ? (
+                          {isExecutiveUser || bizOwnerLike(ast.businessId) ? (
                             <>
                               <button
                                 onClick={() => executiveAssetEdit(ast)}
@@ -2301,7 +2313,7 @@ export default function SharedEnterpriseModule({
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                      {canDeleteInv ? (
+                      {canDeleteInv || bizOwnerLike(inv.businessId) ? (
                         <div className="flex items-center justify-center gap-1.5">
                           <button
                             title="Edit item"

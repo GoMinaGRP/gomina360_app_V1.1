@@ -42,6 +42,7 @@ import {
   AUDIT_MODULES,
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 
 const MODULES = [...AUDIT_MODULES] as string[];
@@ -110,12 +111,17 @@ async function scopeFor(user: any): Promise<Scope> {
   // Auditor assignment — and then strictly inside the businesses, branches
   // and modules of that assignment. Managers carrying canManageAuditors may
   // open the center to manage grants inside their own businesses.
+  //
+  // Additionally, a user the OWNER granted "Manage Business / Unit" power
+  // reviews those units in full — every module, every branch — scoped to the
+  // granted units only.
+  const managedIds = businessManageIdsOf(user);
   const grants = (await db
     .select()
     .from(auditAssignments)
     .where(eq(auditAssignments.userId, user.id))).filter((g) => g.isActive);
   const canGrant = !!user.canManageAuditors;
-  if (grants.length === 0 && !canGrant) {
+  if (grants.length === 0 && !canGrant && managedIds.length === 0) {
     return { eligible: false, level: "NONE", businessIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
   }
   const moduleByBusiness: Record<number, string[]> = {};
@@ -128,11 +134,15 @@ async function scopeFor(user: any): Promise<Scope> {
       ? null
       : [...new Set([...(branchByBusiness[g.businessId] || []), g.branchCode])];
   }
+  for (const bid of managedIds) {
+    moduleByBusiness[bid] = MODULES; // full module coverage for managed units
+    branchByBusiness[bid] = null;    // all branches of the managed unit
+  }
   const grantBusinessIds = canGrant ? ((await accessibleBusinessIds(user)) || []) : [];
   return {
     eligible: true,
     level: grants.length > 0 ? "AUDITOR" : "SUPERVISOR",
-    businessIds: [...new Set(grants.map((g) => g.businessId))],
+    businessIds: [...new Set([...grants.map((g) => g.businessId), ...managedIds])],
     moduleByBusiness,
     branchByBusiness,
     canGrant,
@@ -198,21 +208,22 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     push({
       key: `TRANSACTION:transactions:${t.id}`, recordType: "TRANSACTION", recordSource: "transactions", recordId: t.id,
       ref: t.transactionNumber, title: `${t.type} · ${t.category} — GH₵ ${Number(t.amountGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
-      detail: `${t.paymentMethod} · ${t.description}`,
+      detail: `${t.paymentMethod} · ${t.date} · ${t.description}${t.recordedBy ? ` · by ${t.recordedBy}` : ""}`,
       module: "FINANCE", businessId: t.businessId, branchCode: branchOf(t.businessId, t.branchCode),
       workerName: t.recordedBy, date: day10(t.date) || tsDay(t.createdAt), amountGhs: t.amountGhs, status: t.status || "COMPLETED",
     });
   }
 
-  // INVENTORY — stock items
+  // INVENTORY — stock items (full detail: quantities, prices, dates, photos)
   const items = await db.select().from(inventoryItems).orderBy(desc(inventoryItems.id)).limit(200);
   for (const i of items) {
+    const photoCount = Array.isArray(i.photos) ? i.photos.length : i.photo ? 1 : 0;
     push({
       key: `INVENTORY_ITEM:inventory_items:${i.id}`, recordType: "INVENTORY_ITEM", recordSource: "inventory_items", recordId: i.id,
       ref: i.sku, title: `${i.name} — ${i.quantity} ${i.unit}`,
-      detail: `${i.category} · threshold ${i.minStockThreshold} ${i.unit}`,
+      detail: `${i.category} · ${i.quantity} ${i.unit} in stock · cost GH₵ ${Number(i.costPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · sell GH₵ ${Number(i.sellingPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · min ${i.minStockThreshold} ${i.unit}${i.expiryDate ? ` · expires ${i.expiryDate}` : ""}${photoCount > 0 ? ` · ${photoCount} photo(s)` : ""}${i.registeredByName ? ` · registered by ${i.registeredByName}` : ""}`,
       module: "INVENTORY", businessId: i.businessId, branchCode: branchOf(i.businessId, i.branchCode),
-      workerName: null, date: "", amountGhs: null, status: i.status || "IN_STOCK",
+      workerName: i.registeredByName, date: tsDay(i.registeredAt), amountGhs: i.sellingPriceGhs, status: i.status || "IN_STOCK",
     });
   }
 
@@ -267,7 +278,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     push({
       key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id,
       ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`,
-      detail: `Value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location}`,
+      detail: `Purchased GH₵ ${Number(a.purchasePriceGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location} · next maintenance ${a.nextMaintenanceDate}${a.description ? ` · ${a.description}` : ""}${Array.isArray(a.assetImages) && a.assetImages.length ? ` · ${a.assetImages.length} image(s)` : ""}`,
       module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode),
       workerName: a.recorderName, date: tsDay(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition,
     });

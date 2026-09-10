@@ -87,6 +87,12 @@ export const users = pgTable("users", {
   // that shoppers see inside the storefront's HELP panel. The OWNER always
   // edits it; grant/revoke is OWNER-only.
   canManageSupport: boolean("can_manage_support").default(false),
+  // OWNER-granted "Manage Business / Unit" delegation: the list of business
+  // ids this user may manage with OWNER-equivalent power — full dashboard,
+  // records, settings and management functions — strictly for THOSE units
+  // only. Every other business stays out of reach. Grant/revoke is
+  // OWNER-only. (Stored as a JSONB array of integer business ids.)
+  businessManageIds: jsonb("business_manage_ids").$type<number[]>(),
   // ── Secure login ──────────────────────────────────────────────────────
   // scrypt password hash (format "scrypt:<salt_hex>:<hash_hex>"); null until
   // the OWNER sets a password for the account.

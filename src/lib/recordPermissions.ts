@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { managesBusiness } from "./permissions";
 
 /**
  * Shared-record access control for Transactions & MoMo, Suppliers & Vendors
@@ -49,6 +50,17 @@ export function canDeleteInventory(user: any): boolean {
 export function canManageExpenses(user: any): boolean {
   if (!user) return false;
   return user.role === "OWNER" || user.canManageExpenses === true;
+}
+
+/**
+ * OWNER-delegated "Manage Business / Unit" power: the user acts with
+ * owner-equivalent authority — but ONLY for the business/unit the OWNER
+ * granted (`users.businessManageIds`). The OWNER implicitly manages all.
+ * Every other unit stays out of reach.
+ */
+export function canManageBusinessUnit(user: any, businessId?: number | null): boolean {
+  if (!user) return false;
+  return managesBusiness(user, businessId ?? null);
 }
 
 /**

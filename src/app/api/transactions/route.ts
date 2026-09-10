@@ -5,6 +5,7 @@ import { eq, desc } from "drizzle-orm";
 import {
   canManageSharedRecords,
   canManageExpenses,
+  canManageBusinessUnit,
 } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
 
@@ -196,12 +197,15 @@ export async function PATCH(request: Request) {
 
     // Expenses get their own gate: manage/delete-expenses is a separate
     // OWNER-granted permission. Other transaction types fall back to the
-    // shared-record permission.
+    // shared-record permission. A user the OWNER granted "Manage Business /
+    // Unit" power for THIS unit may always edit — owner-equivalent, scoped
+    // to that unit only.
     const targetIsExpense =
       (updates.type !== undefined ? updates.type : existing.type) === "EXPENSE";
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
     const permitted = targetIsExpense
-      ? canManageExpenses(actor)
-      : canManageSharedRecords(actor);
+      ? canManageExpenses(actor) || unitManager
+      : canManageSharedRecords(actor) || unitManager;
     if (!permitted) {
       return NextResponse.json(
         {
@@ -270,9 +274,14 @@ export async function DELETE(request: Request) {
 
     // Expenses get their own gate: manage/delete-expenses is a separate
     // OWNER-granted permission. Other transaction types fall back to the
-    // shared-record permission.
+    // shared-record permission. A user the OWNER granted "Manage Business /
+    // Unit" power for THIS unit may always delete — owner-equivalent, scoped
+    // to that unit only.
     const isExpense = existing.type === "EXPENSE";
-    const permitted = isExpense ? canManageExpenses(actor) : canManageSharedRecords(actor);
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
+    const permitted = isExpense
+      ? canManageExpenses(actor) || unitManager
+      : canManageSharedRecords(actor) || unitManager;
     if (!permitted) {
       return NextResponse.json(
         {

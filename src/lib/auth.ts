@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { users, userSessions, userBusinessAccess } from "@/db/schema";
+import { businessManageIdsOf } from "./permissions";
 
 /**
  * GoMina 360 authentication & access control.
@@ -140,12 +141,15 @@ export async function getSessionInfo(request: Request): Promise<SessionInfo | nu
   return { sessionId: row.session.id, user: row.user };
 }
 
-/** Business ids a user may access. Returns null ⇒ unrestricted (OWNER). */
+/** Business ids a user may access. Returns null ⇒ unrestricted (OWNER).
+ *  Effective access = primary assignment ∪ extra-access grants ∪ units the
+ *  user has been granted to MANAGE (managing a unit implies seeing it). */
 export async function accessibleBusinessIds(user: any): Promise<number[] | null> {
   if (!user) return [];
   if (user.role === "OWNER") return null; // unrestricted
   const ids = new Set<number>();
   if (user.assignedBusinessId) ids.add(Number(user.assignedBusinessId));
+  for (const m of businessManageIdsOf(user)) ids.add(m); // manage ⇒ access
   const grants = await db
     .select({ businessId: userBusinessAccess.businessId })
     .from(userBusinessAccess)

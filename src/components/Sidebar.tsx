@@ -32,6 +32,7 @@ import {
   Landmark,
   Wifi,
 } from "lucide-react";
+import { businessManageIdsOf } from "@/lib/permissions";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
@@ -90,6 +91,11 @@ export default function Sidebar({
   const isExecutive =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
   const assignedBusinessId = currentUser?.assignedBusinessId;
+  // OWNER-delegated "Manage Business / Unit" managers: owner-equivalent power
+  // strictly for the granted units — they get the same enterprise sections,
+  // but every list stays server-scoped to the units they may reach.
+  const managedBizIds = new Set(businessManageIdsOf(currentUser));
+  const isUnitManager = managedBizIds.size > 0;
 
   // Collapsible static menu: pinned rail at all times (never hidden) — the
   // toggle shrinks it to an icon-only strip so content gets the room back.
@@ -266,6 +272,15 @@ export default function Sidebar({
                       GRANTED
                     </span>
                   )}
+                  {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
+                    <span
+                      className="text-[8px] font-black text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded shrink-0"
+                      data-testid={`sidebar-chip-manage-${biz.code}`}
+                      title="Owner-equivalent management of this unit"
+                    >
+                      MANAGE
+                    </span>
+                  )}
                   {(biz.status || "").toUpperCase() === "INACTIVE" && (
                     <span className="text-[9px] font-black text-rose-300 bg-rose-500/15 border border-rose-500/40 px-1 py-0.5 rounded shrink-0">
                       INACTIVE
@@ -304,8 +319,9 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Shared Enterprise Management Modules — Owner / General Manager only */}
-      {isExecutive && (
+      {/* Shared Enterprise Management Modules — Owner / General Manager, plus
+          any user the OWNER granted "Manage Business / Unit" power (scoped). */}
+      {(isExecutive || isUnitManager) && (
         <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
           <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             Shared Enterprise Modules

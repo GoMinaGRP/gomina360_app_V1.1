@@ -43,6 +43,7 @@ import { CurrencyCode } from "@/lib/currency";
 import { isSeededBaselineTxn } from "@/lib/financeReport";
 import { getOfflineQueue } from "@/lib/offlineSync";
 import { installSessionBridge, setSessionToken, clearSessionToken } from "@/lib/sessionBridge";
+import { businessManageIdsOf } from "@/lib/permissions";
 import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
 
@@ -661,7 +662,16 @@ export default function GoMinaApp() {
     // locked. Data is scope-safe: /api/init already filters every entity to
     // the businesses the user can access.
     const financeGranteeEntry = !isExecutive && !!currentUser?.canViewFinance && activeTab === "FINANCE";
-    if (!isExecutive && executiveOnlyTabs.includes(activeTab) && !cctvManagerEntry && !financeGranteeEntry) {
+    // OWNER-delegated "Manage Business / Unit" managers may open the
+    // business-scoped enterprise modules — every list is server-scoped to the
+    // units they can reach — but never the global HQ surfaces (Command Center,
+    // Users & Access, AI Advisor, Scenario Planning, Integrations Hub).
+    const isUnitManager = businessManageIdsOf(currentUser).length > 0;
+    const unitManagerEntry =
+      !isExecutive &&
+      isUnitManager &&
+      ["INVENTORY", "TRANSACTIONS", "ASSETS", "CUSTOMERS", "SUPPLIERS", "EMPLOYEES", "FINANCE"].includes(activeTab);
+    if (!isExecutive && executiveOnlyTabs.includes(activeTab) && !cctvManagerEntry && !financeGranteeEntry && !unitManagerEntry) {
       return (
         <div className="flex items-center justify-center min-h-[60vh] p-8">
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-8 max-w-md text-center space-y-3">

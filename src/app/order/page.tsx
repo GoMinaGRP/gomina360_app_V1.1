@@ -19,6 +19,8 @@ import {
   Navigation,
   Globe,
   ZoomIn,
+  ChevronLeft,
+  ChevronRight,
   User as UserIcon,
   Phone,
   ClipboardList,
@@ -149,8 +151,22 @@ function OrderInner() {
   const [support, setSupport] = useState<any | null>(null);
   // Enlarged product image (customer tap-to-zoom lightbox) — keeps the
   // product's own business alongside it so "Add to cart" always targets the
-  // correct shop, even from the one-page all-businesses grid.
-  const [lightbox, setLightbox] = useState<{ p: any; fromBiz?: any } | null>(null);
+  // correct shop, even from the one-page all-businesses grid. `idx` tracks
+  // which of the product's photos the gallery is currently showing.
+  const [lightbox, setLightbox] = useState<{ p: any; fromBiz?: any; idx: number } | null>(null);
+
+  // All images registered for a product (primary photo + extras), as the
+  // Amazon-style gallery source. Falls back to the legacy `photo` field.
+  const productPhotos = (p: any): string[] => {
+    const arr: string[] = [];
+    if (typeof p.photo === "string" && p.photo.length > 0) arr.push(p.photo);
+    if (Array.isArray(p.photos)) {
+      for (const ph of p.photos) {
+        if (typeof ph === "string" && ph.length > 0 && !arr.includes(ph)) arr.push(ph);
+      }
+    }
+    return arr;
+  };
 
   useEffect(() => {
     (async () => {
@@ -484,25 +500,50 @@ function OrderInner() {
   // availability and an always-one-tap Add / stepper.
   const renderProduct = (p: any, fromBiz?: any) => {
     const q = inCart(p.id);
+    const photos = productPhotos(p);
     return (
       <div
         key={p.id}
         className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
         data-testid={`oo-prod-${p.id}`}
       >
-        {p.photo ? (
-          <button
-            type="button"
-            onClick={() => setLightbox({ p, fromBiz })}
-            className="relative w-full mb-2.5 group cursor-zoom-in bg-white"
-            title="Tap to enlarge"
-            data-testid={`oo-photo-${p.id}`}
-          >
-            <img src={p.photo} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
-            <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
-              <ZoomIn className="w-3 h-3" />
-            </span>
-          </button>
+        {photos.length > 0 ? (
+          <div className="mb-2.5">
+            <button
+              type="button"
+              onClick={() => setLightbox({ p, fromBiz, idx: 0 })}
+              className="relative w-full group cursor-zoom-in bg-white"
+              title="Tap to enlarge"
+              data-testid={`oo-photo-${p.id}`}
+            >
+              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
+                <ZoomIn className="w-3 h-3" />
+              </span>
+            </button>
+            {photos.length > 1 && (
+              <div
+                className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5"
+                data-testid={`oo-thumbs-${p.id}`}
+                aria-label={`${photos.length} photos of ${p.name}`}
+              >
+                {photos.map((ph, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setLightbox({ p, fromBiz, idx: i })}
+                    className={`shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
+                      i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
+                    }`}
+                    data-testid={`oo-thumb-${p.id}-${i}`}
+                    aria-label={`View photo ${i + 1} of ${photos.length}`}
+                  >
+                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="w-full h-32 sm:h-36 rounded-lg mb-2.5 bg-slate-50 border border-slate-100 flex items-center justify-center">
             <PackageCheck className="w-8 h-8 text-slate-300" />
@@ -1371,59 +1412,122 @@ function OrderInner() {
         </div>
       )}
 
-      {/* Product image lightbox — tap a product photo to enlarge it. */}
-      {lightbox && (
-        <div
-          className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setLightbox(null)}
-          data-testid="oo-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Enlarged photo of ${lightbox.p.name}`}
-        >
+      {/* Product image lightbox — tap a product photo to enlarge it.
+          Amazon-style gallery: main image, prev/next, thumbnails. */}
+      {lightbox && (() => {
+        const photos = productPhotos(lightbox.p);
+        const count = photos.length;
+        const idx = count > 0 ? Math.min(Math.max(lightbox.idx || 0, 0), count - 1) : 0;
+        const showNav = count > 1;
+        const go = (d: number) => {
+          const next = (idx + d + count) % count;
+          setLightbox({ ...lightbox, idx: next });
+        };
+        return (
           <div
-            className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setLightbox(null)}
+            data-testid="oo-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Enlarged photos of ${lightbox.p.name}`}
           >
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
-              <div className="min-w-0">
-                <div className="text-sm font-extrabold text-slate-900 truncate">{lightbox.p.name}</div>
-                <div className="text-[10px] text-slate-500">
-                  {lightbox.p.category} · {fmtMoney(lightbox.p.price)} / {lightbox.p.unit} · {lightbox.p.available} {lightbox.p.unit} left
+            <div
+              className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
+                <div className="min-w-0">
+                  <div className="text-sm font-extrabold text-slate-900 truncate">{lightbox.p.name}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {lightbox.p.category} · {fmtMoney(lightbox.p.price)} / {lightbox.p.unit} · {lightbox.p.available} {lightbox.p.unit} left
+                  </div>
                 </div>
+                <button
+                  onClick={() => setLightbox(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 shrink-0"
+                  data-testid="oo-lightbox-close"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                onClick={() => setLightbox(null)}
-                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 shrink-0"
-                data-testid="oo-lightbox-close"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <img
-              src={lightbox.p.photo}
-              alt={lightbox.p.name}
-              className="w-full max-h-[55vh] object-contain bg-white"
-              data-testid="oo-lightbox-img"
-            />
-            <div className="px-4 py-3 flex items-center justify-between gap-3">
-              <div className="text-lg font-black text-slate-900">{fmtMoney(lightbox.p.price)}</div>
-              <button
-                onClick={() => {
-                  add(lightbox.p, 1, lightbox.fromBiz);
-                  setLightbox(null);
-                }}
-                disabled={lightbox.p.available <= 0}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
-                data-testid="oo-lightbox-add"
-              >
-                <Plus className="w-4 h-4" /> Add to Cart
-              </button>
+              <div className="relative bg-white">
+                {count > 0 ? (
+                  <img
+                    src={photos[idx]}
+                    alt={`${lightbox.p.name} — photo ${idx + 1} of ${count}`}
+                    className="w-full max-h-[52vh] object-contain bg-white"
+                    data-testid="oo-lightbox-img"
+                  />
+                ) : (
+                  <div className="w-full max-h-[52vh] aspect-square bg-slate-50 flex items-center justify-center">
+                    <PackageCheck className="w-12 h-12 text-slate-300" />
+                  </div>
+                )}
+                {showNav && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => go(-1)}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
+                      data-testid="oo-lightbox-prev"
+                      aria-label="Previous photo"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => go(1)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
+                      data-testid="oo-lightbox-next"
+                      aria-label="Next photo"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
+              </div>
+              {showNav && (
+                <div className="px-4 py-2 flex items-center gap-2 border-t border-slate-100 overflow-x-auto">
+                  {photos.map((ph, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setLightbox({ ...lightbox, idx: i })}
+                      className={`shrink-0 w-12 h-12 rounded-md border-2 overflow-hidden bg-white transition ${
+                        i === idx ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
+                      }`}
+                      data-testid={`oo-lightbox-thumb-${i}`}
+                      aria-label={`Photo ${i + 1} of ${count}`}
+                      aria-current={i === idx}
+                    >
+                      <img src={ph} alt={`${lightbox.p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    </button>
+                  ))}
+                  <span className="ml-auto text-[10px] font-bold text-slate-400 whitespace-nowrap" data-testid="oo-lightbox-count">
+                    {idx + 1} / {count}
+                  </span>
+                </div>
+              )}
+              <div className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="text-lg font-black text-slate-900">{fmtMoney(lightbox.p.price)}</div>
+                <button
+                  onClick={() => {
+                    add(lightbox.p, 1, lightbox.fromBiz);
+                    setLightbox(null);
+                  }}
+                  disabled={lightbox.p.available <= 0}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
+                  data-testid="oo-lightbox-add"
+                >
+                  <Plus className="w-4 h-4" /> Add to Cart
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Cart bar */}
       {!placed && cart.length > 0 && (

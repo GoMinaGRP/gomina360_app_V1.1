@@ -13,7 +13,7 @@ import {
 } from "@/db/schema";
 import { desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { canManageSharedRecords, canDeleteInventory } from "@/lib/recordPermissions";
+import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 // Which enterprise entity a deletion-log row refers to.
@@ -114,12 +114,24 @@ export async function PATCH(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const actor = session.user;
+
+    const [existing] = await db.select().from(table).where(eq(table.id, recordId));
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Record not found." },
+        { status: 404 }
+      );
+    }
+
     // Inventory entries are permission-gated separately (delete-inventory
-    // permission); suppliers/employees follow the shared-record flag.
+    // permission); suppliers/employees follow the shared-record flag. A user
+    // the OWNER granted "Manage Business / Unit" power for the record's unit
+    // may always edit — owner-equivalent, scoped to that unit only.
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
     const permitted =
       moduleKey === "INVENTORY"
-        ? canDeleteInventory(actor)
-        : canManageSharedRecords(actor);
+        ? canDeleteInventory(actor) || unitManager
+        : canManageSharedRecords(actor) || unitManager;
     if (!permitted) {
       return NextResponse.json(
         {
@@ -130,14 +142,6 @@ export async function PATCH(request: Request) {
               : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can edit records.",
         },
         { status: 403 }
-      );
-    }
-
-    const [existing] = await db.select().from(table).where(eq(table.id, recordId));
-    if (!existing) {
-      return NextResponse.json(
-        { success: false, error: "Record not found." },
-        { status: 404 }
       );
     }
 
@@ -283,10 +287,24 @@ export async function DELETE(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const actor = session.user;
+
+    const [existing] = await db.select().from(table).where(eq(table.id, recordId));
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Record not found." },
+        { status: 404 }
+      );
+    }
+
+    // Inventory entries are permission-gated separately (delete-inventory
+    // permission); suppliers/employees follow the shared-record flag. A user
+    // the OWNER granted "Manage Business / Unit" power for the record's unit
+    // may always delete — owner-equivalent, scoped to that unit only.
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
     const permitted =
       moduleKey === "INVENTORY"
-        ? canDeleteInventory(actor)
-        : canManageSharedRecords(actor);
+        ? canDeleteInventory(actor) || unitManager
+        : canManageSharedRecords(actor) || unitManager;
     if (!permitted) {
       return NextResponse.json(
         {
@@ -297,14 +315,6 @@ export async function DELETE(request: Request) {
               : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can delete records.",
         },
         { status: 403 }
-      );
-    }
-
-    const [existing] = await db.select().from(table).where(eq(table.id, recordId));
-    if (!existing) {
-      return NextResponse.json(
-        { success: false, error: "Record not found." },
-        { status: 404 }
       );
     }
 
