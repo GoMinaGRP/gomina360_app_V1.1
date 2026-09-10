@@ -724,14 +724,14 @@ export default function TelecomServicesModule({
         vendorPlaceholder="e.g. router / airtime wholesaler"
         defaultCategory="Float Purchase"
         defaultCategories={[
-          { value: "Float Purchase", label: "Float Purchase" },
-          { value: "Router Data", label: "Router Data" },
-          { value: "Rent", label: "Rent" },
-          { value: "Power & Utilities", label: "Power & Utilities" },
-          { value: "Airtime/Data Stock", label: "Airtime/Data Stock" },
-          { value: "Device Repair", label: "Device Repair" },
-          { value: "Marketing", label: "Marketing" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Float Purchase", label: "💰 Float Purchase" },
+          { value: "Router Data", label: "📶 Router Data" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Power & Utilities", label: "⚡ Power & Utilities" },
+          { value: "Airtime/Data Stock", label: "📱 Airtime/Data Stock" },
+          { value: "Device Repair", label: "🔧 Device Repair" },
+          { value: "Marketing", label: "📢 Marketing" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="tel-expense"
       />

@@ -826,14 +826,14 @@ export default function CarWashModule({
         vendorPlaceholder="e.g. Chemico Detergents Ltd"
         defaultCategory="Detergents & Chemicals"
         defaultCategories={[
-          { value: "Water Bill", label: "Water Bill" },
-          { value: "Detergents & Chemicals", label: "Detergents & Chemicals" },
-          { value: "Wages", label: "Wages" },
-          { value: "Electricity", label: "Electricity" },
-          { value: "Equipment Repair", label: "Equipment Repair" },
-          { value: "Rent", label: "Rent" },
-          { value: "Marketing", label: "Marketing" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Water Bill", label: "💧 Water Bill" },
+          { value: "Detergents & Chemicals", label: "🧴 Detergents & Chemicals" },
+          { value: "Wages", label: "👷 Wages" },
+          { value: "Electricity", label: "⚡ Electricity" },
+          { value: "Equipment Repair", label: "🔧 Equipment Repair" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Marketing", label: "📢 Marketing" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="cw-expense"
       />

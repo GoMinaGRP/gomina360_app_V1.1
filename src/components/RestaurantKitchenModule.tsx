@@ -708,15 +708,15 @@ export default function RestaurantKitchenModule({
         vendorPlaceholder="e.g. fresh produce supplier"
         defaultCategory="Gas & Fuel"
         defaultCategories={[
-          { value: "Gas & Fuel", label: "Gas & Fuel" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Payroll", label: "Payroll" },
-          { value: "Rent", label: "Rent" },
-          { value: "Equipment Repair", label: "Equipment Repair" },
-          { value: "Cleaning Supplies", label: "Cleaning Supplies" },
-          { value: "Packaging", label: "Packaging" },
-          { value: "Waste Disposal", label: "Waste Disposal" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Gas & Fuel", label: "🔥 Gas & Fuel" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Equipment Repair", label: "🔧 Equipment Repair" },
+          { value: "Cleaning Supplies", label: "🧹 Cleaning Supplies" },
+          { value: "Packaging", label: "📦 Packaging" },
+          { value: "Waste Disposal", label: "🗑️ Waste Disposal" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="kit-expense"
       />

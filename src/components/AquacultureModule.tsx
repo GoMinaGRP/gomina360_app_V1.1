@@ -709,15 +709,15 @@ export default function AquacultureModule({
         vendorPlaceholder="e.g. fish feed supplier"
         defaultCategory="Feed Purchase"
         defaultCategories={[
-          { value: "Feed Purchase", label: "Feed Purchase" },
-          { value: "Fingerlings & Seed", label: "Fingerlings & Seed" },
-          { value: "Water Treatment", label: "Water Treatment" },
-          { value: "Electricity", label: "Electricity" },
-          { value: "Fuel", label: "Fuel" },
-          { value: "Labor", label: "Labor" },
-          { value: "Transport", label: "Transport" },
-          { value: "Net & Cage Repair", label: "Net & Cage Repair" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Feed Purchase", label: "🌾 Feed Purchase" },
+          { value: "Fingerlings & Seed", label: "🐟 Fingerlings & Seed" },
+          { value: "Water Treatment", label: "💧 Water Treatment" },
+          { value: "Electricity", label: "⚡ Electricity" },
+          { value: "Fuel", label: "⛽ Fuel" },
+          { value: "Labor", label: "👷 Labor" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Net & Cage Repair", label: "🔧 Net & Cage Repair" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="aqua-expense"
       />

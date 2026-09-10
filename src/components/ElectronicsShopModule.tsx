@@ -804,14 +804,14 @@ export default function ElectronicsShopModule({
         vendorPlaceholder="e.g. Solar panel supplier"
         defaultCategory="Repair & Maintenance"
         defaultCategories={[
-          { value: "Rent", label: "Rent" },
-          { value: "Fuel", label: "Fuel" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Repair & Maintenance", label: "Repair & Maintenance" },
-          { value: "Import Duties", label: "Import Duties" },
-          { value: "Marketing", label: "Marketing" },
-          { value: "Payroll", label: "Payroll" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Fuel", label: "⛽ Fuel" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Repair & Maintenance", label: "🔧 Repair & Maintenance" },
+          { value: "Import Duties", label: "🛃 Import Duties" },
+          { value: "Marketing", label: "📢 Marketing" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="tec-expense"
       />

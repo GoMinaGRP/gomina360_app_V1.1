@@ -336,14 +336,14 @@ export default function LivestockModule(props: LivestockModuleProps) {
         vendorPlaceholder="e.g. fodder / feed supplier"
         defaultCategory="Feed & Fodder"
         defaultCategories={[
-          { value: "Feed & Fodder", label: "Feed & Fodder" },
-          { value: "Veterinary", label: "Veterinary" },
-          { value: "Vaccination", label: "Vaccination" },
-          { value: "Water", label: "Water" },
-          { value: "Labor", label: "Labor" },
-          { value: "Transport", label: "Transport" },
-          { value: "Fencing & Repair", label: "Fencing & Repair" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Feed & Fodder", label: "🌾 Feed & Fodder" },
+          { value: "Veterinary", label: "🏥 Veterinary" },
+          { value: "Vaccination", label: "💉 Vaccination" },
+          { value: "Water", label: "💧 Water" },
+          { value: "Labor", label: "👷 Labor" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Fencing & Repair", label: "🔧 Fencing & Repair" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="lk-expense"
       />

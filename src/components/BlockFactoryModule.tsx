@@ -693,16 +693,16 @@ export default function BlockFactoryModule({
         vendorPlaceholder="e.g. Ghacem Cement depot"
         defaultCategory="Cement Purchase"
         defaultCategories={[
-          { value: "Cement Purchase", label: "Cement Purchase" },
-          { value: "Sand & Aggregates", label: "Sand & Aggregates" },
-          { value: "Fuel & Diesel", label: "Fuel & Diesel" },
-          { value: "Machine Repair", label: "Machine Repair" },
-          { value: "Payroll", label: "Payroll" },
-          { value: "Transport", label: "Transport" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Pallets & Packaging", label: "Pallets & Packaging" },
-          { value: "Rent", label: "Rent" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Cement Purchase", label: "🧱 Cement Purchase" },
+          { value: "Sand & Aggregates", label: "🪨 Sand & Aggregates" },
+          { value: "Fuel & Diesel", label: "⛽ Fuel & Diesel" },
+          { value: "Machine Repair", label: "🔧 Machine Repair" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Pallets & Packaging", label: "📦 Pallets & Packaging" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="bf-expense"
       />

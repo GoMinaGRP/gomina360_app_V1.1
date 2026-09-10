@@ -799,14 +799,14 @@ export default function HardwareStoreModule({
         vendorPlaceholder="e.g. cement & building supplies dealer"
         defaultCategory="Forklift Fuel"
         defaultCategories={[
-          { value: "Forklift Fuel", label: "Forklift Fuel" },
-          { value: "Yard Rent", label: "Yard Rent" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Transport", label: "Transport" },
-          { value: "Payroll", label: "Payroll" },
-          { value: "Equipment Repair", label: "Equipment Repair" },
-          { value: "Packaging", label: "Packaging" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Forklift Fuel", label: "⛽ Forklift Fuel" },
+          { value: "Yard Rent", label: "🏗️ Yard Rent" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Equipment Repair", label: "🔧 Equipment Repair" },
+          { value: "Packaging", label: "📦 Packaging" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="hw-expense"
       />

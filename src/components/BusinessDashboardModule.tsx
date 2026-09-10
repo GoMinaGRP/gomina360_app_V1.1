@@ -710,14 +710,14 @@ export default function BusinessDashboardModule({
         vendorPlaceholder="e.g. supplier name"
         defaultCategory="Supplies"
         defaultCategories={[
-          { value: "Fuel", label: "Fuel" },
-          { value: "Payroll", label: "Payroll" },
-          { value: "Rent", label: "Rent" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Transport", label: "Transport" },
-          { value: "Supplies", label: "Supplies" },
-          { value: "Marketing", label: "Marketing" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Fuel", label: "⛽ Fuel" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Rent", label: "🏢 Rent" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Supplies", label: "📦 Supplies" },
+          { value: "Marketing", label: "📢 Marketing" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="bd-expense"
       />

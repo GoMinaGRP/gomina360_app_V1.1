@@ -855,11 +855,11 @@ export default function WorkerDashboard({
         vendorPlaceholder="e.g. supplier or vendor name"
         defaultCategory="Daily Operations"
         defaultCategories={[
-          { value: "Daily Operations", label: "Daily Operations" },
-          { value: "Stock & Supplies", label: "Stock & Supplies" },
-          { value: "Utilities", label: "Utilities" },
-          { value: "Transport", label: "Transport" },
-          { value: "Miscellaneous", label: "Miscellaneous" },
+          { value: "Daily Operations", label: "📋 Daily Operations" },
+          { value: "Stock & Supplies", label: "📦 Stock & Supplies" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="worker-expense"
       />
