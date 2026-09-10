@@ -445,7 +445,7 @@ async function sectionD() {
   await page.waitForSelector('[data-testid="oo-pin-root"]', { timeout: 10000 });
   await page.type('[data-testid="oo-name"]', "TEST UI Pinner");
   await page.type('[data-testid="oo-phone"]', "0551230456");
-  await page.type('[data-testid="oo-destination"]', "TEST Osu, Oxford Street");
+  await page.type('[data-testid="oo-dest-input"]', "TEST Osu, Oxford Street");
   // D1 — placing without a pin is blocked with guidance
   await page.click('[data-testid="oo-place"]');
   await page.waitForSelector('[data-testid="oo-error"]', { timeout: 10000 });
@@ -531,7 +531,7 @@ async function sectionD() {
     gpsCoords.includes(String(GPS_PIN.lat)) && gpsAcc.includes("12"), `${gpsCoords} | acc='${gpsAcc}' mode=${autoOrClick}`);
   await pgps.type('[data-testid="oo-name"]', "TEST GPS Customer");
   await pgps.type('[data-testid="oo-phone"]', "0551230789");
-  await pgps.type('[data-testid="oo-destination"]', "TEST GPS drop");
+  await pgps.type('[data-testid="oo-dest-input"]', "TEST GPS drop");
   await pgps.click('[data-testid="oo-place"]');
   await pgps.waitForSelector('[data-testid="oo-code"]', { timeout: 20000 });
   const gpsCode = await pgps.$eval('[data-testid="oo-code"]', (el) => el.textContent.trim());

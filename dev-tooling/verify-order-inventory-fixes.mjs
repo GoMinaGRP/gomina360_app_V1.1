@@ -241,8 +241,8 @@ async function sectionC(ownerCookie) {
   await page.click('[data-testid="oo-add-12"]');
   await page.waitForSelector('[data-testid="oo-qty-12"]', { timeout: 10000 });
   await page.click('[data-testid="oo-delivery"]');
-  await page.waitForSelector('[data-testid="oo-destination"]', { timeout: 10000 });
-  await page.type('[data-testid="oo-destination"]', "TEST Coconut Avenue, House 12");
+  await page.waitForSelector('[data-testid="oo-dest-input"]', { timeout: 10000 });
+  await page.type('[data-testid="oo-dest-input"]', "TEST Coconut Avenue, House 12");
   // drop the pin exactly at map centre (= the shop) without nudging
   await page.waitForSelector('[data-testid="oo-pin-set"]', { timeout: 10000 });
   await clickT(page, "oo-pin-set");

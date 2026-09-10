@@ -189,7 +189,11 @@ export default function LocationPinPicker({
         </div>
       </div>
 
-      <div className="relative overflow-hidden" style={{ height: 260 }}>
+      {/* `isolation: isolate` opens a stacking context around the map, so
+          Leaflet's internal panes/controls (z-index up to 1000) can only
+          compete with each other — never with page UI layered above the
+          map, such as the address-autocomplete suggestions. */}
+      <div className="relative overflow-hidden isolate" style={{ height: 260, zIndex: 0 }}>
         <LeafletMap
           pin={pin}
           center={center}
