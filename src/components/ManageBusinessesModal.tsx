@@ -8,7 +8,9 @@ import {
   Copy,
   Crosshair,
   Download,
+  FileUp,
   Globe,
+  HardDriveDownload,
   Image as ImageIcon,
   MapPin,
   Pencil,
@@ -20,6 +22,20 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+
+/** Trigger a full business backup download via a temp anchor. */
+function downloadBusinessBackup(biz: any) {
+  if (!biz?.id) return;
+  const url = `/api/business-backup/export?businessId=${encodeURIComponent(biz.id)}`;
+  // Use a simple anchor with download attribute so browser fetches with cookies.
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  a.download = `gomina-backup-${(biz.code || "business").toLowerCase()}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 import LocationSelector, { LocationValue } from "./LocationSelector";
 import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
@@ -959,6 +975,14 @@ export default function ManageBusinessesModal({
                               }`}
                             >
                               <Globe className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => downloadBusinessBackup(biz)}
+                              data-testid={`manage-biz-export-${biz.code}`}
+                              title="Export / backup this entire business — restorable ZIP (all data, history, settings, analytics)"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-violet-500/30 text-slate-200 hover:text-violet-300 transition"
+                            >
+                              <HardDriveDownload className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => openEdit(biz)}

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { Building2, Plus, X } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { Building2, FileUp, Plus, X } from "lucide-react";
 import LocationSelector, { LocationValue } from "./LocationSelector";
 
 interface NewBusinessModalProps {
@@ -31,8 +31,48 @@ export default function NewBusinessModal({
   const [monthlyTargetRevenueGhs, setMonthlyTargetRevenueGhs] = useState(120000);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // ── Business backup import ──────────────────────────────────────────
+  const [importMode, setImportMode] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importName, setImportName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!isOpen) return null;
+
+  const resetImport = () => {
+    setImportMode(false);
+    setImportFile(null);
+    setImportName("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFile) {
+      setError("Please choose a GoMina backup (.zip) file to import.");
+      return;
+    }
+    setIsSubmitting(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      if (importName.trim()) fd.append("name", importName.trim());
+      const res = await fetch("/api/business-backup/import", { method: "POST", body: fd });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.success) {
+        onBusinessCreated({ id: d.businessId, code: d.businessCode, name: d.businessName, category: d.category });
+        onClose();
+        resetImport();
+      } else {
+        setError(d?.error || "Backup import failed. Verify the file is a GoMina 360 backup (.zip).");
+      }
+    } catch (err: any) {
+      setError(err?.message || "Network error while importing the backup.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,6 +141,93 @@ export default function NewBusinessModal({
           </button>
         </div>
 
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { resetImport(); setError(""); }}
+            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition ${
+              !importMode
+                ? "bg-emerald-600 text-white"
+                : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            <Plus className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />New blank unit
+          </button>
+          <button
+            type="button"
+            onClick={() => { setImportMode(true); setError(""); }}
+            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition ${
+              importMode
+                ? "bg-violet-600 text-white"
+                : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            <FileUp className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />Import backup (.zip)
+          </button>
+        </div>
+
+        {importMode ? (
+          <form onSubmit={handleImport} className="space-y-3">
+            {error && (
+              <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-2.5 rounded-lg text-xs">
+                {error}
+              </div>
+            )}
+            <div className="rounded-xl bg-violet-500/10 border border-violet-500/30 p-3 text-[11px] text-violet-200/90 leading-relaxed">
+              <b className="text-violet-300">Restore from backup.</b> Choose a GoMina 360
+              business backup <code>.zip</code> file produced by Manage Businesses →
+              Backup. A <b>brand-new</b> business unit is created; existing businesses
+              and branches are never modified. All data, history, settings,
+              relationships, analytics, forecasts and scenario plans are restored
+              with IDs/codes automatically remapped.
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">
+                Backup file (.zip)
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip,application/zip,application/vnd.gomina.business-backup+zip"
+                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs file:mr-3 file:rounded-md file:border-0 file:bg-violet-600 file:px-3 file:py-1 file:text-white file:font-bold"
+              />
+              {importFile && (
+                <p className="mt-1 text-[10px] text-emerald-300">
+                  Ready: {importFile.name} ({Math.round(importFile.size / 1024)} KB)
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">
+                New business name (optional — leave blank to use original name)
+              </label>
+              <input
+                type="text"
+                value={importName}
+                onChange={(e) => setImportName(e.target.value)}
+                placeholder="e.g. Mina Tamale Poultry (Restored)"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+              />
+            </div>
+            <div className="flex justify-end space-x-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => { onClose(); resetImport(); }}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting || !importFile}
+                className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold shadow-md transition disabled:opacity-50"
+              >
+                {isSubmitting ? "Importing & restoring…" : "Create & restore business"}
+              </button>
+            </div>
+          </form>
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-3">
           {error && (
             <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-2.5 rounded-lg text-xs">
@@ -227,6 +354,7 @@ export default function NewBusinessModal({
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );
