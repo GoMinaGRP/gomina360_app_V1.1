@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   UtensilsCrossed, ChefHat, Package, AlertTriangle, TrendingUp, TrendingDown, Wallet, Activity,
-  Users, Truck, FileText, Trash2, LayoutDashboard, ListOrdered, ShoppingBasket, Boxes,
+  Users, Truck, FileText, Trash, LayoutDashboard, ListOrdered, ShoppingBasket, Boxes,
   UserCog, X, Plus, ShieldCheck, Sparkles, ClipboardCheck, ReceiptText, BookOpenText,
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
@@ -370,7 +370,7 @@ export default function RestaurantKitchenModule({
           <button onClick={() => setShowForm("ORDER")} className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center gap-1"><ChefHat className="w-3.5 h-3.5" />Order</button>
           <button onClick={() => setShowForm("MENU_ITEM")} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1"><BookOpenText className="w-3.5 h-3.5" />Dish</button>
           <button onClick={() => setShowForm("PURCHASE")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><Truck className="w-3.5 h-3.5" />Purchase</button>
-          <button onClick={() => setShowForm("WASTE")} className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />Waste</button>
+          <button onClick={() => setShowForm("WASTE")} className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1"><Trash className="w-3.5 h-3.5" />Waste</button>
           <button data-testid="kit-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
@@ -502,7 +502,7 @@ export default function RestaurantKitchenModule({
             <Stat label="Ingredients" value={branchInventory.length} sub="stocked items" color="cyan" icon={Boxes} />
             <Stat label="Stock Cost Value" value={formatMoney(branchInventory.reduce((s, i) => s + (i.quantity || 0) * (i.costPriceGhs || 0), 0), currentCurrency, true)} sub="at cost price" color="amber" icon={Wallet} />
             <Stat label="Purchases Received" value={formatMoney(receivedStockCost, currentCurrency, true)} sub="supplier stock-ins" color="purple" icon={Truck} />
-            <Stat label="Waste Cost" value={formatMoney(wasteCost, currentCurrency, true)} sub={`${waste.length} waste log(s)`} color="rose" icon={Trash2} />
+            <Stat label="Waste Cost" value={formatMoney(wasteCost, currentCurrency, true)} sub={`${waste.length} waste log(s)`} color="rose" icon={Trash} />
           </div>
           <Card title="Food Inventory" icon={ShoppingBasket}
             action={<div className="flex gap-2">
@@ -537,7 +537,7 @@ export default function RestaurantKitchenModule({
                 <p className="text-[10px] text-slate-500">Target band 30–35%. Shift-log benchmarks: {shiftLogs[0] ? `${shiftLogs[0].foodCostPercent}% cost / ${shiftLogs[0].wastePercent}% waste on ${shiftLogs[0].shiftDate}` : "none yet"}</p>
               </div>
             </Card>
-            <Card title="Food Waste Log" icon={Trash2}
+            <Card title="Food Waste Log" icon={Trash}
               action={<button onClick={() => setShowForm("WASTE")} className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Log Waste</button>}>
               <div className="p-4 space-y-1.5">
                 {wasteByReason.map((w) => (

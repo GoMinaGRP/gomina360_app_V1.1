@@ -8,7 +8,7 @@ import {
   Plus,
   Settings2,
   Pencil,
-  Trash2,
+  Trash,
   UserCheck,
   X,
   Check,
@@ -370,7 +370,7 @@ export default function DailyChecklistPanel({
                     className="px-2 py-1 rounded bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold" title="Toggle active">
                     {t.isActive !== false ? "Deactivate" : "Activate"}
                   </button>
-                  <button onClick={() => removeTemplate(t.id)} disabled={busy} className="p-1.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50" title="Delete item"><Trash2 className="w-3 h-3" /></button>
+                  <button onClick={() => removeTemplate(t.id)} disabled={busy} className="p-1.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50" title="Delete item"><Trash className="w-3 h-3" /></button>
                 </>
               )}
             </div>

@@ -22,7 +22,7 @@ import {
   Eye,
   ThumbsUp,
   Banknote,
-  Trash2,
+  Trash,
   FileSpreadsheet,
   Settings2,
   Download,
@@ -651,7 +651,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
                               </>
                             ) : (
                               <button onClick={() => setConfirmDelRun(r.id)} className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300" title="Discard draft" data-testid={`prl-run-delete-${r.id}`}>
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </>
@@ -845,7 +845,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
                         <td className="px-3 py-2 text-center">
                           {canManageBiz(a.businessId) && (
                             <button onClick={() => delAttendance(a.id)} className="p-1 rounded bg-slate-800 hover:bg-rose-500/20 text-slate-500 hover:text-rose-300" data-testid={`prl-att-del-${a.id}`}>
-                              <Trash2 className="w-3 h-3" />
+                              <Trash className="w-3 h-3" />
                             </button>
                           )}
                         </td>
@@ -1067,7 +1067,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
                         <span>%</span>
                         <button onClick={() => setSetForm({ ...setForm, payeBands: setForm.payeBands.filter((_: any, j: number) => j !== i) })}
                           className="p-1 rounded bg-slate-800 hover:bg-rose-500/20 text-slate-500 hover:text-rose-300" data-testid={`prl-set-band-del-${i}`}>
-                          <Trash2 className="w-3 h-3" />
+                          <Trash className="w-3 h-3" />
                         </button>
                         {b.upto === "" && <span className="text-[10px] text-slate-500">(open band — everything above)</span>}
                       </div>
@@ -1106,7 +1106,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
                         </select>
                         <button onClick={() => setSetForm({ ...setForm, customItems: setForm.customItems.filter((_: any, j: number) => j !== i) })}
                           className="p-1 rounded bg-slate-800 hover:bg-rose-500/20 text-slate-500 hover:text-rose-300" data-testid={`prl-set-item-del-${i}`}>
-                          <Trash2 className="w-3 h-3" />
+                          <Trash className="w-3 h-3" />
                         </button>
                       </div>
                     ))}

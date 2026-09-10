@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   X,
   Plus,
-  Trash2,
+  Trash,
   FileText,
   ClipboardEdit,
   CheckCircle,
@@ -390,7 +390,7 @@ export default function SalesDocumentBuilder({
                       disabled={lineItems.length === 1}
                       className="col-span-1 p-1 rounded hover:bg-rose-500/20 text-rose-400 disabled:opacity-30"
                     >
-                      <Trash2 className="w-4 h-4 mx-auto" />
+                      <Trash className="w-4 h-4 mx-auto" />
                     </button>
                   </div>
                 ))}

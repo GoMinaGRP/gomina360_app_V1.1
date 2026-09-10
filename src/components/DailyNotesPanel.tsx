@@ -11,7 +11,7 @@ import {
   NotebookPen,
   Send,
   Sparkles,
-  Trash2,
+  Trash,
   TrendingUp,
 } from "lucide-react";
 
@@ -226,7 +226,7 @@ export default function DailyNotesPanel({
                         title={mine ? "Withdraw my note" : "Withdraw note"}
                         data-testid={`dn-del-${n.id}`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>

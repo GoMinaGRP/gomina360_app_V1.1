@@ -8,7 +8,7 @@ import {
   Store,
   Plus,
   Minus,
-  Trash2,
+  Trash,
   X,
   PackageCheck,
   Copy,
@@ -1611,7 +1611,7 @@ function OrderInner() {
                     <span className="flex-1 min-w-0 truncate text-slate-700">{l.qty}× {l.product.name}</span>
                     <span className="text-slate-500">{fmtMoney(l.product.price * l.qty)}</span>
                     <button onClick={() => add(l.product, -l.qty)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ))}

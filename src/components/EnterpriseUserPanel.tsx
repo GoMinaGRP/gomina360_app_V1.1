@@ -8,7 +8,7 @@ import {
   UserX,
   Shield,
   Key,
-  Trash2,
+  Trash,
   RefreshCw,
   AlertTriangle,
   CheckCircle,
@@ -588,7 +588,7 @@ export default function EnterpriseUserPanel({
                           className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-400 transition disabled:opacity-30"
                           title="Delete User"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash className="w-4 h-4" />
                         </button>
                       </div>
                     </td>

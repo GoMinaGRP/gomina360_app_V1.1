@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, ImagePlus, Loader2, RefreshCw, Trash2, UserRound, X } from "lucide-react";
+import { Camera, ImagePlus, Loader2, RefreshCw, Trash, UserRound, X } from "lucide-react";
 import Avatar from "./Avatar";
 
 interface Props {
@@ -256,7 +256,7 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
               className="py-2 rounded-lg bg-rose-600/80 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-extrabold flex items-center justify-center gap-1.5"
               data-testid="ppm-remove"
             >
-              <Trash2 className="w-3.5 h-3.5" /> Remove
+              <Trash className="w-3.5 h-3.5" /> Remove
             </button>
           </div>
 

@@ -19,7 +19,7 @@ import {
   QrCode,
   RotateCcw,
   ShieldCheck,
-  Trash2,
+  Trash,
   X,
 } from "lucide-react";
 
@@ -1036,7 +1036,7 @@ export default function ManageBusinessesModal({
                               title="Permanently delete unit"
                               className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash className="w-4 h-4" />
                             </button>
                           </div>
                         )}
@@ -1725,7 +1725,7 @@ export default function ManageBusinessesModal({
                           className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-300 hover:text-rose-300"
                           title="Remove branch logo — falls back to the business logo"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ))}
