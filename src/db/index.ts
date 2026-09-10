@@ -58,6 +58,34 @@ export function resolvedDbEnvName(): string | null {
   return null;
 }
 
+/**
+ * Sign-in surfaces a DIFFERENT, actionable message for deployment
+ * configuration failures (no connection string, a 127.0.0.1/localhost URL on
+ * a managed host, or a schema that was never pushed) versus a genuinely
+ * transient database outage. Returns null for transient/unknown errors — those
+ * keep the generic "temporarily unavailable" copy and are diagnosed through
+ * GET /api/health instead.
+ *
+ * Unwraps Drizzle's "Failed query" wrapper (the real driver error is in
+ * `.cause`) so SQLSTATE codes like 42P01 (table missing) are visible here.
+ */
+export function dbFailureMessage(error: unknown): string | null {
+  const e = error as any;
+  const root = e?.cause?.message ? e.cause : e;
+  const msg = String(root?.message || e?.message || error || "");
+  const code = root?.code || e?.code;
+
+  // Our own hard configuration errors (thrown by resolveDatabaseUrl).
+  if (/not configured|misconfiguration|local\/loopback host/i.test(msg)) {
+    return "GoMina 360 is not connected to a database on this deployment. Set DATABASE_URL (or the POSTGRES_URL / POSTGRES_PRISMA_URL auto-created by your Vercel Postgres or Neon integration) in Vercel → Settings → Environment Variables for BOTH Production and Preview, then redeploy. A 127.0.0.1 / localhost URL copied from local development can never work on Vercel — use the managed Postgres connection string.";
+  }
+  // Schema never pushed to this database.
+  if (code === "42P01" || /relation "[a-z_]+" does not exist/i.test(msg)) {
+    return "The database is connected, but its tables don't exist yet. From your machine run: DATABASE_URL=\"<your-managed-url>\" npx drizzle-kit push — then open /api/init once to create the schema and seed the OWNER account.";
+  }
+  return null;
+}
+
 function resolveDatabaseUrl(): string {
   const used = resolvedDbEnvName();
   const databaseUrl = used ? (process.env[used] as string) : "";
