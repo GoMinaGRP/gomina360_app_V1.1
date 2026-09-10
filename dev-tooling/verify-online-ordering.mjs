@@ -250,10 +250,10 @@ async function sectionD(cookies) {
     await p1.click(`[data-testid="${tid}"]`);
   };
   await centreClick("oo-delivery");
-  await p1.waitForSelector('[data-testid="oo-destination"]', { timeout: 5000 });
+  await p1.waitForSelector('[data-testid="oo-dest-input"]', { timeout: 5000 });
   await p1.type('[data-testid="oo-name"]', T + " UI");
   await p1.type('[data-testid="oo-phone"]', "0551444555");
-  await p1.type('[data-testid="oo-destination"]', "TEST Kasoa toll booth");
+  await p1.type('[data-testid="oo-dest-input"]', "TEST Kasoa toll booth");
   // Delivery orders now pin their exact point on Google Maps (no geolocation
   // permission here → drop the pin at the map centre, then confirm).
   await p1.waitForSelector('[data-testid="oo-pin-root"]', { timeout: 10000 });

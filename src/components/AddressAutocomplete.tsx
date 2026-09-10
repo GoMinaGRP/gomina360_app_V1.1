@@ -1,7 +1,25 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { CSSProperties } from "react";
 import { Loader2, MapPin, PencilLine, Search, X } from "lucide-react";
+
+/**
+ * Top-most UI layer. The suggestion list is rendered in a portal on
+ * document.body at this z-index so NOTHING on the page — above all the
+ * Leaflet map underneath the field, whose own panes/controls climb to
+ * z-index 1000 — can ever paint over the address suggestions.
+ */
+const DROPDOWN_Z = 9999;
+/** Gap between the input and the panel, and the minimum viewport margin. */
+const GAP = 4;
+const MARGIN = 8;
+/** Preferred (maximum) panel height — matches the previous max-h-72. */
+const PREFERRED_MAX_H = 288;
+
+// useLayoutEffect warns during SSR; the panel is client-only anyway.
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export interface AddressSuggestion {
   place_id: number | string;
@@ -40,6 +58,17 @@ interface Props {
  *     landmark, "near blue gate" etc.) without losing the pin;
  *   • ✕ clears;
  *   • Escape dismisses; ↑/↓ navigate.
+ *
+ * LAYERING — the suggestion list must ALWAYS sit ABOVE the map and stay
+ * fully visible while typing. The delivery map (Leaflet) renders directly
+ * beneath this field and its panes/zoom/style controls use z-index values up
+ * to 1000, so a plain `absolute z-50` list inside the form flow got painted
+ * over by the map. The list is therefore rendered through a PORTAL on
+ * document.body as a `position: fixed` panel at z-index 9999, anchored to
+ * the input and re-measured on scroll/resize. Being outside every card,
+ * `overflow-hidden` wrapper and stacking context on the page, it can never
+ * be covered or clipped — and it is flipped above the field (and height
+ * capped) when there isn't room below, so the options are always reachable.
  */
 export default function AddressAutocomplete({
   value,
@@ -62,6 +91,93 @@ export default function AddressAutocomplete({
   const listRef = useRef<HTMLUListElement | null>(null);
   const pickedLabelRef = useRef<string>("");
   const ignoreNextBlur = useRef(false);
+  // Portal target — only available in the browser, so mount-gated.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  // Fixed-position geometry for the portalled panel (anchored to the input).
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({
+    position: "fixed",
+    top: 0,
+    left: 0,
+    visibility: "hidden",
+    zIndex: DROPDOWN_Z,
+  });
+  const [placement, setPlacement] = useState<"below" | "above">("below");
+
+  /**
+   * Anchor the panel to the input in viewport coordinates and clamp it so it
+   * is ALWAYS fully visible: it opens below the field, flips above when the
+   * space below is too small, and its height is capped to the room available
+   * on the chosen side. Horizontally it tracks the input width but never
+   * leaves the viewport.
+   */
+  const positionPanel = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Field scrolled out of sight — hide rather than leave a floating panel.
+    if (r.bottom < 0 || r.top > vh) {
+      setPanelStyle((s) => ({ ...s, visibility: "hidden" }));
+      return;
+    }
+
+    const spaceBelow = vh - r.bottom - GAP - MARGIN;
+    const spaceAbove = r.top - GAP - MARGIN;
+    // Prefer below (natural reading order); flip only when below is cramped
+    // AND above genuinely has more room.
+    const below = spaceBelow >= Math.min(PREFERRED_MAX_H, 160) || spaceBelow >= spaceAbove;
+    const maxHeight = Math.max(
+      120,
+      Math.min(PREFERRED_MAX_H, below ? spaceBelow : spaceAbove),
+    );
+
+    const width = Math.min(Math.max(r.width, 220), vw - MARGIN * 2);
+    const left = Math.max(MARGIN, Math.min(r.left, vw - width - MARGIN));
+
+    setPlacement(below ? "below" : "above");
+    setPanelStyle({
+      position: "fixed",
+      left,
+      width,
+      maxHeight,
+      zIndex: DROPDOWN_Z,
+      visibility: "visible",
+      ...(below
+        ? { top: Math.min(r.bottom + GAP, vh - MARGIN) }
+        : { top: Math.max(MARGIN, r.top - GAP - maxHeight) }),
+    });
+  }, []);
+
+  // Measure in the same frame the panel mounts (no stale-position paint),
+  // then keep it glued to the input while the page scrolls or resizes.
+  const panelOpen = open && suggestions.length > 0;
+  useIsoLayoutEffect(() => {
+    if (!panelOpen) {
+      setPanelStyle((s) => (s.visibility === "hidden" ? s : { ...s, visibility: "hidden" }));
+      return;
+    }
+    positionPanel();
+    const on = (e?: Event) => {
+      // Scrolling *inside* the suggestion list doesn't move the input.
+      if (e?.target instanceof Node && listRef.current?.contains(e.target)) return;
+      positionPanel();
+    };
+    window.addEventListener("resize", on);
+    // capture:true — also follow scrolling of any inner scroll container.
+    window.addEventListener("scroll", on, true);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", on);
+    vv?.addEventListener("scroll", on);
+    return () => {
+      window.removeEventListener("resize", on);
+      window.removeEventListener("scroll", on, true);
+      vv?.removeEventListener("resize", on);
+      vv?.removeEventListener("scroll", on);
+    };
+  }, [panelOpen, suggestions.length, positionPanel]);
 
   const fetchSuggestions = useCallback(
     (query: string) => {
@@ -205,37 +321,44 @@ export default function AddressAutocomplete({
         )}
       </div>
 
-      {open && suggestions.length > 0 && (
-        <ul
-          ref={listRef}
-          className="absolute z-50 mt-1 w-full max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white shadow-xl py-1 text-[13px] text-slate-800"
-          data-testid={`${prefix}-list`}
-          role="listbox"
-        >
-          <li className="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1">
-            <MapPin className="w-3 h-3" /> Suggested addresses
-          </li>
-          {suggestions.map((s, i) => (
-            <li
-              key={s.place_id}
-              data-idx={i}
-              role="option"
-              aria-selected={i === active}
-              onMouseDown={() => { ignoreNextBlur.current = true; }}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => choose(s)}
-              className={`cursor-pointer px-3 py-2 flex items-start gap-2 ${i === active ? "bg-amber-50" : "hover:bg-slate-50"}`}
-              data-testid={`${prefix}-opt-${i}`}
-            >
-              <MapPin className={`w-4 h-4 mt-0.5 shrink-0 ${i === 0 && bias ? "text-emerald-600" : "text-slate-400"}`} />
-              <span className="min-w-0 flex-1 break-words">{s.label}</span>
+      {/* Suggestions — portalled to <body> so the map (or any other card,
+          sticky bar or overflow-hidden wrapper) can never cover or clip
+          them. Positioned in viewport coordinates against the input. */}
+      {mounted && panelOpen &&
+        createPortal(
+          <ul
+            ref={listRef}
+            style={panelStyle}
+            className="overflow-auto overscroll-contain rounded-xl border border-slate-200 bg-white shadow-2xl ring-1 ring-black/5 py-1 text-[13px] text-slate-800"
+            data-testid={`${prefix}-list`}
+            data-placement={placement}
+            role="listbox"
+          >
+            <li className="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1">
+              <MapPin className="w-3 h-3" /> Suggested addresses
             </li>
-          ))}
-          <li className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-100">
-            Can&apos;t find it? Type any landmark or house number — you can edit this after picking.
-          </li>
-        </ul>
-      )}
+            {suggestions.map((s, i) => (
+              <li
+                key={s.place_id}
+                data-idx={i}
+                role="option"
+                aria-selected={i === active}
+                onMouseDown={(e) => { e.preventDefault(); ignoreNextBlur.current = true; }}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => choose(s)}
+                className={`cursor-pointer px-3 py-2 flex items-start gap-2 ${i === active ? "bg-amber-50" : "hover:bg-slate-50"}`}
+                data-testid={`${prefix}-opt-${i}`}
+              >
+                <MapPin className={`w-4 h-4 mt-0.5 shrink-0 ${i === 0 && bias ? "text-emerald-600" : "text-slate-400"}`} />
+                <span className="min-w-0 flex-1 break-words">{s.label}</span>
+              </li>
+            ))}
+            <li className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-100">
+              Can&apos;t find it? Type any landmark or house number — you can edit this after picking.
+            </li>
+          </ul>,
+          document.body,
+        )}
     </div>
   );
 }

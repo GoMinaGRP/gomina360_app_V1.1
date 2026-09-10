@@ -1069,7 +1069,12 @@ function OrderInner() {
                   </div>
                   {fulfillment === "DELIVERY" && (
                     <div className="space-y-2" data-testid="oo-delivery-block">
+                      {/* Address first, map second — and the field keeps its
+                          own stacking level above the map below it, so the
+                          suggestions (portalled to <body>) always overlay the
+                          map instead of being covered by it. */}
                       <AddressAutocomplete
+                        className="relative z-20"
                         value={destination}
                         onChange={(s) => {
                           setDestination(s);
