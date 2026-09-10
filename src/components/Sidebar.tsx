@@ -31,6 +31,7 @@ import {
   HardHat,
   Landmark,
   Wifi,
+  Settings2,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -75,6 +76,8 @@ interface SidebarProps {
    *  assignment AND every business the OWNER granted via Users & Access →
    *  "Extra business access" (user_business_access). */
   accessibleBusinessIds?: number[] | null;
+  /** Opens Manage Businesses & Branches — shown to "Manage Unit" grantees. */
+  onOpenManageBusinesses?: () => void;
 }
 
 export default function Sidebar({
@@ -85,6 +88,7 @@ export default function Sidebar({
   auditEligible,
   onOpenSupportInfo,
   accessibleBusinessIds,
+  onOpenManageBusinesses,
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
@@ -327,6 +331,21 @@ export default function Sidebar({
             Shared Enterprise Modules
           </div>
           <div className="space-y-1 mt-1">
+            {!isExecutive && isUnitManager && onOpenManageBusinesses && (
+              <button
+                onClick={onOpenManageBusinesses}
+                data-testid="sidebar-manage-units"
+                className="w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition text-indigo-300 hover:bg-indigo-500/15 hover:text-indigo-200 border border-indigo-500/30 bg-indigo-500/5"
+              >
+                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                  <Settings2 className="w-4 h-4 text-indigo-400" />
+                  <span>Manage Units</span>
+                </div>
+                <span className="hidden sm:inline text-[8px] font-black bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded border border-amber-500/30">
+                  GRANTED
+                </span>
+              </button>
+            )}
             <button
               onClick={() => selectTab("SALES_CENTER")}
               data-testid="sidebar-tab-sales"

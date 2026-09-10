@@ -72,6 +72,7 @@ import {
   provisionBusiness,
 } from "@/lib/businessProvisioning";
 import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/lib/auth";
+import { managesBusiness } from "@/lib/permissions";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
  *  the ONLY business fields a non-OWNER may change — and only staff carrying
@@ -106,6 +107,29 @@ const VALID_STATUSES = ["ACTIVE", "EXPANDING", "MAINTENANCE", "INACTIVE"];
 async function loadBusiness(id: number) {
   const [biz] = await db.select().from(businesses).where(eq(businesses.id, id));
   return biz;
+}
+
+/**
+ * Resolves the caller's control level over one business unit, DB-resolved from
+ * the session (client-supplied roles/flags are never trusted):
+ *   • "OWNER"       — the group owner (full control over every unit).
+ *   • "UNIT_MANAGER" — a user the OWNER granted "Manage Unit" for THIS unit
+ *                      (`users.businessManageIds`). Owner-equivalent for edit,
+ *                      business-type, online-ordering/service settings and
+ *                      reset — but NEVER deactivate/delete (those stay OWNER).
+ *   • null          — no structural control (other grants may still allow the
+ *                      narrower online-ordering / service-area scope).
+ */
+async function businessControlLevel(
+  request: Request,
+  businessId: number
+): Promise<"OWNER" | "UNIT_MANAGER" | null> {
+  const session = await getSessionInfo(request);
+  const user = session?.user as any;
+  if (!user) return null;
+  if (user.role === "OWNER") return "OWNER";
+  if (managesBusiness(user, businessId)) return "UNIT_MANAGER";
+  return null;
 }
 
 /** Count every operational record owned by the business — used by the Owner
@@ -187,13 +211,18 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Impact preview reveals internal record counts — OWNER only.
-    const ownerGate = await requireOwner(request);
-    if (!ownerGate) return FORBIDDEN("Only the OWNER can inspect business record counts.");
     const { id } = await params;
     const businessId = parseInt(id, 10);
     if (!Number.isFinite(businessId)) {
       return NextResponse.json({ success: false, error: "Invalid business id." }, { status: 400 });
+    }
+    // Impact preview reveals internal record counts — OWNER, or a user granted
+    // "Manage Unit" for this exact business (they see the same reset preview).
+    const level = await businessControlLevel(request, businessId);
+    if (!level) {
+      return FORBIDDEN(
+        "Only the OWNER — or a user granted “Manage Unit” for this business — can inspect business record counts.",
+      );
     }
     const biz = await loadBusiness(businessId);
     if (!biz) {
@@ -227,18 +256,20 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     const body = await request.json();
 
-    // Session-verified gate (secure login cookie — no spoofing). The OWNER
-    // may update everything. Staff carrying the OWNER-granted canManageOnline
-    // permission (Users & Access → Permissions) may update ONLY the
-    // online-ordering / service-area / customer-contact fields, and only on
-    // a business they can access.
-    const actor = await requireOwner(request);
-    if (!actor) {
+    // Session-verified gate (secure login cookie — no spoofing):
+    //   • OWNER — every field.
+    //   • "Manage Unit" grantee — every field EXCEPT `status` (deactivate /
+    //     re-activate stays OWNER-only), strictly on their granted unit.
+    //   • canManageOnline staff (Users & Access → Permissions) — ONLY the
+    //     online-ordering / service-area / customer-contact fields, and only
+    //     on a business they can access.
+    const level = await businessControlLevel(request, businessId);
+    if (!level) {
       const session = await getSessionInfo(request);
       const user = session?.user;
       if (!user || !user.canManageOnline) {
         return FORBIDDEN(
-          "Only the OWNER — or staff granted “Online Storefront & Delivery Areas” in Users & Access — can update businesses.",
+          "Only the OWNER — or a user granted “Manage Unit” for this business — can update it. Staff granted “Online Storefront & Delivery Areas” may manage those settings only.",
         );
       }
       const allowed = await canAccessBusiness(user, businessId);
@@ -250,6 +281,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (outsideScope.length > 0) {
         return FORBIDDEN(
           `Only the OWNER can change: ${outsideScope.join(", ")}. Granted staff may manage online ordering, service areas & customer contacts only.`,
+        );
+      }
+    }
+    if (level === "UNIT_MANAGER") {
+      const touched = Object.keys(body || {}).filter((k) => !["actorUserId", "id"].includes(k));
+      const outsideScope = touched.filter((k) => k === "status");
+      if (outsideScope.length > 0) {
+        return FORBIDDEN(
+          "Deactivating / re-activating a unit (status) stays with the OWNER. As a “Manage Unit” grantee you can edit, change business type, manage online ordering & service settings, and reset this unit.",
         );
       }
     }
@@ -603,9 +643,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       body = {};
     }
 
-    // Session-verified OWNER gate (secure login cookie — no spoofing).
-    const actor = await requireOwner(request);
-    if (!actor) return FORBIDDEN("Only the OWNER can reset a business.");
+    // Session-verified gate (secure login cookie — no spoofing): the OWNER, or
+    // a user the OWNER granted "Manage Unit" for this business (their own unit
+    // only). Un-assigning staff users (resetUsers) remains OWNER-only; the
+    // type/master-list reset is part of the granted "Reset Business Type".
+    const level = await businessControlLevel(request, businessId);
+    if (!level) {
+      return FORBIDDEN(
+        "Only the OWNER — or a user granted “Manage Unit” for this business — can reset a business.",
+      );
+    }
 
     // Mandatory confirmation gate — the caller must echo the exact unit code.
     if (body.confirmCode !== biz.code) {
@@ -616,7 +663,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     const resetMasterLists = body.resetMasterLists === true;
-    const resetUsersFlag = body.resetUsers === true;
+    const resetUsersFlag = level === "OWNER" && body.resetUsers === true;
 
     const counts = await relatedCounts(businessId);
 

@@ -58,6 +58,9 @@ interface CommandCenterDashboardProps {
   /** OWNER or staff carrying the OWNER-granted canManageSupport permission. */
   canManageSupportInfo?: boolean;
   canManageBusinesses?: boolean;
+  /** OWNER or any user the OWNER granted "Manage Unit" (businessManageIds) —
+   *  opens the Manage Businesses & Branches console for their granted units. */
+  canOpenManageUnits?: boolean;
   /** OWNER or staff carrying the OWNER-granted "New Branch/Unit" permission —
    *  may open the New Branch / Unit creation modal (UI affordance for the
    *  POST /api/businesses gate). */
@@ -83,6 +86,7 @@ export default function CommandCenterDashboard({
   onOpenSupportInfo,
   canManageSupportInfo = false,
   canManageBusinesses = false,
+  canOpenManageUnits = false,
   canCreateBusiness = false,
   canManageOnline = false,
   canManageUsersConsole = false,
@@ -322,7 +326,7 @@ export default function CommandCenterDashboard({
           </button>
 
           <AiSectionGuide moduleKey="COMMAND_CENTER" section="COMMAND_CENTER" variant="header" />
-          {(canManageBusinesses || canManageOnline) && onOpenManageBusinesses && (
+          {(canManageBusinesses || canOpenManageUnits || canManageOnline) && onOpenManageBusinesses && (
             <button
               onClick={onOpenManageBusinesses}
               data-testid="open-manage-businesses"

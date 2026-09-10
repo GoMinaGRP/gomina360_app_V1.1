@@ -766,6 +766,7 @@ export default function GoMinaApp() {
           onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
           onOpenUserAccess={() => setIsUserAccessOpen(true)}
           canManageBusinesses={currentUser?.role === "OWNER"}
+          canOpenManageUnits={currentUser?.role === "OWNER" || isUnitManager}
           // Owner-controlled permission (Users & Access → Permissions →
           // "New Branch/Unit"): the OWNER or any executive staff member
           // carrying the canCreateBusiness grant may open the New Branch /
@@ -1275,6 +1276,7 @@ export default function GoMinaApp() {
           auditEligible={auditEligible}
           onOpenSupportInfo={() => setIsSupportOpen(true)}
           accessibleBusinessIds={accessibleIds}
+          onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
         />
 
         <main className="flex-1 min-w-0 overflow-y-auto bg-slate-950/95 pb-12">
