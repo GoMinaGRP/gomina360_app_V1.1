@@ -1778,6 +1778,7 @@ export const AUDIT_MODULES = [
   "ATTENDANCE",
   "ASSETS",
   "CCTV",
+  "USERS",
 ] as const;
 
 /** Issue lifecycle for flagged records / correction requests:
