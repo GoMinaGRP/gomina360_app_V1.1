@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ShoppingCart,
@@ -31,6 +31,7 @@ import {
   Info,
 } from "lucide-react";
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
+import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import { googleMapsEmbed, businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
@@ -128,6 +129,9 @@ function OrderInner() {
   const [pickPointId, setPickPointId] = useState<number | null>(null);
   const [destination, setDestination] = useState("");
   const [deliveryPin, setDeliveryPin] = useState<PinValue | null>(null);
+  // Shared tile-style state so the two map pickers (delivery-pin + "serving
+  // my location" preview, when open) stay in sync — Standard ↔ Satellite.
+  const [mapStyle, setMapStyle] = useState<"STANDARD" | "SATELLITE">("STANDARD");
   const [payChoice, setPayChoice] = useState<"ON_DELIVERY" | "MOMO_NOW">("ON_DELIVERY");
   const [momoRef, setMomoRef] = useState("");
   const [note, setNote] = useState("");
@@ -348,6 +352,43 @@ function OrderInner() {
     if (fulfillment === "PICKUP" && biz.pickupEnabled === false && biz.deliveryEnabled !== false) setFulfillment("DELIVERY");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bizId, biz?.deliveryEnabled, biz?.pickupEnabled]);
+
+  // Reverse-geocode the delivery pin once it stops moving — fills in the
+  // Address field automatically the moment the customer drops a pin / taps
+  // GPS, so they don't have to retype their whole address. We debounce and
+  // only overwrite when the Address field is empty or we previously
+  // auto-filled it (preserves manual edits).
+  const lastReverseRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
+  const autoFilledRef = useRef(false);
+  useEffect(() => {
+    if (!deliveryPin) return;
+    const { lat, lng } = deliveryPin;
+    const rounded = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    if (lastReverseRef.current && lastReverseRef.current.label &&
+        `${lastReverseRef.current.lat.toFixed(5)},${lastReverseRef.current.lng.toFixed(5)}` === rounded) {
+      // Same place we already reverse-coded — reuse cached label.
+      if (!destination.trim() || autoFilledRef.current) {
+        setDestination(lastReverseRef.current.label);
+        autoFilledRef.current = true;
+      }
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json() as { label?: string };
+        const label = String(data.label || "").trim();
+        lastReverseRef.current = { lat, lng, label };
+        if (label && (!destination.trim() || autoFilledRef.current)) {
+          setDestination(label);
+          autoFilledRef.current = true;
+        }
+      } catch { /* offline or slow — leave the existing text */ }
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deliveryPin?.lat, deliveryPin?.lng]);
 
   // Esc closes the product-image lightbox and the HELP panel.
   useEffect(() => {
@@ -780,8 +821,9 @@ function OrderInner() {
                 <LocationPinPicker
                   value={null}
                   onChange={(p) => {
-                    if (p && typeof p !== "function") {
-                      setCustLoc({ lat: p.lat, lng: p.lng, accuracyM: p.accuracyM ?? null, source: "PIN" });
+                    const next = typeof p === "function" ? (p as any)(null) : p;
+                    if (next && typeof next === "object") {
+                      setCustLoc({ lat: next.lat, lng: next.lng, accuracyM: next.accuracyM ?? null, source: "PIN" });
                       setNearOnly(true);
                       setLocPinOpen(false);
                       setLocErr("");
@@ -789,7 +831,9 @@ function OrderInner() {
                   }}
                   defaultCenter={null}
                   prefix="oo-loc-pin"
-                  hint="Drop the pin where you are — we show only the branches that deliver to that point."
+                  tileStyle={mapStyle}
+                  onTileStyleChange={setMapStyle}
+                  hint="Drop the pin where you are — we show only the branches that deliver to that point. Switch to Satellite for an aerial view."
                 />
               )}
             </section>
@@ -1025,22 +1069,49 @@ function OrderInner() {
                   </div>
                   {fulfillment === "DELIVERY" && (
                     <div className="space-y-2" data-testid="oo-delivery-block">
-                      <div className="relative">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input
-                          value={destination}
-                          onChange={(e) => setDestination(e.target.value)}
-                          placeholder="Delivery address (area / landmark / house no.)"
-                          className={fieldCls}
-                          data-testid="oo-destination"
-                        />
-                      </div>
+                      <AddressAutocomplete
+                        value={destination}
+                        onChange={(s) => {
+                          setDestination(s);
+                          // If the customer types their own address from
+                          // scratch (not via a pick), treat subsequent
+                          // reverse-geocode results as non-authoritative so
+                          // we don't overwrite what they just typed.
+                          autoFilledRef.current = false;
+                        }}
+                        onPick={(s: AddressSuggestion) => {
+                          // Drop the pin at the chosen address (flew the
+                          // map there too) and remember this was an
+                          // auto-fill so reverse-geocode won't fight the
+                          // user later.
+                          const center = s.bbox
+                            ? { lat: (s.bbox[0] + s.bbox[2]) / 2, lng: (s.bbox[1] + s.bbox[3]) / 2 }
+                            : { lat: s.lat, lng: s.lng };
+                          setDeliveryPin({ lat: center.lat, lng: center.lng, accuracyM: null });
+                          autoFilledRef.current = true;
+                        }}
+                        onClear={() => {
+                          setDeliveryPin(null);
+                          autoFilledRef.current = false;
+                        }}
+                        bias={
+                          biz.gpsLat != null && biz.gpsLng != null
+                            ? { lat: biz.gpsLat, lng: biz.gpsLng }
+                            : custLoc
+                              ? { lat: custLoc.lat, lng: custLoc.lng }
+                              : null
+                        }
+                        placeholder="Delivery address — start typing and pick from the list, or drop a pin below"
+                        prefix="oo-dest"
+                      />
                       <LocationPinPicker
                         value={deliveryPin}
                         onChange={setDeliveryPin}
                         defaultCenter={biz.gpsLat != null && biz.gpsLng != null ? { lat: biz.gpsLat, lng: biz.gpsLng } : null}
                         prefix="oo-pin"
-                        hint="The courier navigates to this exact pin — only the branch team and the courier delivering your order can see it."
+                        tileStyle={mapStyle}
+                        onTileStyleChange={setMapStyle}
+                        hint="The courier navigates to this exact pin — only the branch team and the courier delivering your order can see it. Switch to Satellite for an aerial view."
                       />
                       {deliveryPin && pinAtShopM != null && pinAtShopM < 75 && (
                         <p className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1.5" data-testid="oo-pin-shop-warn">
