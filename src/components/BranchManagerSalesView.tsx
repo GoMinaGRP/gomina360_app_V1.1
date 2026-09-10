@@ -35,6 +35,8 @@ import { COMPANY_INFO } from "@/lib/companyInfo";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import SalesDocumentBuilder from "./SalesDocumentBuilder";
 import FinancialReportSection from "./FinancialReportSection";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import { generateSalesDocumentPDF, printSalesDocument, downloadFile as downloadPDFFile } from "@/lib/salesDocument";
 import {
   BarChart,
@@ -166,6 +168,7 @@ export default function BranchManagerSalesView({
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
   const [saleSuccess, setSaleSuccess] = useState(false);
   const [saleError, setSaleError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
   const [lastSaleInfo, setLastSaleInfo] = useState<any>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
 
@@ -439,35 +442,10 @@ export default function BranchManagerSalesView({
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
 
   // ─────── Handlers ───────
-  const handleRecordSale = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performRecordSale = async () => {
     if (cart.length === 0) return;
     setSaleError("");
     setIsSubmittingSale(true);
-
-    // Check custom prices require permission
-    if (cartHasCustomPrices && !canOverridePrice) {
-      const missingReason = cart.filter(
-        (c) => c.isCustomPrice && !c.customPriceReason.trim()
-      );
-      if (missingReason.length > 0) {
-        setSaleError("Please provide a reason for each custom price.");
-        setIsSubmittingSale(false);
-        return;
-      }
-    }
-
-    // Credit sales need an identifiable customer (server enforces this too).
-    if (saleOnCredit && (!saleCustomerName.trim() || /^walk[- ]?in/i.test(saleCustomerName.trim()))) {
-      setSaleError("A credit sale needs the customer's real name — no walk-in credit.");
-      setIsSubmittingSale(false);
-      return;
-    }
-    if (saleOnCredit && creditDeposit && Number(creditDeposit) > cartTotal) {
-      setSaleError(`Deposit ${formatMoney(Number(creditDeposit), currentCurrency)} exceeds the credit total ${formatMoney(cartTotal, currentCurrency)}.`);
-      setIsSubmittingSale(false);
-      return;
-    }
 
     const cartPayload = cart.map((c) => ({
       inventoryId: c.inventoryId,
@@ -557,6 +535,46 @@ export default function BranchManagerSalesView({
       setIsSubmittingSale(false);
     }
   };
+
+  // Confirmation gate for the Sale (validation first, then confirm, then execute).
+  const handleRecordSale = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) return;
+    setSaleError("");
+
+    // Check custom prices require permission
+    if (cartHasCustomPrices && !canOverridePrice) {
+      const missingReason = cart.filter(
+        (c) => c.isCustomPrice && !c.customPriceReason.trim()
+      );
+      if (missingReason.length > 0) {
+        setSaleError("Please provide a reason for each custom price.");
+        return;
+      }
+    }
+
+    // Credit sales need an identifiable customer (server enforces this too).
+    if (saleOnCredit && (!saleCustomerName.trim() || /^walk[- ]?in/i.test(saleCustomerName.trim()))) {
+      setSaleError("A credit sale needs the customer's real name — no walk-in credit.");
+      return;
+    }
+    if (saleOnCredit && creditDeposit && Number(creditDeposit) > cartTotal) {
+      setSaleError(`Deposit ${formatMoney(Number(creditDeposit), currentCurrency)} exceeds the credit total ${formatMoney(cartTotal, currentCurrency)}.`);
+      return;
+    }
+
+    setConfirmEntry({
+      entity: "SALE",
+      data: {
+        customerName: saleCustomerName,
+        paymentMethod: saleOnCredit ? "CREDIT" : salePaymentMethod,
+        amountGhs: cartTotal,
+      },
+    });
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
 
   // ─────── Credit installment handlers ───────
   /** Open the credit detail/payment modal — by sale row or by secure code
@@ -2740,6 +2758,21 @@ export default function BranchManagerSalesView({
           </div>
         </div>
       )}
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          setConfirmEntry(null);
+          performRecordSale();
+        }}
+        testid="bm-confirm-entry"
+      />
     </div>
   );
 }

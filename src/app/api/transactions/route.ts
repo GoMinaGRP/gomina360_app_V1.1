@@ -4,6 +4,8 @@ import { transactions, businesses, recordDeletionLogs } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import {
   canManageSharedRecords,
+  canManageExpenses,
+  canManageBusinessUnit,
 } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
 
@@ -137,6 +139,8 @@ export async function POST(request: Request) {
  * PATCH /api/transactions — edit a transaction (type, category, amount,
  * payment method, description). OWNER always allowed; other users only with
  * the OWNER-granted canManageRecords flag (resolved server-side from the DB).
+ * Expense records (type === "EXPENSE") are additionally gated by the
+ * OWNER-granted canManageExpenses flag.
  */
 export async function PATCH(request: Request) {
   try {
@@ -153,16 +157,6 @@ export async function PATCH(request: Request) {
     const editSession = await getSessionInfo(request);
     if (!editSession) return UNAUTHENTICATED();
     const actor = editSession.user;
-    if (!canManageSharedRecords(actor)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can edit transactions.",
-        },
-        { status: 403 }
-      );
-    }
 
     const [existing] = await db
       .select()
@@ -201,6 +195,29 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // Expenses get their own gate: manage/delete-expenses is a separate
+    // OWNER-granted permission. Other transaction types fall back to the
+    // shared-record permission. A user the OWNER granted "Manage Business /
+    // Unit" power for THIS unit may always edit — owner-equivalent, scoped
+    // to that unit only.
+    const targetIsExpense =
+      (updates.type !== undefined ? updates.type : existing.type) === "EXPENSE";
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
+    const permitted = targetIsExpense
+      ? canManageExpenses(actor) || unitManager
+      : canManageSharedRecords(actor) || unitManager;
+    if (!permitted) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: targetIsExpense
+            ? "Not permitted — only the OWNER (or a manager the OWNER has granted expense-management permission) can edit expenses."
+            : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can edit transactions.",
+        },
+        { status: 403 }
+      );
+    }
+
     const [updated] = await db
       .update(transactions)
       .set(updates)
@@ -217,8 +234,9 @@ export async function PATCH(request: Request) {
 
 /**
  * DELETE /api/transactions — permanently delete a transaction. Permission-
- * gated like PATCH and ALWAYS writes an immutable audit row (record snapshot,
- * user, date+time, mandatory reason) before the delete lands.
+ * gated like PATCH (expenses via the OWNER-granted expense-management flag,
+ * other types via the shared-record flag) and ALWAYS writes an immutable audit
+ * row (record snapshot, user, date+time, mandatory reason) before the delete.
  */
 export async function DELETE(request: Request) {
   try {
@@ -242,16 +260,6 @@ export async function DELETE(request: Request) {
     const delSession = await getSessionInfo(request);
     if (!delSession) return UNAUTHENTICATED();
     const actor = delSession.user;
-    if (!canManageSharedRecords(actor)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can delete transactions.",
-        },
-        { status: 403 }
-      );
-    }
 
     const [existing] = await db
       .select()
@@ -261,6 +269,28 @@ export async function DELETE(request: Request) {
       return NextResponse.json(
         { success: false, error: "Transaction not found." },
         { status: 404 }
+      );
+    }
+
+    // Expenses get their own gate: manage/delete-expenses is a separate
+    // OWNER-granted permission. Other transaction types fall back to the
+    // shared-record permission. A user the OWNER granted "Manage Business /
+    // Unit" power for THIS unit may always delete — owner-equivalent, scoped
+    // to that unit only.
+    const isExpense = existing.type === "EXPENSE";
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
+    const permitted = isExpense
+      ? canManageExpenses(actor) || unitManager
+      : canManageSharedRecords(actor) || unitManager;
+    if (!permitted) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: isExpense
+            ? "Not permitted — only the OWNER (or a manager the OWNER has granted expense-management permission) can delete expenses."
+            : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can delete transactions.",
+        },
+        { status: 403 }
       );
     }
 

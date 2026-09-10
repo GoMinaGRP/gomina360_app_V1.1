@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck, RefreshCw, Flag, MessageSquare, PencilLine, BadgeCheck, History,
   KeyRound, ScrollText, BarChart3, Rows3, X, FileSpreadsheet, UserCheck, Ban, Search, AlertTriangle,
-  ImagePlus, Send, User,
+  ImagePlus, Send, User, Eye, Images, Link2, ArrowLeft,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
@@ -24,10 +24,11 @@ import {
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
 
-const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV"];
+const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
 const MODULE_LABEL: Record<string, string> = {
   OPERATIONS: "Operations · Production", FINANCE: "Sales · Finance", INVENTORY: "Inventory",
   EMPLOYEES: "Employees", PAYROLL: "Payroll", ATTENDANCE: "Attendance", ASSETS: "Assets", CCTV: "CCTV",
+  USERS: "Users · Access",
 };
 const MODULE_TINT: Record<string, string> = {
   OPERATIONS: "text-emerald-300 bg-emerald-500/15 border-emerald-500/30",
@@ -38,6 +39,7 @@ const MODULE_TINT: Record<string, string> = {
   ATTENDANCE: "text-sky-300 bg-sky-500/15 border-sky-500/30",
   ASSETS: "text-orange-300 bg-orange-500/15 border-orange-500/30",
   CCTV: "text-rose-300 bg-rose-500/15 border-rose-500/30",
+  USERS: "text-fuchsia-300 bg-fuchsia-500/15 border-fuchsia-500/30",
 };
 const ACTION_TINT: Record<string, string> = {
   VERIFIED: "text-emerald-300 bg-emerald-500/15 border-emerald-500/30",
@@ -98,6 +100,26 @@ const money = (n: number) => `GH₵ ${Number(n || 0).toLocaleString("en-US", { m
 const fmtTs = (v: any) => (v ? new Date(v).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const dayOnly = (v: any) => String(v ?? "").slice(0, 10);
 
+/** Flattens an underlying record into readable field rows for the detail
+ *  drawer: scalars shown as-is, objects/arrays summarised, embedded base64
+ *  photos rendered inline, and huge blobs collapsed so the drawer stays light. */
+function fieldList(rec: any): { key: string; label: string; value: string; kind: "text" | "image" | "long" }[] {
+  if (!rec || typeof rec !== "object") return [];
+  const SKIP = new Set(["id"]);
+  const out: { key: string; label: string; value: string; kind: "text" | "image" | "long" }[] = [];
+  for (const [k, v] of Object.entries(rec)) {
+    if (SKIP.has(k) || v === null || v === undefined || v === "") continue;
+    const label = k.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
+    if (typeof v === "string" && v.startsWith("data:image")) { out.push({ key: k, label, value: v, kind: "image" }); continue; }
+    if (typeof v === "string" && v.length > 220) { out.push({ key: k, label, value: v, kind: "long" }); continue; }
+    if (Array.isArray(v)) { out.push({ key: k, label, value: v.length ? `${v.length} item(s) — ${JSON.stringify(v).slice(0, 200)}` : "none", kind: "text" }); continue; }
+    if (typeof v === "object") { const s = JSON.stringify(v); out.push({ key: k, label, value: s, kind: s.length > 220 ? "long" : "text" }); continue; }
+    if (typeof v === "boolean") { out.push({ key: k, label, value: v ? "Yes" : "No", kind: "text" }); continue; }
+    out.push({ key: k, label, value: String(v), kind: "text" });
+  }
+  return out;
+}
+
 type Rec = any;
 type Rev = any;
 
@@ -124,6 +146,10 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const [accessMsg, setAccessMsg] = useState("");
   const [accessErr, setAccessErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [detail, setDetail] = useState<Rec | null>(null);
+  const [detailStack, setDetailStack] = useState<Rec[]>([]);
+  const [detailData, setDetailData] = useState<any>(null);
+  const [detailErr, setDetailErr] = useState("");
 
   const bizSource = data?.bizList?.length ? data.bizList : businesses;
   const bizName = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.name || `Business #${id}`, [bizSource]);
@@ -207,6 +233,31 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   }, [allIssues, issuesView]);
   const issueCountBy = useCallback((s: string) => s === "OPEN" ? allIssues.filter((r: Rev) => OPEN_ISSUE_STATUSES.includes(r.status)).length : s === "ALL" ? allIssues.length : allIssues.filter((r: Rev) => r.status === s).length, [allIssues]);
   const reviewsFor = useCallback((rec: Rec) => reviews.filter((r: Rev) => `${r.recordType}:${r.recordSource || ""}:${r.recordId}` === rec.key), [reviews]);
+
+  // Detail drawer: fetch the complete underlying record (full row + photos +
+  // related/child records), scope-checked server-side. Related rows can be
+  // opened in turn (breadcrumb stack kept for back-navigation).
+  const fetchDetail = async (r: Rec) => {
+    const p = new URLSearchParams({ record: "1", recordType: r.recordType, recordId: String(r.recordId) });
+    if (r.recordSource) p.set("recordSource", r.recordSource);
+    const res = await fetch(`/api/audit?${p.toString()}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "Could not load the underlying record");
+    return body.detail || null;
+  };
+  const openRecord = async (r: Rec) => {
+    setDetailStack((s) => (detail ? [...s, detail] : s));
+    setDetail(r); setDetailData(null); setDetailErr("");
+    try { setDetailData(await fetchDetail(r)); } catch (e: any) { setDetailErr(e.message); }
+  };
+  const backDetail = async () => {
+    const prev = detailStack[detailStack.length - 1];
+    if (!prev) return;
+    setDetailStack((s) => s.slice(0, -1));
+    setDetail(prev); setDetailData(null); setDetailErr("");
+    try { setDetailData(await fetchDetail(prev)); } catch (e: any) { setDetailErr(e.message); }
+  };
+  const closeDetail = () => { setDetail(null); setDetailStack([]); setDetailData(null); setDetailErr(""); };
 
   const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -487,7 +538,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                   <tr key={r.key} className="text-slate-300 hover:bg-slate-800/40" data-testid={`aud-rec-row-${r.key}`}>
                     <td className="px-4 py-2.5">
                       <div className="font-mono text-[10px] text-cyan-300">{r.ref}</div>
-                      <div className="font-semibold text-slate-100">{r.title}</div>
+                      <div className="font-semibold text-slate-100 flex items-center gap-1.5">
+                        {r.title}
+                        {(r.imageCount || 0) > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded px-1 py-px" data-testid={`aud-rec-photos-${r.key}`}>
+                            <Images className="w-2.5 h-2.5" />{r.imageCount}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[10px] text-slate-500 line-clamp-1">{r.detail}</div>
                     </td>
                     <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[r.module] || MODULE_TINT.OPERATIONS}`}>{r.module}</span></td>
@@ -497,6 +555,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[r.reviewState] || STATE_TINT.UNREVIEWED}`} data-testid={`aud-rec-state-${r.key}`}>{r.reviewState}</span></td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-1">
+                        <button title="Open complete record" onClick={() => openRecord(r)} className="p-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/30" data-testid={`aud-open-${r.key}`}><Eye className="w-3.5 h-3.5" /></button>
                         <button title="Review history" onClick={() => setHistKey(histKey === r.key ? null : r.key)} className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400" data-testid={`aud-hist-${r.key}`}><History className="w-3.5 h-3.5" /></button>
                         <button title="Verify record" onClick={() => { setActionModal({ rec: r, action: "VERIFIED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30" data-testid={`aud-verify-${r.key}`}><BadgeCheck className="w-3.5 h-3.5" /></button>
                         <button title="Flag issue" onClick={() => { setActionModal({ rec: r, action: "FLAGGED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30" data-testid={`aud-flag-${r.key}`}><Flag className="w-3.5 h-3.5" /></button>
@@ -945,6 +1004,96 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
               {log.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500 text-sm">Nothing on the audit trail yet.</td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Record detail drawer: complete underlying record ────── */}
+      {detail && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" data-testid="aud-detail-overlay">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" data-testid="aud-detail">
+            <div className="flex items-start gap-3 px-5 py-4 border-b border-slate-800">
+              {detailStack.length > 0 && (
+                <button onClick={backDetail} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0" title="Back" data-testid="aud-detail-back"><ArrowLeft className="w-4 h-4" /></button>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[11px] text-cyan-300">{detail.ref}</span>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[detail.module] || MODULE_TINT.OPERATIONS}`}>{detail.module}</span>
+                  {detail.recordType && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-600 text-slate-400">{detail.recordType}</span>}
+                  {detail.reviewState && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[detail.reviewState] || STATE_TINT.UNREVIEWED}`}>{detail.reviewState}</span>}
+                </div>
+                <h3 className="text-sm font-black text-white mt-1" data-testid="aud-detail-title">{detail.title}</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {bizName(detail.businessId)} · {detail.branchCode || bizCode(detail.businessId)}
+                  {detail.workerName ? ` · worker: ${detail.workerName}` : ""}
+                  {detail.date ? ` · ${detail.date}` : ""}
+                </p>
+              </div>
+              <button onClick={closeDetail} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 shrink-0" data-testid="aud-detail-close"><X className="w-4 h-4" /></button>
+            </div>
+
+            <div className="overflow-y-auto px-5 py-4 space-y-5">
+              {detailErr && <div className="text-xs text-rose-300" data-testid="aud-detail-error">{detailErr}</div>}
+              {!detailData && !detailErr && <div className="text-xs text-slate-500">Loading the complete record…</div>}
+
+              {detailData && (
+                <>
+                  {detailData.photos?.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5" data-testid="aud-detail-photos"><Images className="w-3.5 h-3.5 text-cyan-400" /> Photos & attachments ({detailData.photos.length})</div>
+                      <div className="flex flex-wrap gap-2">
+                        {detailData.photos.slice(0, 12).map((p: string, i: number) => (
+                          <img key={i} src={p} alt={`attachment ${i + 1}`} className="h-28 w-auto rounded-lg border border-slate-700 object-cover bg-slate-950" data-testid={`aud-detail-photo-${i}`} />
+                        ))}
+                        {detailData.photos.length > 12 && <div className="flex items-center text-[11px] text-slate-500">+ {detailData.photos.length - 12} more</div>}
+                      </div>
+                    </div>
+                  )}
+
+                  {detailData.record && (
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Complete underlying record</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 bg-slate-950/60 border border-slate-800 rounded-xl p-3" data-testid="aud-detail-fields">
+                        {fieldList(detailData.record).map((f) => (
+                          <div key={f.key} className="min-w-0">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">{f.label}</div>
+                            {f.kind === "image" ? (
+                              <img src={f.value} alt={f.label} className="max-h-28 rounded border border-slate-700 mt-1" />
+                            ) : (
+                              <div className={`text-[11px] text-slate-300 mt-0.5 ${f.kind === "long" ? "break-all line-clamp-4" : "break-words"}`}>{f.value}</div>
+                            )}
+                          </div>
+                        ))}
+                        {fieldList(detailData.record).length === 0 && <div className="text-[11px] text-slate-600 col-span-2">No extra fields on this record.</div>}
+                      </div>
+                    </div>
+                  )}
+
+                  {detailData.related?.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5" data-testid="aud-detail-related"><Link2 className="w-3.5 h-3.5 text-cyan-400" /> Related records ({detailData.related.length})</div>
+                      <div className="space-y-1.5">
+                        {detailData.related.map((rel: any) => (
+                          <button key={rel.key} onClick={() => openRecord(rel)} className="w-full text-left rounded-lg bg-slate-950/60 hover:bg-slate-800 border border-slate-800 px-3 py-2 flex items-center gap-2" data-testid={`aud-detail-rel-${rel.key}`}>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-[10px] text-cyan-300">{rel.ref}</span>
+                                <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[rel.module] || MODULE_TINT.OPERATIONS}`}>{rel.module}</span>
+                                {(rel.imageCount || 0) > 0 && <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-cyan-300"><Images className="w-2.5 h-2.5" />{rel.imageCount}</span>}
+                              </div>
+                              <div className="font-semibold text-slate-100 text-[11px]">{rel.title}</div>
+                              <div className="text-[10px] text-slate-500 line-clamp-1">{rel.detail}</div>
+                            </div>
+                            <Eye className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

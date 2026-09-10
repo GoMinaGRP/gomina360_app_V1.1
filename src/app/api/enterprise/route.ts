@@ -13,13 +13,14 @@ import {
 } from "@/db/schema";
 import { desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { canManageSharedRecords } from "@/lib/recordPermissions";
+import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
   SUPPLIERS: suppliers,
   EMPLOYEES: employees,
+  INVENTORY: inventoryItems,
 };
 
 /**
@@ -85,9 +86,10 @@ export async function GET(request: Request) {
 }
 
 /**
- * PATCH /api/enterprise — edit a supplier or employee record.
- * OWNER always allowed; other users only with the OWNER-granted
- * canManageRecords flag (resolved server-side from the database).
+ * PATCH /api/enterprise — edit a supplier, employee or inventory record.
+ * OWNER always allowed; other users only with the OWNER-granted flag
+ * (canManageRecords for SUPPLIERS/EMPLOYEES, canDeleteInventory for
+ * INVENTORY), resolved server-side from the database.
  */
 export async function PATCH(request: Request) {
   try {
@@ -97,7 +99,7 @@ export async function PATCH(request: Request) {
     const table = MODULE_TABLE[moduleKey];
     if (!table) {
       return NextResponse.json(
-        { success: false, error: "entityType must be SUPPLIERS or EMPLOYEES." },
+        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES or INVENTORY." },
         { status: 400 }
       );
     }
@@ -112,22 +114,34 @@ export async function PATCH(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const actor = session.user;
-    if (!canManageSharedRecords(actor)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can edit records.",
-        },
-        { status: 403 }
-      );
-    }
 
     const [existing] = await db.select().from(table).where(eq(table.id, recordId));
     if (!existing) {
       return NextResponse.json(
         { success: false, error: "Record not found." },
         { status: 404 }
+      );
+    }
+
+    // Inventory entries are permission-gated separately (delete-inventory
+    // permission); suppliers/employees follow the shared-record flag. A user
+    // the OWNER granted "Manage Business / Unit" power for the record's unit
+    // may always edit — owner-equivalent, scoped to that unit only.
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
+    const permitted =
+      moduleKey === "INVENTORY"
+        ? canDeleteInventory(actor) || unitManager
+        : canManageSharedRecords(actor) || unitManager;
+    if (!permitted) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            moduleKey === "INVENTORY"
+              ? "Not permitted — only the OWNER (or a manager the OWNER has granted the delete-inventory permission) can edit inventory entries."
+              : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can edit records.",
+        },
+        { status: 403 }
       );
     }
 
@@ -140,6 +154,59 @@ export async function PATCH(request: Request) {
       if (typeof d.phone === "string" && d.phone.trim()) updates.phone = d.phone.trim();
       if (typeof d.email === "string") updates.email = d.email.trim() || null;
       if (typeof d.paymentTerms === "string" && d.paymentTerms.trim()) updates.paymentTerms = d.paymentTerms.trim();
+    } else if (moduleKey === "INVENTORY") {
+      // Inventory & Stock — editable catalog fields. Quantity edits recompute
+      // the IN_STOCK / LOW_STOCK / OUT_OF_STOCK status that drives alerts.
+      if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
+      if (typeof d.sku === "string" && d.sku.trim()) updates.sku = d.sku.trim();
+      if (typeof d.category === "string" && d.category.trim()) updates.category = d.category.trim();
+      if (typeof d.unit === "string" && d.unit.trim()) updates.unit = d.unit.trim();
+      if (d.quantity !== undefined) {
+        const qty = Number(d.quantity);
+        if (!Number.isFinite(qty) || qty < 0) {
+          return NextResponse.json(
+            { success: false, error: "Quantity must be zero or a positive number." },
+            { status: 400 }
+          );
+        }
+        updates.quantity = qty;
+      }
+      if (d.costPriceGhs !== undefined) {
+        const v = Number(d.costPriceGhs);
+        if (!Number.isFinite(v) || v < 0) {
+          return NextResponse.json(
+            { success: false, error: "Cost price must be zero or a positive number." },
+            { status: 400 }
+          );
+        }
+        updates.costPriceGhs = v;
+      }
+      if (d.sellingPriceGhs !== undefined) {
+        const v = Number(d.sellingPriceGhs);
+        if (!Number.isFinite(v) || v < 0) {
+          return NextResponse.json(
+            { success: false, error: "Selling price must be zero or a positive number." },
+            { status: 400 }
+          );
+        }
+        updates.sellingPriceGhs = v;
+      }
+      if (d.minStockThreshold !== undefined) {
+        const v = Number(d.minStockThreshold);
+        if (!Number.isFinite(v) || v < 0) {
+          return NextResponse.json(
+            { success: false, error: "Minimum stock threshold must be zero or a positive number." },
+            { status: 400 }
+          );
+        }
+        updates.minStockThreshold = v;
+      }
+      if (d.businessId !== undefined) updates.businessId = Number(d.businessId) || existing.businessId;
+      if (d.expiryDate !== undefined) updates.expiryDate = d.expiryDate || null;
+      // Recompute stock status from the (possibly updated) quantity/threshold.
+      const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
+      const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
+      updates.status = computeStockStatus(Number(nextQty), Number(nextThreshold));
     } else {
       // EMPLOYEES
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
@@ -184,9 +251,11 @@ export async function PATCH(request: Request) {
 }
 
 /**
- * DELETE /api/enterprise — permanently delete a supplier or employee record.
- * Permission-gated exactly like PATCH and ALWAYS writes an immutable audit
- * row (module, record snapshot, user, date+time, mandatory reason) first.
+ * DELETE /api/enterprise — permanently delete a supplier, employee or
+ * inventory record.
+ * Permission-gated exactly like PATCH (INVENTORY uses the delete-inventory
+ * permission) and ALWAYS writes an immutable audit row (module, record
+ * snapshot, user, date+time, mandatory reason) first.
  */
 export async function DELETE(request: Request) {
   try {
@@ -196,7 +265,7 @@ export async function DELETE(request: Request) {
     const table = MODULE_TABLE[moduleKey];
     if (!table) {
       return NextResponse.json(
-        { success: false, error: "entityType must be SUPPLIERS or EMPLOYEES." },
+        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES or INVENTORY." },
         { status: 400 }
       );
     }
@@ -218,16 +287,6 @@ export async function DELETE(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const actor = session.user;
-    if (!canManageSharedRecords(actor)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can delete records.",
-        },
-        { status: 403 }
-      );
-    }
 
     const [existing] = await db.select().from(table).where(eq(table.id, recordId));
     if (!existing) {
@@ -237,10 +296,34 @@ export async function DELETE(request: Request) {
       );
     }
 
+    // Inventory entries are permission-gated separately (delete-inventory
+    // permission); suppliers/employees follow the shared-record flag. A user
+    // the OWNER granted "Manage Business / Unit" power for the record's unit
+    // may always delete — owner-equivalent, scoped to that unit only.
+    const unitManager = canManageBusinessUnit(actor, existing.businessId);
+    const permitted =
+      moduleKey === "INVENTORY"
+        ? canDeleteInventory(actor) || unitManager
+        : canManageSharedRecords(actor) || unitManager;
+    if (!permitted) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            moduleKey === "INVENTORY"
+              ? "Not permitted — only the OWNER (or a manager the OWNER has granted the delete-inventory permission) can delete inventory entries."
+              : "Not permitted — only the OWNER (or a manager the OWNER has granted record-management permission) can delete records.",
+        },
+        { status: 403 }
+      );
+    }
+
     const label =
       moduleKey === "SUPPLIERS"
         ? existing.name
-        : `${existing.name} (${existing.role})`;
+        : moduleKey === "INVENTORY"
+          ? `${existing.name} (${existing.sku})`
+          : `${existing.name} (${existing.role})`;
 
     // Immutable audit row BEFORE the delete lands.
     const [log] = await db

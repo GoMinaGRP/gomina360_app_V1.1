@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     const action = String(body.action || "").toUpperCase();
     const logo = body.logo === null || body.logo === undefined ? null : String(body.logo);
     if (logo && !validLogo(logo)) {
-      return NextResponse.json({ success: false, error: "Logo must be an image (PNG/JPG) under about 1MB." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Logo must be an image under about 1MB." }, { status: 400 });
     }
 
     // ── Company (group) logo — the ultimate fallback ─────────────────────

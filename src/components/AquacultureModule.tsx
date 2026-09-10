@@ -16,6 +16,9 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzeAquaculture, AQUA_ALERT_STYLES, AQUA_METRIC_COLORS } from "@/lib/aquacultureAnalytics";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface Props {
   currentUser: any;
@@ -49,8 +52,10 @@ export default function AquacultureModule({
   const [tab, setTab] = useState<AquaTab>("DASHBOARD");
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState<null | "POND" | "BATCH" | "FEED" | "WATER" | "HARVEST" | "CHECKLIST" | "SALE">(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const [ponds, setPonds] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
@@ -89,6 +94,77 @@ export default function AquacultureModule({
   }, [bizId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // ─── Submit handler (with Sale/Inventory/Asset confirmation gate) ───
+  const performSubmit = async (entity: string, data: any) => {
+    setBusy(true); setErr("");
+    try {
+      // Stock-linked sale through the shared pipeline: validates
+      // available stock, deducts, records revenue + receipt.
+      if (entity === "SALE") {
+        const res = await fetch("/api/sales", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId: bizId,
+            branchCode: businessInfo?.code,
+            customerName: data.customerName,
+            customerPhone: data.customerPhone,
+            paymentMethod: data.paymentMethod,
+            notes: data.notes,
+            cartItems: [{
+              inventoryId: Number(data.inventoryId),
+              quantity: Number(data.quantity),
+              sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined,
+              customPriceReason: data.customPriceReason,
+            }],
+            createdByUserId: currentUser?.id,
+            createdByName: currentUser?.name,
+            createdByRole: currentUser?.role,
+          }),
+        });
+        const d = await res.json();
+        if (d.success) { setShowForm(null); await refresh(); onRefreshData(); }
+        else setErr(d.error || "Sale failed.");
+        return;
+      }
+      const res = await fetch("/api/aquaculture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity,
+          data: {
+            ...data,
+            businessId: bizId,
+            branchCode: businessInfo?.code,
+            branchName: businessInfo?.name,
+            createdByName: currentUser?.name,
+            createdByRole: currentUser?.role,
+            recordedByName: currentUser?.name,
+            recordedByRole: currentUser?.role,
+            recordedByUserId: currentUser?.id,
+          },
+        }),
+      });
+      const d = await res.json();
+      if (d.success) {
+        setShowForm(null);
+        await refresh();
+        // For harvest, reload ponds/batches from db
+        if (entity === "HARVEST") onRefreshData();
+      } else setErr(d.error || "Failed to save");
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const submit = (entity: string, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity, data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
 
   // ─── KPI calculations ────────────────────────────────────────────
   const activePonds = ponds.filter((p) => p.status !== "EMPTY" && p.status !== "PREPARE_NEXT_CYCLE");
@@ -195,6 +271,9 @@ export default function AquacultureModule({
   const scoreBarColor = statusColor === "red" ? "bg-rose-500" : statusColor === "yellow" ? "bg-amber-500" : "bg-emerald-500";
   const scoreTextColor = statusColor === "red" ? "text-rose-400" : statusColor === "yellow" ? "text-amber-400" : "text-emerald-400";
 
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-[1600px] mx-auto text-slate-100">
       {/* Header */}
@@ -228,6 +307,13 @@ export default function AquacultureModule({
             <span className="text-[10px] leading-none lg:leading-normal lg:text-xs">{t.label}</span>
           </button>
         ))}
+        <button
+          data-testid="aqua-open-expense"
+          onClick={() => setShowExpense(true)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+        >
+          <Wallet className="w-4 h-4" />Record Expense
+        </button>
         <AiSectionGuide moduleKey="AQUA" section={tab} businessInfo={businessInfo} />
       </div>
 
@@ -623,68 +709,52 @@ export default function AquacultureModule({
       {showForm && (
         <AquacultureForm type={showForm} busy={busy} error={err} ponds={ponds} batches={batches} inventory={branchInventory}
           onClose={() => { setShowForm(null); setErr(""); }}
-          onSubmit={async (entity: string, data: any) => {
-            setBusy(true); setErr("");
-            try {
-              // Stock-linked sale through the shared pipeline: validates
-              // available stock, deducts, records revenue + receipt.
-              if (entity === "SALE") {
-                const res = await fetch("/api/sales", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    businessId: bizId,
-                    branchCode: businessInfo?.code,
-                    customerName: data.customerName,
-                    customerPhone: data.customerPhone,
-                    paymentMethod: data.paymentMethod,
-                    notes: data.notes,
-                    cartItems: [{
-                      inventoryId: Number(data.inventoryId),
-                      quantity: Number(data.quantity),
-                      sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined,
-                      customPriceReason: data.customPriceReason,
-                    }],
-                    createdByUserId: currentUser?.id,
-                    createdByName: currentUser?.name,
-                    createdByRole: currentUser?.role,
-                  }),
-                });
-                const d = await res.json();
-                if (d.success) { setShowForm(null); await refresh(); onRefreshData(); }
-                else setErr(d.error || "Sale failed.");
-                return;
-              }
-              const res = await fetch("/api/aquaculture", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  entity,
-                  data: {
-                    ...data,
-                    businessId: bizId,
-                    branchCode: businessInfo?.code,
-                    branchName: businessInfo?.name,
-                    createdByName: currentUser?.name,
-                    createdByRole: currentUser?.role,
-                    recordedByName: currentUser?.name,
-                    recordedByRole: currentUser?.role,
-                    recordedByUserId: currentUser?.id,
-                  },
-                }),
-              });
-              const d = await res.json();
-              if (d.success) {
-                setShowForm(null);
-                await refresh();
-                // For harvest, reload ponds/batches from db
-                if (entity === "HARVEST") onRefreshData();
-              } else setErr(d.error || "Failed to save");
-            } catch (e: any) { setErr(e.message); }
-            finally { setBusy(false); }
-          }}
+          onSubmit={submit}
         />
       )}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); refresh(); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense — Aquaculture"
+        contextLabel="Aquaculture"
+        vendorPlaceholder="e.g. fish feed supplier"
+        defaultCategory="Feed Purchase"
+        defaultCategories={[
+          { value: "Feed Purchase", label: "🌾 Feed Purchase" },
+          { value: "Fingerlings & Seed", label: "🐟 Fingerlings & Seed" },
+          { value: "Water Treatment", label: "💧 Water Treatment" },
+          { value: "Electricity", label: "⚡ Electricity" },
+          { value: "Fuel", label: "⛽ Fuel" },
+          { value: "Labor", label: "👷 Labor" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Net & Cage Repair", label: "🔧 Net & Cage Repair" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
+        ]}
+        testid="aqua-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity, c.data);
+        }}
+        testid="aqua-confirm-entry"
+      />
     </div>
   );
 }
@@ -692,6 +762,49 @@ export default function AquacultureModule({
 // ────────────────────────────────────────────────────────────────────────────
 //  Form component
 // ────────────────────────────────────────────────────────────────────────────
+function FormField({ f, set, label, k, t = "text", ...rest }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
+      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
+        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
+    </div>
+  );
+}
+function FormSelect({ f, set, label, k, opts }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
+      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
+        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
+        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function PondSelect({ ponds, f, set }: any) {
+  return (
+    <FormSelect f={f} set={set} label="Pond / Tank / Cage" k="pondId"
+      opts={[
+        { v: "", l: "— Select pond —" },
+        ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
+      ]}
+    />
+  );
+}
+
+function BatchSelect({ batches, f, set }: any) {
+  return (
+    <FormSelect f={f} set={set} label="Batch / Stock" k="batchId"
+      opts={[
+        { v: "", l: "— Select batch —" },
+        ...batches.map((b: any) => ({ v: b.id, l: `${b.batchNumber} (${b.species})` })),
+      ]}
+    />
+  );
+}
+
 function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, onClose, onSubmit }: any) {
   const [f, setF] = useState<any>({
     type: "CAGE",
@@ -726,40 +839,7 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
   };
   const sellable = (inventory || []).filter((i: any) => (i.quantity || 0) > 0);
 
-  const I = ({ label, k, t = "text", ...rest }: any) => (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
 
-  const S = ({ label, k, opts }: any) => (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-
-  const PondSelect = () => (
-    <S label="Pond / Tank / Cage" k="pondId"
-      opts={[
-        { v: "", l: "— Select pond —" },
-        ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
-      ]}
-    />
-  );
-  const BatchSelect = () => (
-    <S label="Batch / Stock" k="batchId"
-      opts={[
-        { v: "", l: "— Select batch —" },
-        ...batches.map((b: any) => ({ v: b.id, l: `${b.batchNumber} (${b.species})` })),
-      ]}
-    />
-  );
 
   const handle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -781,30 +861,30 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
           {type === "POND" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <I label="Name" k="name" placeholder="e.g. Akosombo Cage 5" required />
-                <I label="Pond ID" k="pondId" placeholder="Auto if blank" />
-                <S label="Type" k="type" opts={["CAGE", "POND", "TANK", "BIOFLOC", "EARTH_POND"]} />
-                <I label="Capacity (Liters)" k="capacityLiters" t="number" required min={100} />
-                <I label="Initial Biomass (kg)" k="currentBiomassKg" t="number" min={0} />
+                <FormField f={f} set={set} label="Name" k="name" placeholder="e.g. Akosombo Cage 5" required />
+                <FormField f={f} set={set} label="Pond ID" k="pondId" placeholder="Auto if blank" />
+                <FormSelect f={f} set={set} label="Type" k="type" opts={["CAGE", "POND", "TANK", "BIOFLOC", "EARTH_POND"]} />
+                <FormField f={f} set={set} label="Capacity (Liters)" k="capacityLiters" t="number" required min={100} />
+                <FormField f={f} set={set} label="Initial Biomass (kg)" k="currentBiomassKg" t="number" min={0} />
               </div>
-              <I label="Notes" k="notes" placeholder="Optional notes" />
+              <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional notes" />
             </>
           )}
 
           {type === "BATCH" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <I label="Batch Number" k="batchNumber" placeholder="Auto if blank" />
-                <S label="Species" k="species" opts={["VOLTA_TILAPIA", "AFRICAN_CATFISH", "RED_TILAPIA", "HYBRID_TILAPIA"]} />
-                <I label="Strain / Genetics" k="strainGenetics" placeholder="e.g. Local Strain" />
-                <I label="Hatch Date" k="hatchDate" t="date" />
-                <I label="Initial Count *" k="initialCount" t="number" required min={1} />
-                <I label="Avg Weight (g)" k="avgWeightGrams" t="number" min={0} />
+                <FormField f={f} set={set} label="Batch Number" k="batchNumber" placeholder="Auto if blank" />
+                <FormSelect f={f} set={set} label="Species" k="species" opts={["VOLTA_TILAPIA", "AFRICAN_CATFISH", "RED_TILAPIA", "HYBRID_TILAPIA"]} />
+                <FormField f={f} set={set} label="Strain / Genetics" k="strainGenetics" placeholder="e.g. Local Strain" />
+                <FormField f={f} set={set} label="Hatch Date" k="hatchDate" t="date" />
+                <FormField f={f} set={set} label="Initial Count *" k="initialCount" t="number" required min={1} />
+                <FormField f={f} set={set} label="Avg Weight (g)" k="avgWeightGrams" t="number" min={0} />
               </div>
-              <PondSelect />
+              <PondSelect ponds={ponds} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Target Harvest Date" k="targetHarvestDate" t="date" />
-                <I label="Current Count" k="currentCount" t="number" min={0} placeholder="Defaults to initial" />
+                <FormField f={f} set={set} label="Target Harvest Date" k="targetHarvestDate" t="date" />
+                <FormField f={f} set={set} label="Current Count" k="currentCount" t="number" min={0} placeholder="Defaults to initial" />
               </div>
             </>
           )}
@@ -812,52 +892,52 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
           {type === "FEED" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <S label="Entry Type" k="entryType" opts={[{ v: "CONSUMPTION", l: "Consumed (used)" }, { v: "PURCHASE", l: "Purchase (stock in)" }]} />
-                <S label="Feed Type" k="feedType" opts={["FLOATING", "SINKING", "STARTER", "GROWER", "FINISHER"]} />
+                <FormSelect f={f} set={set} label="Entry Type" k="entryType" opts={[{ v: "CONSUMPTION", l: "Consumed (used)" }, { v: "PURCHASE", l: "Purchase (stock in)" }]} />
+                <FormSelect f={f} set={set} label="Feed Type" k="feedType" opts={["FLOATING", "SINKING", "STARTER", "GROWER", "FINISHER"]} />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <I label="Quantity (kg) *" k="quantityKg" t="number" step="0.1" required min={0.1} />
-                <I label="Cost per kg (GH₵)" k="costPerKgGhs" t="number" step="0.01" />
+                <FormField f={f} set={set} label="Quantity (kg) *" k="quantityKg" t="number" step="0.1" required min={0.1} />
+                <FormField f={f} set={set} label="Cost per kg (GH₵)" k="costPerKgGhs" t="number" step="0.01" />
               </div>
-              <PondSelect />
-              <BatchSelect />
+              <PondSelect ponds={ponds} f={f} set={set} />
+              <BatchSelect batches={batches} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Supplier / Brand" k="brandSupplier" placeholder="e.g. Akosombo Feeds" />
-                <I label="Date" k="recordedDate" t="date" defaultValue={today} />
+                <FormField f={f} set={set} label="Supplier / Brand" k="brandSupplier" placeholder="e.g. Akosombo Feeds" />
+                <FormField f={f} set={set} label="Date" k="recordedDate" t="date" defaultValue={today} />
               </div>
             </>
           )}
 
           {type === "WATER" && (
             <>
-              <PondSelect />
+              <PondSelect ponds={ponds} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Date" k="sampleDate" t="date" defaultValue={today} />
-                <I label="Volume (L)" k="waterLiters" t="number" min={0} />
-                <I label="pH *" k="phLevel" t="number" step="0.1" required min={3} max={11} />
-                <I label="Dissolved O₂ (mg/L) *" k="dissolvedOxygenMgL" t="number" step="0.1" required min={0} max={20} />
-                <I label="Temperature (°C)" k="temperatureC" t="number" step="0.1" />
-                <I label="Ammonia (mg/L)" k="ammoniaMgL" t="number" step="0.01" min={0} />
-                <S label="Turbidity" k="turbidity" opts={["CLEAR", "MODERATE", "HIGH"]} />
-                <I label="Nitrate (mg/L)" k="nitrateMgL" t="number" step="0.1" min={0} />
+                <FormField f={f} set={set} label="Date" k="sampleDate" t="date" defaultValue={today} />
+                <FormField f={f} set={set} label="Volume (L)" k="waterLiters" t="number" min={0} />
+                <FormField f={f} set={set} label="pH *" k="phLevel" t="number" step="0.1" required min={3} max={11} />
+                <FormField f={f} set={set} label="Dissolved O₂ (mg/L) *" k="dissolvedOxygenMgL" t="number" step="0.1" required min={0} max={20} />
+                <FormField f={f} set={set} label="Temperature (°C)" k="temperatureC" t="number" step="0.1" />
+                <FormField f={f} set={set} label="Ammonia (mg/L)" k="ammoniaMgL" t="number" step="0.01" min={0} />
+                <FormSelect f={f} set={set} label="Turbidity" k="turbidity" opts={["CLEAR", "MODERATE", "HIGH"]} />
+                <FormField f={f} set={set} label="Nitrate (mg/L)" k="nitrateMgL" t="number" step="0.1" min={0} />
               </div>
-              <I label="Treatment Used" k="treatmentUsed" placeholder="e.g. Chlorine + Probiotic" />
+              <FormField f={f} set={set} label="Treatment Used" k="treatmentUsed" placeholder="e.g. Chlorine + Probiotic" />
             </>
           )}
 
           {type === "HARVEST" && (
             <>
-              <PondSelect />
-              <BatchSelect />
+              <PondSelect ponds={ponds} f={f} set={set} />
+              <BatchSelect batches={batches} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Harvest Date" k="saleDate" t="date" defaultValue={today} />
-                <S label="Species" k="species" opts={["VOLTA_TILAPIA", "AFRICAN_CATFISH", "RED_TILAPIA", "HYBRID_TILAPIA"]} />
-                <I label="Fish Count *" k="harvestedCount" t="number" required min={1} />
-                <I label="Total Weight (kg) *" k="totalWeightKg" t="number" step="0.1" required min={0.1} />
-                <I label="Revenue (GH₵)" k="revenueGhs" t="number" step="0.01" min={0} />
-                <I label="Buyer Name" k="buyerName" placeholder="e.g. Labadi Hotel" />
+                <FormField f={f} set={set} label="Harvest Date" k="saleDate" t="date" defaultValue={today} />
+                <FormSelect f={f} set={set} label="Species" k="species" opts={["VOLTA_TILAPIA", "AFRICAN_CATFISH", "RED_TILAPIA", "HYBRID_TILAPIA"]} />
+                <FormField f={f} set={set} label="Fish Count *" k="harvestedCount" t="number" required min={1} />
+                <FormField f={f} set={set} label="Total Weight (kg) *" k="totalWeightKg" t="number" step="0.1" required min={0.1} />
+                <FormField f={f} set={set} label="Revenue (GH₵)" k="revenueGhs" t="number" step="0.01" min={0} />
+                <FormField f={f} set={set} label="Buyer Name" k="buyerName" placeholder="e.g. Labadi Hotel" />
               </div>
-              <I label="Notes" k="notes" placeholder="Optional notes" />
+              <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional notes" />
             </>
           )}
 
@@ -884,7 +964,7 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
                       <input type="number" required min={0.01} step="any" max={sel?.quantity || undefined} value={f.quantity ?? ""} onChange={(e) => set("quantity", Number(e.target.value))}
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" />
                     </div>
-                    <I label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={sel ? String(sel.sellingPriceGhs) : "Auto from stock"} />
+                    <FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={sel ? String(sel.sellingPriceGhs) : "Auto from stock"} />
                   </div>
                   {sel && f.quantity ? (
                     <div className="text-[11px] text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded-lg px-3 py-2">
@@ -893,14 +973,14 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
                     </div>
                   ) : null}
                   <div className="grid grid-cols-2 gap-3">
-                    <I label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-                    <I label="Customer Phone" k="customerPhone" placeholder="024…" />
+                    <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
+                    <FormField f={f} set={set} label="Customer Phone" k="customerPhone" placeholder="024…" />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <S label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "CARD"]} />
-                    <I label="Price Override Reason" k="customPriceReason" placeholder="Only if price changed" />
+                    <FormSelect f={f} set={set} label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "CARD"]} />
+                    <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="Only if price changed" />
                   </div>
-                  <I label="Notes" k="notes" placeholder="Optional" />
+                  <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional" />
                 </>);
               })()}
             </>

@@ -61,6 +61,8 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   const [canManageStock, setCanManageStock] = useState(false);
   const [canExportData, setCanExportData] = useState(false);
   const [canManageRecords, setCanManageRecords] = useState(false);
+  const [canDeleteInventory, setCanDeleteInventory] = useState(false);
+  const [canManageExpenses, setCanManageExpenses] = useState(false);
   const [canManageCctv, setCanManageCctv] = useState(false);
   const [canManageAuditors, setCanManageAuditors] = useState(false);
   const [canManageOnline, setCanManageOnline] = useState(false);
@@ -68,6 +70,9 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   const [canViewFinance, setCanViewFinance] = useState(false);
   const [canManageSupport, setCanManageSupport] = useState(false);
   const [extraAccess, setExtraAccess] = useState<number[]>([]);
+  // Business / Unit ids the user may MANAGE with owner-equivalent power
+  // (strictly those units — everything else stays out of reach).
+  const [manageAccess, setManageAccess] = useState<number[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [canDelegateUsers, setCanDelegateUsers] = useState(false);
 
@@ -149,10 +154,13 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
     setCanManageStock(false);
     setCanExportData(false);
     setCanManageRecords(false);
+    setCanDeleteInventory(false);
+    setCanManageExpenses(false);
     setCanManageCctv(false);
     setCanManageAuditors(false);
     setCanManageSupport(false);
     setExtraAccess([]);
+    setManageAccess([]);
     setIsActive(true);
     setError("");
     setNotice("");
@@ -173,6 +181,8 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
     setCanManageStock(Boolean(u.canManageStock));
     setCanExportData(Boolean(u.canExportData));
     setCanManageRecords(Boolean(u.canManageRecords));
+    setCanDeleteInventory(Boolean(u.canDeleteInventory));
+    setCanManageExpenses(Boolean(u.canManageExpenses));
     setCanManageCctv(Boolean(u.canManageCctv));
     setCanManageAuditors(Boolean(u.canManageAuditors));
     setCanManageOnline(Boolean(u.canManageOnline));
@@ -180,6 +190,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
     setCanViewFinance(Boolean(u.canViewFinance));
     setCanManageSupport(Boolean(u.canManageSupport));
     setExtraAccess(u.extraAccessIds || []);
+    setManageAccess(Array.isArray(u.businessManageIds) ? u.businessManageIds.map(Number) : []);
     setIsActive(u.isActive !== false);
     setError("");
     setNotice("");
@@ -199,6 +210,8 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           assignedBusinessId: assignedBusinessId === "" ? null : assignedBusinessId,
           password: password || undefined,
           canRecordSales, canRecordExpenses, canManageStock, canExportData, canManageRecords,
+          canDeleteInventory: isOwner ? canDeleteInventory : undefined,
+          canManageExpenses: isOwner ? canManageExpenses : undefined,
           canManageCctv: isOwner ? canManageCctv : undefined,
           canManageAuditors: isOwner ? canManageAuditors : undefined,
           canManageOnline: isOwner ? canManageOnline : undefined,
@@ -207,6 +220,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           canManageSupport: isOwner ? canManageSupport : undefined,
           canManageUsers: isOwner ? canDelegateUsers : undefined,
           extraAccessIds: extraAccess,
+          businessManageIds: isOwner ? manageAccess : undefined,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -243,6 +257,8 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           assignedBusinessId: assignedBusinessId === "" ? null : assignedBusinessId,
           isActive,
           canRecordSales, canRecordExpenses, canManageStock, canExportData, canManageRecords,
+          canDeleteInventory: isOwner ? canDeleteInventory : undefined,
+          canManageExpenses: isOwner ? canManageExpenses : undefined,
           canManageCctv: isOwner ? canManageCctv : undefined,
           canManageAuditors: isOwner ? canManageAuditors : undefined,
           canManageOnline: isOwner ? canManageOnline : undefined,
@@ -251,6 +267,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           canManageSupport: isOwner ? canManageSupport : undefined,
           canManageUsers: isOwner ? canDelegateUsers : undefined,
           extraAccessIds: extraAccess,
+          businessManageIds: isOwner ? manageAccess : undefined,
           newPassword: isOwner && password ? password : undefined,
         }),
       });
@@ -384,6 +401,12 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
             <Toggle label="Manage & delete shared records" value={canManageRecords} onChange={setCanManageRecords} testid="perm-records" tint="cyan" />
           )}
           {isOwner && (
+            <Toggle label="Manage, edit & delete inventory entries" value={canDeleteInventory} onChange={setCanDeleteInventory} testid="perm-inventory" tint="cyan" />
+          )}
+          {isOwner && (
+            <Toggle label="Manage, edit & delete expenses" value={canManageExpenses} onChange={setCanManageExpenses} testid="perm-expense-manage" tint="cyan" />
+          )}
+          {isOwner && (
             <Toggle label="Manage CCTV cameras" value={canManageCctv} onChange={setCanManageCctv} testid="perm-cctv" tint="cyan" />
           )}
           {isOwner && (
@@ -461,6 +484,39 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
               );
             })}
           </div>
+          {isOwner && (
+            <div className="mt-3">
+              <div className="text-[10px] font-bold text-amber-300 uppercase tracking-wide mb-1">
+                Manage Business / Unit (like OWNER)
+              </div>
+              <p className="text-[10px] text-slate-400 mb-1.5 leading-snug">
+                Owner-equivalent power — full dashboard, records, settings and management —
+                strictly for the units ticked below. Unticked units stay out of reach.
+              </p>
+              <div className="max-h-36 overflow-y-auto space-y-1 pr-1" data-testid="user-form-manage-access">
+                {visibleBiz.map((b) => {
+                  const managed = manageAccess.includes(b.id);
+                  return (
+                    <label key={b.id} className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={managed}
+                        onChange={() =>
+                          setManageAccess((prev) =>
+                            managed ? prev.filter((x) => x !== b.id) : [...prev, b.id]
+                          )
+                        }
+                        data-testid={`manage-grant-${b.code}`}
+                        className="accent-amber-500"
+                      />
+                      <span className="truncate">{b.name}</span>
+                      <span className="text-[9px] text-slate-500">{b.code}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -554,6 +610,15 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
                         {!u.hasPassword && (
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
                             NO PASSWORD
+                          </span>
+                        )}
+                        {(u.businessManageIds?.length ?? 0) > 0 && (
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                            data-testid={`user-manages-${u.id}`}
+                            title="Owner-equivalent management of the granted units"
+                          >
+                            MANAGES {u.businessManageIds.length} UNIT{u.businessManageIds.length === 1 ? "" : "S"}
                           </span>
                         )}
                       </div>

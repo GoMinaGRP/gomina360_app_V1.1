@@ -18,12 +18,10 @@ import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
-const DEFAULT_BLOCK_TYPES = [
-  { typeKey: "6-INCH-SOLID", name: "6-Inch Solid Blocks", dimensions: "6in x 9in x 18in", style: "SOLID" },
-  { typeKey: "6-INCH-HOLLOW", name: "6-Inch Hollow Blocks", dimensions: "6in x 8in x 16in", style: "HOLLOW" },
-  { typeKey: "5-INCH-SOLID", name: "5-Inch Solid Blocks", dimensions: "5in x 6in x 16in", style: "SOLID" },
-  { typeKey: "PAVING-BRICKS", name: "Paving Bricks", dimensions: "4in x 8in pavers", style: "PAVING" },
-];
+// NOTE: the block production master list starts EMPTY for every business — no
+// sample block types are auto-seeded (owner directive: new / reset units begin
+// with zero sample, test or unrelated data). The demo flagship BLOCK-01
+// receives its original types from the seed (seed.ts) only.
 
 // Fallback selling prices for the factory's original types — used only when a
 // master type carries no price of its own and a stock item must be created.
@@ -145,14 +143,9 @@ export async function GET(request: NextRequest) {
       db.select().from(blockQcChecks).where(eq(blockQcChecks.businessId, businessId)),
     ]);
 
-    // Seed the block type master list once with the factory's original types
-    let types = existingTypes;
-    if (types.length === 0) {
-      for (const t of DEFAULT_BLOCK_TYPES) {
-        const [row] = await db.insert(blockTypes).values({ businessId, ...t }).returning();
-        types.push(row);
-      }
-    }
+    // The master list stays exactly as the operator has defined it (starts
+    // empty — no sample types). Self-heal SKU links only for what exists.
+    const types = existingTypes;
 
     // Self-heal master-list → inventory SKU links so Production, Restock and
     // Sales always credit one canonical stock row per block type.
@@ -208,14 +201,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: "Enter a valid block type name" }, { status: 400 });
       }
 
-      // Make sure the master list exists (seeded) before duplicate-checking
-      let existing = await db.select().from(blockTypes).where(eq(blockTypes.businessId, businessId));
-      if (existing.length === 0) {
-        for (const t of DEFAULT_BLOCK_TYPES) {
-          const [seeded] = await db.insert(blockTypes).values({ businessId, ...t }).returning();
-          existing.push(seeded);
-        }
-      }
+      // Duplicate-check against the operator's own master list (starts empty).
+      const existing = await db.select().from(blockTypes).where(eq(blockTypes.businessId, businessId));
       if (existing.some((t: any) => String(t.typeKey).toUpperCase() === typeKey)) {
         return NextResponse.json(
           { success: false, error: `"${typeKey}" is already in the block type master list` },

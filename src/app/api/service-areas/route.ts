@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { businesses, serviceAreas, pickupLocations } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { managesBusiness } from "@/lib/permissions";
 
 /**
  * Service areas / localities + pickup locations per Business (branch unit).
@@ -35,6 +36,9 @@ async function gate(request: Request, businessId: number) {
   if (!session) return { error: UNAUTHENTICATED() };
   const user = session.user as any;
   if (user.role === "OWNER") return { user };
+  // "Manage Unit" grantee — owner-equivalent for their granted unit (this
+  // includes the service/ordering settings that live here).
+  if (managesBusiness(user, businessId)) return { user };
   if (!user.canManageOnline) {
     return {
       error: FORBIDDEN(

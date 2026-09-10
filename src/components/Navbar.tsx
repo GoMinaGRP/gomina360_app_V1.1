@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   KeyRound,
   Camera,
+  Settings2,
 } from "lucide-react";
 import { CurrencyCode, CURRENCIES } from "@/lib/currency";
 import { synchronizeOfflineQueue, getOfflineQueue } from "@/lib/offlineSync";
@@ -40,6 +41,10 @@ interface NavbarProps {
   /** Opens Manage Units → Online Ordering & service areas (OWNER / GM / BM /
    *  record managers only — the entry is hidden for everyone else). */
   onOpenOnlineOrdering?: () => void;
+  /** Opens the Manage Businesses & Branches console — shown to users the
+   *  OWNER granted "Manage Unit" (businessManageIds) so the entry is always
+   *  reachable from the account menu, regardless of sidebar state. */
+  onOpenManageUnits?: () => void;
   /** Notification bell element (rendered before the account menu). */
   bellSlot?: React.ReactNode;
 }
@@ -58,6 +63,7 @@ export default function Navbar({
   onOpenChangePassword,
   onOpenProfilePhoto,
   onOpenOnlineOrdering,
+  onOpenManageUnits,
   bellSlot,
 }: NavbarProps) {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -297,6 +303,19 @@ export default function Navbar({
                   </div>
                 </div>
                 <div className="px-3 py-1 space-y-1">
+                  {onOpenManageUnits && (
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        onOpenManageUnits();
+                      }}
+                      data-testid="open-manage-units"
+                      className="w-full text-left px-3 py-2 rounded-lg text-xs font-semibold hover:bg-indigo-500/15 text-slate-200 hover:text-indigo-300 transition flex items-center justify-between"
+                    >
+                      <span>Manage Units</span>
+                      <Settings2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   {onOpenOnlineOrdering && (
                     <button
                       onClick={() => {

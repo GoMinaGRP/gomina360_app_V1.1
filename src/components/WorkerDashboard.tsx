@@ -19,8 +19,10 @@ import {
   Truck,
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
-import { addToOfflineQueue } from "@/lib/offlineSync";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
+import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface WorkerDashboardProps {
   currentUser: any;
@@ -75,6 +77,7 @@ export default function WorkerDashboard({
   const [saleSuccess, setSaleSuccess] = useState(false);
   const [saleTrackingCode, setSaleTrackingCode] = useState("");
   const [saleError, setSaleError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   // Customer form
   const [newCustName, setNewCustName] = useState("");
@@ -83,11 +86,8 @@ export default function WorkerDashboard({
   const [newCustType, setNewCustType] = useState("RETAIL");
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
 
-  // Expense form (if permitted)
-  const [expenseAmount, setExpenseAmount] = useState("");
-  const [expenseCategory, setExpenseCategory] = useState("Daily Operations");
-  const [expenseDescription, setExpenseDescription] = useState("");
-  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+  // Expense form (if permitted) — uses the shared Record Expense Information form
+  const [showExpense, setShowExpense] = useState(false);
 
   // Completion flash for the inline quick forms (customer / expense) — after
   // a completed save the form is cleared AND the worker gets an unmistakable
@@ -162,8 +162,7 @@ export default function WorkerDashboard({
   // Workers can NEVER override prices
   const canOverridePrice = false;
 
-  const handleRecordSale = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performRecordSale = async () => {
     if (cart.length === 0) return;
     setSaleError("");
     setIsSubmittingSale(true);
@@ -212,6 +211,19 @@ export default function WorkerDashboard({
     }
   };
 
+  // Confirmation gate for the Sale before final execution.
+  const handleRecordSale = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) return;
+    setConfirmEntry({
+      entity: "SALE",
+      data: { customerName: saleCustomerName, paymentMethod: salePaymentMethod, amountGhs: cartTotal },
+    });
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCustName.trim()) return;
@@ -244,50 +256,6 @@ export default function WorkerDashboard({
       console.error("Error creating customer:", err);
     } finally {
       setIsCreatingCustomer(false);
-    }
-  };
-
-  const handleRecordExpense = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!expenseAmount || Number(expenseAmount) <= 0) return;
-    setIsSubmittingExpense(true);
-
-    const payload = {
-      businessId: businessInfo?.id,
-      type: "EXPENSE",
-      category: expenseCategory,
-      amountGhs: Number(expenseAmount),
-      paymentMethod: "CASH",
-      description: expenseDescription || expenseCategory,
-      recordedBy: currentUser?.name || "Sales Person",
-    };
-
-    if (!isOnline) {
-      addToOfflineQueue("TRANSACTION", payload);
-      setIsSubmittingExpense(false);
-      setExpenseAmount("");
-      setExpenseDescription("");
-      flashSaved("✓ Expense queued offline — it posts automatically when you're back online.");
-      onRefreshData();
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/transactions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        setExpenseAmount("");
-        setExpenseDescription("");
-        flashSaved("✓ Expense recorded — form cleared for the next one.");
-        onRefreshData();
-      }
-    } catch (err) {
-      console.error("Expense recording error:", err);
-    } finally {
-      setIsSubmittingExpense(false);
     }
   };
 
@@ -587,63 +555,24 @@ export default function WorkerDashboard({
               </form>
             )}
 
-            {/* Daily Expense form (if permitted) */}
+            {/* Daily Expense (if permitted) — shared Record Expense Information form */}
             {canRecordExpenses && (
               <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl">
                 <div className="flex items-center space-x-2 pb-4 border-b border-slate-700/70">
                   <ArrowUpRight className="w-5 h-5 text-amber-400" />
                   <h3 className="text-base font-bold text-white">Record Daily Expense</h3>
                 </div>
-
-                <form onSubmit={handleRecordExpense} className="mt-4 space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Amount ({currentCurrency})
-                      </label>
-                      <input
-                        type="number"
-                        required
-                        step="0.01"
-                        min="0.01"
-                        placeholder="0.00"
-                        value={expenseAmount}
-                        onChange={(e) => setExpenseAmount(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm font-bold focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Category
-                      </label>
-                      <input
-                        type="text"
-                        value={expenseCategory}
-                        onChange={(e) => setExpenseCategory(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Description
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={expenseDescription}
-                      onChange={(e) => setExpenseDescription(e.target.value)}
-                      placeholder="e.g. Bought cleaning supplies for the shop"
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-amber-500 resize-none"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isSubmittingExpense}
-                    className="w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-sm shadow transition disabled:opacity-50"
-                  >
-                    {isSubmittingExpense ? "Recording..." : "Submit Expense"}
-                  </button>
-                </form>
+                <p className="text-xs text-slate-400 mt-3">
+                  Record an expense with a category, amount, payment method, vendor, description and receipt photo — linked to your branch automatically.
+                </p>
+                <button
+                  type="button"
+                  data-testid="worker-open-expense"
+                  onClick={() => setShowExpense(true)}
+                  className="mt-4 w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold text-sm shadow transition"
+                >
+                  Record Expense
+                </button>
               </div>
             )}
           </div>
@@ -926,6 +855,44 @@ export default function WorkerDashboard({
         </div>
         )}
       </div>
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); flashSaved("✓ Expense recorded — it appears in your branch ledger."); onRefreshData(); }}
+        businessId={businessInfo?.id}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense Information"
+        contextLabel={businessInfo?.name || "Branch"}
+        vendorPlaceholder="e.g. supplier or vendor name"
+        defaultCategory="Daily Operations"
+        defaultCategories={[
+          { value: "Daily Operations", label: "📋 Daily Operations" },
+          { value: "Stock & Supplies", label: "📦 Stock & Supplies" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
+        ]}
+        testid="worker-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          setConfirmEntry(null);
+          performRecordSale();
+        }}
+        testid="worker-confirm-entry"
+      />
     </div>
   );
 }

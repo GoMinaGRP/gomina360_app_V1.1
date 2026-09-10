@@ -23,6 +23,7 @@ import {
 import LocationSelector, { LocationValue } from "./LocationSelector";
 import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
+import { businessManageIdsOf } from "@/lib/permissions";
 
 /** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
  *  the same convention used for employee photos and document uploads. */
@@ -96,6 +97,16 @@ export default function ManageBusinessesModal({
   initialOnlineBizId = null,
 }: ManageBusinessesModalProps) {
   const isOwner = currentUser?.role === "OWNER";
+  // OWNER-delegated "Manage Unit" grants: owner-equivalent management controls
+  // (Edit, Business Type, service/ordering settings, Reset) — strictly for the
+  // granted units. Deactivate & Delete stay OWNER-only.
+  const managedIds = useMemo(
+    () => new Set<number>(businessManageIdsOf(currentUser)),
+    [currentUser]
+  );
+  const isUnitManager = managedIds.size > 0;
+  /** Owner-equivalent controls over one specific unit. */
+  const canFullyManage = (biz: any) => isOwner || managedIds.has(Number(biz.id));
   // Authorized staff: manager roles (and owner-delegated record managers) may
   // run Online Ordering & the service area for businesses they can access —
   // the businesses list itself is already access-scoped by the server, and
@@ -620,7 +631,8 @@ export default function ManageBusinessesModal({
           actorUserId: currentUser?.id ?? null,
           confirmCode: confirmText.trim(),
           resetMasterLists: resetMasters,
-          resetUsers: resetStaffUsers,
+          // Un-assigning staff users stays OWNER-only (re-checked server-side).
+          resetUsers: isOwner ? resetStaffUsers : false,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -669,7 +681,8 @@ export default function ManageBusinessesModal({
           contactPhone,
           initialCapitalGhs: Number(initialCapitalGhs),
           monthlyTargetRevenueGhs: Number(monthlyTargetRevenueGhs),
-          status,
+          // Deactivation / status changes stay OWNER-only.
+          ...(isOwner ? { status } : {}),
         }),
       });
       const d = await res.json().catch(() => null);
@@ -783,6 +796,8 @@ export default function ManageBusinessesModal({
                 {mode === "list" &&
                   (isOwner
                     ? "Owner console — add, edit, relocate, change type, online ordering & service areas, deactivate or permanently delete any unit"
+                    : isUnitManager
+                    ? "Unit manager console — edit, change business type, online ordering & service settings, and reset the units the OWNER granted you (deactivate & delete stay with the OWNER)"
                     : "Manage online ordering, service areas & share links for your businesses")}
                 {mode === "edit" && `Editing ${selected?.name} (${selected?.code})`}
                 {mode === "delete" && `Confirm permanent deletion of ${selected?.name}`}
@@ -815,9 +830,16 @@ export default function ManageBusinessesModal({
 
         {/* Body */}
         <div className="p-6 overflow-y-auto space-y-4">
-          {!isOwner && (
+          {!isOwner && !isUnitManager && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 p-3 rounded-lg text-xs">
               Only the OWNER can change business units. You are viewing this console read-only.
+            </div>
+          )}
+          {!isOwner && isUnitManager && (
+            <div className="bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 p-3 rounded-lg text-xs" data-testid="manage-unit-banner">
+              You manage the unit(s) granted by the OWNER. Edit, business type, online ordering &
+              service settings and reset are enabled for those units only — deactivate and delete
+              remain OWNER-only.
             </div>
           )}
           {error && (
@@ -902,6 +924,15 @@ export default function ManageBusinessesModal({
                               >
                                 {(biz.status || "ACTIVE").toUpperCase()}
                               </span>
+                              {!isOwner && canFullyManage(biz) && (
+                                <span
+                                  data-testid={`manage-biz-granted-${biz.code}`}
+                                  className="text-[10px] font-black bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40"
+                                  title="The OWNER granted you management of this unit"
+                                >
+                                  YOU MANAGE
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                               <span>{biz.category}</span>
@@ -985,10 +1016,49 @@ export default function ManageBusinessesModal({
                             </button>
                           </div>
                         )}
+                        {/* "Manage Unit" grantee: owner-equivalent management for
+                            THIS granted unit — Edit (rename/relocate/type),
+                            Online ordering & service settings, and Reset.
+                            Deactivate & Delete stay OWNER-only (not rendered). */}
+                        {!isOwner && canFullyManage(biz) && (
+                          <div className="flex items-center gap-1.5 shrink-0" data-testid={`manage-biz-manage-${biz.code}`}>
+                            <button
+                              onClick={() => openOnline(biz)}
+                              data-testid={`manage-biz-online-${biz.code}`}
+                              title="Online ordering, service area & share QR/links"
+                              className={`flex items-center gap-1 px-2 py-2 rounded-lg text-[10px] font-black transition ${
+                                biz.onlineOrderingEnabled === false
+                                  ? "bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
+                                  : "bg-slate-700/70 hover:bg-emerald-500/30 text-slate-200 hover:text-emerald-300"
+                              }`}
+                            >
+                              <Globe className="w-4 h-4" />
+                              <span>Online</span>
+                            </button>
+                            <button
+                              onClick={() => openEdit(biz)}
+                              data-testid={`manage-biz-edit-${biz.code}`}
+                              title="Edit / rename / relocate / change type"
+                              className="flex items-center gap-1 px-2 py-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition text-[10px] font-black"
+                            >
+                              <Pencil className="w-4 h-4" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              onClick={() => openReset(biz)}
+                              data-testid={`manage-biz-reset-${biz.code}`}
+                              title="Reset to new business state — clears all operational records"
+                              className="flex items-center gap-1 px-2 py-2 rounded-lg bg-slate-700/70 hover:bg-cyan-500/30 text-slate-200 hover:text-cyan-300 transition text-[10px] font-black"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                              <span>Reset</span>
+                            </button>
+                          </div>
+                        )}
                         {/* Authorized staff (GM / BM / record managers): ONLY the
                             online-ordering & service-area panel — every save is
                             re-checked server-side against their business access. */}
-                        {!isOwner && canManageOnline && (
+                        {!isOwner && !canFullyManage(biz) && canManageOnline && (
                           <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               onClick={() => openOnline(biz)}
@@ -1677,7 +1747,7 @@ export default function ManageBusinessesModal({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid ${isOwner ? "grid-cols-2" : "grid-cols-1"} gap-3`}>
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">
                     Business Type
@@ -1701,22 +1771,24 @@ export default function ManageBusinessesModal({
                     </p>
                   )}
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">
-                    Operational Status
-                  </label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {isOwner && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Operational Status
+                    </label>
+                    <select
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                    >
+                      {STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               <div className="pt-1 border-t border-slate-800">
@@ -1946,19 +2018,21 @@ export default function ManageBusinessesModal({
                     templates are wiped and re-seeded to the type defaults.
                   </span>
                 </label>
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={resetStaffUsers}
-                    onChange={(e) => setResetStaffUsers(e.target.checked)}
-                    data-testid="manage-reset-users"
-                    className="mt-0.5 accent-cyan-500"
-                  />
-                  <span className="text-slate-200">
-                    <b className="text-cyan-300">Also un-assign staff users</b> — user accounts
-                    are kept but un-assigned from this unit, ready for re-deployment.
-                  </span>
-                </label>
+                {isOwner && (
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={resetStaffUsers}
+                      onChange={(e) => setResetStaffUsers(e.target.checked)}
+                      data-testid="manage-reset-users"
+                      className="mt-0.5 accent-cyan-500"
+                    />
+                    <span className="text-slate-200">
+                      <b className="text-cyan-300">Also un-assign staff users</b> — user accounts
+                      are kept but un-assigned from this unit, ready for re-deployment.
+                    </span>
+                  </label>
+                )}
               </div>
 
               <div>

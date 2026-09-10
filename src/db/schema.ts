@@ -34,6 +34,20 @@ export const users = pgTable("users", {
   // (Transactions & MoMo, Suppliers & Vendors, Employees & Payroll). The OWNER
   // always retains full control; managers act only while this flag is granted.
   canManageRecords: boolean("can_manage_records").default(false),
+  // OWNER-granted "delete-inventory" permission: a non-OWNER may only manage,
+  // edit and delete Inventory & Stock entries while this flag is granted. The
+  // OWNER always retains full control. Like canManageRecords this is a
+  // user-level grant (not per-business), so it applies uniformly to inventory
+  // entries of every business type — existing or newly created. Grant/revoke
+  // is OWNER-only.
+  canDeleteInventory: boolean("can_delete_inventory").default(false),
+  // OWNER-granted "manage-expenses" permission: a non-OWNER may only edit and
+  // delete EXPENSE transactions while this flag is granted. The OWNER always
+  // retains full control. Like canManageRecords and canDeleteInventory this is
+  // a user-level grant (not per-business), so it applies uniformly to the
+  // expenses of every business type and branch — existing or newly created.
+  // Grant/revoke is OWNER-only.
+  canManageExpenses: boolean("can_manage_expenses").default(false),
   // OWNER-delegated user administration: a BRANCH_MANAGER / GENERAL_MANAGER
   // carrying this flag may open Users & Access and create workers AND branch
   // managers, assign role/business/branch/permissions, and edit or deactivate
@@ -73,6 +87,12 @@ export const users = pgTable("users", {
   // that shoppers see inside the storefront's HELP panel. The OWNER always
   // edits it; grant/revoke is OWNER-only.
   canManageSupport: boolean("can_manage_support").default(false),
+  // OWNER-granted "Manage Business / Unit" delegation: the list of business
+  // ids this user may manage with OWNER-equivalent power — full dashboard,
+  // records, settings and management functions — strictly for THOSE units
+  // only. Every other business stays out of reach. Grant/revoke is
+  // OWNER-only. (Stored as a JSONB array of integer business ids.)
+  businessManageIds: jsonb("business_manage_ids").$type<number[]>(),
   // ── Secure login ──────────────────────────────────────────────────────
   // scrypt password hash (format "scrypt:<salt_hex>:<hash_hex>"); null until
   // the OWNER sets a password for the account.
@@ -1758,6 +1778,7 @@ export const AUDIT_MODULES = [
   "ATTENDANCE",
   "ASSETS",
   "CCTV",
+  "USERS",
 ] as const;
 
 /** Issue lifecycle for flagged records / correction requests:

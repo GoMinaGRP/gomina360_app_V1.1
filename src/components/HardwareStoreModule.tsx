@@ -15,6 +15,9 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 type Props = {
   currentUser: any;
@@ -80,9 +83,11 @@ export default function HardwareStoreModule({
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [opsLogs, setOpsLogs] = useState<any[]>([]);
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [trackItem, setTrackItem] = useState<{ type: "ORDER" | "DELIVERY"; row: any } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!bizId) return;
@@ -264,7 +269,18 @@ export default function HardwareStoreModule({
   }, [branchInventory, orders, enRouteAging, profit, today]);
 
   // ── Submit router ─────────────────────────────────────────────────────
-  const submit = async (entity: FormType, data: any) => {
+  const submit = (entity: FormType, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity: String(entity), data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
+  const performSubmit = async (entity: FormType, data: any) => {
     setBusy(true); setError("");
     try {
       let d: any;
@@ -430,7 +446,7 @@ export default function HardwareStoreModule({
           <button data-testid="hw-open-purchase" onClick={() => setShowForm("PURCHASE")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><Truck className="w-3.5 h-3.5" />Purchase</button>
           <button data-testid="hw-open-delivery" onClick={() => setShowForm("DELIVERY")} className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center gap-1"><HardHat className="w-3.5 h-3.5" />Delivery</button>
           <button data-testid="hw-open-grn" onClick={() => setShowForm("GRN")} className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1"><ClipboardCheck className="w-3.5 h-3.5" />GRN</button>
-          <button data-testid="hw-open-expense" onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="hw-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -782,10 +798,55 @@ export default function HardwareStoreModule({
       )}
 
       {showForm && <HardwareForm type={showForm} busy={busy} onClose={() => { setShowForm(null); setError(""); }} onSubmit={submit} inventory={branchInventory} suppliers={suppliers} orders={orders} currency={currentCurrency} />}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense — Hardware Store"
+        contextLabel="Hardware Store"
+        vendorPlaceholder="e.g. cement & building supplies dealer"
+        defaultCategory="Forklift Fuel"
+        defaultCategories={[
+          { value: "Forklift Fuel", label: "⛽ Forklift Fuel" },
+          { value: "Yard Rent", label: "🏗️ Yard Rent" },
+          { value: "Utilities", label: "💡 Utilities" },
+          { value: "Transport", label: "🚛 Transport" },
+          { value: "Payroll", label: "👷 Payroll" },
+          { value: "Equipment Repair", label: "🔧 Equipment Repair" },
+          { value: "Packaging", label: "📦 Packaging" },
+          { value: "Miscellaneous", label: "📋 Miscellaneous" },
+        ]}
+        testid="hw-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity as FormType, c.data);
+        }}
+        testid="hw-confirm-entry"
+      />
       {trackItem && <HardwareTrackModal track={trackItem} currency={currentCurrency} onClose={() => setTrackItem(null)} />}
     </div>
   );
 }
+
+function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input data-testid={`hwf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
+function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select data-testid={`hwf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
 
 function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, orders, currency }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -796,8 +857,6 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
     unit: "Units", condition: "GOOD",
   });
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const I = ({ label, k, t = "text", ...rest }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input data-testid={`hwf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>;
-  const S = ({ label, k, opts }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select data-testid={`hwf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>;
   const title =
     type === "SALE" ? "Record Sale / Payment" :
     type === "EXPENSE" ? "Record Expense" :
@@ -820,40 +879,40 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" data-testid="hw-form"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button data-testid="hwf-close" onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
     {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div>
-      <S label="Material (in stock)" k="inventoryId" opts={[{ v: "", l: "— select material —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-2 gap-3"><I label="Quantity" k="quantity" t="number" required min={1} /><I label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
-      <div className="grid grid-cols-2 gap-3"><S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><I label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><I label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
-      <I label="Custom price reason (if discounted)" k="customPriceReason" /><I label="Notes" k="notes" />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
+      <FormSelect f={f} set={set} label="Material (in stock)" k="inventoryId" opts={[{ v: "", l: "— select material —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><FormField f={f} set={set} label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
+      <FormField f={f} set={set} label="Custom price reason (if discounted)" k="customPriceReason" /><FormField f={f} set={set} label="Notes" k="notes" />
       {saleTotal > 0 && <div className="text-xs text-amber-300 font-bold" data-testid="hwf-sale-total">Total: {formatMoney(saleTotal, currency)}</div>}
     </>}
-    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><I label="Category" k="category" placeholder="Forklift Fuel, Yard Rent, Utilities..." required /><I label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><I label="Date" k="date" t="date" /></div><I label="Description" k="description" /></>}
-    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><I label="Material Name" k="name" required /><I label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><I label="Category" k="category" placeholder="Cement & Mortar" list="hw-item-cats" /><I label="Unit" k="unit" placeholder="Bags, Lengths, Sheets…" /></div><div className="grid grid-cols-2 gap-3"><I label="Opening Qty" k="quantity" t="number" min={0} /><I label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><I label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><I label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="hw-item-cats">{MATERIAL_CATS.map((c) => <option key={c} value={c} />)}</datalist></>}
-    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div><S label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><I label="Material Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. Torkor Blocks 6in Hollow"} />{selectedItem && !f.itemName && <p className="text-[10px] text-amber-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><I label="Qty" k="quantity" t="number" required min={1} /><I label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><I label="Due Date" k="dueDate" t="date" /></div><I label="Delivery Site" k="deliverySite" placeholder="e.g. East Legon Site, Plot 14" /><I label="Notes" k="notes" /></>}
+    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Forklift Fuel, Yard Rent, Utilities..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
+    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Material Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Cement & Mortar" list="hw-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags, Lengths, Sheets…" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="hw-item-cats">{MATERIAL_CATS.map((c) => <option key={c} value={c} />)}</datalist></>}
+    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Material Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. Torkor Blocks 6in Hollow"} />{selectedItem && !f.itemName && <p className="text-[10px] text-amber-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormField f={f} set={set} label="Delivery Site" k="deliverySite" placeholder="e.g. East Legon Site, Plot 14" /><FormField f={f} set={set} label="Notes" k="notes" /></>}
     {type === "PURCHASE" && <>
-      <div className="grid grid-cols-2 gap-3"><S label="Supplier" k="supplierName" opts={(suppliers || []).map((s: any) => s.name)} /><I label="Material / Product" k="itemName" placeholder={selectedItem?.name || "e.g. Ghacem 42.5R Cement 50kg"} required /></div>
-      <S label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— auto-match by name —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-3 gap-3"><I label="Qty" k="quantity" t="number" required min={1} /><I label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" required /><I label="Sell Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" placeholder="new items" /></div>
-      <div className="grid grid-cols-2 gap-3"><S label="Status" k="status" opts={purchaseStatusOpts} /><I label="Order Date" k="orderDate" t="date" /></div>
-      <S label="Payment (if received)" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Supplier" k="supplierName" opts={(suppliers || []).map((s: any) => s.name)} /><FormField f={f} set={set} label="Material / Product" k="itemName" placeholder={selectedItem?.name || "e.g. Ghacem 42.5R Cement 50kg"} required /></div>
+      <FormSelect f={f} set={set} label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— auto-match by name —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
+      <div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" required /><FormField f={f} set={set} label="Sell Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" placeholder="new items" /></div>
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Status" k="status" opts={purchaseStatusOpts} /><FormField f={f} set={set} label="Order Date" k="orderDate" t="date" /></div>
+      <FormSelect f={f} set={set} label="Payment (if received)" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
       <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer"><input data-testid="hwf-recordExpense" type="checkbox" checked={f.recordExpense !== false} onChange={(e) => set("recordExpense", e.target.checked)} className="accent-indigo-500 w-3.5 h-3.5" />Book expense to Finance when received (Recommended)</label>
-      <I label="Notes" k="notes" />
+      <FormField f={f} set={set} label="Notes" k="notes" />
     </>}
     {type === "DELIVERY" && <>
-      <div className="grid grid-cols-2 gap-3"><I label="Customer" k="customerName" required /><S label="Linked order (optional)" k="orderNumber" opts={[{ v: "", l: "— standalone dispatch —" }, ...(orders || []).filter((o: any) => ["PENDING", "READY"].includes(o.status)).map((o: any) => ({ v: o.orderNumber, l: `${o.orderNumber} • ${o.itemName}` }))]} /></div>
-      <I label="Site Address" k="siteAddress" placeholder="e.g. East Legon Site, Plot 14" />
-      <S label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— select material —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <I label="Material Name (if not listed)" k="itemName" placeholder={selectedItem?.name || "auto from selection"} />
-      <div className="grid grid-cols-2 gap-3"><I label="Quantity" k="quantity" t="number" required min={1} /><I label="Unit" k="unit" placeholder="Bags, Lengths…" /></div>
-      <div className="grid grid-cols-2 gap-3"><I label="Driver" k="driverName" /><I label="Vehicle No." k="vehicleNumber" placeholder="GN-1234-26" /></div>
-      <I label="Dispatch Date" k="dispatchDate" t="date" />
-      <I label="Notes" k="notes" />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer" k="customerName" required /><FormSelect f={f} set={set} label="Linked order (optional)" k="orderNumber" opts={[{ v: "", l: "— standalone dispatch —" }, ...(orders || []).filter((o: any) => ["PENDING", "READY"].includes(o.status)).map((o: any) => ({ v: o.orderNumber, l: `${o.orderNumber} • ${o.itemName}` }))]} /></div>
+      <FormField f={f} set={set} label="Site Address" k="siteAddress" placeholder="e.g. East Legon Site, Plot 14" />
+      <FormSelect f={f} set={set} label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— select material —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
+      <FormField f={f} set={set} label="Material Name (if not listed)" k="itemName" placeholder={selectedItem?.name || "auto from selection"} />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags, Lengths…" /></div>
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Driver" k="driverName" /><FormField f={f} set={set} label="Vehicle No." k="vehicleNumber" placeholder="GN-1234-26" /></div>
+      <FormField f={f} set={set} label="Dispatch Date" k="dispatchDate" t="date" />
+      <FormField f={f} set={set} label="Notes" k="notes" />
     </>}
     {type === "GRN" && <>
-      <div className="grid grid-cols-2 gap-3"><I label="Supplier" k="supplierName" required /><I label="Material Received" k="itemName" placeholder="e.g. Ghacem 42.5R Cement 50kg" required /></div>
-      <div className="grid grid-cols-3 gap-3"><I label="Qty Received" k="quantityReceived" t="number" min={0} step="0.1" required /><I label="Unit" k="unit" placeholder="Bags" /><I label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" min={0} /></div>
-      <div className="grid grid-cols-2 gap-3"><S label="Condition" k="condition" opts={["GOOD", "PARTIAL", "DAMAGED"]} /><I label="Received By" k="receivedBy" /></div>
-      <S label="Payment Method" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Supplier" k="supplierName" required /><FormField f={f} set={set} label="Material Received" k="itemName" placeholder="e.g. Ghacem 42.5R Cement 50kg" required /></div>
+      <div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty Received" k="quantityReceived" t="number" min={0} step="0.1" required /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags" /><FormField f={f} set={set} label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" min={0} /></div>
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Condition" k="condition" opts={["GOOD", "PARTIAL", "DAMAGED"]} /><FormField f={f} set={set} label="Received By" k="receivedBy" /></div>
+      <FormSelect f={f} set={set} label="Payment Method" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
       <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer"><input data-testid="hwf-grn-recordExpense" type="checkbox" checked={f.recordExpense !== false} onChange={(e) => set("recordExpense", e.target.checked)} className="accent-cyan-500 w-3.5 h-3.5" />Book landed cost to Finance (Recommended)</label>
       <p className="text-[10px] text-slate-500">Posting a GRN tops up the matching stock item (or creates it) — the yard log doubles as the stock-intake ledger.</p>
     </>}

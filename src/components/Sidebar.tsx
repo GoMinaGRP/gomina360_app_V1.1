@@ -31,7 +31,9 @@ import {
   HardHat,
   Landmark,
   Wifi,
+  Settings2,
 } from "lucide-react";
+import { businessManageIdsOf } from "@/lib/permissions";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
@@ -74,6 +76,8 @@ interface SidebarProps {
    *  assignment AND every business the OWNER granted via Users & Access →
    *  "Extra business access" (user_business_access). */
   accessibleBusinessIds?: number[] | null;
+  /** Opens Manage Businesses & Branches — shown to "Manage Unit" grantees. */
+  onOpenManageBusinesses?: () => void;
 }
 
 export default function Sidebar({
@@ -84,12 +88,18 @@ export default function Sidebar({
   auditEligible,
   onOpenSupportInfo,
   accessibleBusinessIds,
+  onOpenManageBusinesses,
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
   const isExecutive =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
   const assignedBusinessId = currentUser?.assignedBusinessId;
+  // OWNER-delegated "Manage Business / Unit" managers: owner-equivalent power
+  // strictly for the granted units — they get the same enterprise sections,
+  // but every list stays server-scoped to the units they may reach.
+  const managedBizIds = new Set(businessManageIdsOf(currentUser));
+  const isUnitManager = managedBizIds.size > 0;
 
   // Collapsible static menu: pinned rail at all times (never hidden) — the
   // toggle shrinks it to an icon-only strip so content gets the room back.
@@ -266,6 +276,15 @@ export default function Sidebar({
                       GRANTED
                     </span>
                   )}
+                  {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
+                    <span
+                      className="text-[8px] font-black text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded shrink-0"
+                      data-testid={`sidebar-chip-manage-${biz.code}`}
+                      title="Owner-equivalent management of this unit"
+                    >
+                      MANAGE
+                    </span>
+                  )}
                   {(biz.status || "").toUpperCase() === "INACTIVE" && (
                     <span className="text-[9px] font-black text-rose-300 bg-rose-500/15 border border-rose-500/40 px-1 py-0.5 rounded shrink-0">
                       INACTIVE
@@ -304,13 +323,29 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Shared Enterprise Management Modules — Owner / General Manager only */}
-      {isExecutive && (
+      {/* Shared Enterprise Management Modules — Owner / General Manager, plus
+          any user the OWNER granted "Manage Business / Unit" power (scoped). */}
+      {(isExecutive || isUnitManager) && (
         <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
           <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             Shared Enterprise Modules
           </div>
           <div className="space-y-1 mt-1">
+            {!isExecutive && isUnitManager && onOpenManageBusinesses && (
+              <button
+                onClick={onOpenManageBusinesses}
+                data-testid="sidebar-manage-units"
+                className="w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition text-indigo-300 hover:bg-indigo-500/15 hover:text-indigo-200 border border-indigo-500/30 bg-indigo-500/5"
+              >
+                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                  <Settings2 className="w-4 h-4 text-indigo-400" />
+                  <span>Manage Units</span>
+                </div>
+                <span className="hidden sm:inline text-[8px] font-black bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded border border-amber-500/30">
+                  GRANTED
+                </span>
+              </button>
+            )}
             <button
               onClick={() => selectTab("SALES_CENTER")}
               data-testid="sidebar-tab-sales"

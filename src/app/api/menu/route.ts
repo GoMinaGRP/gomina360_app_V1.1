@@ -34,16 +34,30 @@ export async function GET() {
       if (b.onlineOrderingEnabled === false) continue;
       const products = itemRows
         .filter((i) => i.businessId === b.id)
-        .map((i) => ({
-          id: i.id,
-          sku: i.sku,
-          name: i.name,
-          category: i.category,
-          unit: i.unit,
-          price: i.sellingPriceGhs,
-          available: Math.max(0, Math.floor(i.quantity)),
-          photo: i.photo || null,
-        }));
+        .map((i) => {
+          // Every image registered for the product — the primary `photo` plus
+          // any extra shots in the `photos` array — exposed so the customer
+          // storefront can render an Amazon-style gallery (main image,
+          // thumbnails, click-to-preview, next/previous). Never cost prices,
+          // margins or other internal fields.
+          const gallery = Array.isArray(i.photos) && i.photos.length > 0
+            ? i.photos.filter((p: any) => typeof p === "string" && p.length > 0)
+            : [];
+          const allPhotos: string[] = [];
+          if (typeof i.photo === "string" && i.photo.length > 0) allPhotos.push(i.photo);
+          for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
+          return {
+            id: i.id,
+            sku: i.sku,
+            name: i.name,
+            category: i.category,
+            unit: i.unit,
+            price: i.sellingPriceGhs,
+            available: Math.max(0, Math.floor(i.quantity)),
+            photo: i.photo || null,
+            photos: allPhotos,
+          };
+        });
       if (products.length === 0) continue;
       result.push({
         businessId: b.id,

@@ -22,6 +22,8 @@ import {
   transactions,
   inventoryItems,
   employees,
+  customers,
+  suppliers,
   assets,
   businesses,
   cctvCameras,
@@ -34,6 +36,9 @@ import {
   carWashLogs,
   hardwareLogs,
   checklistEntries,
+  recordDeletionLogs,
+  employeeHistory,
+  assetAuditLogs,
   auditAssignments,
   auditReviews,
   auditIssueUpdates,
@@ -42,6 +47,7 @@ import {
   AUDIT_MODULES,
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 
 const MODULES = [...AUDIT_MODULES] as string[];
@@ -110,12 +116,17 @@ async function scopeFor(user: any): Promise<Scope> {
   // Auditor assignment — and then strictly inside the businesses, branches
   // and modules of that assignment. Managers carrying canManageAuditors may
   // open the center to manage grants inside their own businesses.
+  //
+  // Additionally, a user the OWNER granted "Manage Business / Unit" power
+  // reviews those units in full — every module, every branch — scoped to the
+  // granted units only.
+  const managedIds = businessManageIdsOf(user);
   const grants = (await db
     .select()
     .from(auditAssignments)
     .where(eq(auditAssignments.userId, user.id))).filter((g) => g.isActive);
   const canGrant = !!user.canManageAuditors;
-  if (grants.length === 0 && !canGrant) {
+  if (grants.length === 0 && !canGrant && managedIds.length === 0) {
     return { eligible: false, level: "NONE", businessIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
   }
   const moduleByBusiness: Record<number, string[]> = {};
@@ -128,11 +139,15 @@ async function scopeFor(user: any): Promise<Scope> {
       ? null
       : [...new Set([...(branchByBusiness[g.businessId] || []), g.branchCode])];
   }
+  for (const bid of managedIds) {
+    moduleByBusiness[bid] = MODULES; // full module coverage for managed units
+    branchByBusiness[bid] = null;    // all branches of the managed unit
+  }
   const grantBusinessIds = canGrant ? ((await accessibleBusinessIds(user)) || []) : [];
   return {
     eligible: true,
     level: grants.length > 0 ? "AUDITOR" : "SUPERVISOR",
-    businessIds: [...new Set(grants.map((g) => g.businessId))],
+    businessIds: [...new Set([...grants.map((g) => g.businessId), ...managedIds])],
     moduleByBusiness,
     branchByBusiness,
     canGrant,
@@ -177,17 +192,26 @@ export type AuditRecordRow = {
   date: string;
   amountGhs: number | null;
   status: string | null;
+  /** Number of photos/attachments on the underlying record (for the Records
+   *  table's gallery indicator — actual images resolve in the detail view). */
+  imageCount?: number;
 };
 
 const day10 = (v: any) => String(v ?? "").slice(0, 10);
 const tsDay = (v: any) => (v ? new Date(v).toISOString().slice(0, 10) : "");
 
+let codeOfCache: Map<number, string> = new Map();
+async function codeOf(): Promise<Map<number, string>> {
+  // Refreshed per request so newly-created businesses resolve immediately.
+  codeOfCache = new Map((await db.select().from(businesses)).map((b) => [b.id, b.code]));
+  return codeOfCache;
+}
+const branchOf = (businessId: number, branchCode?: string | null) => branchCode || codeOfCache.get(businessId) || null;
+
 /** Pulls the reviewable universe for this caller from the EXISTING tables and
  *  normalizes it into one shape the control center can browse. */
 async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
-  const bizRows = await db.select().from(businesses);
-  const codeOf = new Map(bizRows.map((b) => [b.id, b.code]));
-  const branchOf = (businessId: number, branchCode?: string | null) => branchCode || codeOf.get(businessId) || null;
+  const codeMap = await codeOf();
   const keep = (businessId: number, module: string, branchCode?: string | null) => scope.businessIds === null || canSeeRecord(scope, businessId, module, branchCode);
   const rows: AuditRecordRow[] = [];
   const push = (r: AuditRecordRow) => { if (keep(r.businessId, r.module, r.branchCode)) rows.push(r); };
@@ -195,24 +219,28 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   // FINANCE — transactions & MoMo (INCOME = sales, EXPENSE/INVESTMENT/TRANSFER)
   const txns = await db.select().from(transactions).orderBy(desc(transactions.id)).limit(240);
   for (const t of txns) {
+    const receipts = Array.isArray(t.receiptImages) ? t.receiptImages.length : t.receiptImage ? 1 : 0;
     push({
       key: `TRANSACTION:transactions:${t.id}`, recordType: "TRANSACTION", recordSource: "transactions", recordId: t.id,
       ref: t.transactionNumber, title: `${t.type} · ${t.category} — GH₵ ${Number(t.amountGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
-      detail: `${t.paymentMethod} · ${t.description}`,
+      detail: `${t.paymentMethod} · ${t.date} · ${t.description}${t.recordedBy ? ` · by ${t.recordedBy}` : ""}`,
       module: "FINANCE", businessId: t.businessId, branchCode: branchOf(t.businessId, t.branchCode),
       workerName: t.recordedBy, date: day10(t.date) || tsDay(t.createdAt), amountGhs: t.amountGhs, status: t.status || "COMPLETED",
+      imageCount: receipts,
     });
   }
 
-  // INVENTORY — stock items
+  // INVENTORY — stock items (full detail: quantities, prices, dates, photos)
   const items = await db.select().from(inventoryItems).orderBy(desc(inventoryItems.id)).limit(200);
   for (const i of items) {
+    const photoCount = Array.isArray(i.photos) ? i.photos.length : i.photo ? 1 : 0;
     push({
       key: `INVENTORY_ITEM:inventory_items:${i.id}`, recordType: "INVENTORY_ITEM", recordSource: "inventory_items", recordId: i.id,
       ref: i.sku, title: `${i.name} — ${i.quantity} ${i.unit}`,
-      detail: `${i.category} · threshold ${i.minStockThreshold} ${i.unit}`,
+      detail: `${i.category} · ${i.quantity} ${i.unit} in stock · cost GH₵ ${Number(i.costPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · sell GH₵ ${Number(i.sellingPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · min ${i.minStockThreshold} ${i.unit}${i.expiryDate ? ` · expires ${i.expiryDate}` : ""}${photoCount > 0 ? ` · ${photoCount} photo(s)` : ""}${i.registeredByName ? ` · registered by ${i.registeredByName}` : ""}`,
       module: "INVENTORY", businessId: i.businessId, branchCode: branchOf(i.businessId, i.branchCode),
-      workerName: null, date: "", amountGhs: null, status: i.status || "IN_STOCK",
+      workerName: i.registeredByName, date: tsDay(i.registeredAt), amountGhs: i.sellingPriceGhs, status: i.status || "IN_STOCK",
+      imageCount: photoCount,
     });
   }
 
@@ -223,8 +251,9 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       key: `EMPLOYEE:employees:${e.id}`, recordType: "EMPLOYEE", recordSource: "employees", recordId: e.id,
       ref: `EMP-${e.id}`, title: `${e.name} — ${e.role}`,
       detail: `Salary GH₵ ${Number(e.salaryGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · hired ${e.hireDate} · ${e.branch}`,
-      module: "EMPLOYEES", businessId: e.businessId, branchCode: codeOf.get(e.businessId) || null,
+      module: "EMPLOYEES", businessId: e.businessId, branchCode: codeMap.get(e.businessId) || null,
       workerName: e.name, date: day10(e.hireDate), amountGhs: e.salaryGhs, status: e.status || "ACTIVE",
+      imageCount: e.photo ? 1 : 0,
     });
   }
 
@@ -267,9 +296,10 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     push({
       key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id,
       ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`,
-      detail: `Value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location}`,
+      detail: `Purchased GH₵ ${Number(a.purchasePriceGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location} · next maintenance ${a.nextMaintenanceDate}${a.description ? ` · ${a.description}` : ""}${Array.isArray(a.assetImages) && a.assetImages.length ? ` · ${a.assetImages.length} image(s)` : ""}`,
       module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode),
       workerName: a.recorderName, date: tsDay(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition,
+      imageCount: Array.isArray(a.assetImages) ? a.assetImages.length : 0,
     });
   }
 
@@ -316,6 +346,72 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       module: "OPERATIONS", businessId: c.businessId, branchCode: branchOf(c.businessId, c.branchCode),
       workerName: c.completedByName || c.assignedToName, workerUserId: c.assignedToUserId ?? null,
       date: day10(c.checklistDate), amountGhs: null, status: c.isCompleted ? "COMPLETED" : "PENDING",
+    });
+  }
+
+  // ASSETS — the immutable activity/approval log (add, edit, transfer, delete,
+  // approve, reject) is itself reviewable, and links to the live asset record.
+  const assetById = new Map((await db.select().from(assets)).map((a) => [a.id, a]));
+  const assetActs = await db.select().from(assetAuditLogs).orderBy(desc(assetAuditLogs.id)).limit(200);
+  for (const act of assetActs) {
+    const ast = assetById.get(act.assetId);
+    if (!ast) continue; // orphan log (asset hard-deleted) — skip
+    push({
+      key: `ASSET_ACTIVITY:asset_audit_logs:${act.id}`, recordType: "ASSET_ACTIVITY", recordSource: "asset_audit_logs", recordId: act.id,
+      ref: act.assetCode || `AST-${act.assetId}`, title: `Asset ${act.assetCode || `AST-${act.assetId}`} — ${act.action}`,
+      detail: `${act.status}${act.requestedByName ? ` · requested by ${act.requestedByName}` : ""}${act.approvedByName ? ` · approved by ${act.approvedByName}` : ""}${act.resolvedAt ? ` · resolved ${tsDay(act.resolvedAt)}` : ""}`,
+      module: "ASSETS", businessId: ast.businessId, branchCode: branchOf(ast.businessId, ast.branchCode),
+      workerName: act.requestedByName, date: tsDay(act.createdAt), amountGhs: ast.currentValueGhs, status: act.status,
+    });
+  }
+
+  // EMPLOYEES — the HR history log (created, updated, photo/document changes).
+  const empHist = await db.select().from(employeeHistory).orderBy(desc(employeeHistory.id)).limit(200);
+  for (const h of empHist) {
+    push({
+      key: `EMPLOYEE_HISTORY:employee_history:${h.id}`, recordType: "EMPLOYEE_HISTORY", recordSource: "employee_history", recordId: h.id,
+      ref: `EMP-${h.employeeId}`, title: `${h.summary}`,
+      detail: `${h.field ? `${h.field}: ` : ""}${h.oldValue ? `${h.oldValue} → ` : ""}${h.newValue || ""}${h.changedByName ? ` · by ${h.changedByName}` : ""}`,
+      module: "EMPLOYEES", businessId: h.businessId, branchCode: codeMap.get(h.businessId) || null,
+      workerName: h.changedByName, date: tsDay(h.createdAt), amountGhs: null, status: h.action,
+    });
+  }
+
+  // DELETION — the immutable record-deletion log (full snapshot preserved).
+  // Supplier deletions carry no business context (suppliers are a global
+  // directory), so they surface for the unrestricted OWNER only.
+  const DELETION_MODULE: Record<string, string> = { TRANSACTIONS: "FINANCE", INVENTORY: "INVENTORY", EMPLOYEES: "EMPLOYEES" };
+  const delRows = await db.select().from(recordDeletionLogs).orderBy(desc(recordDeletionLogs.id)).limit(200);
+  for (const d of delRows) {
+    const mod = DELETION_MODULE[d.module];
+    if (!mod) continue;
+    const snap: any = d.recordSnapshot || {};
+    push({
+      key: `DELETION:record_deletion_logs:${d.id}`, recordType: "DELETION", recordSource: "record_deletion_logs", recordId: d.id,
+      ref: `DEL-${d.id}`, title: `${d.recordLabel} — deleted`,
+      detail: `Deleted by ${d.deletedByName} (${d.deletedByRole}) · reason: ${d.reason}`,
+      module: mod, businessId: Number(snap.businessId) || 0, branchCode: branchOf(Number(snap.businessId) || 0, snap.branchCode),
+      workerName: d.deletedByName, date: tsDay(d.createdAt), amountGhs: snap.amountGhs ?? null, status: "DELETED",
+      imageCount: Array.isArray(snap.photos) ? snap.photos.length : snap.photo ? 1 : Array.isArray(snap.assetImages) ? snap.assetImages.length : 0,
+    });
+  }
+
+  // USERS — access-management activities (grant/revoke auditor access,
+  // delegate/revoke auditor-management) linked into the Records section.
+  const userActs = await db.select().from(auditTrail)
+    .where(eq(auditTrail.targetType, "USER"))
+    .orderBy(desc(auditTrail.id)).limit(120);
+  const grantActs = await db.select().from(auditTrail)
+    .where(eq(auditTrail.targetType, "GRANT"))
+    .orderBy(desc(auditTrail.id)).limit(120);
+  const accessActs = [...userActs, ...grantActs].sort((a, b) => b.id - a.id);
+  for (const t of accessActs) {
+    push({
+      key: `USER_ACTIVITY:audit_trail:${t.id}`, recordType: "USER_ACTIVITY", recordSource: "audit_trail", recordId: t.id,
+      ref: `ACT-${t.id}`, title: `${t.action} — ${t.targetLabel}`,
+      detail: `${t.actorName} (${t.actorRole})${t.reason ? ` · ${t.reason}` : ""}${t.detail ? ` · ${t.detail}` : ""}`,
+      module: "USERS", businessId: t.businessId ?? 0, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
+      workerName: t.actorName, date: tsDay(t.createdAt), amountGhs: null, status: "LOGGED",
     });
   }
 
@@ -448,6 +544,31 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: true, eligible: scope.eligible, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds });
     }
     if (!scope.eligible) return FORBIDDEN("You have no Supervisor or Auditor access. The OWNER grants Auditor permissions.");
+
+    // Detail drawer: the complete underlying record (full row + photos +
+    // related/child records) for a single row — scope-checked server-side.
+    if (url.searchParams.get("record") === "1") {
+      const rt = (url.searchParams.get("recordType") || "").toUpperCase();
+      const rs = url.searchParams.get("recordSource") || null;
+      const rid = Number(url.searchParams.get("recordId") || 0);
+      if (!rt || !rid) return NextResponse.json({ success: false, error: "recordType and recordId are required" }, { status: 400 });
+      if (rt === "SUPPLIER" || rt === "CUSTOMER") {
+        // Global vendor/customer directory — shared across units, so it is
+        // visible to every eligible auditor (they already see the full party
+        // summary in the parent transaction's related list).
+        const detail = await loadFullRecord(rt, rs, rid);
+        if (!detail) return NextResponse.json({ success: false, error: "Record not found" }, { status: 404 });
+        return NextResponse.json({ success: true, detail });
+      }
+      const scoped = await resolveRecord(rt, rs, rid);
+      if (!scoped) return NextResponse.json({ success: false, error: "Unknown record type" }, { status: 404 });
+      if (!canSeeRecord(scope, scoped.businessId ?? 0, scoped.module, scoped.branchCode)) {
+        return FORBIDDEN("This record is outside your audit scope.");
+      }
+      const detail = await loadFullRecord(rt, rs, rid);
+      if (!detail) return NextResponse.json({ success: false, error: "Record not found" }, { status: 404 });
+      return NextResponse.json({ success: true, detail });
+    }
 
     const fBusiness = Number(url.searchParams.get("businessId") || 0) || null;
     const fModule = (url.searchParams.get("module") || "").toUpperCase();
@@ -582,6 +703,186 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
         workerName: r.completedByName || r.assignedToName,
         workerUserId: r.assignedToUserId ?? null,
       };
+    }
+    case "ASSET_ACTIVITY": {
+      const r = await first(await db.select().from(assetAuditLogs).where(eq(assetAuditLogs.id, recordId)));
+      if (!r) return null;
+      const ast = r.assetId ? await first(await db.select().from(assets).where(eq(assets.id, r.assetId))) : null;
+      return { businessId: ast?.businessId, branchCode: ast?.branchCode, module: "ASSETS", ref: r.assetCode || `AST-${r.assetId}`, title: `Asset ${r.assetCode || `AST-${r.assetId}`} — ${r.action}`, workerName: r.requestedByName };
+    }
+    case "EMPLOYEE_HISTORY": {
+      const r = await first(await db.select().from(employeeHistory).where(eq(employeeHistory.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: null, module: "EMPLOYEES", ref: `EMP-${r.employeeId}`, title: r.summary, workerName: r.changedByName };
+    }
+    case "DELETION": {
+      const r = await first(await db.select().from(recordDeletionLogs).where(eq(recordDeletionLogs.id, recordId)));
+      if (!r) return null;
+      const snap: any = r.recordSnapshot || {};
+      const mod = ({ TRANSACTIONS: "FINANCE", INVENTORY: "INVENTORY", EMPLOYEES: "EMPLOYEES" } as Record<string, string>)[r.module];
+      if (!mod) return null;
+      return { businessId: Number(snap.businessId) || 0, branchCode: snap.branchCode, module: mod, ref: `DEL-${r.id}`, title: `${r.recordLabel} — deleted`, workerName: r.deletedByName };
+    }
+    case "USER_ACTIVITY": {
+      const r = await first(await db.select().from(auditTrail).where(eq(auditTrail.id, recordId)));
+      return r && { businessId: r.businessId ?? 0, branchCode: r.branchCode, module: "USERS", ref: `ACT-${r.id}`, title: `${r.action} — ${r.targetLabel}`, workerName: r.actorName };
+    }
+    case "PAYROLL_ENTRY": {
+      const r = await first(await db.select().from(payrollEntries).where(eq(payrollEntries.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode, module: "PAYROLL", ref: `PE-${r.id}`, title: `${r.employeeName} — net GH₵ ${Number(r.netPayGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, workerName: r.employeeName };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Builds a related-record row (same shape the Records table expects) so the
+ *  detail drawer can list children/parties and the auditor can jump straight
+ *  into each of them. */
+type RelatedRow = {
+  key: string;
+  recordType: string;
+  recordSource: string | null;
+  recordId: number;
+  ref: string;
+  title: string;
+  detail: string;
+  module: string;
+  businessId: number;
+  branchCode: string | null;
+  date: string;
+  amountGhs: number | null;
+  status: string | null;
+  imageCount: number;
+};
+
+const ghc = (n: any) => Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 });
+
+const photoList = (r: any): string[] => {
+  const out: string[] = [];
+  if (Array.isArray(r?.photos)) for (const p of r.photos) if (typeof p === "string" && p) out.push(p);
+  if (Array.isArray(r?.receiptImages)) for (const p of r.receiptImages) if (typeof p === "string" && p) out.push(p);
+  if (typeof r?.receiptImage === "string" && r.receiptImage) out.push(r.receiptImage);
+  if (Array.isArray(r?.assetImages)) for (const p of r.assetImages) if (typeof p === "string" && p) out.push(p);
+  if (typeof r?.photo === "string" && r.photo) out.push(r.photo);
+  return out;
+};
+
+/** Loads the complete underlying record for the Records detail drawer: the full
+ *  source row (`record`), every photo/attachment on it (`photos`), and its
+ *  related/child records (`related`, already in Records-row shape). Activity and
+ *  deletion rows link back to the live record they mutated. */
+async function loadFullRecord(recordType: string, recordSource: string | null, recordId: number) {
+  const first = async (rows: any[]) => rows[0] || null;
+  const related = (rows: RelatedRow[]) => rows;
+  await codeOf();
+
+  switch (recordType) {
+    case "TRANSACTION": {
+      const r = await first(await db.select().from(transactions).where(eq(transactions.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.customerId) {
+        const c = await first(await db.select().from(customers).where(eq(customers.id, r.customerId)));
+        if (c) rel.push({ key: `CUSTOMER:customers:${c.id}`, recordType: "CUSTOMER", recordSource: "customers", recordId: c.id, ref: `CUS-${c.id}`, title: `${c.name} — ${c.type}`, detail: `${c.phone}${c.region ? ` · ${c.region}` : ""} · total spent GH₵ ${ghc(c.totalSpentGhs)}`, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(c.createdAt), amountGhs: c.totalSpentGhs, status: null, imageCount: 0 });
+      }
+      if (r.supplierId) {
+        const s = await first(await db.select().from(suppliers).where(eq(suppliers.id, r.supplierId)));
+        if (s) rel.push({ key: `SUPPLIER:suppliers:${s.id}`, recordType: "SUPPLIER", recordSource: "suppliers", recordId: s.id, ref: `SUP-${s.id}`, title: `${s.name} — ${s.category}`, detail: `${s.contactPerson} · ${s.phone} · ${s.paymentTerms} · supplied GH₵ ${ghc(s.totalSuppliedGhs)}`, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(s.createdAt), amountGhs: s.totalSuppliedGhs, status: null, imageCount: 0 });
+      }
+      const linkedPay = await db.select().from(payrollEntries).where(eq(payrollEntries.transactionId, recordId)).limit(1);
+      for (const p of linkedPay) rel.push({ key: `PAYROLL_ENTRY:payroll_entries:${p.id}`, recordType: "PAYROLL_ENTRY", recordSource: "payroll_entries", recordId: p.id, ref: `PE-${p.id}`, title: `${p.employeeName} — net GH₵ ${ghc(p.netPayGhs)}`, detail: `Gross GH₵ ${ghc(p.grossPayGhs)} · deductions GH₵ ${ghc(p.totalEmployeeDeductionsGhs)} · ${p.status}`, module: "PAYROLL", businessId: p.businessId, branchCode: p.branchCode, date: tsDay(p.createdAt), amountGhs: p.netPayGhs, status: p.status, imageCount: 0 });
+      return { record: r, photos: photoList(r), related: related(rel) };
+    }
+    case "INVENTORY_ITEM": {
+      const r = await first(await db.select().from(inventoryItems).where(eq(inventoryItems.id, recordId)));
+      if (!r) return null;
+      const sib = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, r.businessId)).limit(12);
+      const rel: RelatedRow[] = sib.filter((x) => x.id !== r.id).slice(0, 8).map((x) => ({
+        key: `INVENTORY_ITEM:inventory_items:${x.id}`, recordType: "INVENTORY_ITEM", recordSource: "inventory_items", recordId: x.id, ref: x.sku,
+        title: `${x.name} — ${x.quantity} ${x.unit}`, detail: `sell GH₵ ${ghc(x.sellingPriceGhs)} · cost GH₵ ${ghc(x.costPriceGhs)} · status ${x.status || "IN_STOCK"}`,
+        module: "INVENTORY", businessId: x.businessId, branchCode: branchOf(x.businessId, x.branchCode), date: tsDay(x.registeredAt), amountGhs: x.sellingPriceGhs, status: x.status || "IN_STOCK", imageCount: Array.isArray(x.photos) ? x.photos.length : 0,
+      }));
+      return { record: r, photos: photoList(r), related: related(rel) };
+    }
+    case "EMPLOYEE": {
+      const r = await first(await db.select().from(employees).where(eq(employees.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      const hist = await db.select().from(employeeHistory).where(eq(employeeHistory.employeeId, recordId)).limit(10);
+      for (const h of hist) rel.push({ key: `EMPLOYEE_HISTORY:employee_history:${h.id}`, recordType: "EMPLOYEE_HISTORY", recordSource: "employee_history", recordId: h.id, ref: `EMP-${h.employeeId}`, title: h.summary, detail: `${h.field ? `${h.field}: ` : ""}${h.oldValue ? `${h.oldValue} → ` : ""}${h.newValue || ""} · by ${h.changedByName}`, module: "EMPLOYEES", businessId: h.businessId, branchCode: null, date: tsDay(h.createdAt), amountGhs: null, status: h.action, imageCount: 0 });
+      const pays = await db.select().from(payrollEntries).where(eq(payrollEntries.employeeId, recordId)).limit(10);
+      for (const p of pays) rel.push({ key: `PAYROLL_ENTRY:payroll_entries:${p.id}`, recordType: "PAYROLL_ENTRY", recordSource: "payroll_entries", recordId: p.id, ref: `PE-${p.id}`, title: `${p.employeeName} — net GH₵ ${ghc(p.netPayGhs)}`, detail: `Gross GH₵ ${ghc(p.grossPayGhs)} · ${p.status}`, module: "PAYROLL", businessId: p.businessId, branchCode: p.branchCode, date: tsDay(p.createdAt), amountGhs: p.netPayGhs, status: p.status, imageCount: 0 });
+      return { record: r, photos: photoList(r), related: related(rel) };
+    }
+    case "PAYROLL_RUN": {
+      const r = await first(await db.select().from(payrollRuns).where(eq(payrollRuns.id, recordId)));
+      if (!r) return null;
+      const entries = await db.select().from(payrollEntries).where(eq(payrollEntries.runId, recordId));
+      const rel: RelatedRow[] = entries.map((p) => ({
+        key: `PAYROLL_ENTRY:payroll_entries:${p.id}`, recordType: "PAYROLL_ENTRY", recordSource: "payroll_entries", recordId: p.id, ref: `PE-${p.id}`,
+        title: `${p.employeeName} — net GH₵ ${ghc(p.netPayGhs)}`,
+        detail: `Gross GH₵ ${ghc(p.grossPayGhs)} · SSNIT EE GH₵ ${ghc(p.ssnitEmployeeGhs)} · PAYE GH₵ ${ghc(p.payeGhs)} · deductions GH₵ ${ghc(p.totalEmployeeDeductionsGhs)} · ${p.status}`,
+        module: "PAYROLL", businessId: p.businessId, branchCode: p.branchCode, date: tsDay(p.createdAt), amountGhs: p.netPayGhs, status: p.status, imageCount: 0,
+      }));
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "ASSET": {
+      const r = await first(await db.select().from(assets).where(eq(assets.id, recordId)));
+      if (!r) return null;
+      const acts = await db.select().from(assetAuditLogs).where(eq(assetAuditLogs.assetId, recordId)).limit(12);
+      const rel: RelatedRow[] = acts.map((a) => ({
+        key: `ASSET_ACTIVITY:asset_audit_logs:${a.id}`, recordType: "ASSET_ACTIVITY", recordSource: "asset_audit_logs", recordId: a.id, ref: a.assetCode || `AST-${a.assetId}`,
+        title: `Asset ${a.assetCode || `AST-${a.assetId}`} — ${a.action}`,
+        detail: `${a.status}${a.requestedByName ? ` · requested by ${a.requestedByName}` : ""}${a.approvedByName ? ` · approved by ${a.approvedByName}` : ""}`,
+        module: "ASSETS", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(a.createdAt), amountGhs: r.currentValueGhs, status: a.status, imageCount: 0,
+      }));
+      return { record: r, photos: photoList(r), related: related(rel) };
+    }
+    case "ASSET_ACTIVITY": {
+      const r = await first(await db.select().from(assetAuditLogs).where(eq(assetAuditLogs.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.assetId) {
+        const ast = await first(await db.select().from(assets).where(eq(assets.id, r.assetId)));
+        if (ast) rel.push({ key: `ASSET:assets:${ast.id}`, recordType: "ASSET", recordSource: "assets", recordId: ast.id, ref: ast.assetCode || `AST-${ast.id}`, title: `${ast.name} — ${ast.assetType} · ${ast.condition}`, detail: `value GH₵ ${ghc(ast.currentValueGhs)} · ${ast.location}`, module: "ASSETS", businessId: ast.businessId, branchCode: branchOf(ast.businessId, ast.branchCode), date: tsDay(ast.recordedAt), amountGhs: ast.currentValueGhs, status: ast.condition, imageCount: Array.isArray(ast.assetImages) ? ast.assetImages.length : 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "EMPLOYEE_HISTORY": {
+      const r = await first(await db.select().from(employeeHistory).where(eq(employeeHistory.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      const emp = await first(await db.select().from(employees).where(eq(employees.id, r.employeeId)));
+      if (emp) rel.push({ key: `EMPLOYEE:employees:${emp.id}`, recordType: "EMPLOYEE", recordSource: "employees", recordId: emp.id, ref: `EMP-${emp.id}`, title: `${emp.name} — ${emp.role}`, detail: `salary GH₵ ${ghc(emp.salaryGhs)} · ${emp.branch}`, module: "EMPLOYEES", businessId: emp.businessId, branchCode: null, date: day10(emp.hireDate), amountGhs: emp.salaryGhs, status: emp.status || "ACTIVE", imageCount: emp.photo ? 1 : 0 });
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "DELETION": {
+      const r = await first(await db.select().from(recordDeletionLogs).where(eq(recordDeletionLogs.id, recordId)));
+      if (!r) return null;
+      const snap: any = r.recordSnapshot || {};
+      return { record: r, photos: photoList(snap), related: related([]) };
+    }
+    case "USER_ACTIVITY": {
+      const r = await first(await db.select().from(auditTrail).where(eq(auditTrail.id, recordId)));
+      return r ? { record: r, photos: [], related: related([]) } : null;
+    }
+    case "SUPPLIER": {
+      const r = await first(await db.select().from(suppliers).where(eq(suppliers.id, recordId)));
+      return r ? { record: r, photos: [], related: related([]) } : null;
+    }
+    case "CUSTOMER": {
+      const r = await first(await db.select().from(customers).where(eq(customers.id, recordId)));
+      return r ? { record: r, photos: [], related: related([]) } : null;
+    }
+    case "PAYROLL_ENTRY": {
+      const r = await first(await db.select().from(payrollEntries).where(eq(payrollEntries.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.runId) {
+        const run = await first(await db.select().from(payrollRuns).where(eq(payrollRuns.id, r.runId)));
+        if (run) rel.push({ key: `PAYROLL_RUN:payroll_runs:${run.id}`, recordType: "PAYROLL_RUN", recordSource: "payroll_runs", recordId: run.id, ref: `PR-${run.id} · ${run.period}`, title: `Payroll ${run.period} (${run.status})`, detail: `${run.status}${run.approvedByName ? ` · approved by ${run.approvedByName}` : ""}`, module: "PAYROLL", businessId: run.businessId, branchCode: run.branchCode, date: tsDay(run.createdAt), amountGhs: null, status: run.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
     }
     default:
       return null;

@@ -62,61 +62,62 @@ export default function SpecializedBusinessView({
   const [showLogModal, setShowLogModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Form states for all 7 businesses
-  const [batchNumber, setBatchNumber] = useState("BATCH-2026-L03");
+  // Form states for all 7 businesses — start EMPTY / neutral (owner directive:
+  // new & reset units must never pre-fill sample or demo values).
+  const [batchNumber, setBatchNumber] = useState("");
   const [birdType, setBirdType] = useState("LAYERS");
-  const [totalBirds, setTotalBirds] = useState(4000);
-  const [dailyEggsTrays, setDailyEggsTrays] = useState(135);
-  const [feedConsumedKg, setFeedConsumedKg] = useState(420);
+  const [totalBirds, setTotalBirds] = useState(0);
+  const [dailyEggsTrays, setDailyEggsTrays] = useState(0);
+  const [feedConsumedKg, setFeedConsumedKg] = useState(0);
   const [mortalityCount, setMortalityCount] = useState(0);
   const [healthStatus, setHealthStatus] = useState("HEALTHY");
 
   // Block Factory form state
-  const [batchId, setBatchId] = useState("BLK-PROD-099");
+  const [batchId, setBatchId] = useState("");
   const [blockType, setBlockType] = useState("6-INCH-SOLID");
-  const [bagsCementUsed, setBagsCementUsed] = useState(60);
-  const [blocksMolded, setBlocksMolded] = useState(1800);
-  const [blocksBroken, setBlocksBroken] = useState(9);
+  const [bagsCementUsed, setBagsCementUsed] = useState(0);
+  const [blocksMolded, setBlocksMolded] = useState(0);
+  const [blocksBroken, setBlocksBroken] = useState(0);
   const [qualityGrade, setQualityGrade] = useState("GRADE_A_STANDARD");
 
   // Aquaculture form state
-  const [pondId, setPondId] = useState("CAGE-VOLTA-05");
+  const [pondId, setPondId] = useState("");
   const [species, setSpecies] = useState("VOLTA_TILAPIA");
-  const [stockCount, setStockCount] = useState(10000);
-  const [averageWeightGrams, setAverageWeightGrams] = useState(780);
-  const [phLevel, setPhLevel] = useState(7.2);
-  const [dissolvedOxygen, setDissolvedOxygen] = useState(6.7);
-  const [fcr, setFcr] = useState(1.3);
+  const [stockCount, setStockCount] = useState(0);
+  const [averageWeightGrams, setAverageWeightGrams] = useState(0);
+  const [phLevel, setPhLevel] = useState(0);
+  const [dissolvedOxygen, setDissolvedOxygen] = useState(0);
+  const [fcr, setFcr] = useState(0);
 
   // Livestock form state
-  const [tagNumber, setTagNumber] = useState("GH-COW-205");
+  const [tagNumber, setTagNumber] = useState("");
   const [animalType, setAnimalType] = useState("CATTLE");
-  const [breed, setBreed] = useState("SANGA");
-  const [weightKg, setWeightKg] = useState(410);
+  const [breed, setBreed] = useState("");
+  const [weightKg, setWeightKg] = useState(0);
   const [vaccinationStatus, setVaccinationStatus] = useState("UP_TO_DATE");
   const [pregnantStatus, setPregnantStatus] = useState(false);
 
   // Restaurant form state
-  const [totalOrders, setTotalOrders] = useState(165);
-  const [mostPopularDish, setMostPopularDish] = useState("Jollof Rice with Grilled Tilapia & Pepper Sauce");
-  const [foodCostPercent, setFoodCostPercent] = useState(27.4);
-  const [wastePercent, setWastePercent] = useState(2.3);
-  const [momoReceiptsGhs, setMomoReceiptsGhs] = useState(5400);
-  const [cashReceiptsGhs, setCashReceiptsGhs] = useState(2300);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const [mostPopularDish, setMostPopularDish] = useState("");
+  const [foodCostPercent, setFoodCostPercent] = useState(0);
+  const [wastePercent, setWastePercent] = useState(0);
+  const [momoReceiptsGhs, setMomoReceiptsGhs] = useState(0);
+  const [cashReceiptsGhs, setCashReceiptsGhs] = useState(0);
 
   // Electronics form state
-  const [serialNumber, setSerialNumber] = useState(`SN-SOL-5KVA-${Math.floor(10000 + Math.random() * 90000)}`);
-  const [productName, setProductName] = useState("5kVA Solar Hybrid Inverter + Smart BMS");
-  const [brand, setBrand] = useState("Felicity Solar");
-  const [warrantyMonths, setWarrantyMonths] = useState(24);
+  const [serialNumber, setSerialNumber] = useState("");
+  const [productName, setProductName] = useState("");
+  const [brand, setBrand] = useState("");
+  const [warrantyMonths, setWarrantyMonths] = useState(0);
   const [inStock, setInStock] = useState(true);
-  const [retailPriceGhs, setRetailPriceGhs] = useState(13500);
+  const [retailPriceGhs, setRetailPriceGhs] = useState(0);
 
   // Car Wash form state
-  const [vehiclesWashed, setVehiclesWashed] = useState(48);
-  const [chemicalUsedLiters, setChemicalUsedLiters] = useState(13.5);
-  const [totalRevenueGhs, setTotalRevenueGhs] = useState(2600);
-  const [waterPressurePsi, setWaterPressurePsi] = useState(3200);
+  const [vehiclesWashed, setVehiclesWashed] = useState(0);
+  const [chemicalUsedLiters, setChemicalUsedLiters] = useState(0);
+  const [totalRevenueGhs, setTotalRevenueGhs] = useState(0);
+  const [waterPressurePsi, setWaterPressurePsi] = useState(0);
 
   const bizCategory = businessInfo?.category || "Enterprise Unit";
   const upperCode = (businessCode || "").toUpperCase();
@@ -228,103 +229,100 @@ export default function SpecializedBusinessView({
     return <Activity className="w-6 h-6 text-emerald-400" />;
   };
 
-  // Calculate specialized KPIs for this business from its logs
+  // Calculate specialized KPIs for this business from its logs.
+  // NOTE (owner directive): a clean / reset unit must show honest, zero-based
+  // metrics and empty states — never sample or demo numbers. Every card below
+  // is derived purely from the unit's own recorded logs ("—" when none exist).
   const getSpecializedKpiCards = () => {
+    const logs = specializedLogs || [];
+    const sum = (key: string) => logs.reduce((a: number, r: any) => a + (Number(r[key]) || 0), 0);
+    const avg = (key: string, digits = 1) =>
+      logs.length > 0 ? (sum(key) / logs.length).toFixed(digits) : "—";
+
     if (upperCode.startsWith("POULTRY")) {
-      const totalTrays = specializedLogs.reduce((acc, r) => acc + (r.dailyEggsTrays || 0), 0);
-      const avgFeed =
-        specializedLogs.length > 0
-          ? (
-              specializedLogs.reduce((acc, r) => acc + (r.feedConsumedKg || 0), 0) /
-              specializedLogs.length
-            ).toFixed(1)
-          : "390.0";
+      const totalTrays = sum("dailyEggsTrays");
+      const totalBirds = sum("totalBirds");
+      const mortalities = sum("mortalityCount");
+      const mortalityRate = totalBirds > 0 ? ((mortalities / totalBirds) * 100).toFixed(2) : "—";
       return [
-        { label: "Total Eggs Harvested", value: `${totalTrays} Trays`, subtitle: "Grade A Large (30/Tray)" },
-        { label: "Avg Feed Consumed/Day", value: `${avgFeed} Kg`, subtitle: "Maize & Concentrate" },
-        { label: "Mortality Rate", value: "0.02%", subtitle: "Below 1% industry target" },
-        { label: "Flock Health Status", value: "HEALTHY", subtitle: "Veterinary Check Passed" },
+        { label: "Total Eggs Harvested", value: `${totalTrays.toLocaleString()} Trays`, subtitle: "From recorded operations" },
+        { label: "Avg Feed Consumed/Day", value: avg("feedConsumedKg") === "—" ? "—" : `${avg("feedConsumedKg")} Kg`, subtitle: "Recorded feed logs" },
+        { label: "Mortality Rate", value: mortalityRate === "—" ? "—" : `${mortalityRate}%`, subtitle: "From recorded operations" },
+        { label: "Total Birds Placed", value: totalBirds.toLocaleString(), subtitle: "Across recorded batches" },
       ];
     }
 
     if (upperCode.startsWith("BLOCK")) {
-      const totalBlocks = specializedLogs.reduce((acc, r) => acc + (r.blocksMolded || 0), 0);
-      const totalBroken = specializedLogs.reduce((acc, r) => acc + (r.blocksBroken || 0), 0);
-      const breakRate =
-        totalBlocks > 0 ? ((totalBroken / totalBlocks) * 100).toFixed(2) : "0.55";
+      const totalBlocks = sum("blocksMolded");
+      const totalBroken = sum("blocksBroken");
+      const breakRate = totalBlocks > 0 ? ((totalBroken / totalBlocks) * 100).toFixed(2) : "—";
       return [
-        { label: "Blocks Molded", value: `${totalBlocks.toLocaleString()} Units`, subtitle: "6-Inch Solid & Hollow" },
-        { label: "Breakage Rate", value: `${breakRate}%`, subtitle: "Below 1.0% QC threshold" },
-        { label: "Cement Bags Used", value: `${specializedLogs.reduce((a, r) => a + (r.bagsCementUsed || 0), 0)} Bags`, subtitle: "Ghacem 42.5R Grade" },
-        { label: "Quality Assessment", value: "GRADE A", subtitle: "Standard Heavy-Duty" },
+        { label: "Blocks Molded", value: `${totalBlocks.toLocaleString()} Units`, subtitle: "From recorded production" },
+        { label: "Breakage Rate", value: breakRate === "—" ? "—" : `${breakRate}%`, subtitle: "From recorded production" },
+        { label: "Cement Bags Used", value: `${sum("bagsCementUsed").toLocaleString()} Bags`, subtitle: "From recorded production" },
+        { label: "Batches Logged", value: String(logs.length), subtitle: "Production entries this unit" },
       ];
     }
 
     if (upperCode.startsWith("AQUA")) {
-      const avgPh =
-        specializedLogs.length > 0
-          ? (
-              specializedLogs.reduce((acc, r) => acc + (r.phLevel || 0), 0) /
-              specializedLogs.length
-            ).toFixed(1)
-          : "7.2";
-      const avgDo =
-        specializedLogs.length > 0
-          ? (
-              specializedLogs.reduce((acc, r) => acc + (r.dissolvedOxygen || 0), 0) /
-              specializedLogs.length
-            ).toFixed(1)
-          : "6.6";
       return [
-        { label: "Dissolved Oxygen", value: `${avgDo} mg/L`, subtitle: "Optimal Cage Range: 6-8 mg/L" },
-        { label: "Water pH Level", value: avgPh, subtitle: "Akosombo & Sogakope Basin" },
-        { label: "Avg Feed Conversion (FCR)", value: "1.30", subtitle: "High Biomass Efficiency" },
-        { label: "Active Stock Biomass", value: "20,500 Kg", subtitle: "Volta Tilapia & Catfish" },
+        { label: "Avg Dissolved O₂", value: avg("dissolvedOxygen") === "—" ? "—" : `${avg("dissolvedOxygen")} mg/L`, subtitle: "Recorded water logs" },
+        { label: "Avg Water pH", value: avg("phLevel"), subtitle: "Recorded water logs" },
+        { label: "Avg FCR", value: avg("fcr", 2), subtitle: "Recorded feed conversion" },
+        { label: "Active Stock Count", value: sum("stockCount").toLocaleString(), subtitle: "Across recorded cages/ponds" },
       ];
     }
 
     if (upperCode.startsWith("LIVESTOCK")) {
+      const herd = logs.length;
+      const vaccinated = logs.filter((r: any) => String(r.vaccinationStatus || "").toUpperCase() === "UP_TO_DATE").length;
+      const breeding = logs.filter((r: any) => !!r.pregnantStatus).length;
+      const avgWeight = avg("weightKg");
       return [
-        { label: "Total Active Tagged Herd", value: `${specializedLogs.length || 2} Animals`, subtitle: "Cattle, Goats & Sheep" },
-        { label: "Vaccination Compliance", value: "100%", subtitle: "Veterinary Up-to-Date" },
-        { label: "Avg Adult Cattle Weight", value: "418.5 Kg", subtitle: "Sanga Breed Standard" },
-        { label: "Pregnant / Breeding", value: "1 Active", subtitle: "Calving expected next quarter" },
+        { label: "Total Tagged Herd", value: `${herd.toLocaleString()} Animals`, subtitle: "Recorded animals" },
+        { label: "Vaccination Compliance", value: herd > 0 ? `${Math.round((vaccinated / herd) * 100)}%` : "—", subtitle: herd > 0 ? `${vaccinated} of ${herd} up-to-date` : "No records yet" },
+        { label: "Avg Animal Weight", value: avgWeight === "—" ? "—" : `${avgWeight} Kg`, subtitle: "Recorded weights" },
+        { label: "Pregnant / Breeding", value: `${breeding} Active`, subtitle: "Recorded breeding status" },
       ];
     }
 
     if (upperCode.startsWith("FOOD")) {
-      const totalOrdersCount = specializedLogs.reduce((acc, r) => acc + (r.totalOrders || 0), 0);
+      const totalOrders = sum("totalOrders");
+      const momo = sum("momoReceiptsGhs");
+      const cash = sum("cashReceiptsGhs");
+      const total = momo + cash;
+      const momoShare = total > 0 ? `${Math.round((momo / total) * 100)}%` : "—";
       return [
-        { label: "Daily Shift Orders", value: `${totalOrdersCount || 184} Orders`, subtitle: "Dine-in, Takeaway & Delivery" },
-        { label: "Food Cost Margin", value: "27.8%", subtitle: "Below 30% profitability target" },
-        { label: "Kitchen Waste Rate", value: "2.5%", subtitle: "Strict portion & inventory control" },
-        { label: "MoMo Share of Sales", value: "68.6%", subtitle: "MTN MoMo & Telecel Cash" },
+        { label: "Total Shift Orders", value: `${totalOrders.toLocaleString()} Orders`, subtitle: "From recorded shifts" },
+        { label: "Avg Food Cost %", value: avg("foodCostPercent"), subtitle: "Recorded shifts" },
+        { label: "Avg Waste %", value: avg("wastePercent"), subtitle: "Recorded shifts" },
+        { label: "MoMo Share of Sales", value: momoShare, subtitle: "Recorded receipts" },
       ];
     }
 
     if (upperCode.startsWith("TECH")) {
       return [
-        { label: "Solar Inverter Stock", value: "14 Units", subtitle: "Felicity 5kVA & 10kVA Hybrid" },
-        { label: "Warranty Coverage", value: "24 Months", subtitle: "Factory & Local Service" },
-        { label: "Serial Verification", value: "100% Validated", subtitle: "Anti-counterfeit database" },
-        { label: "Q1 Unit Revenue", value: formatMoney(businessMetrics?.revenueGhs || 248000, currentCurrency), subtitle: "Highest revenue contributor" },
+        { label: "Units Logged", value: logs.length.toLocaleString(), subtitle: "Recorded items" },
+        { label: "In-Stock Units", value: logs.filter((r: any) => r.inStock !== false).length.toLocaleString(), subtitle: "Recorded stock status" },
+        { label: "Avg Warranty (Months)", value: avg("warrantyMonths", 0), subtitle: "Recorded warranties" },
+        { label: "Recorded Sales Value", value: formatMoney(sum("retailPriceGhs"), currentCurrency), subtitle: "Recorded retail prices" },
       ];
     }
 
     if (upperCode.startsWith("WASH")) {
       return [
-        { label: "Daily Vehicles Serviced", value: "52 Vehicles", subtitle: "Sedans, SUVs & Commercial" },
-        { label: "Pressure Wash PSI", value: "3,200 PSI", subtitle: "Kärcher Industrial Bay System" },
-        { label: "Chemical Usage", value: "14.5 Liters", subtitle: "Eco-Friendly Foam & Wax" },
-        { label: "Daily Shift Receipts", value: formatMoney(2860, currentCurrency), subtitle: "Airport Residential & Dzorwulu" },
+        { label: "Vehicles Serviced", value: sum("vehiclesWashed").toLocaleString(), subtitle: "From recorded shifts" },
+        { label: "Avg Pressure (PSI)", value: avg("waterPressurePsi", 0), subtitle: "Recorded shifts" },
+        { label: "Chemical Used", value: `${sum("chemicalUsedLiters").toLocaleString()} L`, subtitle: "Recorded shifts" },
+        { label: "Total Shift Receipts", value: formatMoney(sum("totalRevenueGhs"), currentCurrency), subtitle: "Recorded revenue" },
       ];
     }
 
     return [
-      { label: "Branch Status", value: "ACTIVE", subtitle: "Operational Unit" },
-      { label: "Staff Assigned", value: "12 Staff", subtitle: "Full-time & Contract" },
-      { label: "Risk Score", value: "Low Risk", subtitle: "Compliant" },
-      { label: "Q1 Revenue", value: formatMoney(businessMetrics?.revenueGhs, currentCurrency), subtitle: "Target on track" },
+      { label: "Branch Status", value: businessInfo?.status || "ACTIVE", subtitle: "Current unit status" },
+      { label: "Operations Logged", value: String(logs.length), subtitle: "This unit's logbook" },
+      { label: "Q1 Revenue", value: formatMoney(businessMetrics?.revenueGhs ?? 0, currentCurrency), subtitle: "Live ledger" },
+      { label: "Q1 Net Profit", value: formatMoney(businessMetrics?.netProfitGhs ?? 0, currentCurrency), subtitle: "Live ledger" },
     ];
   };
 
@@ -363,10 +361,10 @@ export default function SpecializedBusinessView({
           <div className="text-right hidden lg:block mr-2">
             <div className="text-xs text-slate-400">Q1 Revenue</div>
             <div className="text-lg font-bold text-emerald-400">
-              {formatMoney(businessMetrics?.revenueGhs || 95000, currentCurrency)}
+              {formatMoney(businessMetrics?.revenueGhs ?? 0, currentCurrency)}
             </div>
             <div className="text-[10px] text-slate-400">
-              ROI: {businessMetrics?.roiPercent || 18}%
+              ROI: {businessMetrics?.roiPercent ?? 0}%
             </div>
           </div>
 
@@ -695,6 +693,24 @@ export default function SpecializedBusinessView({
                   )}
                 </tr>
               ))}
+              {specializedLogs.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={
+                      upperCode.startsWith("POULTRY") ? 7 :
+                      upperCode.startsWith("BLOCK") ? 6 :
+                      upperCode.startsWith("AQUA") ? 7 :
+                      upperCode.startsWith("LIVESTOCK") ? 6 :
+                      upperCode.startsWith("FOOD") ? 7 :
+                      upperCode.startsWith("TECH") ? 6 :
+                      upperCode.startsWith("WASH") ? 5 : 4
+                    }
+                    className="px-4 py-10 text-center text-slate-400"
+                  >
+                    No records yet — log the first daily operations entry to start the logbook.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
