@@ -14,6 +14,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 
 interface Props {
   currentUser: any;
@@ -160,6 +161,7 @@ export default function BusinessDashboardModule({
 
   const [tab, setTab] = useState<Tab>("DASHBOARD");
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [restockItemId, setRestockItemId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -340,7 +342,7 @@ export default function BusinessDashboardModule({
           <button onClick={() => setShowForm("SALE")} className={`px-3 py-2 rounded-lg ${cfg.saleBtn} text-white text-xs font-bold flex items-center gap-1`}><BadgeDollarSign className="w-3.5 h-3.5" />Sale</button>
           <button onClick={() => setShowForm("OPS")} className="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1"><Activity className="w-3.5 h-3.5" />{cfg.opsLabel.split(" ")[0]} Log</button>
           <button onClick={() => setShowForm("RESTOCK")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><PackagePlus className="w-3.5 h-3.5" />Restock</button>
-          <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="bd-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -380,7 +382,7 @@ export default function BusinessDashboardModule({
                 <div className="text-sm font-bold text-emerald-300">Your {businessInfo?.category} workspace was auto-provisioned — nothing is blank here.</div>
                 <p className="text-xs text-slate-400 mt-0.5">
                   Starter stock kit loaded ({branchInventory.length} items worth {formatMoney(stockCostValue, currentCurrency, true)} at cost) • {cfg.opsLabel} ready • specialized daily checklist installed • live finance, alerts &amp; reports connected.
-                  Try it: record a <button className="text-emerald-300 underline font-semibold" onClick={() => setShowForm("SALE")}>Sale</button>, receive <button className="text-emerald-300 underline font-semibold" onClick={() => setShowForm("RESTOCK")}>Stock</button>, or post an <button className="text-emerald-300 underline font-semibold" onClick={() => setShowForm("EXPENSE")}>Expense</button>.
+                  Try it: record a <button className="text-emerald-300 underline font-semibold" onClick={() => setShowForm("SALE")}>Sale</button>, receive <button className="text-emerald-300 underline font-semibold" onClick={() => setShowForm("RESTOCK")}>Stock</button>, or post an <button className="text-emerald-300 underline font-semibold" onClick={() => setShowExpense(true)}>Expense</button>.
                 </p>
               </div>
               <button onClick={() => { localStorage.setItem(`gomina-unit-ready-${bizId}`, "done"); setGettingStartedOpen(false); }} className="self-start md:self-center text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
@@ -485,7 +487,7 @@ export default function BusinessDashboardModule({
                     <p>No financial activity yet — post a sale or expense and this chart comes alive.</p>
                     <div className="flex gap-2">
                       <button onClick={() => setShowForm("SALE")} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold">Record Sale</button>
-                      <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold">Record Expense</button>
+                      <button onClick={() => setShowExpense(true)} className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold">Record Expense</button>
                     </div>
                   </div>
                 )}
@@ -643,7 +645,7 @@ export default function BusinessDashboardModule({
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowForm("SALE")} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1"><BadgeDollarSign className="w-3.5 h-3.5" />Record Sale / Payment</button>
-            <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Record Expense</button>
+            <button onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Record Expense</button>
             <button onClick={() => { setRestockItemId(null); setShowForm("RESTOCK"); }} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><PackagePlus className="w-3.5 h-3.5" />Purchase Stock</button>
           </div>
           {starterKitActive && stockCostValue > 0 && (
@@ -693,6 +695,32 @@ export default function BusinessDashboardModule({
           onSubmit={submit}
         />
       )}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense"
+        contextLabel="Business"
+        vendorPlaceholder="e.g. supplier name"
+        defaultCategory="Supplies"
+        defaultCategories={[
+          { value: "Fuel", label: "Fuel" },
+          { value: "Payroll", label: "Payroll" },
+          { value: "Rent", label: "Rent" },
+          { value: "Utilities", label: "Utilities" },
+          { value: "Transport", label: "Transport" },
+          { value: "Supplies", label: "Supplies" },
+          { value: "Marketing", label: "Marketing" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="bd-expense"
+      />
     </div>
   );
 }
@@ -702,6 +730,30 @@ function Row({ k, v }: any) {
     <div className="flex items-center justify-between gap-3 p-2 rounded-lg bg-slate-900/70 border border-slate-700">
       <span className="text-slate-400">{k}</span>
       <span className="text-slate-200 font-semibold text-right">{v || "—"}</span>
+    </div>
+  );
+}
+
+// Stable field components (defined at module scope so they are never recreated
+// during renders — otherwise React remounts the input after every keystroke
+// and drops the cursor/focus).
+function FormField({ f, set, label, k, t = "text", ...rest }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
+        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
+    </div>
+  );
+}
+function FormSelect({ f, set, label, k, opts }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
+        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
+        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
+      </select>
     </div>
   );
 }
@@ -730,23 +782,6 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
   const restockCost = Number(f.unitCostGhs) || 0;
   const restockTotal = qty * restockCost;
 
-  const I = ({ label, k, t = "text", ...rest }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-  const S = ({ label, k, opts }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -771,20 +806,20 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
                       })}
                   </select>
                 </div>
-                <I label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
-                <I label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
-                <I label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-                <I label="Customer Phone" k="customerPhone" />
-                <S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
-                <I label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
-                <I label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
+                <FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
+                <FormField f={f} set={set} label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
+                <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
+                <FormField f={f} set={set} label="Customer Phone" k="customerPhone" />
+                <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
+                <FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
+                <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
               </div>
               {selectedItem && (
                 <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200">
                   Total due: <span className="font-black">GH₵ {saleNet.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>{salePct > 0 && <span className="ml-1 text-emerald-300">({salePct}% discount − GH₵ {(saleTotal - saleNet).toLocaleString(undefined, { maximumFractionDigits: 2 })})</span>} — sells {qty} {selectedItem.unit} of “{selectedItem.name}”. Stock after sale: {Math.max(0, (selectedItem.quantity || 0) - qty).toLocaleString()}.
                 </div>
               )}
-              <I label="Notes" k="notes" />
+              <FormField f={f} set={set} label="Notes" k="notes" />
             </>
           )}
           {type === "RESTOCK" && (
@@ -800,10 +835,10 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
                     {inventory.map((i: any) => <option key={i.id} value={i.id}>{i.name} ({i.sku}) • {i.quantity} {i.unit} on hand</option>)}
                   </select>
                 </div>
-                <I label="Quantity Received" k="quantity" t="number" required min={1} />
-                <I label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" />
-                <I label="Date" k="date" t="date" />
-                <S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
+                <FormField f={f} set={set} label="Quantity Received" k="quantity" t="number" required min={1} />
+                <FormField f={f} set={set} label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" />
+                <FormField f={f} set={set} label="Date" k="date" t="date" />
+                <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
               </div>
               {selectedItem && qty > 0 && (
                 <div className="p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs text-indigo-200">
@@ -814,44 +849,44 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
                 <input id="unit-record-expense" type="checkbox" checked={!!f.recordExpense} onChange={(e) => set("recordExpense", e.target.checked)} className="w-4 h-4 accent-indigo-500" />
                 <label htmlFor="unit-record-expense" className="text-slate-300">Book purchase as expense ({restockTotal > 0 ? `GH₵ ${restockTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "no cost set"}) in Finance</label>
               </div>
-              <I label="Description / Supplier note" k="description" />
+              <FormField f={f} set={set} label="Description / Supplier note" k="description" />
             </>
           )}
           {type === "EXPENSE" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <I label="Category" k="category" required placeholder="Fuel, Payroll, Rent..." list="unit-exp-cats" />
-                <I label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required min={0.01} />
-                <S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
-                <I label="Date" k="date" t="date" />
+                <FormField f={f} set={set} label="Category" k="category" required placeholder="Fuel, Payroll, Rent..." list="unit-exp-cats" />
+                <FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required min={0.01} />
+                <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
+                <FormField f={f} set={set} label="Date" k="date" t="date" />
               </div>
-              <I label="Description" k="description" />
+              <FormField f={f} set={set} label="Description" k="description" />
               <datalist id="unit-exp-cats">{["Stock Purchase", "Fuel & Transport", "Payroll", "Rent", "Utilities", "Equipment Repair", "Packaging", "Marketing", "Miscellaneous"].map((c) => <option key={c} value={c} />)}</datalist>
             </>
           )}
           {type === "ITEM" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2"><I label="Item Name" k="name" required /></div>
-                <I label="SKU" k="sku" placeholder="auto if blank" />
-                <I label="Category" k="category" placeholder="e.g. Finished Goods" />
-                <I label="Opening Quantity" k="quantity" t="number" min={0} />
-                <S label="Unit" k="unit" opts={["Units", "Kg", "Plates", "Bags", "Litres", "Crates", "Jobs", "Drums", "m³"]} />
-                <I label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
-                <I label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
-                <I label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
+                <div className="col-span-2"><FormField f={f} set={set} label="Item Name" k="name" required /></div>
+                <FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" />
+                <FormField f={f} set={set} label="Category" k="category" placeholder="e.g. Finished Goods" />
+                <FormField f={f} set={set} label="Opening Quantity" k="quantity" t="number" min={0} />
+                <FormSelect f={f} set={set} label="Unit" k="unit" opts={["Units", "Kg", "Plates", "Bags", "Litres", "Crates", "Jobs", "Drums", "m³"]} />
+                <FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
+                <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
+                <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
               </div>
             </>
           )}
           {type === "OPS" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <S label="Activity Type" k="category" opts={["Production", "Feeding", "Harvest", "Quality Check", "Machine Work", "Service Job", "Cleaning & Maintenance", "Other"]} />
-                <I label={cfg.opsQtyLabel} k="quantity" t="number" min={0} />
-                <I label="Date" k="date" t="date" />
-                <I label="Unit Cost (GH₵, optional)" k="amountGhs" t="number" min={0} step="0.01" placeholder="0 = activity only" />
+                <FormSelect f={f} set={set} label="Activity Type" k="category" opts={["Production", "Feeding", "Harvest", "Quality Check", "Machine Work", "Service Job", "Cleaning & Maintenance", "Other"]} />
+                <FormField f={f} set={set} label={cfg.opsQtyLabel} k="quantity" t="number" min={0} />
+                <FormField f={f} set={set} label="Date" k="date" t="date" />
+                <FormField f={f} set={set} label="Unit Cost (GH₵, optional)" k="amountGhs" t="number" min={0} step="0.01" placeholder="0 = activity only" />
               </div>
-              <I label="Notes / Details" k="description" placeholder={`e.g. Morning ${cfg.opsUnit} from the first shift`} />
+              <FormField f={f} set={set} label="Notes / Details" k="description" placeholder={`e.g. Morning ${cfg.opsUnit} from the first shift`} />
               <p className="text-[10px] text-slate-500">Saved to today’s Activities feed and the enterprise transaction ledger as an operational log entry.</p>
             </>
           )}

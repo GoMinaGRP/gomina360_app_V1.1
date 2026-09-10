@@ -34,6 +34,20 @@ export const users = pgTable("users", {
   // (Transactions & MoMo, Suppliers & Vendors, Employees & Payroll). The OWNER
   // always retains full control; managers act only while this flag is granted.
   canManageRecords: boolean("can_manage_records").default(false),
+  // OWNER-granted "delete-inventory" permission: a non-OWNER may only manage,
+  // edit and delete Inventory & Stock entries while this flag is granted. The
+  // OWNER always retains full control. Like canManageRecords this is a
+  // user-level grant (not per-business), so it applies uniformly to inventory
+  // entries of every business type — existing or newly created. Grant/revoke
+  // is OWNER-only.
+  canDeleteInventory: boolean("can_delete_inventory").default(false),
+  // OWNER-granted "manage-expenses" permission: a non-OWNER may only edit and
+  // delete EXPENSE transactions while this flag is granted. The OWNER always
+  // retains full control. Like canManageRecords and canDeleteInventory this is
+  // a user-level grant (not per-business), so it applies uniformly to the
+  // expenses of every business type and branch — existing or newly created.
+  // Grant/revoke is OWNER-only.
+  canManageExpenses: boolean("can_manage_expenses").default(false),
   // OWNER-delegated user administration: a BRANCH_MANAGER / GENERAL_MANAGER
   // carrying this flag may open Users & Access and create workers AND branch
   // managers, assign role/business/branch/permissions, and edit or deactivate

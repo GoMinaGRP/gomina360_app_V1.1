@@ -222,10 +222,18 @@ export default function SharedEnterpriseModule({
   // The OWNER always can; managers only while the OWNER has granted the flag.
   const isOwnerUser = currentUser?.role === "OWNER";
   const canManageShared = isOwnerUser || currentUser?.canManageRecords === true;
+  // Inventory & Stock: the OWNER always can manage/edit/delete; every other
+  // user only while the OWNER has granted the delete-inventory permission.
+  const canDeleteInv = isOwnerUser || currentUser?.canDeleteInventory === true;
+  // Expenses (transactions with type === "EXPENSE"): the OWNER always can
+  // edit/delete; every other user only while the OWNER has granted the
+  // expense-management permission.
+  const canManageExp = isOwnerUser || currentUser?.canManageExpenses === true;
   const MANAGEABLE =
     moduleType === "TRANSACTIONS" ||
     moduleType === "SUPPLIERS" ||
-    moduleType === "EMPLOYEES";
+    moduleType === "EMPLOYEES" ||
+    moduleType === "INVENTORY";
 
   const [editingRecord, setEditingRecord] = useState<any | null>(null);
   const [deletingRecord, setDeletingRecord] = useState<any | null>(null);
@@ -235,7 +243,7 @@ export default function SharedEnterpriseModule({
   const [deletionLogs, setDeletionLogs] = useState<any[]>([]);
   const [showAccessModal, setShowAccessModal] = useState(false);
   const [accessUsers, setAccessUsers] = useState<any[]>([]);
-  const [accessBusy, setAccessBusy] = useState<number | null>(null);
+  const [accessBusy, setAccessBusy] = useState<string | null>(null);
 
   const refreshDeletionLogs = useCallback(async () => {
     if (!MANAGEABLE) return;
@@ -258,6 +266,8 @@ export default function SharedEnterpriseModule({
       ? `${r.transactionNumber} — GH₵ ${r.amountGhs} (${r.category})`
       : moduleType === "SUPPLIERS"
       ? r.name
+      : moduleType === "INVENTORY"
+      ? `${r.name} (${r.sku})`
       : `${r.name} (${r.role})`;
 
   // Edit submit: PATCH to the module's endpoint — server re-checks permission.
@@ -292,6 +302,24 @@ export default function SharedEnterpriseModule({
               phone: editingRecord.phone,
               email: editingRecord.email,
               paymentTerms: editingRecord.paymentTerms,
+            },
+          }
+        : moduleType === "INVENTORY"
+        ? {
+            entityType: "INVENTORY",
+            id: editingRecord.id,
+            actorUserId: currentUser?.id,
+            data: {
+              name: editingRecord.name,
+              sku: editingRecord.sku,
+              category: editingRecord.category,
+              unit: editingRecord.unit,
+              quantity: editingRecord.quantity,
+              costPriceGhs: editingRecord.costPriceGhs,
+              sellingPriceGhs: editingRecord.sellingPriceGhs,
+              minStockThreshold: editingRecord.minStockThreshold,
+              expiryDate: editingRecord.expiryDate,
+              businessId: editingRecord.businessId,
             },
           }
         : {
@@ -358,7 +386,20 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  // OWNER access-control console: grant / revoke canManageRecords per manager.
+  // OWNER access-control console: grant / revoke the module's management
+  // flags. Transactions expose two independent flags — the shared-record flag
+  // for income/investment/transfer rows and the expense-management flag for
+  // expense rows. Inventory uses canDeleteInventory.
+  const accessFields =
+    moduleType === "INVENTORY"
+      ? [{ key: "canDeleteInventory", label: "Manage, edit & delete inventory entries" }]
+      : moduleType === "TRANSACTIONS"
+      ? [
+          { key: "canManageRecords", label: "Manage & delete transactions (income, investment, transfer)" },
+          { key: "canManageExpenses", label: "Manage & delete expenses" },
+        ]
+      : [{ key: "canManageRecords", label: "Manage & delete records" }];
+
   const openAccessControl = async () => {
     setShowAccessModal(true);
     try {
@@ -370,22 +411,22 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  const toggleRecordAccess = async (u: any) => {
-    setAccessBusy(u.id);
+  const toggleRecordAccess = async (u: any, field: string) => {
+    setAccessBusy(`${field}:${u.id}`);
     try {
       const r = await fetch("/api/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: u.id,
-          canManageRecords: !u.canManageRecords,
+          [field]: !u[field],
           requestingUserRole: currentUser?.role,
         }),
       });
       const d = await r.json();
       if (r.ok && d.success) {
         setAccessUsers((prev) =>
-          prev.map((x) => (x.id === u.id ? { ...x, canManageRecords: d.user.canManageRecords } : x))
+          prev.map((x) => (x.id === u.id ? { ...x, [field]: d.user[field] } : x))
         );
         onRefreshData();
       }
@@ -396,60 +437,69 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  // Actions cell shared by the three manageable tables.
-  const RecordActions = ({ r, prefix, onProfile }: { r: any; prefix: string; onProfile?: (r: any) => void }) => (
-    <td className="px-4 py-3.5 text-center">
-      {canManageShared ? (
-        <div className="flex items-center justify-center gap-1.5">
-          {onProfile && (
+  // Actions cell shared by the three manageable tables. Expense transactions
+  // (type === "EXPENSE") are gated by the OWNER-granted expense-management
+  // permission; every other record uses the shared-record permission.
+  const RecordActions = ({ r, prefix, onProfile }: { r: any; prefix: string; onProfile?: (r: any) => void }) => {
+    const isExpense = r?.type === "EXPENSE";
+    const permitted = isExpense ? canManageExp : canManageShared;
+    const lockHint = isExpense
+      ? "Only the OWNER, or a manager granted the expense-management permission by the OWNER, can manage or delete expenses"
+      : "Only the OWNER, or a manager granted permission by the OWNER, can manage records";
+    return (
+      <td className="px-4 py-3.5 text-center">
+        {permitted ? (
+          <div className="flex items-center justify-center gap-1.5">
+            {onProfile && (
+              <button
+                title="Open full record (profile, documents, history)"
+                data-testid={`${prefix}-profile-${r.id}`}
+                onClick={() => onProfile(r)}
+                className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-teal-500/30 text-slate-200 hover:text-teal-300 transition"
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
-              title="Open full record (profile, documents, history)"
-              data-testid={`${prefix}-profile-${r.id}`}
-              onClick={() => onProfile(r)}
-              className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-teal-500/30 text-slate-200 hover:text-teal-300 transition"
+              title="Edit record"
+              data-testid={`${prefix}-edit-${r.id}`}
+              onClick={() => { setEditingRecord({ ...r }); setRecordErr(""); }}
+              className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition"
             >
-              <UserCheck className="w-3.5 h-3.5" />
+              <Pencil className="w-3.5 h-3.5" />
             </button>
-          )}
-          <button
-            title="Edit record"
-            data-testid={`${prefix}-edit-${r.id}`}
-            onClick={() => { setEditingRecord({ ...r }); setRecordErr(""); }}
-            className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button
-            title="Delete record (reason is recorded)"
-            data-testid={`${prefix}-delete-${r.id}`}
-            onClick={() => { setDeletingRecord(r); setDeleteReason(""); setRecordErr(""); }}
-            className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center justify-center gap-1.5">
-          {onProfile && (
             <button
-              title="Open full record (read-only)"
-              data-testid={`${prefix}-profile-${r.id}`}
-              onClick={() => onProfile(r)}
-              className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-teal-500/30 text-slate-200 hover:text-teal-300 transition"
+              title="Delete record (reason is recorded)"
+              data-testid={`${prefix}-delete-${r.id}`}
+              onClick={() => { setDeletingRecord(r); setDeleteReason(""); setRecordErr(""); }}
+              className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
             >
-              <UserCheck className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
-          )}
-          <span
-            title="Only the OWNER, or a manager granted permission by the OWNER, can manage records"
-            className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-500 bg-slate-800 border border-slate-700 px-2 py-1 rounded"
-          >
-            <Lock className="w-3 h-3" /> LOCKED
-          </span>
-        </div>
-      )}
-    </td>
-  );
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-1.5">
+            {onProfile && (
+              <button
+                title="Open full record (read-only)"
+                data-testid={`${prefix}-profile-${r.id}`}
+                onClick={() => onProfile(r)}
+                className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-teal-500/30 text-slate-200 hover:text-teal-300 transition"
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <span
+              title={lockHint}
+              className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-500 bg-slate-800 border border-slate-700 px-2 py-1 rounded"
+            >
+              <Lock className="w-3 h-3" /> LOCKED
+            </span>
+          </div>
+        )}
+      </td>
+    );
+  };
 
   const refreshAssetAuditLogs = async () => {
     if (moduleType !== "ASSETS") return;
@@ -2089,6 +2139,7 @@ export default function SharedEnterpriseModule({
                   <th className="px-4 py-3 text-right">Cost Price</th>
                   <th className="px-4 py-3 text-right">Selling Price</th>
                   <th className="px-4 py-3 text-center">Stock Status</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/60">
@@ -2152,6 +2203,35 @@ export default function SharedEnterpriseModule({
                       >
                         {inv.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-center" onClick={(e) => e.stopPropagation()}>
+                      {canDeleteInv ? (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            title="Edit item"
+                            data-testid={`inv-edit-${inv.id}`}
+                            onClick={() => { setEditingRecord({ ...inv }); setRecordErr(""); }}
+                            className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            title="Delete item (reason is recorded)"
+                            data-testid={`inv-delete-${inv.id}`}
+                            onClick={() => { setDeletingRecord(inv); setDeleteReason(""); setRecordErr(""); }}
+                            className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          title="Only the OWNER, or a manager granted the delete-inventory permission by the OWNER, can edit or delete stock items"
+                          className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-500 bg-slate-800 border border-slate-700 px-2 py-1 rounded"
+                        >
+                          <Lock className="w-3 h-3" /> LOCKED
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -2701,7 +2781,7 @@ export default function SharedEnterpriseModule({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <h3 className="text-lg font-bold text-white">
-              Edit {moduleType === "TRANSACTIONS" ? "Transaction" : moduleType === "SUPPLIERS" ? "Supplier" : "Employee"} —{" "}
+              Edit {moduleType === "TRANSACTIONS" ? "Transaction" : moduleType === "SUPPLIERS" ? "Supplier" : moduleType === "INVENTORY" ? "Stock Item" : "Employee"} —{" "}
               <span className="text-indigo-300">{recordLabel(editingRecord)}</span>
             </h3>
             <form onSubmit={submitRecordEdit} className="space-y-3" data-testid="record-edit-form">
@@ -2804,6 +2884,71 @@ export default function SharedEnterpriseModule({
                       <option value="CASH_ON_DELIVERY">CASH_ON_DELIVERY</option>
                       <option value="MOMO_INSTANT">MOMO_INSTANT</option>
                     </select>
+                  </div>
+                </>
+              ) : moduleType === "INVENTORY" ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Item Name</label>
+                    <input type="text" data-testid="edit-inventory-name" value={editingRecord.name || ""}
+                      onChange={(e) => setEditingRecord({ ...editingRecord, name: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">SKU / Item Code</label>
+                      <input type="text" value={editingRecord.sku || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, sku: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
+                      <input type="text" value={editingRecord.category || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, category: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Quantity on Hand</label>
+                      <input type="number" step="0.01" min="0" data-testid="edit-inventory-qty" value={editingRecord.quantity}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, quantity: Number(e.target.value) })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Unit</label>
+                      <input type="text" value={editingRecord.unit || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, unit: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Cost Price (GH₵)</label>
+                      <input type="number" step="0.01" min="0" value={editingRecord.costPriceGhs}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, costPriceGhs: Number(e.target.value) })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Selling Price (GH₵)</label>
+                      <input type="number" step="0.01" min="0" value={editingRecord.sellingPriceGhs}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, sellingPriceGhs: Number(e.target.value) })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Min. Stock Threshold</label>
+                      <input type="number" step="0.01" min="0" value={editingRecord.minStockThreshold}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, minStockThreshold: Number(e.target.value) })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Expiry Date (optional)</label>
+                      <input type="date" value={editingRecord.expiryDate || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, expiryDate: e.target.value || null })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
                   </div>
                 </>
               ) : (
@@ -2938,32 +3083,51 @@ export default function SharedEnterpriseModule({
               </button>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              You (the OWNER) can <b>always</b> add, edit and delete records in Transactions &amp; MoMo,
-              Suppliers &amp; Vendors and Employees &amp; Payroll. Use the toggles to grant or remove
-              the same power for selected managers. Every deletion is logged with user, date, time and reason.
+              {moduleType === "INVENTORY" ? (
+                <>You (the OWNER) can <b>always</b> add, edit and delete Inventory &amp; Stock entries.
+                  Use the toggles to grant or remove the <b>delete-inventory</b> permission for selected
+                  managers, letting them manage, edit and delete stock entries too. Every deletion is
+                  logged with user, date, time and reason.</>
+              ) : moduleType === "TRANSACTIONS" ? (
+                <>You (the OWNER) can <b>always</b> add, edit and delete every transaction — including
+                  expenses. Use the two toggles to grant or remove the shared-record power (income,
+                  investment &amp; transfer) and the <b>expense-management</b> power separately. Every
+                  deletion is logged with user, date, time and reason.</>
+              ) : (
+                <>You (the OWNER) can <b>always</b> add, edit and delete records in Suppliers &amp; Vendors
+                  and Employees &amp; Payroll. Use the toggles to grant or remove the same power for
+                  selected managers. Every deletion is logged with user, date, time and reason.</>
+              )}
             </p>
             <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
               {accessUsers.map((u) => (
-                <div key={u.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-800/70 border border-slate-700 px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">{u.name}</div>
-                    <div className="text-[10px] text-slate-400">
-                      <span className="font-black text-cyan-300">{u.role}</span>
-                      {u.assignedBusinessId ? ` · ${getBusinessName(u.assignedBusinessId)}` : " · All businesses"}
+                <div key={u.id} className="rounded-xl bg-slate-800/70 border border-slate-700 px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white truncate">{u.name}</div>
+                      <div className="text-[10px] text-slate-400">
+                        <span className="font-black text-cyan-300">{u.role}</span>
+                        {u.assignedBusinessId ? ` · ${getBusinessName(u.assignedBusinessId)}` : " · All businesses"}
+                      </div>
                     </div>
                   </div>
-                  <button
-                    onClick={() => toggleRecordAccess(u)}
-                    disabled={accessBusy === u.id}
-                    data-testid={`access-toggle-${u.id}`}
-                    className={`shrink-0 px-3 py-1.5 rounded-lg text-[10px] font-black transition ${
-                      u.canManageRecords
-                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30"
-                        : "bg-slate-700/70 text-slate-400 border border-slate-600 hover:bg-slate-600"
-                    }`}
-                  >
-                    {accessBusy === u.id ? "…" : u.canManageRecords ? "CAN MANAGE & DELETE ✓" : "NO ACCESS"}
-                  </button>
+                  {accessFields.map((f) => (
+                    <div key={f.key} className="flex items-center justify-between gap-3">
+                      <span className="text-[10px] text-slate-400 leading-tight">{f.label}</span>
+                      <button
+                        onClick={() => toggleRecordAccess(u, f.key)}
+                        disabled={accessBusy === `${f.key}:${u.id}`}
+                        data-testid={`access-toggle-${f.key}-${u.id}`}
+                        className={`shrink-0 px-3 py-1.5 rounded-lg text-[10px] font-black transition ${
+                          u[f.key]
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30"
+                            : "bg-slate-700/70 text-slate-400 border border-slate-600 hover:bg-slate-600"
+                        }`}
+                      >
+                        {accessBusy === `${f.key}:${u.id}` ? "…" : u[f.key] ? "CAN MANAGE & DELETE ✓" : "NO ACCESS"}
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ))}
               {accessUsers.length === 0 && (

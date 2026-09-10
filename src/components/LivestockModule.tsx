@@ -17,6 +17,7 @@ import AiSectionGuide from "./AiSectionGuide";
 import SpecializedBusinessView from "./SpecializedBusinessView";
 import FinancialReportSection from "./FinancialReportSection";
 import DailyChecklistPanel from "./DailyChecklistPanel";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 
 /**
@@ -48,6 +49,7 @@ interface LivestockModuleProps {
   isOnline: boolean;
   onRefreshLogs: () => void;
   currentUser?: any;
+  onRefreshData?: () => void;
   employees?: any[];
   transactions?: any[];
   inventory?: any[];
@@ -63,6 +65,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
     transactions = [],
     inventory = [],
   } = props;
+  const [showExpense, setShowExpense] = useState(false);
   const [tab, setTab] = useState<Tab>("OVERVIEW");
 
   const revenue = businessMetrics?.revenueGhs || 0;
@@ -169,6 +172,13 @@ export default function LivestockModule(props: LivestockModuleProps) {
             <span>{t.label}</span>
           </button>
         ))}
+        <button
+          data-testid="lk-open-expense"
+          onClick={() => setShowExpense(true)}
+          className="ml-auto flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+        >
+          <Landmark className="w-3.5 h-3.5" />Record Expense
+        </button>
         <AiSectionGuide moduleKey="LIVESTOCK" section={tab === "FINANCE" ? "FINANCE_REPORT" : tab === "HERD" ? "OPERATIONS" : "DEFAULT"} businessInfo={businessInfo} />
       </div>
 
@@ -311,6 +321,32 @@ export default function LivestockModule(props: LivestockModuleProps) {
           onChanged={props.onRefreshLogs}
         />
       )}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); props.onRefreshData?.(); props.onRefreshLogs(); }}
+        businessId={businessInfo?.id}
+        branchCode={props.businessCode}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={props.currentUser}
+        title="Record Expense — Livestock"
+        contextLabel="Livestock"
+        vendorPlaceholder="e.g. fodder / feed supplier"
+        defaultCategory="Feed & Fodder"
+        defaultCategories={[
+          { value: "Feed & Fodder", label: "Feed & Fodder" },
+          { value: "Veterinary", label: "Veterinary" },
+          { value: "Vaccination", label: "Vaccination" },
+          { value: "Water", label: "Water" },
+          { value: "Labor", label: "Labor" },
+          { value: "Transport", label: "Transport" },
+          { value: "Fencing & Repair", label: "Fencing & Repair" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="lk-expense"
+      />
     </div>
   );
 }

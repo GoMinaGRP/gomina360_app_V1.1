@@ -1662,6 +1662,34 @@ export default function PoultryFarmModule({
 }
 
 // ─────────────────────────── FORM MODAL ───────────────────────────
+function FormField({ f, set, label, k, t = "text", ...rest }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
+      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
+        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
+    </div>
+  );
+}
+function FormSelect({ f, set, label, k, opts }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
+      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
+        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
+        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function BatchSelect({ flocks, f, set }: any) {
+  return (
+    <FormSelect f={f} set={set} label="Flock / Batch" k="batchNumber"
+      opts={[{ v: "", l: "— Select batch —" }, ...flocks.map((x: any) => ({ v: x.batchNumber, l: `${x.batchNumber} (${x.birdType})` }))]} />
+  );
+}
+
 function PoultryForm({ type, flocks, inventory = [], products = [], busy, error, onClose, onSubmit }: any) {
   const [f, setF] = useState<any>({
     birdType: "LAYERS", status: "ACTIVE", feedType: "LAYER_MASH", entryType: "CONSUMPTION",
@@ -1681,26 +1709,6 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
   };
   const sellable = (inventory || []).filter((i: any) => (i.quantity || 0) > 0);
 
-  const I = ({ label, k, t = "text", ...rest }: any) => (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-  const S = ({ label, k, opts }: any) => (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-  const BatchSelect = () => (
-    <S label="Flock / Batch" k="batchNumber"
-      opts={[{ v: "", l: "— Select batch —" }, ...flocks.map((x: any) => ({ v: x.batchNumber, l: `${x.batchNumber} (${x.birdType})` }))]} />
-  );
 
   const handle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1726,68 +1734,68 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
 
           {type === "FLOCKS" && (<>
             <div className="grid grid-cols-2 gap-3">
-              <I label="Batch Number" k="batchNumber" placeholder="Auto-generated if blank" />
-              <I label="Flock Name" k="flockName" placeholder="e.g. Nsawam Isa Brown Flock 01" />
-              <S label="Bird Type" k="birdType" opts={["LAYERS", "BROILERS", "COCKERELS", "TURKEYS", "GUINEA_FOWL"]} />
-              <I label="Breed" k="breed" placeholder="e.g. Isa Brown" />
-              <I label="Genetics" k="genetics" placeholder="e.g. Isa Brown (Hy-Line Genetics)" />
-              <I label="Supplier" k="supplier" placeholder="e.g. Akate Farms Hatchery Ltd" />
-              <I label="House / Pen" k="houseName" placeholder="e.g. House A" />
-              <I label="Initial Count *" k="initialCount" t="number" required min={1} />
-              <I label="Age (weeks)" k="ageWeeks" t="number" step="0.5" />
-              <I label="Arrival Date" k="arrivalDate" t="date" />
-              <I label="Cost / Bird (GH₵)" k="costPerBirdGhs" t="number" step="0.01" />
+              <FormField f={f} set={set} label="Batch Number" k="batchNumber" placeholder="Auto-generated if blank" />
+              <FormField f={f} set={set} label="Flock Name" k="flockName" placeholder="e.g. Nsawam Isa Brown Flock 01" />
+              <FormSelect f={f} set={set} label="Bird Type" k="birdType" opts={["LAYERS", "BROILERS", "COCKERELS", "TURKEYS", "GUINEA_FOWL"]} />
+              <FormField f={f} set={set} label="Breed" k="breed" placeholder="e.g. Isa Brown" />
+              <FormField f={f} set={set} label="Genetics" k="genetics" placeholder="e.g. Isa Brown (Hy-Line Genetics)" />
+              <FormField f={f} set={set} label="Supplier" k="supplier" placeholder="e.g. Akate Farms Hatchery Ltd" />
+              <FormField f={f} set={set} label="House / Pen" k="houseName" placeholder="e.g. House A" />
+              <FormField f={f} set={set} label="Initial Count *" k="initialCount" t="number" required min={1} />
+              <FormField f={f} set={set} label="Age (weeks)" k="ageWeeks" t="number" step="0.5" />
+              <FormField f={f} set={set} label="Arrival Date" k="arrivalDate" t="date" />
+              <FormField f={f} set={set} label="Cost / Bird (GH₵)" k="costPerBirdGhs" t="number" step="0.01" />
             </div>
-            <I label="Source Hatchery" k="sourceHatchery" placeholder="e.g. Akate Farms Hatchery" />
+            <FormField f={f} set={set} label="Source Hatchery" k="sourceHatchery" placeholder="e.g. Akate Farms Hatchery" />
           </>)}
 
           {type === "FEED" && (<>
             <div className="grid grid-cols-2 gap-3">
-              <S label="Entry Type" k="entryType" opts={[{ v: "CONSUMPTION", l: "Consumption (used)" }, { v: "PURCHASE", l: "Purchase (stock in)" }]} />
-              <S label="Feed Type" k="feedType" opts={["STARTER", "GROWER", "FINISHER", "LAYER_MASH", "CONCENTRATE"]} />
+              <FormSelect f={f} set={set} label="Entry Type" k="entryType" opts={[{ v: "CONSUMPTION", l: "Consumption (used)" }, { v: "PURCHASE", l: "Purchase (stock in)" }]} />
+              <FormSelect f={f} set={set} label="Feed Type" k="feedType" opts={["STARTER", "GROWER", "FINISHER", "LAYER_MASH", "CONCENTRATE"]} />
             </div>
-            <BatchSelect />
+            <BatchSelect flocks={flocks} f={f} set={set} />
             <div className="grid grid-cols-2 gap-3">
-              <I label="Quantity (kg) *" k="quantityKg" t="number" step="0.1" required min={0.1} />
-              <I label="Cost per kg (GH₵)" k="costPerKgGhs" t="number" step="0.01" />
+              <FormField f={f} set={set} label="Quantity (kg) *" k="quantityKg" t="number" step="0.1" required min={0.1} />
+              <FormField f={f} set={set} label="Cost per kg (GH₵)" k="costPerKgGhs" t="number" step="0.01" />
             </div>
-            <I label="Brand / Supplier" k="brandSupplier" placeholder="e.g. Ghafeed Poultry Mills" />
-            <I label="Date" k="recordedDate" t="date" />
+            <FormField f={f} set={set} label="Brand / Supplier" k="brandSupplier" placeholder="e.g. Ghafeed Poultry Mills" />
+            <FormField f={f} set={set} label="Date" k="recordedDate" t="date" />
           </>)}
 
           {type === "WATER" && (<>
-            <BatchSelect />
+            <BatchSelect flocks={flocks} f={f} set={set} />
             <div className="grid grid-cols-2 gap-3">
-              <I label="Volume (Liters) *" k="volumeLiters" t="number" step="1" required min={1} />
-              <S label="Source" k="sourceType" opts={["BOREHOLE", "PIPED", "TANKER", "RAINWATER"]} />
-              <I label="pH Level" k="phLevel" t="number" step="0.1" placeholder="6.5 – 7.5" />
-              <I label="Date" k="recordedDate" t="date" />
+              <FormField f={f} set={set} label="Volume (Liters) *" k="volumeLiters" t="number" step="1" required min={1} />
+              <FormSelect f={f} set={set} label="Source" k="sourceType" opts={["BOREHOLE", "PIPED", "TANKER", "RAINWATER"]} />
+              <FormField f={f} set={set} label="pH Level" k="phLevel" t="number" step="0.1" placeholder="6.5 – 7.5" />
+              <FormField f={f} set={set} label="Date" k="recordedDate" t="date" />
             </div>
             <label className="flex items-center gap-2 text-xs text-slate-300">
               <input type="checkbox" checked={!!f.isTreated} onChange={(e) => set("isTreated", e.target.checked)} className="accent-emerald-500" />
               Water was treated
             </label>
-            {f.isTreated && <I label="Treatment Used" k="treatmentUsed" placeholder="e.g. Chlorine + Vitamin C" />}
+            {f.isTreated && <FormField f={f} set={set} label="Treatment Used" k="treatmentUsed" placeholder="e.g. Chlorine + Vitamin C" />}
           </>)}
 
           {type === "HEALTH" && (<>
             <div className="grid grid-cols-2 gap-3">
-              <S label="Record Type" k="recordType" opts={["VACCINATION", "TREATMENT", "INSPECTION", "MORTALITY", "BIOSECURITY"]} />
-              <S label="Outcome" k="outcome" opts={["MONITORING", "RESOLVED", "ONGOING"]} />
+              <FormSelect f={f} set={set} label="Record Type" k="recordType" opts={["VACCINATION", "TREATMENT", "INSPECTION", "MORTALITY", "BIOSECURITY"]} />
+              <FormSelect f={f} set={set} label="Outcome" k="outcome" opts={["MONITORING", "RESOLVED", "ONGOING"]} />
             </div>
-            <BatchSelect />
+            <BatchSelect flocks={flocks} f={f} set={set} />
             <div className="grid grid-cols-2 gap-3">
-              <I label="Vaccine / Drug" k="vaccineOrDrug" placeholder="e.g. Lasota" />
-              <I label="Disease / Condition" k="diseaseOrCondition" placeholder="e.g. Newcastle" />
-              <I label="Dosage" k="dosage" placeholder="e.g. 1 dose/bird" />
-              <I label="Administered By" k="administeredBy" placeholder="Vet or staff name" />
-              <I label="Birds Affected" k="birdsAffected" t="number" />
-              <I label="Mortality Count" k="mortalityCount" t="number" />
-              <I label="Cost (GH₵)" k="costGhs" t="number" step="0.01" />
-              <I label="Next Due Date" k="nextDueDate" t="date" />
+              <FormField f={f} set={set} label="Vaccine / Drug" k="vaccineOrDrug" placeholder="e.g. Lasota" />
+              <FormField f={f} set={set} label="Disease / Condition" k="diseaseOrCondition" placeholder="e.g. Newcastle" />
+              <FormField f={f} set={set} label="Dosage" k="dosage" placeholder="e.g. 1 dose/bird" />
+              <FormField f={f} set={set} label="Administered By" k="administeredBy" placeholder="Vet or staff name" />
+              <FormField f={f} set={set} label="Birds Affected" k="birdsAffected" t="number" />
+              <FormField f={f} set={set} label="Mortality Count" k="mortalityCount" t="number" />
+              <FormField f={f} set={set} label="Cost (GH₵)" k="costGhs" t="number" step="0.01" />
+              <FormField f={f} set={set} label="Next Due Date" k="nextDueDate" t="date" />
             </div>
-            <I label="Date" k="recordedDate" t="date" />
-            <I label="Notes" k="notes" placeholder="Optional observations" />
+            <FormField f={f} set={set} label="Date" k="recordedDate" t="date" />
+            <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional observations" />
           </>)}
 
           {type === "PRODUCTION" && (() => {
@@ -1802,7 +1810,7 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
             const newUnit = f.npUnit || "Units";
             return (<>
               <div data-testid="production-type-field">
-                <S label="Production Type" k="productionType" opts={[
+                <FormSelect f={f} set={set} label="Production Type" k="productionType" opts={[
                   { v: "EGGS", l: "Eggs" },
                   { v: "BROILER_WEIGHT", l: "Broiler Harvest" },
                   ...customProducts.map((p: any) => ({ v: p.productKey, l: `${p.name} (${p.unit})` })),
@@ -1816,45 +1824,45 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
                     New Product Type — saved to the Master Product List and linked into Inventory, Stock, Sales & Reports
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <I label="Product Name *" k="npName" placeholder="e.g. Duck Egg Crates" />
-                    <S label="Unit" k="npUnit" opts={["Trays", "Birds", "Kg", "Pieces", "Crates", "Bags", "Units"]} />
-                    <I label="Cost Price (GH₵)" k="npCost" t="number" step="0.01" />
-                    <I label="Selling Price (GH₵)" k="npSelling" t="number" step="0.01" />
-                    <I label="Min Stock Alert Qty" k="npThreshold" t="number" step="1" />
-                    <I label="Category" k="npCategory" placeholder="Poultry Products" />
+                    <FormField f={f} set={set} label="Product Name *" k="npName" placeholder="e.g. Duck Egg Crates" />
+                    <FormSelect f={f} set={set} label="Unit" k="npUnit" opts={["Trays", "Birds", "Kg", "Pieces", "Crates", "Bags", "Units"]} />
+                    <FormField f={f} set={set} label="Cost Price (GH₵)" k="npCost" t="number" step="0.01" />
+                    <FormField f={f} set={set} label="Selling Price (GH₵)" k="npSelling" t="number" step="0.01" />
+                    <FormField f={f} set={set} label="Min Stock Alert Qty" k="npThreshold" t="number" step="1" />
+                    <FormField f={f} set={set} label="Category" k="npCategory" placeholder="Poultry Products" />
                   </div>
                 </div>
               )}
 
-              <BatchSelect />
+              <BatchSelect flocks={flocks} f={f} set={set} />
 
               {f.productionType === "EGGS" ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <I label="Eggs Collected *" k="eggsCollected" t="number" required min={0} />
-                  <I label="Trays" k="traysProduced" t="number" step="0.1" placeholder="Auto (eggs÷30)" />
-                  <I label="Grade A" k="gradeA" t="number" />
-                  <I label="Grade B" k="gradeB" t="number" />
-                  <I label="Cracked Eggs" k="crackedEggs" t="number" />
-                  <I label="Lay %" k="layPercentage" t="number" step="0.1" />
+                  <FormField f={f} set={set} label="Eggs Collected *" k="eggsCollected" t="number" required min={0} />
+                  <FormField f={f} set={set} label="Trays" k="traysProduced" t="number" step="0.1" placeholder="Auto (eggs÷30)" />
+                  <FormField f={f} set={set} label="Grade A" k="gradeA" t="number" />
+                  <FormField f={f} set={set} label="Grade B" k="gradeB" t="number" />
+                  <FormField f={f} set={set} label="Cracked Eggs" k="crackedEggs" t="number" />
+                  <FormField f={f} set={set} label="Lay %" k="layPercentage" t="number" step="0.1" />
                 </div>
               ) : f.productionType === "BROILER_WEIGHT" ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <I label="Birds Harvested" k="birdsHarvested" t="number" />
-                  <I label="Total Weight (kg)" k="totalWeightKg" t="number" step="0.1" />
-                  <I label="Avg Weight (kg)" k="avgWeightKg" t="number" step="0.01" />
-                  <I label="FCR" k="fcr" t="number" step="0.01" />
+                  <FormField f={f} set={set} label="Birds Harvested" k="birdsHarvested" t="number" />
+                  <FormField f={f} set={set} label="Total Weight (kg)" k="totalWeightKg" t="number" step="0.1" />
+                  <FormField f={f} set={set} label="Avg Weight (kg)" k="avgWeightKg" t="number" step="0.01" />
+                  <FormField f={f} set={set} label="FCR" k="fcr" t="number" step="0.01" />
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
-                  <I
+                  <FormField f={f} set={set}
                     label={`Quantity Produced * (${isNew ? newUnit : selCustom?.unit || "Units"})`}
                     k="quantityProduced" t="number" step="0.01" required min={0.01}
                   />
-                  <I label="Sold Immediately (qty, optional)" k="quantitySold" t="number" step="0.01" />
-                  <I label="Revenue (GH₵, optional)" k="revenueGhs" t="number" step="0.01" />
+                  <FormField f={f} set={set} label="Sold Immediately (qty, optional)" k="quantitySold" t="number" step="0.01" />
+                  <FormField f={f} set={set} label="Revenue (GH₵, optional)" k="revenueGhs" t="number" step="0.01" />
                 </div>
               )}
-              <I label="Date" k="recordedDate" t="date" />
+              <FormField f={f} set={set} label="Date" k="recordedDate" t="date" />
             </>);
           })()}
 
@@ -1880,7 +1888,7 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
                     <input type="number" required min={0.01} step="any" max={sel?.quantity || undefined} value={f.quantity ?? ""} onChange={(e) => set("quantity", Number(e.target.value))}
                       className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" />
                   </div>
-                  <I label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={sel ? String(sel.sellingPriceGhs) : "Auto from stock"} />
+                  <FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={sel ? String(sel.sellingPriceGhs) : "Auto from stock"} />
                 </div>
                 {sel && f.quantity ? (
                   <div className="text-[11px] text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded-lg px-3 py-2">
@@ -1889,14 +1897,14 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
                   </div>
                 ) : null}
                 <div className="grid grid-cols-2 gap-3">
-                  <I label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-                  <I label="Customer Phone" k="customerPhone" placeholder="024…" />
+                  <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
+                  <FormField f={f} set={set} label="Customer Phone" k="customerPhone" placeholder="024…" />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <S label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "CARD"]} />
-                  <I label="Price Override Reason" k="customPriceReason" placeholder="Only if price changed" />
+                  <FormSelect f={f} set={set} label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "CARD"]} />
+                  <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="Only if price changed" />
                 </div>
-                <I label="Notes" k="notes" placeholder="Optional" />
+                <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional" />
               </>);
             })()}
           </>)}

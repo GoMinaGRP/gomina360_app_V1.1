@@ -14,6 +14,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 
 type Props = {
   currentUser: any;
@@ -81,6 +82,7 @@ export default function ElectronicsShopModule({
   const [purchases, setPurchases] = useState<any[]>([]);
   const [opsLogs, setOpsLogs] = useState<any[]>([]);
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -427,7 +429,7 @@ export default function ElectronicsShopModule({
           <button onClick={() => setShowForm("PURCHASE")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><Truck className="w-3.5 h-3.5" />Purchase</button>
           <button onClick={() => setShowForm("SERIAL")} className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1"><Barcode className="w-3.5 h-3.5" />Serial</button>
           <button onClick={() => setShowForm("WARRANTY")} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1"><Award className="w-3.5 h-3.5" />Claim</button>
-          <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="tec-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -787,9 +789,38 @@ export default function ElectronicsShopModule({
       )}
 
       {showForm && <ElectronicsForm type={showForm} busy={busy} onClose={() => { setShowForm(null); setError(""); }} onSubmit={submit} inventory={branchInventory} serials={serials} suppliers={suppliers} currency={currentCurrency} />}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense — Electronics Shop"
+        contextLabel="Electronics Shop"
+        vendorPlaceholder="e.g. Solar panel supplier"
+        defaultCategory="Repair & Maintenance"
+        defaultCategories={[
+          { value: "Rent", label: "Rent" },
+          { value: "Fuel", label: "Fuel" },
+          { value: "Utilities", label: "Utilities" },
+          { value: "Repair & Maintenance", label: "Repair & Maintenance" },
+          { value: "Import Duties", label: "Import Duties" },
+          { value: "Marketing", label: "Marketing" },
+          { value: "Payroll", label: "Payroll" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="tec-expense"
+      />
     </div>
   );
 }
+
+function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
+function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
 
 function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, suppliers, currency }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -799,8 +830,6 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
     issueType: "WARRANTY_CLAIM", date: todayStr, orderDate: todayStr, loggedDate: todayStr, recordExpense: true, inStock: "true",
   });
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const I = ({ label, k, t = "text", ...rest }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>;
-  const S = ({ label, k, opts }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>;
   const title =
     type === "SALE" ? "Record Sale / Payment" :
     type === "EXPENSE" ? "Record Expense" :
@@ -823,34 +852,34 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
     {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div>
-      <S label="Product" k="inventoryId" opts={[{ v: "", l: "— select product —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-2 gap-3"><I label="Quantity" k="quantity" t="number" required min={1} /><I label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
-      <div className="grid grid-cols-2 gap-3"><S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><I label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><I label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
-      <I label="Custom price reason (if discounted)" k="customPriceReason" /><I label="Notes" k="notes" />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
+      <FormSelect f={f} set={set} label="Product" k="inventoryId" opts={[{ v: "", l: "— select product —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><FormField f={f} set={set} label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
+      <FormField f={f} set={set} label="Custom price reason (if discounted)" k="customPriceReason" /><FormField f={f} set={set} label="Notes" k="notes" />
       {saleTotal > 0 && <div className="text-xs text-cyan-300 font-bold">Total: {formatMoney(saleTotal, currency)}</div>}
     </>}
-    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><I label="Category" k="category" placeholder="Rent, Fuel, Utilities, Repair..." required /><I label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><I label="Date" k="date" t="date" /></div><I label="Description" k="description" /></>}
-    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><I label="Product Name" k="name" required /><I label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><I label="Category" k="category" placeholder="Electronics & Solar" list="tec-item-cats" /><I label="Unit" k="unit" placeholder="Units" /></div><div className="grid grid-cols-2 gap-3"><I label="Opening Qty" k="quantity" t="number" min={0} /><I label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><I label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><I label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="tec-item-cats">{["Electronics & Solar", "Phones & Accessories", "Computers", "Home Appliances", "TV & Audio"].map((c) => <option key={c} value={c} />)}</datalist></>}
-    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div><S label="Product (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><I label="Item Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} />{selectedItem && !f.itemName && <p className="text-[10px] text-cyan-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><I label="Qty" k="quantity" t="number" required min={1} /><I label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><I label="Due Date" k="dueDate" t="date" /></div><S label="Status" k="status" opts={["PENDING", "READY", "DELIVERED", "CANCELLED"]} /><I label="Notes" k="notes" /></>}
+    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Rent, Fuel, Utilities, Repair..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
+    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Product Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Electronics & Solar" list="tec-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Units" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="tec-item-cats">{["Electronics & Solar", "Phones & Accessories", "Computers", "Home Appliances", "TV & Audio"].map((c) => <option key={c} value={c} />)}</datalist></>}
+    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Product (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Item Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} />{selectedItem && !f.itemName && <p className="text-[10px] text-cyan-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormSelect f={f} set={set} label="Status" k="status" opts={["PENDING", "READY", "DELIVERED", "CANCELLED"]} /><FormField f={f} set={set} label="Notes" k="notes" /></>}
     {type === "PURCHASE" && <>
-      <div className="grid grid-cols-2 gap-3"><S label="Supplier" k="supplierName" opts={(suppliers || []).map((s: any) => s.name)} /><I label="Item / Product" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} required /></div>
-      <S label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— auto-match by name —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-3 gap-3"><I label="Qty" k="quantity" t="number" required min={1} /><I label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" required /><I label="Sell Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" placeholder="new items" /></div>
-      <div className="grid grid-cols-2 gap-3"><S label="Status" k="status" opts={purchaseStatusOpts} /><I label="Order Date" k="orderDate" t="date" /></div>
-      <S label="Payment (if received)" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Supplier" k="supplierName" opts={(suppliers || []).map((s: any) => s.name)} /><FormField f={f} set={set} label="Item / Product" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} required /></div>
+      <FormSelect f={f} set={set} label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— auto-match by name —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
+      <div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" required /><FormField f={f} set={set} label="Sell Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" placeholder="new items" /></div>
+      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Status" k="status" opts={purchaseStatusOpts} /><FormField f={f} set={set} label="Order Date" k="orderDate" t="date" /></div>
+      <FormSelect f={f} set={set} label="Payment (if received)" k="paymentMethod" opts={["BANK_TRANSFER", "MTN_MOMO", "CASH", "POS_CARD", "TELECEL_CASH"]} />
       <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer"><input type="checkbox" checked={f.recordExpense !== false} onChange={(e) => set("recordExpense", e.target.checked)} className="accent-indigo-500 w-3.5 h-3.5" />Book expense to Finance when received (Recommended)</label>
-      <I label="Notes" k="notes" />
+      <FormField f={f} set={set} label="Notes" k="notes" />
     </>}
-    {type === "SERIAL" && <><div className="grid grid-cols-2 gap-3"><I label="Serial Number" k="serialNumber" placeholder="SN-… auto if blank" /><I label="Brand" k="brand" placeholder="Samsung, LG, Felicity…" /></div><I label="Product Name" k="productName" required placeholder="e.g. 65-inch 4K QLED Smart TV" /><S label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— none —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: i.name }))]} /><div className="grid grid-cols-3 gap-3"><S label="Status" k="status" opts={["IN_STOCK", "SOLD", "RESERVED"]} /><I label="Price (GH₵)" k="priceGhs" t="number" step="0.01" /><I label="Warranty (months)" k="warrantyMonths" t="number" min={0} placeholder="12" /></div><div className="grid grid-cols-2 gap-3"><I label="Customer (if sold)" k="customerName" /><I label="Sale Date" k="saleDate" t="date" /></div></>}
+    {type === "SERIAL" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Serial Number" k="serialNumber" placeholder="SN-… auto if blank" /><FormField f={f} set={set} label="Brand" k="brand" placeholder="Samsung, LG, Felicity…" /></div><FormField f={f} set={set} label="Product Name" k="productName" required placeholder="e.g. 65-inch 4K QLED Smart TV" /><FormSelect f={f} set={set} label="Match stock item (optional)" k="inventoryId" opts={[{ v: "", l: "— none —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: i.name }))]} /><div className="grid grid-cols-3 gap-3"><FormSelect f={f} set={set} label="Status" k="status" opts={["IN_STOCK", "SOLD", "RESERVED"]} /><FormField f={f} set={set} label="Price (GH₵)" k="priceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Warranty (months)" k="warrantyMonths" t="number" min={0} placeholder="12" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer (if sold)" k="customerName" /><FormField f={f} set={set} label="Sale Date" k="saleDate" t="date" /></div></>}
     {type === "WARRANTY" && <>
-      <S label="Tracked serial (optional)" k="serialNumber" opts={[{ v: "", l: "— not tracked / walk-in —" }, ...(serials || []).map((s: any) => ({ v: s.serialNumber, l: `${s.serialNumber} • ${s.productName}` }))]} />
-      <div className="grid grid-cols-2 gap-3"><I label="Product" k="productName" required /><I label="Serial # (if not tracked)" k="serialText" placeholder="optional" onBlur={(e: any) => { if (!f.serialNumber) set("serialNumber", e.target.value); }} /></div>
-      <div className="grid grid-cols-2 gap-3"><I label="Customer" k="customerName" required /><I label="Phone" k="customerPhone" /></div>
-      <div className="grid grid-cols-3 gap-3"><S label="Type" k="issueType" opts={["WARRANTY_CLAIM", "RETURN", "REPAIR"]} /><I label="Service Cost (GH₵)" k="costGhs" t="number" step="0.01" min={0} /><I label="Logged Date" k="loggedDate" t="date" /></div>
-      <I label="Issue description" k="description" placeholder="Fault, symptoms, accessories returned…" />
+      <FormSelect f={f} set={set} label="Tracked serial (optional)" k="serialNumber" opts={[{ v: "", l: "— not tracked / walk-in —" }, ...(serials || []).map((s: any) => ({ v: s.serialNumber, l: `${s.serialNumber} • ${s.productName}` }))]} />
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Product" k="productName" required /><FormField f={f} set={set} label="Serial # (if not tracked)" k="serialText" placeholder="optional" onBlur={(e: any) => { if (!f.serialNumber) set("serialNumber", e.target.value); }} /></div>
+      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer" k="customerName" required /><FormField f={f} set={set} label="Phone" k="customerPhone" /></div>
+      <div className="grid grid-cols-3 gap-3"><FormSelect f={f} set={set} label="Type" k="issueType" opts={["WARRANTY_CLAIM", "RETURN", "REPAIR"]} /><FormField f={f} set={set} label="Service Cost (GH₵)" k="costGhs" t="number" step="0.01" min={0} /><FormField f={f} set={set} label="Logged Date" k="loggedDate" t="date" /></div>
+      <FormField f={f} set={set} label="Issue description" k="description" placeholder="Fault, symptoms, accessories returned…" />
     </>}
-    {type === "LOG" && <><div className="grid grid-cols-2 gap-3"><I label="Serial Number" k="serialNumber" placeholder="SN-… auto if blank" /><I label="Brand" k="brand" placeholder="Felicity Solar" /></div><I label="Product Name" k="productName" required placeholder="5kVA Solar Hybrid Inverter + Smart BMS" /><div className="grid grid-cols-3 gap-3"><I label="Warranty (months)" k="warrantyMonths" t="number" min={0} placeholder="24" /><I label="Retail Price (GH₵)" k="retailPriceGhs" t="number" step="0.01" /><S label="In Stock" k="inStock" opts={[{ v: "true", l: "Yes" }, { v: "false", l: "No" }]} /></div><p className="text-[10px] text-slate-500">This is the legacy electronics ops log — unit registry with warranty terms and stock check date.</p></>}
+    {type === "LOG" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Serial Number" k="serialNumber" placeholder="SN-… auto if blank" /><FormField f={f} set={set} label="Brand" k="brand" placeholder="Felicity Solar" /></div><FormField f={f} set={set} label="Product Name" k="productName" required placeholder="5kVA Solar Hybrid Inverter + Smart BMS" /><div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Warranty (months)" k="warrantyMonths" t="number" min={0} placeholder="24" /><FormField f={f} set={set} label="Retail Price (GH₵)" k="retailPriceGhs" t="number" step="0.01" /><FormSelect f={f} set={set} label="In Stock" k="inStock" opts={[{ v: "true", l: "Yes" }, { v: "false", l: "No" }]} /></div><p className="text-[10px] text-slate-500">This is the legacy electronics ops log — unit registry with warranty terms and stock check date.</p></>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
   </form></div></div>;
 }

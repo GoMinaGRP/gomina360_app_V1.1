@@ -28,6 +28,30 @@ export function canManageSharedRecords(user: any): boolean {
 }
 
 /**
+ * Inventory & Stock deletion gate. The OWNER can ALWAYS manage, edit and
+ * delete inventory entries; every other user only while the OWNER has granted
+ * the `canDeleteInventory` flag on their account. The flag is resolved from
+ * the database-loaded user row — client-supplied role/permission values are
+ * never trusted.
+ */
+export function canDeleteInventory(user: any): boolean {
+  if (!user) return false;
+  return user.role === "OWNER" || user.canDeleteInventory === true;
+}
+
+/**
+ * Expense deletion/edit gate. Expenses are `transactions` rows with
+ * `type === "EXPENSE"`. The OWNER can ALWAYS edit and delete expenses; every
+ * other user only while the OWNER has granted the `canManageExpenses` flag on
+ * their account. The flag is resolved from the database-loaded user row —
+ * client-supplied role/permission values are never trusted.
+ */
+export function canManageExpenses(user: any): boolean {
+  if (!user) return false;
+  return user.role === "OWNER" || user.canManageExpenses === true;
+}
+
+/**
  * DB-resolved OWNER gate. Server routes that mutate enterprise structure
  * (business units) call this with a client-supplied user id; the database —
  * never the request body — decides whether the caller is really the OWNER.

@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 
 type Props = {
   currentUser: any;
@@ -89,6 +90,7 @@ export default function CarWashModule({
   const [washes, setWashes] = useState<any[]>([]);
   const [activities, setActivities] = useState<any[]>([]);
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [editService, setEditService] = useState<any>(null);
   const [payChoice, setPayChoice] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
@@ -344,7 +346,7 @@ export default function CarWashModule({
           <button data-testid="cw-open-wash" onClick={() => setShowForm("WASH")} className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1"><Car className="w-3.5 h-3.5" />New Wash</button>
           <button data-testid="cw-open-booking" onClick={() => setShowForm("BOOKING")} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5" />Booking</button>
           <button data-testid="cw-open-service" onClick={() => { setEditService(null); setShowForm("SERVICE"); }} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1"><Sparkles className="w-3.5 h-3.5" />Service</button>
-          <button data-testid="cw-open-expense" onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="cw-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -757,7 +759,7 @@ export default function CarWashModule({
                 ])} />
             </Card>
             <Card title="Expenses" icon={Wallet} testid="cw-rep-expenses"
-              action={<button onClick={() => setShowForm("EXPENSE")} className="text-[10px] font-bold text-rose-300 hover:text-rose-200">+ Log expense</button>}>
+              action={<button onClick={() => setShowExpense(true)} className="text-[10px] font-bold text-rose-300 hover:text-rose-200">+ Log expense</button>}>
               <DataTable headers={["Date", "Category", "Description", "Amount"]}
                 rows={expenses.slice(0, 12).map((t) => [
                   t.date,
@@ -809,6 +811,32 @@ export default function CarWashModule({
           today={today}
         />
       )}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Log Expense — Car Wash"
+        contextLabel="Car Wash"
+        vendorPlaceholder="e.g. Chemico Detergents Ltd"
+        defaultCategory="Detergents & Chemicals"
+        defaultCategories={[
+          { value: "Water Bill", label: "Water Bill" },
+          { value: "Detergents & Chemicals", label: "Detergents & Chemicals" },
+          { value: "Wages", label: "Wages" },
+          { value: "Electricity", label: "Electricity" },
+          { value: "Equipment Repair", label: "Equipment Repair" },
+          { value: "Rent", label: "Rent" },
+          { value: "Marketing", label: "Marketing" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="cw-expense"
+      />
     </div>
   );
 }
@@ -819,6 +847,25 @@ function bizFormattedTarget(businessInfo: any): string {
 }
 
 // ─── Modal form: start wash / booking / service / expense ────────────────
+function FormField({ f, set, label, k, t = "text", ...rest }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <input data-testid={`cwf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? undefined : Number(e.target.value)) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
+    </div>
+  );
+}
+function FormSelect({ f, set, label, k, opts, testid }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <select data-testid={testid || `cwf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
+        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function CarWashForm({
   type, busy, onClose, onSubmit, onPatch, services, inventory, employees, currency, editService, today,
 }: {
@@ -872,20 +919,6 @@ function CarWashForm({
     onSubmit(type, { ...f });
   };
 
-  const I = ({ label, k, t = "text", ...rest }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <input data-testid={`cwf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? undefined : Number(e.target.value)) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-  const S = ({ label, k, opts, testid }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <select data-testid={testid || `cwf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
 
   const title =
     type === "WASH" ? "Start Wash (Drive-in)" :
@@ -902,51 +935,51 @@ function CarWashForm({
         </div>
         <form onSubmit={handle} className="p-5 space-y-3">
           {type === "WASH" && <>
-            <div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div>
-            <I label="Vehicle (make / plate)" k="vehicleLabel" placeholder="e.g. Toyota Corolla — GW-1234-24" required />
-            <S label="Service" k="serviceId" opts={[{ v: "", l: "— select a service —" }, ...activeServices.map((s: any) => ({ v: s.id, l: `${s.name} (${formatMoney(s.priceGhs, currency, true)})` }))]} />
+            <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
+            <FormField f={f} set={set} label="Vehicle (make / plate)" k="vehicleLabel" placeholder="e.g. Toyota Corolla — GW-1234-24" required />
+            <FormSelect f={f} set={set} label="Service" k="serviceId" opts={[{ v: "", l: "— select a service —" }, ...activeServices.map((s: any) => ({ v: s.id, l: `${s.name} (${formatMoney(s.priceGhs, currency, true)})` }))]} />
             {selectedService && (
               <p className="text-[10px] text-cyan-300 -mt-1">Includes: {selectedService.includesItems || selectedService.name}{selectedService.supplyUsageLiters ? ` • draws ${selectedService.supplyUsageLiters}L chemicals on completion` : ""}</p>
             )}
             <div className="grid grid-cols-2 gap-3">
-              <I label="Price (GH₵)" k="priceGhs" t="number" step="0.01" min={0} placeholder={selectedService ? String(selectedService.priceGhs) : "auto from service"} />
-              <S label="Assign Staff" k="staffName" opts={[{ v: "", l: "— unassigned —" }, ...(employees || []).map((e: any) => ({ v: e.name, l: `${e.name} (${e.role})` }))]} />
+              <FormField f={f} set={set} label="Price (GH₵)" k="priceGhs" t="number" step="0.01" min={0} placeholder={selectedService ? String(selectedService.priceGhs) : "auto from service"} />
+              <FormSelect f={f} set={set} label="Assign Staff" k="staffName" opts={[{ v: "", l: "— unassigned —" }, ...(employees || []).map((e: any) => ({ v: e.name, l: `${e.name} (${e.role})` }))]} />
             </div>
-            <I label="Notes" k="notes" />
+            <FormField f={f} set={set} label="Notes" k="notes" />
           </>}
           {type === "BOOKING" && <>
-            <div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /></div>
-            <I label="Vehicle (make / plate)" k="vehicleLabel" placeholder="e.g. Kia Sportage — GE-8890-23" />
-            <S label="Service" k="serviceId" opts={[{ v: "", l: "— select a service —" }, ...activeServices.map((s: any) => ({ v: s.id, l: `${s.name} (${formatMoney(s.priceGhs, currency, true)})` }))]} />
-            <div className="grid grid-cols-2 gap-3"><I label="Booking Date" k="bookingDate" t="date" required /><I label="Time Slot" k="timeSlot" placeholder="e.g. 10:30" /></div>
-            <S label="Preferred Staff" k="assignedStaffName" opts={[{ v: "", l: "— any —" }, ...(employees || []).map((e: any) => ({ v: e.name, l: `${e.name} (${e.role})` }))]} />
-            <I label="Notes" k="notes" />
+            <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
+            <FormField f={f} set={set} label="Vehicle (make / plate)" k="vehicleLabel" placeholder="e.g. Kia Sportage — GE-8890-23" />
+            <FormSelect f={f} set={set} label="Service" k="serviceId" opts={[{ v: "", l: "— select a service —" }, ...activeServices.map((s: any) => ({ v: s.id, l: `${s.name} (${formatMoney(s.priceGhs, currency, true)})` }))]} />
+            <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Booking Date" k="bookingDate" t="date" required /><FormField f={f} set={set} label="Time Slot" k="timeSlot" placeholder="e.g. 10:30" /></div>
+            <FormSelect f={f} set={set} label="Preferred Staff" k="assignedStaffName" opts={[{ v: "", l: "— any —" }, ...(employees || []).map((e: any) => ({ v: e.name, l: `${e.name} (${e.role})` }))]} />
+            <FormField f={f} set={set} label="Notes" k="notes" />
           </>}
           {type === "SERVICE" && <>
-            <I label="Service Name" k="name" placeholder="e.g. Leather Seat Treatment" required />
+            <FormField f={f} set={set} label="Service Name" k="name" placeholder="e.g. Leather Seat Treatment" required />
             <div className="grid grid-cols-2 gap-3">
-              <S label="Category" k="category" opts={SERVICE_CATEGORIES} />
-              <I label="Price (GH₵)" k="priceGhs" t="number" step="0.01" min={0} required />
+              <FormSelect f={f} set={set} label="Category" k="category" opts={SERVICE_CATEGORIES} />
+              <FormField f={f} set={set} label="Price (GH₵)" k="priceGhs" t="number" step="0.01" min={0} required />
             </div>
-            <I label="Description" k="description" placeholder="What the customer gets" />
+            <FormField f={f} set={set} label="Description" k="description" placeholder="What the customer gets" />
             <div className="grid grid-cols-2 gap-3">
-              <I label="Duration (minutes)" k="durationMinutes" t="number" min={0} />
-              <I label="Includes items (offer contents)" k="includesItems" placeholder="Shampoo, wax, tyre shine…" />
+              <FormField f={f} set={set} label="Duration (minutes)" k="durationMinutes" t="number" min={0} />
+              <FormField f={f} set={set} label="Includes items (offer contents)" k="includesItems" placeholder="Shampoo, wax, tyre shine…" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <S label="Chemical supply (from stock)" k="supplyInventoryId" opts={[{ v: "", l: "— none —" }, ...chemItems.map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} ${i.unit || ""} left)` }))]} />
-              <I label="Liters used per job" k="supplyUsageLiters" t="number" step="0.1" min={0} placeholder="e.g. 2" />
+              <FormSelect f={f} set={set} label="Chemical supply (from stock)" k="supplyInventoryId" opts={[{ v: "", l: "— none —" }, ...chemItems.map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} ${i.unit || ""} left)` }))]} />
+              <FormField f={f} set={set} label="Liters used per job" k="supplyUsageLiters" t="number" step="0.1" min={0} placeholder="e.g. 2" />
             </div>
             <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer"><input data-testid="cwf-active" type="checkbox" checked={f.active !== false && f.active !== "false"} onChange={(e) => set("active", e.target.checked)} className="accent-cyan-500 w-3.5 h-3.5" />Bookable (visible on the service menu)</label>
           </>}
           {type === "EXPENSE" && <>
             <div className="grid grid-cols-2 gap-3">
-              <I label="Category" k="category" placeholder="Water Bill, Detergents, Wages…" required />
-              <I label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" min={0} required />
+              <FormField f={f} set={set} label="Category" k="category" placeholder="Water Bill, Detergents, Wages…" required />
+              <FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" min={0} required />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <S label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "POS_CARD", "BANK_TRANSFER"]} />
-              <I label="Description" k="description" />
+              <FormSelect f={f} set={set} label="Payment Method" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "POS_CARD", "BANK_TRANSFER"]} />
+              <FormField f={f} set={set} label="Description" k="description" />
             </div>
           </>}
           <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">

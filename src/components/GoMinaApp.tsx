@@ -974,6 +974,7 @@ export default function GoMinaApp() {
             currentCurrency={currentCurrency}
             isOnline={isOnline}
             onRefreshLogs={() => handleRefreshLogsForBusiness(bizInfo.code)}
+            onRefreshData={refreshAllData}
             currentUser={currentUser}
             employees={employees}
             transactions={transactions}

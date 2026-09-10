@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 
 type Props = {
   currentUser: any;
@@ -97,6 +98,7 @@ export default function TelecomServicesModule({
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [activities, setActivities] = useState<any[]>([]);
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [formCtx, setFormCtx] = useState<any>(null); // preselected line/voucher/package
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -321,7 +323,7 @@ export default function TelecomServicesModule({
           <button data-testid="tel-open-airdata" onClick={() => { setFormCtx(null); setShowForm("AIRDATA_TXN"); }} className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1"><Signal className="w-3.5 h-3.5" />Airtime/Data</button>
           <button data-testid="tel-open-package" onClick={() => { setFormCtx(null); setShowForm("PACKAGE"); }} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><Ticket className="w-3.5 h-3.5" />Wi-Fi Package</button>
           <button data-testid="tel-open-line" onClick={() => { setFormCtx(null); setShowForm("LINE"); }} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1"><Plus className="w-3.5 h-3.5" />Agent Line</button>
-          <button data-testid="tel-open-expense" onClick={() => { setFormCtx(null); setShowForm("EXPENSE"); }} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="tel-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -707,11 +709,56 @@ export default function TelecomServicesModule({
           currency={currentCurrency}
         />
       )}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Log Branch Expense — Telecom & Digital Services"
+        contextLabel="Telecom & Digital Services"
+        vendorPlaceholder="e.g. router / airtime wholesaler"
+        defaultCategory="Float Purchase"
+        defaultCategories={[
+          { value: "Float Purchase", label: "Float Purchase" },
+          { value: "Router Data", label: "Router Data" },
+          { value: "Rent", label: "Rent" },
+          { value: "Power & Utilities", label: "Power & Utilities" },
+          { value: "Airtime/Data Stock", label: "Airtime/Data Stock" },
+          { value: "Device Repair", label: "Device Repair" },
+          { value: "Marketing", label: "Marketing" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="tel-expense"
+      />
     </div>
   );
 }
 
 // ─── Modal forms: line / MoMo txn / airtime-data sale / package / vouchers / float / expense ───
+function FormField({ f, set, label, k, t = "text", ...rest }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <input data-testid={`telf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? undefined : Number(e.target.value)) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
+    </div>
+  );
+}
+function FormSelect({ f, set, label, k, opts, testid }: any) {
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
+      <select data-testid={testid || `telf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
+        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function TelecomForm({
   type, ctx, busy, onClose, onSubmit, onPatch, lines, packages, currency,
 }: {
@@ -759,20 +806,6 @@ function TelecomForm({
     onSubmit(type, { ...f });
   };
 
-  const I = ({ label, k, t = "text", ...rest }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <input data-testid={`telf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? undefined : Number(e.target.value)) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-  const S = ({ label, k, opts, testid }: any) => (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <select data-testid={testid || `telf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
 
   const TITLES: Record<string, string> = {
     LINE: "New Agent Line",
@@ -796,15 +829,15 @@ function TelecomForm({
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
           {type === "LINE" && (
             <>
-              <I label="Line name *" k="label" required placeholder="e.g. MTN MoMo Agent Till 2" />
+              <FormField f={f} set={set} label="Line name *" k="label" required placeholder="e.g. MTN MoMo Agent Till 2" />
               <div className="grid grid-cols-2 gap-3">
-                <S label="Network" k="network" opts={["MTN", "TELECEL", "AT", "WIFI"]} />
-                <S label="Line type" k="kind" opts={[{ v: "MOMO_AGENT", l: "MoMo Agent Till" }, { v: "AIRTIME_WALLET", l: "Airtime Wallet" }, { v: "DATA_WALLET", l: "Data Wallet" }, { v: "WIFI_HOTSPOT", l: "Wi-Fi Hotspot" }]} />
+                <FormSelect f={f} set={set} label="Network" k="network" opts={["MTN", "TELECEL", "AT", "WIFI"]} />
+                <FormSelect f={f} set={set} label="Line type" k="kind" opts={[{ v: "MOMO_AGENT", l: "MoMo Agent Till" }, { v: "AIRTIME_WALLET", l: "Airtime Wallet" }, { v: "DATA_WALLET", l: "Data Wallet" }, { v: "WIFI_HOTSPOT", l: "Wi-Fi Hotspot" }]} />
               </div>
-              <I label="Agent number / SIM (MSISDN)" k="msisdn" placeholder="e.g. 0244 123 456" />
+              <FormField f={f} set={set} label="Agent number / SIM (MSISDN)" k="msisdn" placeholder="e.g. 0244 123 456" />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Opening float (GH₵)" k="floatGhs" t="number" min="0" step="0.01" />
-                <I label="Opening cash (GH₵)" k="cashGhs" t="number" min="0" step="0.01" />
+                <FormField f={f} set={set} label="Opening float (GH₵)" k="floatGhs" t="number" min="0" step="0.01" />
+                <FormField f={f} set={set} label="Opening cash (GH₵)" k="cashGhs" t="number" min="0" step="0.01" />
               </div>
             </>
           )}
@@ -813,31 +846,31 @@ function TelecomForm({
             <>
               <div className="grid grid-cols-2 gap-3">
                 {type === "MOMO_TXN" ? (
-                  <S label="MoMo type" k="type" testid="telf-type" opts={[{ v: "MOMO_DEPOSIT", l: "Deposit (cash in)" }, { v: "MOMO_WITHDRAWAL", l: "Withdrawal (cash out)" }, { v: "MOMO_TRANSFER", l: "Transfer / Send" }]} />
+                  <FormSelect f={f} set={set} label="MoMo type" k="type" testid="telf-type" opts={[{ v: "MOMO_DEPOSIT", l: "Deposit (cash in)" }, { v: "MOMO_WITHDRAWAL", l: "Withdrawal (cash out)" }, { v: "MOMO_TRANSFER", l: "Transfer / Send" }]} />
                 ) : (
-                  <S label="Product" k="type" testid="telf-type" opts={[{ v: "AIRTIME", l: "Airtime top-up" }, { v: "DATA", l: "Data bundle" }]} />
+                  <FormSelect f={f} set={set} label="Product" k="type" testid="telf-type" opts={[{ v: "AIRTIME", l: "Airtime top-up" }, { v: "DATA", l: "Data bundle" }]} />
                 )}
-                <S label="Network" k="network" testid="telf-network" opts={["MTN", "TELECEL", "AT"]} />
+                <FormSelect f={f} set={set} label="Network" k="network" testid="telf-network" opts={["MTN", "TELECEL", "AT"]} />
               </div>
-              <S label={type === "MOMO_TXN" ? "Agent line (till)" : "Wallet the cost is paid from"} k="lineId" testid="telf-line"
+              <FormSelect f={f} set={set} label={type === "MOMO_TXN" ? "Agent line (till)" : "Wallet the cost is paid from"} k="lineId" testid="telf-line"
                 opts={(type === "MOMO_TXN" ? momoLines : walletLines).map((l: any) => ({ v: l.id, l: `${l.label} — float ${formatMoney(l.floatGhs || 0, currency, true)} / cash ${formatMoney(l.cashGhs || 0, currency, true)}` }))} />
               <div className="grid grid-cols-2 gap-3">
-                <I label="Customer name" k="customerName" placeholder="Walk-in customer" />
-                <I label="Customer phone" k="customerPhone" placeholder="05…" />
+                <FormField f={f} set={set} label="Customer name" k="customerName" placeholder="Walk-in customer" />
+                <FormField f={f} set={set} label="Customer phone" k="customerPhone" placeholder="05…" />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <I label={type === "MOMO_TXN" ? "Amount (GH₵) *" : "Face value (GH₵) *"} k="amountGhs" t="number" min="0.01" step="0.01" required />
-                <I label="Service fee charged (GH₵)" k="chargeGhs" t="number" min="0" step="0.01" />
+                <FormField f={f} set={set} label={type === "MOMO_TXN" ? "Amount (GH₵) *" : "Face value (GH₵) *"} k="amountGhs" t="number" min="0.01" step="0.01" required />
+                <FormField f={f} set={set} label="Service fee charged (GH₵)" k="chargeGhs" t="number" min="0" step="0.01" />
               </div>
               {type === "MOMO_TXN" ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <I label="Commission earned (GH₵)" k="commissionGhs" t="number" min="0" step="0.01" />
-                  <I label="Network reference" k="reference" placeholder="SMS txn id" />
+                  <FormField f={f} set={set} label="Commission earned (GH₵)" k="commissionGhs" t="number" min="0" step="0.01" />
+                  <FormField f={f} set={set} label="Network reference" k="reference" placeholder="SMS txn id" />
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
-                  <I label="Wholesale cost (GH₵) *" k="costGhs" t="number" min="0" step="0.01" required />
-                  <I label="Network reference" k="reference" placeholder="SMS txn id" />
+                  <FormField f={f} set={set} label="Wholesale cost (GH₵) *" k="costGhs" t="number" min="0" step="0.01" required />
+                  <FormField f={f} set={set} label="Network reference" k="reference" placeholder="SMS txn id" />
                 </div>
               )}
               {type === "AIRDATA_TXN" && Number(f.amountGhs) > 0 && Number(f.costGhs) >= 0 && (
@@ -846,42 +879,42 @@ function TelecomForm({
                 </p>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <S label="Outcome" k="status" testid="telf-status" opts={[{ v: "SUCCESS", l: "Successful" }, { v: "FAILED", l: "Failed — record & follow up" }]} />
-                <S label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
+                <FormSelect f={f} set={set} label="Outcome" k="status" testid="telf-status" opts={[{ v: "SUCCESS", l: "Successful" }, { v: "FAILED", l: "Failed — record & follow up" }]} />
+                <FormSelect f={f} set={set} label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
               </div>
               {f.status === "FAILED" && (
-                <I label="Failure reason *" k="failReason" required placeholder="e.g. Network timeout / wrong number / float rejected" />
+                <FormField f={f} set={set} label="Failure reason *" k="failReason" required placeholder="e.g. Network timeout / wrong number / float rejected" />
               )}
-              <I label="Notes" k="notes" placeholder="Optional" />
+              <FormField f={f} set={set} label="Notes" k="notes" placeholder="Optional" />
             </>
           )}
 
           {type === "PACKAGE" && (
             <>
-              <I label="Package name *" k="name" required placeholder="e.g. 3-Day Unlimited" />
+              <FormField f={f} set={set} label="Package name *" k="name" required placeholder="e.g. 3-Day Unlimited" />
               <div className="grid grid-cols-3 gap-3">
-                <I label="Validity (hours) *" k="durationHours" t="number" min="1" required />
-                <I label="Data cap (MB)" k="dataCapMb" t="number" min="0" placeholder="blank = unlimited" />
-                <I label="Price (GH₵) *" k="priceGhs" t="number" min="0.01" step="0.01" required />
+                <FormField f={f} set={set} label="Validity (hours) *" k="durationHours" t="number" min="1" required />
+                <FormField f={f} set={set} label="Data cap (MB)" k="dataCapMb" t="number" min="0" placeholder="blank = unlimited" />
+                <FormField f={f} set={set} label="Price (GH₵) *" k="priceGhs" t="number" min="0.01" step="0.01" required />
               </div>
-              <I label="Hotspot / router" k="routerLabel" placeholder="e.g. Wi-Fi Zone A" />
+              <FormField f={f} set={set} label="Hotspot / router" k="routerLabel" placeholder="e.g. Wi-Fi Zone A" />
             </>
           )}
 
           {type === "VOUCHER_BATCH" && (
             <>
-              <S label="Package" k="packageId" testid="telf-package" opts={packages.filter((p) => p.active).map((p: any) => ({ v: p.id, l: `${p.name} — ${formatMoney(p.priceGhs, currency, true)}` }))} />
-              <I label="How many vouchers (1–100) *" k="count" t="number" min="1" max="100" required />
+              <FormSelect f={f} set={set} label="Package" k="packageId" testid="telf-package" opts={packages.filter((p) => p.active).map((p: any) => ({ v: p.id, l: `${p.name} — ${formatMoney(p.priceGhs, currency, true)}` }))} />
+              <FormField f={f} set={set} label="How many vouchers (1–100) *" k="count" t="number" min="1" max="100" required />
               <p className="text-[10px] text-slate-500">Each voucher gets a unique login code, a 6-digit access PIN and a scannable QR card. Expiry starts counting only when the voucher is sold &amp; activated.</p>
             </>
           )}
 
           {type === "VOUCHER_SELL" && (
             <>
-              <I label="User name *" k="customerName" required placeholder="Who is buying access" />
+              <FormField f={f} set={set} label="User name *" k="customerName" required placeholder="Who is buying access" />
               <div className="grid grid-cols-2 gap-3">
-                <I label="User phone" k="customerPhone" placeholder="05…" />
-                <S label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
+                <FormField f={f} set={set} label="User phone" k="customerPhone" placeholder="05…" />
+                <FormSelect f={f} set={set} label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
               </div>
               <p className="text-[10px] text-slate-500">Selling activates the voucher immediately — it stays valid for {ctx?.voucher ? `${ctx.voucher.packageName}` : "the package duration"}, then expires automatically. The sale posts to Finance and the sales ledger.</p>
             </>
@@ -890,9 +923,9 @@ function TelecomForm({
           {type === "FLOAT" && (
             <>
               <div className="grid grid-cols-3 gap-3">
-                <S label="Target" k="target" testid="telf-target" opts={[{ v: "FLOAT", l: "Float (e-money)" }, { v: "CASH", l: "Cash (till)" }]} />
-                <S label="Direction" k="direction" testid="telf-direction" opts={[{ v: "IN", l: "Top up (add)" }, { v: "OUT", l: "Draw down (remove)" }]} />
-                <I label="Amount (GH₵) *" k="amountGhs" t="number" min="0.01" step="0.01" required />
+                <FormSelect f={f} set={set} label="Target" k="target" testid="telf-target" opts={[{ v: "FLOAT", l: "Float (e-money)" }, { v: "CASH", l: "Cash (till)" }]} />
+                <FormSelect f={f} set={set} label="Direction" k="direction" testid="telf-direction" opts={[{ v: "IN", l: "Top up (add)" }, { v: "OUT", l: "Draw down (remove)" }]} />
+                <FormField f={f} set={set} label="Amount (GH₵) *" k="amountGhs" t="number" min="0.01" step="0.01" required />
               </div>
               <p className="text-[10px] text-slate-500">Current: float {formatMoney(ctx?.line?.floatGhs || 0, currency, true)} / cash {formatMoney(ctx?.line?.cashGhs || 0, currency, true)}. Top-ups &amp; drawdowns are tracked per line and logged — they never distort profit.</p>
             </>
@@ -901,11 +934,11 @@ function TelecomForm({
           {type === "EXPENSE" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <I label="Category *" k="category" required placeholder="Float purchase, Router data, Rent, Power…" />
-                <I label="Amount (GH₵) *" k="amountGhs" t="number" min="0.01" step="0.01" required />
+                <FormField f={f} set={set} label="Category *" k="category" required placeholder="Float purchase, Router data, Rent, Power…" />
+                <FormField f={f} set={set} label="Amount (GH₵) *" k="amountGhs" t="number" min="0.01" step="0.01" required />
               </div>
-              <I label="Description" k="description" placeholder="Optional detail" />
-              <S label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
+              <FormField f={f} set={set} label="Description" k="description" placeholder="Optional detail" />
+              <FormSelect f={f} set={set} label="Payment method" k="paymentMethod" testid="telf-paymethod" opts={PAYMENT_METHODS} />
             </>
           )}
         </div>

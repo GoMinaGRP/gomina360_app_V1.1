@@ -16,6 +16,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 
 interface Props {
   currentUser: any;
@@ -60,6 +61,7 @@ export default function BlockFactoryModule({
   const [qcChecks, setQcChecks] = useState<any[]>([]);
   const [checklistDate, setChecklistDate] = useState<string>(new Date().toISOString().split("T")[0]);
   const [showForm, setShowForm] = useState<FormType>(null);
+  const [showExpense, setShowExpense] = useState(false);
   const [restockItemId, setRestockItemId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -372,7 +374,7 @@ export default function BlockFactoryModule({
           <button onClick={() => { setRestockItemId(null); setShowForm("RESTOCK"); }} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><PackagePlus className="w-3.5 h-3.5" />Restock</button>
           <button onClick={() => setShowForm("ORDER")} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1"><ShoppingCart className="w-3.5 h-3.5" />Order</button>
           <button onClick={() => setShowForm("DELIVERY")} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1"><Truck className="w-3.5 h-3.5" />Delivery</button>
-          <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
+          <button data-testid="bf-open-expense" onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Expense</button>
         </div>
       </div>
 
@@ -588,7 +590,7 @@ export default function BlockFactoryModule({
 
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowForm("SALE")} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1"><BadgeDollarSign className="w-3.5 h-3.5" />Record Sale / Payment</button>
-            <button onClick={() => setShowForm("EXPENSE")} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Record Expense</button>
+            <button onClick={() => setShowExpense(true)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />Record Expense</button>
             <button onClick={() => { setRestockItemId(null); setShowForm("RESTOCK"); }} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1"><PackagePlus className="w-3.5 h-3.5" />Purchase Stock</button>
           </div>
 
@@ -676,6 +678,34 @@ export default function BlockFactoryModule({
       )}
 
       {showForm && <BlockFactoryForm type={showForm} busy={busy} onClose={() => { setShowForm(null); setError(""); setRestockItemId(null); }} onSubmit={submit} orders={orders} inventory={branchInventory} blockTypeOptions={blockTypeOptions} blockTypes={blockTypesList} initialRestockItemId={restockItemId} />}
+
+      <ExpenseEntryForm
+        isOpen={showExpense}
+        onClose={() => setShowExpense(false)}
+        onSaved={() => { setShowExpense(false); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Expense — Block Factory"
+        contextLabel="Block Factory"
+        vendorPlaceholder="e.g. Ghacem Cement depot"
+        defaultCategory="Cement Purchase"
+        defaultCategories={[
+          { value: "Cement Purchase", label: "Cement Purchase" },
+          { value: "Sand & Aggregates", label: "Sand & Aggregates" },
+          { value: "Fuel & Diesel", label: "Fuel & Diesel" },
+          { value: "Machine Repair", label: "Machine Repair" },
+          { value: "Payroll", label: "Payroll" },
+          { value: "Transport", label: "Transport" },
+          { value: "Utilities", label: "Utilities" },
+          { value: "Pallets & Packaging", label: "Pallets & Packaging" },
+          { value: "Rent", label: "Rent" },
+          { value: "Miscellaneous", label: "Miscellaneous" },
+        ]}
+        testid="bf-expense"
+      />
     </div>
   );
 }
@@ -706,6 +736,9 @@ function MiniList({ title, items, render }: any) {
   return <div><div className="text-[10px] uppercase text-slate-500 font-bold mb-2">{title}</div><div className="space-y-2">{items.length ? items.map((item: any) => <div key={item.id} className="p-2 rounded-lg bg-slate-900/70 border border-slate-700 text-xs text-slate-300">{render(item)}</div>) : <p className="text-xs text-slate-500">No records</p>}</div></div>;
 }
 
+function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
+function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
+
 function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, blockTypeOptions, blockTypes = [], initialRestockItemId = null }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
   const [f, setF] = useState<any>({
@@ -714,8 +747,6 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
     restockTarget: initialRestockItemId ? `ITEM:${initialRestockItemId}` : "",
   });
   const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const I = ({ label, k, t = "text", ...rest }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>;
-  const S = ({ label, k, opts }: any) => <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>;
   const title =
     type === "PRODUCTION" ? "Record Block Production" :
     type === "ORDER" ? "Create Customer Order" :
@@ -785,7 +816,7 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
   };
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
-    {type === "PRODUCTION" && <><div className="grid grid-cols-2 gap-3"><I label="Batch ID" k="batchId" placeholder="auto if blank" /><S label="Block Type" k="blockType" opts={[...blockTypeOptions, { v: ADD_NEW_TYPE, l: "➕ Add New Block Type…" }]} /><I label="Bags Cement Used" k="bagsCementUsed" t="number" required min={1} /><I label="Blocks Molded" k="blocksMolded" t="number" required min={1} /><I label="Blocks Broken" k="blocksBroken" t="number" min={0} /><S label="Quality" k="qualityGrade" opts={["GRADE_A_STANDARD", "GRADE_B_MINOR_DEFECT", "REJECTED"]} /><I label="Date" k="recordedDate" t="date" /></div>
+    {type === "PRODUCTION" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Batch ID" k="batchId" placeholder="auto if blank" /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={[...blockTypeOptions, { v: ADD_NEW_TYPE, l: "➕ Add New Block Type…" }]} /><FormField f={f} set={set} label="Bags Cement Used" k="bagsCementUsed" t="number" required min={1} /><FormField f={f} set={set} label="Blocks Molded" k="blocksMolded" t="number" required min={1} /><FormField f={f} set={set} label="Blocks Broken" k="blocksBroken" t="number" min={0} /><FormSelect f={f} set={set} label="Quality" k="qualityGrade" opts={["GRADE_A_STANDARD", "GRADE_B_MINOR_DEFECT", "REJECTED"]} /><FormField f={f} set={set} label="Date" k="recordedDate" t="date" /></div>
     {f.blockType !== ADD_NEW_TYPE && (() => {
       const bt = (blockTypes || []).find((t: any) => t.typeKey === f.blockType);
       const it = bt?.sku ? (inventory || []).find((x: any) => x.sku === bt.sku) : null;
@@ -800,9 +831,9 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
       );
     })()}
     {f.blockType === ADD_NEW_TYPE && <NewBlockTypePanel f={f} set={set} />}</>}
-    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><I label="Customer Name" k="customerName" required /><I label="Customer Phone" k="customerPhone" /><S label="Block Type" k="blockType" opts={blockTypeOptions} /><I label="Quantity" k="quantity" t="number" required min={1} /><I label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required /><S label="Status" k="status" opts={["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]} /><I label="Due Date" k="dueDate" t="date" /></div><I label="Notes" k="notes" /></>}
-    {type === "DELIVERY" && <><div className="grid grid-cols-2 gap-3"><S label="Order" k="orderNumber" opts={[{ v: "", l: "— No linked order —" }, ...orders.map((o: any) => ({ v: o.orderNumber, l: `${o.orderNumber} • ${o.customerName}` }))]} /><I label="Customer" k="customerName" required /><S label="Block Type" k="blockType" opts={blockTypeOptions} /><I label="Quantity" k="quantity" t="number" required min={1} /><I label="Vehicle #" k="vehicleNumber" /><I label="Driver" k="driverName" /><S label="Status" k="status" opts={["SCHEDULED", "IN_TRANSIT", "DELIVERED", "CANCELLED"]} /><I label="Delivery Date" k="deliveryDate" t="date" /></div><I label="Notes" k="notes" /></>}
-    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><I label="Category" k="category" placeholder="Fuel, Cement, Payroll..." required list="blk-exp-cats" /><I label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><I label="Date" k="date" t="date" /></div><I label="Description" k="description" /><datalist id="blk-exp-cats">{["Fuel & Diesel", "Cement Purchase", "Sand & Aggregates", "Payroll", "Machine Repair", "Transport", "Utilities", "Pallets", "Rent", "Miscellaneous"].map((c) => <option key={c} value={c} />)}</datalist></>}
+    {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={blockTypeOptions} /><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Status" k="status" opts={["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormField f={f} set={set} label="Notes" k="notes" /></>}
+    {type === "DELIVERY" && <><div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Order" k="orderNumber" opts={[{ v: "", l: "— No linked order —" }, ...orders.map((o: any) => ({ v: o.orderNumber, l: `${o.orderNumber} • ${o.customerName}` }))]} /><FormField f={f} set={set} label="Customer" k="customerName" required /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={blockTypeOptions} /><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Vehicle #" k="vehicleNumber" /><FormField f={f} set={set} label="Driver" k="driverName" /><FormSelect f={f} set={set} label="Status" k="status" opts={["SCHEDULED", "IN_TRANSIT", "DELIVERED", "CANCELLED"]} /><FormField f={f} set={set} label="Delivery Date" k="deliveryDate" t="date" /></div><FormField f={f} set={set} label="Notes" k="notes" /></>}
+    {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Fuel, Cement, Payroll..." required list="blk-exp-cats" /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /><datalist id="blk-exp-cats">{["Fuel & Diesel", "Cement Purchase", "Sand & Aggregates", "Payroll", "Machine Repair", "Transport", "Utilities", "Pallets", "Rent", "Miscellaneous"].map((c) => <option key={c} value={c} />)}</datalist></>}
     {type === "SALE" && <>
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2"><label className="block text-[10px] text-slate-400 font-semibold mb-1">Product (from live stock — finished blocks first)</label>
@@ -823,16 +854,16 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
               })}
           </select>
         </div>
-        <I label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
-        <I label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
-        <I label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-        <I label="Customer Phone" k="customerPhone" />
-        <S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
-        <I label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
-        <I label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
+        <FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
+        <FormField f={f} set={set} label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
+        <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
+        <FormField f={f} set={set} label="Customer Phone" k="customerPhone" />
+        <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
+        <FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
+        <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
       </div>
       {selectedItem && <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">Total due: <span className="font-black">GH₵ {saleNet.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>{salePct > 0 && <span> ({salePct}% discount)</span>} — sells {saleQty} {selectedItem.unit} of “{selectedItem.name}”. Stock after sale: {Math.max(0, (selectedItem.quantity || 0) - saleQty).toLocaleString()}.</div>}
-      <I label="Notes" k="notes" />
+      <FormField f={f} set={set} label="Notes" k="notes" />
     </>}
     {type === "RESTOCK" && <>
       <div className="grid grid-cols-2 gap-3">
@@ -863,10 +894,10 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
             <option value={ADD_NEW_TYPE}>➕ Add New Block Type…</option>
           </select>
         </div>
-        <I label="Quantity Received" k="quantity" t="number" required min={1} />
-        <I label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" />
-        <I label="Date" k="date" t="date" />
-        <S label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
+        <FormField f={f} set={set} label="Quantity Received" k="quantity" t="number" required min={1} />
+        <FormField f={f} set={set} label="Unit Cost (GH₵)" k="unitCostGhs" t="number" step="0.01" />
+        <FormField f={f} set={set} label="Date" k="date" t="date" />
+        <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
       </div>
       {restockIsNewType && <NewBlockTypePanel f={f} set={set} />}
       {restockItem && restockQty > 0 && (
@@ -883,18 +914,18 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
         <input id="recordExpense" type="checkbox" checked={!!f.recordExpense} onChange={(e) => set("recordExpense", e.target.checked)} className="w-4 h-4 accent-indigo-500" />
         <label htmlFor="recordExpense" className="text-slate-300">Book purchase as expense ({restockTotal > 0 ? `GH₵ ${restockTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "no cost set"}) in Finance</label>
       </div>
-      <I label="Description / Supplier note" k="description" placeholder="e.g. 200 bags Ghacem cement from Tema depot" />
+      <FormField f={f} set={set} label="Description / Supplier note" k="description" placeholder="e.g. 200 bags Ghacem cement from Tema depot" />
     </>}
     {type === "ITEM" && <>
       <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2"><I label="Item Name" k="name" required placeholder="e.g. Ghacem Cement 50kg Bag" /></div>
-        <I label="SKU" k="sku" placeholder="auto if blank" />
-        <I label="Category" k="category" placeholder="Raw Material / Concrete Blocks" list="blk-item-cats" />
-        <I label="Opening Quantity" k="quantity" t="number" min={0} />
-        <S label="Unit" k="unit" opts={["Units", "Bags", "Tons", "Kg", "Drums", "Litres", "m³"]} />
-        <I label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
-        <I label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
-        <I label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
+        <div className="col-span-2"><FormField f={f} set={set} label="Item Name" k="name" required placeholder="e.g. Ghacem Cement 50kg Bag" /></div>
+        <FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" />
+        <FormField f={f} set={set} label="Category" k="category" placeholder="Raw Material / Concrete Blocks" list="blk-item-cats" />
+        <FormField f={f} set={set} label="Opening Quantity" k="quantity" t="number" min={0} />
+        <FormSelect f={f} set={set} label="Unit" k="unit" opts={["Units", "Bags", "Tons", "Kg", "Drums", "Litres", "m³"]} />
+        <FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
+        <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
+        <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
       </div>
       <datalist id="blk-item-cats">{["Raw Materials", "Concrete Blocks", "Paving & Bricks", "Spare Parts", "Consumables", "Finished Goods"].map((c) => <option key={c} value={c} />)}</datalist>
     </>}
