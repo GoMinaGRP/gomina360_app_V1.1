@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { X, Wrench, Building2, MapPin, CheckCircle, ImagePlus, Clock, User, QrCode } from "lucide-react";
 import { formatLocation } from "@/lib/ghanaLocations";
 import QrScanModal from "./QrScanModal";
+import ConfirmActionModal from "./ConfirmActionModal";
 import { buildAssetQr } from "@/lib/qrRegistry";
 
 interface AssetRegistrationModalProps {
@@ -100,6 +101,7 @@ export default function AssetRegistrationModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
   // Reset the form each time the modal is opened
   useEffect(() => {
@@ -286,6 +288,11 @@ export default function AssetRegistrationModal({
       return;
     }
 
+    // Final execution is gated behind a confirmation prompt.
+    setConfirming(true);
+  };
+
+  const performRegister = async () => {
     setIsSubmitting(true);
     try {
       const res = await fetch("/api/enterprise", {
@@ -392,6 +399,7 @@ export default function AssetRegistrationModal({
               </label>
               <select
                 required
+                data-testid="ast-business"
                 value={businessId}
                 disabled={isLocked}
                 onChange={(e) => setBusinessId(e.target.value)}
@@ -420,6 +428,7 @@ export default function AssetRegistrationModal({
               </label>
               <select
                 required
+                data-testid="ast-branch"
                 value={branchCode}
                 onChange={(e) => setBranchCode(e.target.value)}
                 disabled={!businessId || branchOptions.length === 0}
@@ -450,6 +459,7 @@ export default function AssetRegistrationModal({
               <input
                 type="text"
                 required
+                data-testid="ast-code"
                 value={assetCode}
                 onChange={(e) => {
                   setCodeTouched(true);
@@ -555,6 +565,7 @@ export default function AssetRegistrationModal({
             <input
               type="text"
               required
+              data-testid="ast-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. John Deere Farm Tractor"
@@ -728,6 +739,7 @@ export default function AssetRegistrationModal({
             </button>
             <button
               type="submit"
+              data-testid="ast-submit"
               disabled={isSubmitting}
               className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md transition disabled:opacity-50"
             >
@@ -744,6 +756,26 @@ export default function AssetRegistrationModal({
         onCode={handleAssetQrScan}
         busy={qrBusy}
         title="Scan Asset QR"
+      />
+
+      {/* Confirmation gate before the asset is finally registered */}
+      <ConfirmActionModal
+        open={confirming}
+        title="Confirm Asset Entry"
+        message="You're about to register this asset record. It will be linked to the selected business and branch and appear in reports."
+        details={[
+          { label: "Asset", value: name.trim() || "—" },
+          { label: "Asset Code", value: assetCode.trim().toUpperCase() || "—" },
+          { label: "Branch", value: selectedBranch?.name || branchCode || "—" },
+        ]}
+        tone="purple"
+        confirmLabel="Confirm & Register"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          performRegister();
+        }}
+        testid="ast-confirm-entry"
       />
     </div>
   );

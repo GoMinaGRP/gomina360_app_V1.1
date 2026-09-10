@@ -16,6 +16,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 type Props = {
   currentUser: any;
@@ -95,6 +97,7 @@ export default function CarWashModule({
   const [payChoice, setPayChoice] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!bizId) return;
@@ -216,7 +219,18 @@ export default function CarWashModule({
     [branchCustomers]
   );
 
-  const submit = async (type: FormType, data: any) => {
+  const submit = (type: FormType, data: any) => {
+    if (classifyEntry(type)) {
+      setConfirmEntry({ entity: String(type), data: data });
+    } else {
+      performSubmit(type, data);
+    }
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
+  const performSubmit = async (type: FormType, data: any) => {
     setBusy(true);
     setError("");
     try {
@@ -836,6 +850,22 @@ export default function CarWashModule({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="cw-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity as FormType, c.data);
+        }}
+        testid="cw-confirm-entry"
       />
     </div>
   );

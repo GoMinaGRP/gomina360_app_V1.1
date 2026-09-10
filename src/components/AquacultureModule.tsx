@@ -17,6 +17,8 @@ import { analyzeAquaculture, AQUA_ALERT_STYLES, AQUA_METRIC_COLORS } from "@/lib
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface Props {
   currentUser: any;
@@ -53,6 +55,7 @@ export default function AquacultureModule({
   const [showExpense, setShowExpense] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const [ponds, setPonds] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
@@ -91,6 +94,77 @@ export default function AquacultureModule({
   }, [bizId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // ─── Submit handler (with Sale/Inventory/Asset confirmation gate) ───
+  const performSubmit = async (entity: string, data: any) => {
+    setBusy(true); setErr("");
+    try {
+      // Stock-linked sale through the shared pipeline: validates
+      // available stock, deducts, records revenue + receipt.
+      if (entity === "SALE") {
+        const res = await fetch("/api/sales", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId: bizId,
+            branchCode: businessInfo?.code,
+            customerName: data.customerName,
+            customerPhone: data.customerPhone,
+            paymentMethod: data.paymentMethod,
+            notes: data.notes,
+            cartItems: [{
+              inventoryId: Number(data.inventoryId),
+              quantity: Number(data.quantity),
+              sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined,
+              customPriceReason: data.customPriceReason,
+            }],
+            createdByUserId: currentUser?.id,
+            createdByName: currentUser?.name,
+            createdByRole: currentUser?.role,
+          }),
+        });
+        const d = await res.json();
+        if (d.success) { setShowForm(null); await refresh(); onRefreshData(); }
+        else setErr(d.error || "Sale failed.");
+        return;
+      }
+      const res = await fetch("/api/aquaculture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity,
+          data: {
+            ...data,
+            businessId: bizId,
+            branchCode: businessInfo?.code,
+            branchName: businessInfo?.name,
+            createdByName: currentUser?.name,
+            createdByRole: currentUser?.role,
+            recordedByName: currentUser?.name,
+            recordedByRole: currentUser?.role,
+            recordedByUserId: currentUser?.id,
+          },
+        }),
+      });
+      const d = await res.json();
+      if (d.success) {
+        setShowForm(null);
+        await refresh();
+        // For harvest, reload ponds/batches from db
+        if (entity === "HARVEST") onRefreshData();
+      } else setErr(d.error || "Failed to save");
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const submit = (entity: string, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity, data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
 
   // ─── KPI calculations ────────────────────────────────────────────
   const activePonds = ponds.filter((p) => p.status !== "EMPTY" && p.status !== "PREPARE_NEXT_CYCLE");
@@ -196,6 +270,9 @@ export default function AquacultureModule({
 
   const scoreBarColor = statusColor === "red" ? "bg-rose-500" : statusColor === "yellow" ? "bg-amber-500" : "bg-emerald-500";
   const scoreTextColor = statusColor === "red" ? "text-rose-400" : statusColor === "yellow" ? "text-amber-400" : "text-emerald-400";
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-[1600px] mx-auto text-slate-100">
@@ -632,66 +709,7 @@ export default function AquacultureModule({
       {showForm && (
         <AquacultureForm type={showForm} busy={busy} error={err} ponds={ponds} batches={batches} inventory={branchInventory}
           onClose={() => { setShowForm(null); setErr(""); }}
-          onSubmit={async (entity: string, data: any) => {
-            setBusy(true); setErr("");
-            try {
-              // Stock-linked sale through the shared pipeline: validates
-              // available stock, deducts, records revenue + receipt.
-              if (entity === "SALE") {
-                const res = await fetch("/api/sales", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    businessId: bizId,
-                    branchCode: businessInfo?.code,
-                    customerName: data.customerName,
-                    customerPhone: data.customerPhone,
-                    paymentMethod: data.paymentMethod,
-                    notes: data.notes,
-                    cartItems: [{
-                      inventoryId: Number(data.inventoryId),
-                      quantity: Number(data.quantity),
-                      sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined,
-                      customPriceReason: data.customPriceReason,
-                    }],
-                    createdByUserId: currentUser?.id,
-                    createdByName: currentUser?.name,
-                    createdByRole: currentUser?.role,
-                  }),
-                });
-                const d = await res.json();
-                if (d.success) { setShowForm(null); await refresh(); onRefreshData(); }
-                else setErr(d.error || "Sale failed.");
-                return;
-              }
-              const res = await fetch("/api/aquaculture", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  entity,
-                  data: {
-                    ...data,
-                    businessId: bizId,
-                    branchCode: businessInfo?.code,
-                    branchName: businessInfo?.name,
-                    createdByName: currentUser?.name,
-                    createdByRole: currentUser?.role,
-                    recordedByName: currentUser?.name,
-                    recordedByRole: currentUser?.role,
-                    recordedByUserId: currentUser?.id,
-                  },
-                }),
-              });
-              const d = await res.json();
-              if (d.success) {
-                setShowForm(null);
-                await refresh();
-                // For harvest, reload ponds/batches from db
-                if (entity === "HARVEST") onRefreshData();
-              } else setErr(d.error || "Failed to save");
-            } catch (e: any) { setErr(e.message); }
-            finally { setBusy(false); }
-          }}
+          onSubmit={submit}
         />
       )}
 
@@ -720,6 +738,22 @@ export default function AquacultureModule({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="aqua-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity, c.data);
+        }}
+        testid="aqua-confirm-entry"
       />
     </div>
   );

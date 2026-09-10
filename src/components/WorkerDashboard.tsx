@@ -21,6 +21,8 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface WorkerDashboardProps {
   currentUser: any;
@@ -75,6 +77,7 @@ export default function WorkerDashboard({
   const [saleSuccess, setSaleSuccess] = useState(false);
   const [saleTrackingCode, setSaleTrackingCode] = useState("");
   const [saleError, setSaleError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   // Customer form
   const [newCustName, setNewCustName] = useState("");
@@ -159,8 +162,7 @@ export default function WorkerDashboard({
   // Workers can NEVER override prices
   const canOverridePrice = false;
 
-  const handleRecordSale = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performRecordSale = async () => {
     if (cart.length === 0) return;
     setSaleError("");
     setIsSubmittingSale(true);
@@ -208,6 +210,19 @@ export default function WorkerDashboard({
       setIsSubmittingSale(false);
     }
   };
+
+  // Confirmation gate for the Sale before final execution.
+  const handleRecordSale = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) return;
+    setConfirmEntry({
+      entity: "SALE",
+      data: { customerName: saleCustomerName, paymentMethod: salePaymentMethod, amountGhs: cartTotal },
+    });
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -862,6 +877,21 @@ export default function WorkerDashboard({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="worker-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          setConfirmEntry(null);
+          performRecordSale();
+        }}
+        testid="worker-confirm-entry"
       />
     </div>
   );

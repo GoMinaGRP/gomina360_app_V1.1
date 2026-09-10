@@ -11,6 +11,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 type Props = {
   currentUser: any;
@@ -79,6 +81,7 @@ export default function RestaurantKitchenModule({
   const [showExpense, setShowExpense] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!bizId) return;
@@ -221,7 +224,18 @@ export default function RestaurantKitchenModule({
   }, [foodCostPct, totalSalesBase, wasteCost, expiryAlerts, fridgeTaskToday, topDish, lowStock, cookingCount, shiftLogs, currentCurrency]);
 
   // ── Submit router ─────────────────────────────────────────────────────
-  const submit = async (entity: FormType, data: any) => {
+  const submit = (entity: FormType, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity: String(entity), data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
+  const performSubmit = async (entity: FormType, data: any) => {
     setBusy(true); setError("");
     try {
       let d: any;
@@ -719,6 +733,22 @@ export default function RestaurantKitchenModule({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="kit-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity as FormType, c.data);
+        }}
+        testid="kit-confirm-entry"
       />
     </div>
   );

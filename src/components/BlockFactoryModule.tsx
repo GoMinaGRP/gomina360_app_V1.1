@@ -17,6 +17,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface Props {
   currentUser: any;
@@ -65,6 +67,7 @@ export default function BlockFactoryModule({
   const [restockItemId, setRestockItemId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const [dateFilter, setDateFilter] = useState("ALL");
   const [blockTypeFilter, setBlockTypeFilter] = useState("ALL");
@@ -235,7 +238,7 @@ export default function BlockFactoryModule({
     })).slice(-14);
   })();
 
-  const submit = async (entity: FormType, data: any) => {
+  const performSubmit = async (entity: FormType, data: any) => {
     setBusy(true); setError("");
     try {
       let d: any;
@@ -332,6 +335,15 @@ export default function BlockFactoryModule({
     }
   };
 
+  // Confirmation gate for Sale / Inventory / Asset entries before final execution.
+  const submit = (entity: FormType, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity: String(entity), data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
   const Stat = ({ label, value, sub, color = "emerald", icon: Icon }: any) => (
     <div className="bg-slate-800/90 border border-slate-700/80 rounded-xl p-4">
       <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400">
@@ -353,6 +365,9 @@ export default function BlockFactoryModule({
   );
 
   if (loading) return <div className="flex items-center justify-center min-h-[50vh]"><Loader2 className="w-8 h-8 animate-spin text-cyan-400" /></div>;
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-[1600px] mx-auto text-slate-100">
@@ -705,6 +720,22 @@ export default function BlockFactoryModule({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="bf-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity as FormType, c.data);
+        }}
+        testid="bf-confirm-entry"
       />
     </div>
   );

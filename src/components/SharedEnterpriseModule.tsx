@@ -25,6 +25,8 @@ import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
 import AssetRegistrationModal from "./AssetRegistrationModal";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import QrScanModal from "./QrScanModal";
 import QrRecordModal from "./QrRecordModal";
 import PayrollCenter from "./PayrollCenter";
@@ -104,6 +106,16 @@ export default function SharedEnterpriseModule({
   const [paymentMethod, setPaymentMethod] = useState("MTN_MOMO");
   const [description, setDescription] = useState("Transaction payment via MTN MoMo");
   const [trxType, setTrxType] = useState("INCOME");
+
+  // ─── Confirmation gate for Sale / Inventory / Asset final execution ───
+  const [confirmAction, setConfirmAction] = useState<null | {
+    title: string;
+    message: string;
+    details: { label: string; value: string }[];
+    tone: any;
+    confirmLabel: string;
+    run: () => void;
+  }>(null);
 
   // ─── INVENTORY add-form: business + branch/register, stock details & photos ───
   const [invBranch, setInvBranch] = useState("");
@@ -271,8 +283,24 @@ export default function SharedEnterpriseModule({
       : `${r.name} (${r.role})`;
 
   // Edit submit: PATCH to the module's endpoint — server re-checks permission.
-  const submitRecordEdit = async (e: React.FormEvent) => {
+  const submitRecordEdit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingRecord) return;
+    const kind =
+      moduleType === "INVENTORY"
+        ? classifyEntry("INVENTORY")
+        : moduleType === "TRANSACTIONS" && editingRecord.type === "INCOME"
+        ? classifyEntry("SALE")
+        : null;
+    if (kind) {
+      const meta = confirmMeta(kind, { name: editingRecord.name, amountGhs: editingRecord.amountGhs });
+      setConfirmAction({ ...meta, run: performRecordEdit });
+    } else {
+      performRecordEdit();
+    }
+  };
+
+  const performRecordEdit = async () => {
     if (!editingRecord) return;
     setRecordBusy(true);
     setRecordErr("");
@@ -835,8 +863,33 @@ export default function SharedEnterpriseModule({
     setInvBranch(biz?.code || "");
   };
 
-  const handleAddItem = async (e: React.FormEvent) => {
+  // Confirmation gate: Sale / Inventory / Asset entries confirm before saving.
+  const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
+    const kind =
+      moduleType === "INVENTORY"
+        ? classifyEntry("INVENTORY")
+        : moduleType === "ASSETS"
+        ? classifyEntry("ASSET")
+        : moduleType === "TRANSACTIONS" && trxType === "INCOME"
+        ? classifyEntry("SALE")
+        : null;
+    if (kind) {
+      const meta = confirmMeta(
+        kind,
+        moduleType === "INVENTORY"
+          ? { name, quantity: invQty }
+          : moduleType === "ASSETS"
+          ? { name }
+          : { amountGhs, paymentMethod }
+      );
+      setConfirmAction({ ...meta, run: performAddItem });
+    } else {
+      performAddItem();
+    }
+  };
+
+  const performAddItem = async () => {
     setIsSubmitting(true);
 
     if (moduleType === "TRANSACTIONS") {
@@ -1048,14 +1101,7 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  const executiveAssetEdit = async (asset: any) => {
-    const nextValue = window.prompt(
-      `New current value for ${asset.assetCode} (GH₵):`,
-      String(asset.currentValueGhs || 0)
-    );
-    if (nextValue === null) return;
-    const numeric = Number(nextValue);
-    if (Number.isNaN(numeric) || numeric < 0) return;
+  const performAssetEdit = async (asset: any, numeric: number) => {
     setAssetActionBusy(asset.id);
     try {
       await fetch("/api/assets", {
@@ -1076,17 +1122,29 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  const executiveAssetTransfer = async (asset: any) => {
-    const targetCode = window.prompt(
-      `Transfer ${asset.assetCode} to branch code:`,
-      asset.branchCode
+  const executiveAssetEdit = (asset: any) => {
+    const nextValue = window.prompt(
+      `New current value for ${asset.assetCode} (GH₵):`,
+      String(asset.currentValueGhs || 0)
     );
-    if (!targetCode) return;
-    const targetBiz = businesses.find((b) => b.code === targetCode.trim().toUpperCase());
-    if (!targetBiz) {
-      window.alert("Branch code not found.");
-      return;
-    }
+    if (nextValue === null) return;
+    const numeric = Number(nextValue);
+    if (Number.isNaN(numeric) || numeric < 0) return;
+    setConfirmAction({
+      title: "Confirm Asset Edit",
+      message: `You're about to update the current value of ${asset.assetCode} — ${asset.name}.`,
+      details: [
+        { label: "Asset", value: asset.name },
+        { label: "Asset Code", value: asset.assetCode },
+        { label: "New Current Value", value: `GH₵ ${numeric}` },
+      ],
+      tone: "purple",
+      confirmLabel: "Confirm Edit",
+      run: () => performAssetEdit(asset, numeric),
+    });
+  };
+
+  const performAssetTransfer = async (asset: any, targetBiz: any) => {
     setAssetActionBusy(asset.id);
     try {
       await fetch("/api/assets", {
@@ -1111,8 +1169,32 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  const executiveAssetDelete = async (asset: any) => {
-    if (!window.confirm(`Delete asset ${asset.assetCode} — ${asset.name}?`)) return;
+  const executiveAssetTransfer = (asset: any) => {
+    const targetCode = window.prompt(
+      `Transfer ${asset.assetCode} to branch code:`,
+      asset.branchCode
+    );
+    if (!targetCode) return;
+    const targetBiz = businesses.find((b) => b.code === targetCode.trim().toUpperCase());
+    if (!targetBiz) {
+      window.alert("Branch code not found.");
+      return;
+    }
+    setConfirmAction({
+      title: "Confirm Asset Transfer",
+      message: `You're about to transfer ${asset.assetCode} — ${asset.name} to ${targetBiz.name} (${targetBiz.code}).`,
+      details: [
+        { label: "Asset", value: asset.name },
+        { label: "From Branch", value: asset.branchCode || "—" },
+        { label: "To Branch", value: `${targetBiz.name} (${targetBiz.code})` },
+      ],
+      tone: "purple",
+      confirmLabel: "Confirm Transfer",
+      run: () => performAssetTransfer(asset, targetBiz),
+    });
+  };
+
+  const performAssetDelete = async (asset: any) => {
     setAssetActionBusy(asset.id);
     try {
       await fetch(
@@ -1126,6 +1208,20 @@ export default function SharedEnterpriseModule({
     } finally {
       setAssetActionBusy(null);
     }
+  };
+
+  const executiveAssetDelete = (asset: any) => {
+    setConfirmAction({
+      title: "Confirm Asset Deletion",
+      message: `You're about to permanently delete ${asset.assetCode} — ${asset.name}. This cannot be undone.`,
+      details: [
+        { label: "Asset", value: asset.name },
+        { label: "Asset Code", value: asset.assetCode },
+      ],
+      tone: "rose",
+      confirmLabel: "Delete Asset",
+      run: () => performAssetDelete(asset),
+    });
   };
 
   const getBusinessName = (bId: number | null) => {
@@ -1356,7 +1452,7 @@ export default function SharedEnterpriseModule({
               }
             }}
             className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-lg transition"
-            data-testid={moduleType === "EMPLOYEES" ? "employee-reg-open" : undefined}
+            data-testid={moduleType === "EMPLOYEES" ? "employee-reg-open" : moduleType === "ASSETS" ? "asset-reg-open" : "shared-add-open"}
           >
             <Plus className="w-4 h-4" />
             <span>{config.buttonLabel}</span>
@@ -2765,6 +2861,7 @@ export default function SharedEnterpriseModule({
                 </button>
                 <button
                   type="submit"
+                  data-testid="shared-add-submit"
                   disabled={isSubmitting}
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition disabled:opacity-50"
                 >
@@ -3208,6 +3305,23 @@ export default function SharedEnterpriseModule({
           onChanged={onRefreshData}
         />
       )}
+
+      {/* Confirmation gate for Sale / Inventory / Asset final execution */}
+      <ConfirmActionModal
+        open={!!confirmAction}
+        title={confirmAction?.title || ""}
+        message={confirmAction?.message || ""}
+        details={confirmAction?.details || []}
+        tone={confirmAction?.tone || "rose"}
+        confirmLabel={confirmAction?.confirmLabel}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => {
+          const run = confirmAction?.run;
+          setConfirmAction(null);
+          run?.();
+        }}
+        testid="shared-confirm-entry"
+      />
     </div>
   );
 }

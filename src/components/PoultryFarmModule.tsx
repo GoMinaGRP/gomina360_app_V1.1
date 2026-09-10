@@ -19,6 +19,8 @@ import PoultryAnalyticsAlerts from "./PoultryAnalyticsAlerts";
 import PoultryGrowthAnalytics from "./PoultryGrowthAnalytics";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface Props {
   currentUser: any;
@@ -89,6 +91,7 @@ export default function PoultryFarmModule({
   const [newCategoryIcon, setNewCategoryIcon] = useState("📋");
   const [expCategories, setExpCategories] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   const loadExpenseCategories = async () => {
     try {
@@ -360,7 +363,16 @@ export default function PoultryFarmModule({
   );
 
   // ─── Submit handler ───
-  const submit = async (entity: string, data: any) => {
+  // Confirmation gate for Sale / Inventory / Asset entries before final execution.
+  const submit = (entity: string, data: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity, data });
+    } else {
+      performSubmit(entity, data);
+    }
+  };
+
+  const performSubmit = async (entity: string, data: any) => {
     setBusy(true); setErr("");
     try {
       // Stock-linked sale: shared pipeline validates available stock, deducts
@@ -601,6 +613,9 @@ export default function PoultryFarmModule({
       <Plus className="w-3.5 h-3.5" /> {label}
     </button>
   );
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-[1600px] mx-auto text-slate-100">
@@ -1657,6 +1672,22 @@ export default function PoultryFarmModule({
           onSubmit={submit}
         />
       )}
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity, c.data);
+        }}
+        testid="poultry-confirm-entry"
+      />
     </div>
   );
 }

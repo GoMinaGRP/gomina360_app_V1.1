@@ -15,6 +15,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import ConfirmActionModal from "./ConfirmActionModal";
+import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface Props {
   currentUser: any;
@@ -165,6 +167,7 @@ export default function BusinessDashboardModule({
   const [restockItemId, setRestockItemId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
   const [notice, setNotice] = useState("");
   const [gettingStartedOpen, setGettingStartedOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -228,7 +231,18 @@ export default function BusinessDashboardModule({
     [branchTx]
   );
 
-  const submit = async (entity: FormType, f: any) => {
+  const submit = (entity: FormType, f: any) => {
+    if (classifyEntry(entity)) {
+      setConfirmEntry({ entity: String(entity), data: f });
+    } else {
+      performSubmit(entity, f);
+    }
+  };
+
+  const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
+  const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
+
+  const performSubmit = async (entity: FormType, f: any) => {
     setBusy(true); setError(""); setNotice("");
     const meta = {
       businessId: bizId,
@@ -720,6 +734,22 @@ export default function BusinessDashboardModule({
           { value: "Miscellaneous", label: "📋 Miscellaneous" },
         ]}
         testid="bd-expense"
+      />
+
+      <ConfirmActionModal
+        open={!!confirmEntry && !!confirmView}
+        title={confirmView?.title || ""}
+        message={confirmView?.message || ""}
+        details={confirmView?.details || []}
+        tone={confirmView?.tone || "rose"}
+        confirmLabel={confirmView?.confirmLabel}
+        onCancel={() => setConfirmEntry(null)}
+        onConfirm={() => {
+          const c = confirmEntry;
+          setConfirmEntry(null);
+          if (c) performSubmit(c.entity as FormType, c.data);
+        }}
+        testid="bd-confirm-entry"
       />
     </div>
   );
