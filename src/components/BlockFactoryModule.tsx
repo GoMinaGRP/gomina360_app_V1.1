@@ -43,9 +43,12 @@ const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
 ];
 
-// Original factory types — always present as the baseline; the persisted master
-// list (block_types table) extends this with any user-created types.
-const BLOCK_TYPES = ["6-INCH-SOLID", "6-INCH-HOLLOW", "5-INCH-SOLID", "PAVING-BRICKS"];
+// NOTE: the block production master list starts EMPTY for every business — no
+// sample block types are pre-loaded (owner directive: new / reset units begin
+// with zero sample, test or unrelated data). The dropdowns below are fed ONLY
+// by the persisted master list (block_types) plus types referenced by existing
+// records, so a clean unit offers just "+ Add New Block Type…". The demo
+// flagship BLOCK-01 receives its original types from the seed (seed.ts) only.
 const ADD_NEW_TYPE = "__ADD_NEW_BLOCK_TYPE__";
 
 
@@ -92,12 +95,12 @@ export default function BlockFactoryModule({
     }
   }, [bizId]);
 
-  // Master list of block types: original factory types + any saved custom types
-  // + any type already referenced by historical records (so filters never hide data).
+  // Master list of block types: the persisted production master list plus any
+  // type already referenced by historical records (so filters never hide data).
   const blockTypeOptions = useMemo(() => {
     const fromMaster = blockTypesList.filter((t) => t.isActive !== false).map((t) => t.typeKey);
     const fromData = [...production, ...orders, ...deliveries].map((x: any) => x.blockType);
-    return Array.from(new Set([...BLOCK_TYPES, ...fromMaster, ...fromData].filter(Boolean))) as string[];
+    return Array.from(new Set([...fromMaster, ...fromData].filter(Boolean))) as string[];
   }, [blockTypesList, production, orders, deliveries]);
 
   useEffect(() => { refresh(); }, [refresh]);

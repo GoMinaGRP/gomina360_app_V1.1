@@ -17,10 +17,13 @@ import {
   poultryHealthRecords,
   poultryProduction,
   poultryChecklists,
+  poultryProducts,
+  blockTypes,
   blockFactoryLogs,
   aquacultureLogs,
   livestockLogs,
   restaurantLogs,
+  restaurantMenuItems,
   electronicsLogs,
   carWashLogs,
   aiInsights,
@@ -55,6 +58,87 @@ async function ensureWashFlagshipCatalogue() {
     category: wash.category,
   });
   if (created > 0) console.log(`WASH-01 service catalogue provisioned (${created} default services).`);
+}
+
+/**
+ * Flagship master-list seeds (DEMO/RECOVERY ONLY).
+ *
+ * New / reset units deliberately start with EMPTY master lists (owner
+ * directive — zero sample, test or unrelated data); the module GET routes no
+ * longer auto-seed them. Only the original demo flagships receive their
+ * signature master lists here, idempotently (a no-op once any rows exist) so
+ * the demo keeps its familiar data without ever leaking sample rows into a
+ * business the OWNER creates from the app.
+ */
+async function ensureFlagshipMasterLists() {
+  // ── Block Factory: original production master types (BLOCK-01) ────────
+  const [block] = await db.select().from(businesses).where(eq(businesses.code, "BLOCK-01"));
+  if (block) {
+    const existing = await db.select().from(blockTypes).where(eq(blockTypes.businessId, block.id));
+    if (existing.length === 0) {
+      const seeds = [
+        { typeKey: "6-INCH-SOLID", name: "6-Inch Solid Blocks", dimensions: "6in x 9in x 18in", style: "SOLID" },
+        { typeKey: "6-INCH-HOLLOW", name: "6-Inch Hollow Blocks", dimensions: "6in x 8in x 16in", style: "HOLLOW" },
+        { typeKey: "5-INCH-SOLID", name: "5-Inch Solid Blocks", dimensions: "5in x 6in x 16in", style: "SOLID" },
+        { typeKey: "PAVING-BRICKS", name: "Paving Bricks", dimensions: "4in x 8in pavers", style: "PAVING" },
+      ];
+      for (const t of seeds) {
+        await db.insert(blockTypes).values({ businessId: block.id, branchCode: block.code, ...t }).returning();
+      }
+      console.log("BLOCK-01 production master types seeded (4).");
+    }
+  }
+
+  // ── Poultry Farm: the two system products (POULTRY-01) ────────────────
+  const [poultry] = await db.select().from(businesses).where(eq(businesses.code, "POULTRY-01"));
+  if (poultry) {
+    const existing = await db.select().from(poultryProducts).where(eq(poultryProducts.businessId, poultry.id));
+    if (existing.length === 0) {
+      const sysProducts = [
+        { productKey: "EGGS", sku: "POUL-EGG-L01", name: "Grade A Large Egg Trays (30 Eggs/Tray)", category: "Poultry Products", unit: "Trays", costPriceGhs: 38, sellingPriceGhs: 55, minStockThreshold: 150 },
+        { productKey: "BROILER_WEIGHT", sku: "PGH-BROILER-DRESSED", name: "Dressed Broiler Chicken (Whole)", category: "Poultry Meat", unit: "Birds", costPriceGhs: 65, sellingPriceGhs: 90, minStockThreshold: 10 },
+      ];
+      for (const p of sysProducts) {
+        await db.insert(poultryProducts).values({
+          businessId: poultry.id,
+          branchCode: poultry.code,
+          productKey: p.productKey,
+          name: p.name,
+          category: p.category,
+          unit: p.unit,
+          sku: p.sku,
+          costPriceGhs: p.costPriceGhs,
+          sellingPriceGhs: p.sellingPriceGhs,
+          minStockThreshold: p.minStockThreshold,
+          isSystem: true,
+          isActive: true,
+        }).returning();
+      }
+      console.log("POULTRY-01 system products seeded (2).");
+    }
+  }
+
+  // ── Restaurant & Kitchen: signature menu (FOOD-01) ────────────────────
+  const [food] = await db.select().from(businesses).where(eq(businesses.code, "FOOD-01"));
+  if (food) {
+    const existing = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, food.id));
+    if (existing.length === 0) {
+      const menu = [
+        { name: "Jollof Rice with Grilled Tilapia & Pepper Sauce", category: "MAIN", priceGhs: 85, costGhs: 38 },
+        { name: "Waakye with Fish & Salad", category: "MAIN", priceGhs: 45, costGhs: 19 },
+        { name: "Banku with Okro Stew & Goat", category: "MAIN", priceGhs: 60, costGhs: 26 },
+        { name: "Fufu with Light Soup & Chicken", category: "MAIN", priceGhs: 70, costGhs: 30 },
+        { name: "Grilled Tilapia (Full) with Sides", category: "MAIN", priceGhs: 120, costGhs: 55 },
+        { name: "Kelewele with Nuts", category: "STARTER", priceGhs: 20, costGhs: 8 },
+        { name: "Palm Wine / Sobolo", category: "DRINK", priceGhs: 15, costGhs: 5 },
+        { name: "Fresh Fruit Juice", category: "DRINK", priceGhs: 12, costGhs: 4 },
+      ];
+      for (const m of menu) {
+        await db.insert(restaurantMenuItems).values({ businessId: food.id, branchCode: food.code, ...m, isActive: true }).returning();
+      }
+      console.log("FOOD-01 signature menu seeded (8 dishes).");
+    }
+  }
 }
 
 /**
@@ -119,6 +203,7 @@ export async function seedDatabase() {
     console.log("Database already seeded with GoMina 360 data.");
     await ensureHardwareFlagship();
     await ensureWashFlagshipCatalogue();
+    await ensureFlagshipMasterLists();
     return;
   }
 
@@ -1739,6 +1824,7 @@ export async function seedDatabase() {
 
   await ensureHardwareFlagship();
   await ensureWashFlagshipCatalogue();
+  await ensureFlagshipMasterLists();
 
   console.log("GoMina 360 Command Center database seeding completed successfully!");
 }

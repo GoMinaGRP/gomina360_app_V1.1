@@ -13,32 +13,10 @@ import { eq } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 
-// Menu seeded on first load with the kitchen's known signature dishes so the
-// master list matches the operations log's most popular dishes.
-const DEFAULT_MENU = [
-  { name: "Jollof Rice with Grilled Tilapia & Pepper Sauce", category: "MAIN", priceGhs: 85, costGhs: 38 },
-  { name: "Waakye with Fish & Salad", category: "MAIN", priceGhs: 45, costGhs: 19 },
-  { name: "Banku with Okro Stew & Goat", category: "MAIN", priceGhs: 60, costGhs: 26 },
-  { name: "Fufu with Light Soup & Chicken", category: "MAIN", priceGhs: 70, costGhs: 30 },
-  { name: "Grilled Tilapia (Full) with Sides", category: "MAIN", priceGhs: 120, costGhs: 55 },
-  { name: "Kelewele with Nuts", category: "STARTER", priceGhs: 20, costGhs: 8 },
-  { name: "Palm Wine / Sobolo", category: "DRINK", priceGhs: 15, costGhs: 5 },
-  { name: "Fresh Fruit Juice", category: "DRINK", priceGhs: 12, costGhs: 4 },
-];
-
-async function ensureMenu(businessId: number, branchCode: string | null) {
-  const existing = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, businessId));
-  if (existing.length > 0) return existing;
-  const rows = [];
-  for (const m of DEFAULT_MENU) {
-    const [row] = await db
-      .insert(restaurantMenuItems)
-      .values({ businessId, branchCode, ...m, isActive: true })
-      .returning();
-    rows.push(row);
-  }
-  return rows;
-}
+// NOTE: the Restaurant menu master list starts EMPTY for every business — no
+// sample dishes are auto-seeded (owner directive: new / reset units begin with
+// zero sample, test or unrelated data). The demo flagship FOOD-01 receives its
+// signature menu from the seed (seed.ts) only.
 
 // Stock-in a received purchase: match inventory by id/name, else create the item.
 async function receiveStock(businessId: number, branchCode: string | null, data: any, qty: number, cost: number) {
@@ -110,8 +88,7 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
-    const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
-    const menu = await ensureMenu(businessId, biz?.code || null);
+    const menu = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, businessId));
     const [orders, waste, purchases] = await Promise.all([
       db.select().from(restaurantOrders).where(eq(restaurantOrders.businessId, businessId)),
       db.select().from(restaurantWaste).where(eq(restaurantWaste.businessId, businessId)),
@@ -176,7 +153,7 @@ export async function POST(request: NextRequest) {
     if (entity === "MENU_ITEM") {
       const name = String(data.name || "").trim();
       if (!name) return NextResponse.json({ success: false, error: "Dish name is required" }, { status: 400 });
-      const menu = await ensureMenu(businessId, branchCode);
+      const menu = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, businessId));
       if (menu.some((m: any) => m.name.toUpperCase() === name.toUpperCase())) {
         return NextResponse.json({ success: false, error: `"${name}" is already on the menu` }, { status: 409 });
       }

@@ -40,13 +40,6 @@ export const POULTRY_PRODUCTS = {
   },
 } as const;
 
-// System seeds for the Master Product List (same SKUs as POULTRY_PRODUCTS so
-// everything keeps pointing at the same canonical stock rows).
-const SYSTEM_PRODUCT_SEEDS = [
-  { productKey: "EGGS", ...POULTRY_PRODUCTS.EGGS },
-  { productKey: "BROILER_WEIGHT", ...POULTRY_PRODUCTS.BROILER },
-];
-
 /** "Duck Egg Crates" → "DUCK_EGG_CRATES" (stable master-product key fragment) */
 function slugify(name: string): string {
   return (
@@ -87,42 +80,17 @@ export async function GET(request: NextRequest) {
         scope(poultryWeightLogs),
       ]);
 
-    // Master Product List — self-seed the two system products the first time a
-    // poultry unit is opened (their SKUs match the seeded inventory items, so
-    // production keeps topping up the original stock rows).
+    // Master Product List — every production type lives here. It starts EMPTY
+    // for every business (owner directive: new / reset units begin with zero
+    // sample, test or unrelated data); users add their own types from the
+    // Log Production form. The demo flagship POULTRY-01 receives its two
+    // system products (Eggs, Broiler) from the seed (seed.ts) only.
     let products: any[] = [];
     if (bizId) {
       products = await db
         .select()
         .from(poultryProducts)
         .where(eq(poultryProducts.businessId, bizId));
-      if (products.length === 0) {
-        const [biz] = await db
-          .select()
-          .from(businesses)
-          .where(eq(businesses.id, bizId));
-        const code = biz?.code || "POULTRY";
-        for (const sys of SYSTEM_PRODUCT_SEEDS) {
-          await db.insert(poultryProducts).values({
-            businessId: bizId,
-            branchCode: code,
-            productKey: sys.productKey,
-            name: sys.name,
-            category: sys.category,
-            unit: sys.unit,
-            sku: sys.sku,
-            costPriceGhs: sys.costPriceGhs,
-            sellingPriceGhs: sys.sellingPriceGhs,
-            minStockThreshold: sys.minStockThreshold,
-            isSystem: true,
-            isActive: true,
-          });
-        }
-        products = await db
-          .select()
-          .from(poultryProducts)
-          .where(eq(poultryProducts.businessId, bizId));
-      }
     } else {
       products = await db.select().from(poultryProducts);
     }

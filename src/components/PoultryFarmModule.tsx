@@ -1093,6 +1093,11 @@ export default function PoultryFarmModule({
           <Card title="Master Product List — Production Types & Sellable Products" icon={Package}>
             <div className="p-4" data-testid="poultry-master-products">
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                {products.length === 0 && (
+                  <div className="col-span-full rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-6 text-center text-xs text-slate-400">
+                    No products yet — add your first production type below and it appears here, linked into Inventory, Stock, Sales &amp; Reports.
+                  </div>
+                )}
                 {products.map((p: any) => {
                   const stock = branchInventory.find((i: any) => (i.sku || "").toUpperCase() === (p.sku || "").toUpperCase());
                   return (

@@ -452,7 +452,7 @@ export default function TelecomServicesModule({
                       <button data-testid={`tel-line-topup-${l.id}`} onClick={() => { setFormCtx({ line: l }); setShowForm("FLOAT"); }} className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-cyan-600/30 border border-slate-700 text-[10px] font-bold text-cyan-300">Top-up</button>
                     </div>
                   </div>
-                )) : <p className="text-[11px] text-slate-500 text-center py-6">Agent lines (MoMo tills, airtime wallets) are created automatically for new Telecom units — add more any time.</p>}
+                )) : <p className="text-[11px] text-slate-500 text-center py-6">No agent lines yet — add your first MoMo till or airtime wallet with “+ New line”.</p>}
               </div>
             </Card>
 
@@ -539,7 +539,7 @@ export default function TelecomServicesModule({
                     </div>
                   </div>
                 );
-              }) : <p className="text-[11px] text-slate-500 py-4 col-span-3 text-center">Default packages (1-Hour, 1-Day, 1-Week…) are provisioned automatically for new Telecom units.</p>}
+              }) : <p className="text-[11px] text-slate-500 py-4 col-span-3 text-center">No Wi-Fi packages yet — add your first package with “New Package”.</p>}
             </div>
           </Card>
 
