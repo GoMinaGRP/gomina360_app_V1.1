@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { db } from "@/db";
+import { db, dbFailureMessage } from "@/db";
 import { users } from "@/db/schema";
 import {
   createSession,
@@ -109,8 +109,15 @@ export async function POST(request: Request) {
     return res;
   } catch (error: any) {
     // DB/driver failures land here — keep the detail server-side, give the
-    // user an actionable message instead of a raw connection error.
+    // user an actionable message instead of a raw connection error. A
+    // DEPLOYMENT configuration failure (no DATABASE_URL on Vercel, a
+    // 127.0.0.1/localhost URL, or a schema that was never pushed) gets a
+    // specific message; genuinely transient outages keep the generic copy.
     console.error("[auth/login] service error:", error?.message || error);
+    const specific = dbFailureMessage(error);
+    if (specific) {
+      return NextResponse.json({ success: false, error: specific }, { status: 500 });
+    }
     return NextResponse.json(
       { success: false, error: "Sign-in service is temporarily unavailable (database connection). Please wait a moment and retry." },
       { status: 500 }
