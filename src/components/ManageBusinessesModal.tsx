@@ -924,6 +924,15 @@ export default function ManageBusinessesModal({
                               >
                                 {(biz.status || "ACTIVE").toUpperCase()}
                               </span>
+                              {!isOwner && canFullyManage(biz) && (
+                                <span
+                                  data-testid={`manage-biz-granted-${biz.code}`}
+                                  className="text-[10px] font-black bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40"
+                                  title="The OWNER granted you management of this unit"
+                                >
+                                  YOU MANAGE
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                               <span>{biz.category}</span>
@@ -1024,7 +1033,7 @@ export default function ManageBusinessesModal({
                               }`}
                             >
                               <Globe className="w-4 h-4" />
-                              <span className="hidden sm:inline">Online</span>
+                              <span>Online</span>
                             </button>
                             <button
                               onClick={() => openEdit(biz)}
@@ -1033,7 +1042,7 @@ export default function ManageBusinessesModal({
                               className="flex items-center gap-1 px-2 py-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition text-[10px] font-black"
                             >
                               <Pencil className="w-4 h-4" />
-                              <span className="hidden sm:inline">Edit</span>
+                              <span>Edit</span>
                             </button>
                             <button
                               onClick={() => openReset(biz)}
@@ -1042,7 +1051,7 @@ export default function ManageBusinessesModal({
                               className="flex items-center gap-1 px-2 py-2 rounded-lg bg-slate-700/70 hover:bg-cyan-500/30 text-slate-200 hover:text-cyan-300 transition text-[10px] font-black"
                             >
                               <RotateCcw className="w-4 h-4" />
-                              <span className="hidden sm:inline">Reset</span>
+                              <span>Reset</span>
                             </button>
                           </div>
                         )}

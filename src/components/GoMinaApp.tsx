@@ -1187,6 +1187,14 @@ export default function GoMinaApp() {
         onLogout={handleLogout}
         onOpenChangePassword={() => setIsChangePwOpen(true)}
         onOpenProfilePhoto={() => setIsProfilePhotoOpen(true)}
+        onOpenManageUnits={
+          currentUser?.role !== "OWNER" && businessManageIdsOf(currentUser).length > 0
+            ? () => {
+                setManageBizOnlineId(null);
+                setIsManageBizOpen(true);
+              }
+            : undefined
+        }
         onOpenOnlineOrdering={
           currentUser?.role === "OWNER" || !!currentUser?.canManageOnline
             ? () => {
