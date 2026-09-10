@@ -11,7 +11,7 @@ import {
   XCircle,
   ToggleLeft,
   ToggleRight,
-  Trash2,
+  Trash,
   RefreshCw,
   Plus,
   Eye,
@@ -357,7 +357,7 @@ export default function BranchManagerWorkerPanel({
                           className="p-1.5 rounded-lg hover:bg-rose-500/20 text-rose-400 transition"
                           title="Remove Worker"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash className="w-4 h-4" />
                         </button>
                       </div>
                     </td>

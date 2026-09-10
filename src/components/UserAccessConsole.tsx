@@ -8,7 +8,7 @@ import {
   Pencil,
   Plus,
   ShieldCheck,
-  Trash2,
+  Trash,
   UserCheck,
   Users,
   X,
@@ -640,7 +640,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
                         <button onClick={() => handleDelete(u)} data-testid={`user-delete-${u.id}`}
                           title="Delete account"
                           className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition">
-                          <Trash2 className="w-4 h-4" />
+                          <Trash className="w-4 h-4" />
                         </button>
                       )}
                     </div>

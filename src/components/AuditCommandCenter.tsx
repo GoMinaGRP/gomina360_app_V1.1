@@ -12,7 +12,7 @@
 // Auditor permissions; delegated managers → grant/revoke Auditor access
 // inside their branches; auditors → strictly the businesses + modules granted.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck, RefreshCw, Flag, MessageSquare, PencilLine, BadgeCheck, History,
   KeyRound, ScrollText, BarChart3, Rows3, X, FileSpreadsheet, UserCheck, Ban, Search, AlertTriangle,
@@ -534,8 +534,8 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
             </thead>
             <tbody className="divide-y divide-slate-800/70" data-testid="aud-rec-rows">
               {records.map((r) => (
-                <>
-                  <tr key={r.key} className="text-slate-300 hover:bg-slate-800/40" data-testid={`aud-rec-row-${r.key}`}>
+                <React.Fragment key={r.key}>
+                  <tr className="text-slate-300 hover:bg-slate-800/40" data-testid={`aud-rec-row-${r.key}`}>
                     <td className="px-4 py-2.5">
                       <div className="font-mono text-[10px] text-cyan-300">{r.ref}</div>
                       <div className="font-semibold text-slate-100 flex items-center gap-1.5">
@@ -565,7 +565,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     </td>
                   </tr>
                   {histKey === r.key && (
-                    <tr key={`${r.key}-hist`} className="bg-slate-950/60">
+                    <tr className="bg-slate-950/60">
                       <td colSpan={7} className="px-6 py-3" data-testid={`aud-hist-panel-${r.key}`}>
                         {reviewsFor(r).length === 0 ? (
                           <div className="text-[11px] text-slate-500">No reviews yet — this record is unreviewed.</div>
@@ -590,7 +590,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               ))}
               {records.length === 0 && !loading && (
                 <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500 text-sm">No records match the current filters.</td></tr>

@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   WifiOff,
   Pencil,
-  Trash2,
+  Trash,
   Lock,
   ShieldCheck,
 } from "lucide-react";
@@ -514,7 +514,7 @@ export default function SharedEnterpriseModule({
               onClick={() => { setDeletingRecord(r); setDeleteReason(""); setRecordErr(""); }}
               className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
@@ -2329,7 +2329,7 @@ export default function SharedEnterpriseModule({
                             onClick={() => { setDeletingRecord(inv); setDeleteReason(""); setRecordErr(""); }}
                             className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ) : (
@@ -2452,7 +2452,7 @@ export default function SharedEnterpriseModule({
           className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl"
         >
           <h3 className="text-base font-bold text-white flex items-center gap-2 mb-1">
-            <Trash2 className="w-4 h-4 text-rose-400" />
+            <Trash className="w-4 h-4 text-rose-400" />
             Deletion Audit Trail
           </h3>
           <p className="text-[11px] text-slate-400 mb-3">

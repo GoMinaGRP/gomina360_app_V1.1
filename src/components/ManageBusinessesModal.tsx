@@ -8,7 +8,9 @@ import {
   Copy,
   Crosshair,
   Download,
+  FileUp,
   Globe,
+  HardDriveDownload,
   Image as ImageIcon,
   MapPin,
   Pencil,
@@ -17,9 +19,23 @@ import {
   QrCode,
   RotateCcw,
   ShieldCheck,
-  Trash2,
+  Trash,
   X,
 } from "lucide-react";
+
+/** Trigger a full business backup download via a temp anchor. */
+function downloadBusinessBackup(biz: any) {
+  if (!biz?.id) return;
+  const url = `/api/business-backup/export?businessId=${encodeURIComponent(biz.id)}`;
+  // Use a simple anchor with download attribute so browser fetches with cookies.
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  a.download = `gomina-backup-${(biz.code || "business").toLowerCase()}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 import LocationSelector, { LocationValue } from "./LocationSelector";
 import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
@@ -961,6 +977,14 @@ export default function ManageBusinessesModal({
                               <Globe className="w-4 h-4" />
                             </button>
                             <button
+                              onClick={() => downloadBusinessBackup(biz)}
+                              data-testid={`manage-biz-export-${biz.code}`}
+                              title="Export / backup this entire business — restorable ZIP (all data, history, settings, analytics)"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-violet-500/30 text-slate-200 hover:text-violet-300 transition"
+                            >
+                              <HardDriveDownload className="w-4 h-4" />
+                            </button>
+                            <button
                               onClick={() => openEdit(biz)}
                               data-testid={`manage-biz-edit-${biz.code}`}
                               title="Edit / rename / relocate / change type"
@@ -1012,7 +1036,7 @@ export default function ManageBusinessesModal({
                               title="Permanently delete unit"
                               className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash className="w-4 h-4" />
                             </button>
                           </div>
                         )}
@@ -1701,7 +1725,7 @@ export default function ManageBusinessesModal({
                           className="p-1.5 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-300 hover:text-rose-300"
                           title="Remove branch logo — falls back to the business logo"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ))}

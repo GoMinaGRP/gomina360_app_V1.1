@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Crosshair, MapPin, MapPinned, Minus, Plus, RotateCcw } from "lucide-react";
-import { googleMapsEmbed, nudgeLatLng } from "@/lib/tracking";
+import { Crosshair, MapPin, MapPinned, Minus, Plus, RotateCcw, Satellite, Map as MapIcon } from "lucide-react";
+import dynamic from "next/dynamic";
+import { nudgeLatLng } from "@/lib/tracking";
 
 export interface PinValue {
   lat: number;
@@ -10,49 +11,71 @@ export interface PinValue {
   accuracyM?: number | null;
 }
 
+export type TileStyle = "STANDARD" | "SATELLITE";
+
+// Leaflet accesses `window` at module evaluation, so it cannot be imported
+// from a module that Next.js also evaluates on the server. `ssr: false`
+// guarantees the map only mounts in the browser.
+const LeafletMap = dynamic(() => import("./LeafletPinMap"), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="w-full flex items-center justify-center bg-slate-900 text-slate-400 text-[11px]"
+      style={{ height: 260 }}
+      data-testid="pin-map-loading"
+    >
+      <span className="flex items-center gap-2">
+        <MapPin className="w-4 h-4 animate-pulse text-cyan-400" /> Loading interactive map…
+      </span>
+    </div>
+  ),
+});
+
 /**
- * Google-Maps pin picker — lets a customer (or staff member) place the exact
- * delivery point without typing coordinates. The pin is fixed at the centre
- * of the map and the customer moves the MAP underneath it:
- *   1. “Use my current location” captures the device GPS position, or
- *      “Drop pin at the map centre” starts from the branch/area shown;
- *   2. DRAG the map (mouse or finger) to pan — on release, the new map
- *      centre becomes the saved pin; the +/− buttons zoom in/out;
- *   3. the arrow pad nudges the pin 1–500 m at a time for the exact spot —
- *      the embedded Google Map always re-centres on the pin.
- * Direct coordinate entry is also supported. No API key required.
+ * Customer-facing pin picker (Leaflet, no Google-Maps iframe required).
+ * Tiles:
+ *   • STANDARD  — OpenStreetMap (cartographic street map).
+ *   • SATELLITE — Esri World Imagery + hybrid labels overlay so roads/places
+ *                 still render on top of the photo.
+ * UX matches the previous Google-Maps version: drag-to-pan (pin stays at
+ * the centre), GPS locate, click-to-drop, arrow nudge pad, +/− zoom, direct
+ * lat/lng entry. Both map instances on the order page share the same
+ * tile-style state so the view toggle is consistent.
  */
 export default function LocationPinPicker({
   value,
   onChange,
-  defaultCenter = { lat: 5.6037, lng: -0.187 }, // Accra fallback
+  defaultCenter = { lat: 5.6037, lng: -0.187 },
   prefix = "pin",
   hint,
+  tileStyle: controlledStyle,
+  onTileStyleChange,
 }: {
   value: PinValue | null;
   onChange: React.Dispatch<React.SetStateAction<PinValue | null>>;
   defaultCenter?: { lat: number; lng: number } | null;
   prefix?: string;
   hint?: string;
+  tileStyle?: TileStyle;
+  onTileStyleChange?: (s: TileStyle) => void;
 }) {
-  const [step, setStep] = useState(5); // metres per arrow tap
+  const [step, setStep] = useState(5);
   const [locating, setLocating] = useState(false);
   const [geoMsg, setGeoMsg] = useState("");
   const [manual, setManual] = useState(false);
   const [manLat, setManLat] = useState("");
   const [manLng, setManLng] = useState("");
+  const [internalStyle, setInternalStyle] = useState<TileStyle>("STANDARD");
+  const style: TileStyle = controlledStyle ?? internalStyle;
+  const setStyle = (s: TileStyle) => {
+    setInternalStyle(s);
+    onTileStyleChange?.(s);
+  };
   const pin = value;
   const center = defaultCenter || { lat: 5.6037, lng: -0.187 };
-  const watchTried = useRef(false);
-  // Map zoom (Google embed z param) — user-adjustable, auto close-up when a
-  // pin first appears (mirrors the old "pin ? 18 : 13" behaviour).
   const [zoom, setZoom] = useState(13);
   const hadPin = useRef(false);
-  // Drag-to-pan state: the pin is STRUCTURALLY at the map centre, so moving
-  // the map = moving the saved coordinate.
-  const [dragging, setDragging] = useState(false);
-  const dragRef = useRef<{ sx: number; sy: number; base: { lat: number; lng: number }; moved: boolean } | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const watchTried = useRef(false);
 
   const setPin = useCallback(
     (lat: number, lng: number, accuracyM: number | null = null) => {
@@ -63,74 +86,28 @@ export default function LocationPinPicker({
     [onChange],
   );
 
-  // Try GPS silently once on mount — if granted, the map starts exactly at
-  // the customer; if denied/unavailable the nudge pad takes over.
+  // One silent GPS attempt on mount.
   useEffect(() => {
     if (watchTried.current || pin || typeof navigator === "undefined" || !navigator.geolocation) return;
     watchTried.current = true;
     try {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          onChange((prev: PinValue | null) => {
-            // only auto-set when nothing was pinned meanwhile
-            if (prev) return prev;
-            return { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy ?? null };
-          });
+          onChange((prev: PinValue | null) => (prev ? prev : { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy ?? null }));
         },
         () => {},
         { enableHighAccuracy: false, timeout: 4000, maximumAge: 60000 },
       );
-    } catch {}
+    } catch { /* noop */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Close-up view the moment a pin first appears (GPS, drop-pin, drag or
-  // manual entry); afterwards the customer's own zoom choice is respected.
   useEffect(() => {
-    if (pin && !hadPin.current) setZoom(18);
-    hadPin.current = !!pin;
+    if (pin && !hadPin.current) {
+      hadPin.current = true;
+      setZoom(18);
+    }
   }, [pin]);
-
-  // ── Drag the map, pin stays at the centre ───────────────────────────────
-  // The Google embed is key-less: customers used to pan the iframe itself and
-  // the recorded coordinate never moved. Now a transparent drag surface sits
-  // over the map: dragging slides the tiles live (CSS transform) and on
-  // release the new MAP CENTRE becomes the pin — the marker overlay always
-  // marks the exact centre, so the pin truly "stays at the centre".
-  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-    dragRef.current = { sx: e.clientX, sy: e.clientY, base: pin || center, moved: false };
-    setDragging(true);
-  };
-  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d) return;
-    const dx = e.clientX - d.sx;
-    const dy = e.clientY - d.sy;
-    if (!d.moved && Math.hypot(dx, dy) < 3) return; // ignore taps / jitter
-    d.moved = true;
-    if (iframeRef.current) iframeRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
-  };
-  const onDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d) return;
-    dragRef.current = null;
-    setDragging(false);
-    if (iframeRef.current) iframeRef.current.style.transform = "";
-    if (!d.moved) return; // a plain click changes nothing
-    const dx = e.clientX - d.sx;
-    const dy = e.clientY - d.sy;
-    // Web-Mercator metres-per-pixel at the drag latitude and current zoom.
-    const latRad = (d.base.lat * Math.PI) / 180;
-    const mpp = (156543.03392 * Math.cos(latRad)) / Math.pow(2, zoom);
-    // Dragging the tiles down/right pulls the viewport centre north/west.
-    const newLat = d.base.lat + (dy * mpp) / 111320;
-    const newLng = d.base.lng - (dx * mpp) / (111320 * Math.cos(latRad) || 1e-9);
-    setPin(newLat, newLng, null);
-  };
 
   const useGps = () => {
     setGeoMsg("");
@@ -175,7 +152,7 @@ export default function LocationPinPicker({
     <div className="rounded-xl border border-slate-700 bg-slate-900/60 overflow-hidden" data-testid={`${prefix}-root`}>
       <div className="px-3 pt-2.5 pb-2 flex items-center justify-between gap-2 flex-wrap">
         <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1 flex-wrap">
-          <MapPinned className="w-3.5 h-3.5 text-cyan-300" /> Pin on Google Maps
+          <MapPinned className="w-3.5 h-3.5 text-cyan-300" /> Pin on the map
           <span className="normal-case font-medium text-cyan-300/80">— drag the map; the pin stays at the centre</span>
         </p>
         <div className="flex items-center gap-1.5">
@@ -212,49 +189,45 @@ export default function LocationPinPicker({
         </div>
       </div>
 
-      {/* Live Google Map — drag the tiles; the pin never leaves the centre.
-          A transparent surface intercepts drag gestures (the bare iframe used
-          to pan itself and the saved coordinate never moved). */}
-      <div className="relative overflow-hidden">
-        <iframe
-          ref={iframeRef}
-          key={`${pin?.lat ?? center.lat},${pin?.lng ?? center.lng},${zoom}`}
-          title="Delivery location — Google Maps"
-          src={googleMapsEmbed(pin?.lat ?? center.lat, pin?.lng ?? center.lng, zoom)}
-          className="w-full h-[220px] bg-slate-800"
-          loading="lazy"
-          referrerPolicy="no-referrer-when-downgrade"
-          data-testid={`${prefix}-map`}
+      <div className="relative overflow-hidden" style={{ height: 260 }}>
+        <LeafletMap
+          pin={pin}
+          center={center}
+          zoom={zoom}
+          setZoom={setZoom}
+          onCommit={(lat, lng) => setPin(lat, lng, null)}
+          style={style}
+          prefix={prefix}
         />
-        {/* Drag surface — pan the map with mouse or finger */}
-        <div
-          role="application"
-          aria-label="Drag to move the map — the delivery pin stays at the centre"
-          title="Drag to move the map — the delivery pin stays at the centre"
-          className={`absolute inset-0 z-10 select-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
-          style={{ touchAction: "none" }}
-          onPointerDown={onDragStart}
-          onPointerMove={onDragMove}
-          onPointerUp={onDragEnd}
-          onPointerCancel={onDragEnd}
-          data-testid={`${prefix}-drag`}
-        />
-        {/* Exact pin overlay — fixed at the map centre; whatever the customer
-            drags under it becomes the saved coordinate. */}
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
-          <div className="-translate-y-3">
-            <MapPin
-              className={`w-6 h-6 drop-shadow ${pin ? "text-rose-500 fill-rose-200" : "text-slate-500 fill-slate-300/50"}`}
-              data-testid={`${prefix}-marker`}
-            />
-          </div>
-        </div>
-        {/* Zoom controls — re-frame around the same pin */}
-        <div className="absolute right-2 top-2 z-30 flex flex-col gap-1">
+
+        {/* Map-style toggle pill */}
+        <div className="absolute left-2 top-2 z-[1000] flex rounded-lg overflow-hidden border border-slate-600/70 bg-slate-900/90 shadow text-[10px] font-bold" data-testid={`${prefix}-style`}>
           <button
             type="button"
-            onClick={() => setZoom((z) => Math.min(20, z + 1))}
-            disabled={zoom >= 20}
+            onClick={() => setStyle("STANDARD")}
+            className={`flex items-center gap-1 px-2 py-1 ${style === "STANDARD" ? "bg-cyan-500 text-slate-950" : "text-slate-200 hover:bg-slate-800"}`}
+            title="Standard street map"
+            data-testid={`${prefix}-style-std`}
+          >
+            <MapIcon className="w-3 h-3" /> Standard
+          </button>
+          <button
+            type="button"
+            onClick={() => setStyle("SATELLITE")}
+            className={`flex items-center gap-1 px-2 py-1 ${style === "SATELLITE" ? "bg-cyan-500 text-slate-950" : "text-slate-200 hover:bg-slate-800"}`}
+            title="Satellite / aerial view"
+            data-testid={`${prefix}-style-sat`}
+          >
+            <Satellite className="w-3 h-3" /> Satellite
+          </button>
+        </div>
+
+        {/* Zoom controls */}
+        <div className="absolute right-2 top-2 z-[1000] flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setZoom((z) => Math.min(19, z + 1))}
+            disabled={zoom >= 19}
             className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-900/90 border border-slate-600/70 text-white hover:bg-slate-800 disabled:opacity-40 shadow"
             title="Zoom in"
             data-testid={`${prefix}-zoom-in`}
@@ -263,8 +236,8 @@ export default function LocationPinPicker({
           </button>
           <button
             type="button"
-            onClick={() => setZoom((z) => Math.max(10, z - 1))}
-            disabled={zoom <= 10}
+            onClick={() => setZoom((z) => Math.max(3, z - 1))}
+            disabled={zoom <= 3}
             className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-900/90 border border-slate-600/70 text-white hover:bg-slate-800 disabled:opacity-40 shadow"
             title="Zoom out"
             data-testid={`${prefix}-zoom-out`}
@@ -274,7 +247,6 @@ export default function LocationPinPicker({
         </div>
       </div>
 
-      {/* Nudge pad — adjust the pin to the exact point */}
       <div className="px-3 py-2.5 border-t border-slate-800">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Adjust pin</span>

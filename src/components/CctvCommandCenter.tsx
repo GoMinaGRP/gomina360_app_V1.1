@@ -7,7 +7,7 @@ import {
   RefreshCw,
   Plus,
   Pencil,
-  Trash2,
+  Trash,
   Eye,
   Wifi,
   X,
@@ -561,7 +561,7 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
                                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-[11px] font-semibold transition"
                                 data-testid={`cctv-del-${c.id}`}
                               >
-                                <Trash2 className="w-3.5 h-3.5" /> Remove
+                                <Trash className="w-3.5 h-3.5" /> Remove
                               </button>
                             )}
                           </>

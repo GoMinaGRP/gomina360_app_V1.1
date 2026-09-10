@@ -7,7 +7,7 @@ import {
   Camera,
   Upload,
   FileText,
-  Trash2,
+  Trash,
   Download,
   Pencil,
   History,
@@ -672,7 +672,7 @@ export function EmployeeProfile({
                     )}
                     {canManage && (
                       <button onClick={() => delDoc(d.id)} className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-500 hover:text-rose-300" title="Remove" data-testid={`epr-doc-del-${d.id}`}>
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
