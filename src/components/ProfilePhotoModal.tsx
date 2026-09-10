@@ -70,7 +70,7 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
 
   const acceptFile = (file: File | undefined | null) => {
     if (!file) return;
-    if (!/^image\//.test(file.type)) { setError("Please choose an image file (JPEG, PNG, WebP…)."); return; }
+    if (!/^image\//.test(file.type)) { setError("Please choose an image file (any common format: JPEG, PNG, WebP, GIF, …)."); return; }
     setError("");
     const img = new Image();
     img.onload = () => {

@@ -17,7 +17,10 @@ import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
  */
 
 const MAX_PHOTO_CHARS = 700_000; // ~500KB base64 — far above the ~60KB client target
-const PHOTO_RE = /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+// Accept ANY common image format (JPEG, PNG, WebP, GIF, BMP, AVIF, HEIC,
+// SVG, TIFF, ICO, …) — no needless format allow-list; we only verify the
+// payload really is a base64 data-URL image.
+const PHOTO_RE = /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
 
 export async function PUT(request: NextRequest) {
   try {
@@ -30,7 +33,7 @@ export async function PUT(request: NextRequest) {
     if (photo !== null && photo !== undefined) {
       if (typeof photo !== "string" || !PHOTO_RE.test(photo)) {
         return NextResponse.json(
-          { success: false, error: "Photo must be a JPEG, PNG or WebP image." },
+          { success: false, error: "Photo must be an image file." },
           { status: 400 },
         );
       }
