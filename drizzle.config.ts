@@ -1,27 +1,35 @@
+import { config as loadEnv } from "dotenv";
 import { defineConfig } from "drizzle-kit";
+
+/**
+ * Load local Next.js-style env files when drizzle-kit is run by hand.
+ * Existing shell/CI variables keep priority because dotenv does not override
+ * them. Production commands should pass DATABASE_URL explicitly so the target
+ * database is unambiguous.
+ */
+loadEnv({ path: ".env.local", quiet: true });
+loadEnv({ path: ".env", quiet: true });
 
 /**
  * drizzle-kit (migrations/push) connection.
  *
- * Same rule as the server runtime (src/db/index.ts): the connection comes
- * from the first set variable among DATABASE_URL, POSTGRES_PRISMA_URL,
- * POSTGRES_URL, POSTGRES_URL_NON_POOLING. There is NO localhost/127.0.0.1
- * fallback in production — the local sandbox default below is only for
- * development tooling (NODE_ENV not set / non-production) and is never
- * used when any of the connection variables is present.
+ * Keep this resolution order identical to the server runtime
+ * (src/db/index.ts). There is deliberately NO implicit localhost fallback:
+ * without a configured URL, `drizzle-kit push` must stop rather than report
+ * "No changes detected" for an unrelated local database while production is
+ * still missing its auth schema.
  */
 const url =
-  process.env.DATABASE_URL ||
-  process.env.POSTGRES_PRISMA_URL ||
-  process.env.POSTGRES_URL ||
-  process.env.POSTGRES_URL_NON_POOLING ||
-  (process.env.NODE_ENV === "production"
-    ? (() => {
-        throw new Error(
-          "drizzle-kit: a database connection string is required (DATABASE_URL, POSTGRES_PRISMA_URL, POSTGRES_URL or POSTGRES_URL_NON_POOLING). Refusing to fall back to 127.0.0.1:5432 or localhost in production.",
-        );
-      })()
-    : "postgresql://postgres:postgres@127.0.0.1:5432/app_db");
+  process.env.DATABASE_URL?.trim() ||
+  process.env.POSTGRES_PRISMA_URL?.trim() ||
+  process.env.POSTGRES_URL?.trim() ||
+  process.env.POSTGRES_URL_NON_POOLING?.trim();
+
+if (!url) {
+  throw new Error(
+    "drizzle-kit: no database connection string is configured. Set DATABASE_URL (or POSTGRES_PRISMA_URL / POSTGRES_URL / POSTGRES_URL_NON_POOLING) to the exact database you intend to update. Example: DATABASE_URL=\"<managed-production-url>\" npx drizzle-kit push. Refusing to use an implicit localhost database.",
+  );
+}
 
 export default defineConfig({
   dialect: "postgresql",

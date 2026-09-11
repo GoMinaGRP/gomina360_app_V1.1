@@ -134,7 +134,7 @@ export default function SalesDocumentBuilder({
     setLineItems(lineItems.filter((_, i) => i !== index));
   };
 
-  const useInventoryItem = (inv: any) => {
+  const addInventoryItem = (inv: any) => {
     // Append to line items or fill the last empty
     const last = lineItems[lineItems.length - 1];
     const newItem = {
@@ -346,7 +346,7 @@ export default function SalesDocumentBuilder({
                       <button
                         key={inv.id}
                         type="button"
-                        onClick={() => useInventoryItem(inv)}
+                        onClick={() => addInventoryItem(inv)}
                         className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-cyan-300 hover:bg-cyan-900/40"
                         title={`${formatMoney(inv.sellingPriceGhs, currency)} per ${inv.unit}`}
                       >

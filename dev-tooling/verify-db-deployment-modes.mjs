@@ -1,8 +1,8 @@
 /**
  * verify-db-deployment-modes.mjs — production DB-connection crosscheck.
  *
- * Boots disposable `next start` servers on ports 3011-3015, each simulating
- * ONE Vercel deployment mistake, and asserts /api/health reports the EXACT
+ * Boots disposable `next start` servers on ports 3011-3016, each simulating
+ * ONE deployment mistake, and asserts /api/health reports the EXACT
  * actionable cause (JSON: error + code + hint) instead of the old cryptic
  * "Sign-in service is temporarily unavailable (database connection)" black
  * box. Also asserts the healthy main server on :3000 signs in + serves menu.
@@ -11,9 +11,13 @@
  * Requires the main app already running on :3000 (healthy local Postgres).
  */
 import { spawn } from "node:child_process";
+import pg from "pg";
 
+const { Client } = pg;
 const MAIN = "http://127.0.0.1:3000";
 const GOOD_URL = "postgresql://postgres:postgres@127.0.0.1:5432/app_db";
+const EMPTY_DB = "gomina_health_probe_empty";
+const EMPTY_URL = `postgresql://postgres:postgres@127.0.0.1:5432/${EMPTY_DB}`;
 const results = [];
 let pass = 0, fail = 0;
 
@@ -68,6 +72,29 @@ async function healthProbe(base) {
   return { status: res.status, json };
 }
 
+async function recreateEmptyDatabase() {
+  const client = new Client({ connectionString: "postgresql://postgres:postgres@127.0.0.1:5432/postgres" });
+  await client.connect();
+  try {
+    // Constant, test-only identifier; WITH (FORCE) also cleans up after a
+    // previously interrupted run.
+    await client.query(`drop database if exists ${EMPTY_DB} with (force)`);
+    await client.query(`create database ${EMPTY_DB}`);
+  } finally {
+    await client.end();
+  }
+}
+
+async function dropEmptyDatabase() {
+  const client = new Client({ connectionString: "postgresql://postgres:postgres@127.0.0.1:5432/postgres" });
+  await client.connect();
+  try {
+    await client.query(`drop database if exists ${EMPTY_DB} with (force)`);
+  } finally {
+    await client.end();
+  }
+}
+
 // ── Boot all scenarios sequentially (keeps sandbox memory sane) ─────────────
 console.log("── Failure-mode matrix (Vercel simulations) ──");
 
@@ -84,8 +111,9 @@ const m3011 = await bootAndProbe(3011, { VERCEL: "1" }, async (base) => {
     JSON.stringify(health.json).slice(0, 120));
   check("M1b missing-env: hint names Vercel Environment Variables",
     /Environment Variables/i.test(health.json.hint || ""), (health.json.hint || "").slice(0, 90));
-  check("M1c missing-env: sign-in page shows the friendly service message, not a crash",
-    login.status === 500 && /temporarily unavailable/i.test(login.json.error || ""), JSON.stringify(login.json).slice(0, 110));
+  check("M1c missing-env: sign-in returns actionable configuration help, not a crash",
+    login.status === 500 && /not connected to a database/i.test(login.json.error || "") && /DATABASE_URL/.test(login.json.error || ""),
+    JSON.stringify(login.json).slice(0, 110));
   check("M1d missing-env: /order page itself still renders (isolated failure)",
     orderPage.status === 200, `HTTP ${orderPage.status}`);
   return {};
@@ -135,20 +163,38 @@ await bootAndProbe(3015, { DB_DEBUG: "true", DATABASE_URL: "postgresql://secretu
   return {};
 });
 
+// 3016 — PostgreSQL is reachable but the deployed auth schema is absent. This
+// is the exact case where the old `select 1` probe returned a false healthy.
+await recreateEmptyDatabase();
+try {
+  await bootAndProbe(3016, { DATABASE_URL: EMPTY_URL }, async (base) => {
+    const health = await healthProbe(base);
+    check("M6a empty-schema: /api/health rejects a reachable database without auth tables",
+      health.status === 500 && health.json.ok === false && health.json.code === "42P01" && /users/.test(health.json.error || ""),
+      JSON.stringify(health.json).slice(0, 140));
+    check("M6b empty-schema: hint points drizzle-kit at the managed database",
+      /DATABASE_URL=.*managed-url.*drizzle-kit push/i.test(health.json.hint || ""),
+      (health.json.hint || "").slice(0, 110));
+    return {};
+  });
+} finally {
+  await dropEmptyDatabase();
+}
+
 // ── Healthy main server on :3000 ────────────────────────────────────────────
 console.log("── Healthy main server (:3000) ──");
 const hMain = await healthProbe(MAIN);
-check("M6a main /api/health → { ok: true }", hMain.status === 200 && hMain.json.ok === true, JSON.stringify(hMain.json));
+check("M7a main /api/health → { ok: true }", hMain.status === 200 && hMain.json.ok === true, JSON.stringify(hMain.json));
 const loginMain = await fetch(`${MAIN}/api/auth/login`, {
   method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ email: "kwame.owner@gomina360.com", password: "Owner@GoMina26" }),
 }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
-check("M6b owner sign-in succeeds through the lazy db handle",
+check("M7b owner sign-in succeeds through the lazy db handle",
   loginMain.status === 200 && loginMain.json.success === true, `HTTP ${loginMain.status}`);
 const menuMain = await fetch(`${MAIN}/api/menu`).then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
-check("M6c menu loads for the storefront", menuMain.status === 200 && menuMain.json.success === true,
+check("M7c menu loads for the storefront", menuMain.status === 200 && menuMain.json.success === true,
   `${(menuMain.json.businesses || []).length} businesses`);
-check("M6d no TEST leftovers after all probes", true, "suite changed no data");
+check("M7d no TEST leftovers after all probes", true, "suite changed no data");
 
 console.log(`\n═══ RESULT: ${pass}/${pass + fail} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
