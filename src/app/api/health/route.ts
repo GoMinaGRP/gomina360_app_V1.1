@@ -1,5 +1,5 @@
-import { sql } from "drizzle-orm";
 import { resolvedDbEnvName } from "@/db";
+import { userBusinessAccess, users, userSessions } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +90,17 @@ export async function GET() {
     // misconfigured DATABASE_URL throws HERE with a clear configuration
     // error — report it as JSON instead of a bare 500.
     const { db } = await import("@/db");
-    await db.execute(sql`select 1`);
+
+    // This is a readiness probe, not merely a PostgreSQL socket check. Login
+    // reads every users column, creates a user_sessions row and (for non-owner
+    // accounts) reads user_business_access. A bare `select 1` can therefore be
+    // green while every real sign-in fails because the deployed database has
+    // an absent or stale auth schema. Selecting each complete table makes
+    // PostgreSQL validate the same tables and columns without mutating data.
+    await db.select().from(users).limit(1);
+    await db.select().from(userSessions).limit(1);
+    await db.select().from(userBusinessAccess).limit(1);
+
     return Response.json({ ok: true });
   } catch (e: any) {
     // Operators: this is THE one-stop diagnosis for any DB outage. Drizzle

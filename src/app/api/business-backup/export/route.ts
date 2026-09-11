@@ -5,6 +5,10 @@ import { eq } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { exportBusinessBackup, BACKUP_CONTENT_TYPE } from "@/lib/businessBackup";
 
+// exportBusinessBackup uses Buffer/JSZip; make the supported server runtime
+// explicit for both halves of the backup feature.
+export const runtime = "nodejs";
+
 /**
  * GET /api/business-backup/export?businessId=12&branchCode=XYZ
  *

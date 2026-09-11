@@ -24,9 +24,12 @@ Both are the SAME root problem: **the deployed app cannot reach a real PostgreSQ
 | 4 | **Schema never pushed** → tables don't exist | `code: "42P01"` (`relation "users" does not exist`) | Run `drizzle-kit push` against the managed DB (step 4), then `/api/init` (step 5) |
 | 5 | (bonus) **Connection-slot exhaustion** on serverless | `53300` / "too many clients" | Use the provider's POOLED URL + keep `PG_POOL_MAX=2` |
 
-> If `/api/health` answers `{"ok":true}` but login still fails, the problem is NOT
-> the database connection — it would be wrong email/password (`Invalid email or
-> password.` is a different message) or a locked account.
+> `/api/health` is an authentication-readiness check, not just a network ping:
+> it validates the complete `users`, `user_sessions`, and
+> `user_business_access` table shapes used during sign-in. Therefore
+> `{"ok":true}` means the configured database is reachable **and** its auth
+> schema matches this deployment. Wrong credentials and locked accounts still
+> return their distinct login messages.
 
 Add `DB_DEBUG=true` (Vercel env, temporary) and `/api/health` additionally returns
 a sanitized `diag` block (host, port, database name, masked user — NEVER the
@@ -39,8 +42,10 @@ password). Remove it when done. Each cold start also logs one sanitized
 
 - **`src/db/index.ts` — the single connection** (all 53 route/lib files import it;
   no second Pool exists anywhere):
-  - Connection comes **only** from `process.env.DATABASE_URL`. **Zero** fallback
-    to `127.0.0.1:5432`/localhost in any environment.
+  - Connection comes from `DATABASE_URL` or the supported Vercel integration
+    variables (`POSTGRES_PRISMA_URL`, `POSTGRES_URL`,
+    `POSTGRES_URL_NON_POOLING`). **Zero** fallback to
+    `127.0.0.1:5432`/localhost in any environment.
   - Missing env → a **clear configuration error** (exact remediation text), not a
     raw driver stack.
   - On Vercel (`VERCEL`) or `REQUIRE_EXTERNAL_DB=true`, a loopback URL is a hard
@@ -54,15 +59,20 @@ password). Remove it when done. Each cold start also logs one sanitized
     `idleTimeout 20s`, `connectTimeout 10s`, `keepAlive`.
   - SSL: driven by the URL (`sslmode=require` from Neon/Vercel Postgres/Supabase
     works as-is); `PGSSLMODE=require|disable` is an explicit override.
-- **`/api/health`** unwraps Drizzle's `Failed query` wrapper and reports
-  `error` + `code` (SQLSTATE) + an actionable `hint` for every known failure
-  mode; optional `DB_DEBUG=true` adds the sanitized connection snapshot.
-- **`drizzle.config.ts`** is env-driven (hardcoded local URL removed); only
-  non-production tooling may default to localhost.
+- **`/api/health`** now reads the complete auth-table shapes used by login
+  instead of running the false-positive `select 1` probe. It unwraps Drizzle's
+  `Failed query` wrapper and reports `error` + `code` (SQLSTATE) + an actionable
+  `hint`; optional `DB_DEBUG=true` adds the sanitized connection snapshot.
+- **`drizzle.config.ts`** is env-driven and has no implicit local URL. Running
+  `drizzle-kit push` without a configured target now stops with instructions
+  instead of silently checking an unrelated localhost database.
+- **Business backup import/export** are App Router Route Handlers on the Node.js
+  runtime. Multipart uploads use the Web `Request.formData()` API; no legacy
+  Pages Router `config.api.bodyParser` export is used.
 
-Verified by automated suites (all green): failure-mode matrix 16/16
-(missing env / loopback / wrong password `28P01` / DNS `ENOTFOUND` / DB_DEBUG
-sanitization / healthy sign-in + menu), Vercel-simulated build with no env
+Verified by automated suites (all green): failure-mode matrix 18/18
+(missing env / loopback / wrong password `28P01` / DNS `ENOTFOUND` / DB_DEBUG /
+reachable database with missing schema / healthy sign-in + menu), Vercel-simulated build with no env
 ✔, full E2E in real Chromium 27/27 + 34/34, deadlink crawl clean.
 
 ---

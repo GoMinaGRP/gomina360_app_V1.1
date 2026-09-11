@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { readBackupArchive, importBusinessBackup } from "@/lib/businessBackup";
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+// Backup parsing uses Buffer/JSZip, so keep this handler on the Node runtime.
+// App Router Route Handlers receive the Web Request directly and parse
+// multipart bodies with request.formData(); the Pages Router `config.api`
+// bodyParser switch is neither needed nor a valid route-segment export here.
+export const runtime = "nodejs";
 
 /**
  * POST /api/business-backup/import  (multipart/form-data)
