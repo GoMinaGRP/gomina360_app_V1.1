@@ -79,6 +79,10 @@ export function dbFailureMessage(error: unknown): string | null {
   if (/not configured|misconfiguration|local\/loopback host/i.test(msg)) {
     return "GoMina 360 is not connected to a database on this deployment. Set DATABASE_URL (or the POSTGRES_URL / POSTGRES_PRISMA_URL auto-created by your Vercel Postgres or Neon integration) in Vercel → Settings → Environment Variables for BOTH Production and Preview, then redeploy. A 127.0.0.1 / localhost URL copied from local development can never work on Vercel — use the managed Postgres connection string.";
   }
+  // A known table exists but is missing a column required by this deployment.
+  if (code === "42703" || /column "[a-z_]+" does not exist/i.test(msg)) {
+    return "The database is connected, but its schema is older than this deployment. Run the checked-in production migration against the SAME managed database used by Vercel: DATABASE_URL=\"<your-managed-url>\" npm run db:migrate — then redeploy.";
+  }
   // Schema never pushed to this database.
   if (code === "42P01" || /relation "[a-z_]+" does not exist/i.test(msg)) {
     return "The database is connected, but its tables don't exist yet. From your machine run: DATABASE_URL=\"<your-managed-url>\" npx drizzle-kit push — then open /api/init once to create the schema and seed the OWNER account.";

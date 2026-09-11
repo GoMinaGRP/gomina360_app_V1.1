@@ -25,6 +25,7 @@ import {
 const COOKIE_BASE = `Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=${7 * 24 * 3600}`;
 
 export async function POST(request: Request) {
+  let operation = "request parsing";
   try {
     const body = await request.json().catch(() => ({}));
     const email = String(body.email || "").trim().toLowerCase();
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
       );
     }
 
+    operation = "user lookup";
     const [user] = await db.select().from(users).where(eq(users.email, email));
     // Uniform error to avoid leaking which accounts exist.
     if (!user) {
@@ -67,9 +69,11 @@ export async function POST(request: Request) {
       );
     }
 
+    operation = "password verification";
     if (!verifyPassword(password, user.passwordHash)) {
       const failed = (user.failedLoginAttempts || 0) + 1;
       const lock = failed >= MAX_FAILED_LOGINS;
+      operation = "failed-login counter update";
       await db
         .update(users)
         .set({
@@ -88,12 +92,15 @@ export async function POST(request: Request) {
       );
     }
 
+    operation = "login-state reset";
     await db
       .update(users)
       .set({ failedLoginAttempts: 0, lockedUntil: null })
       .where(eq(users.id, user.id));
 
+    operation = "session creation";
     const { token, expires } = await createSession(user.id);
+    operation = "business-access lookup";
     const access = await accessibleBusinessIds(user);
 
     const res = NextResponse.json({
@@ -113,7 +120,19 @@ export async function POST(request: Request) {
     // DEPLOYMENT configuration failure (no DATABASE_URL on Vercel, a
     // 127.0.0.1/localhost URL, or a schema that was never pushed) gets a
     // specific message; genuinely transient outages keep the generic copy.
-    console.error("[auth/login] service error:", error?.message || error);
+    const root = error?.cause?.message ? error.cause : error;
+    // Keep credentials and query parameters out of logs while preserving the
+    // operation and PostgreSQL diagnostics needed to fix the actual failure.
+    console.error("[auth/login] service error:", {
+      operation,
+      message: root?.message || error?.message || String(error),
+      code: root?.code || error?.code || null,
+      detail: root?.detail || null,
+      schema: root?.schema || null,
+      table: root?.table || null,
+      column: root?.column || null,
+      constraint: root?.constraint || null,
+    });
     const specific = dbFailureMessage(error);
     if (specific) {
       return NextResponse.json({ success: false, error: specific }, { status: 500 });

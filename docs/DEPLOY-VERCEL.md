@@ -11,7 +11,7 @@ Both are the SAME root problem: **the deployed app cannot reach a real PostgreSQ
 
 ---
 
-## 1. Why it happens (the only 4 possible causes)
+## 1. Why it happens
 
 `/api/health` now tells you exactly which one you have — open
 `https://<your-app>.vercel.app/api/health` and read `error` / `code` / `hint`:
@@ -21,8 +21,9 @@ Both are the SAME root problem: **the deployed app cannot reach a real PostgreSQ
 | 1 | **No connection string** in Vercel (neither `DATABASE_URL` nor the `POSTGRES_*` integration vars) | `error: "…NOT configured…"`, hint mentions Environment Variables | Set the env var (step 3), redeploy |
 | 2 | `DATABASE_URL` points at **127.0.0.1 / localhost** (the copied local sandbox URL) | `error: "…local/loopback host ("127.0.0.1")…"` | Use the MANAGED Postgres URL — loopback on Vercel means the serverless function itself, nothing listens there |
 | 3 | **Wrong credentials / host / DB name** in the URL | `code: "28P01"` (bad password) · `ENOTFOUND` (bad host) · `3D000` (DB name missing) | Re-copy the full URL from your provider |
-| 4 | **Schema never pushed** → tables don't exist | `code: "42P01"` (`relation "users" does not exist`) | Run `drizzle-kit push` against the managed DB (step 4), then `/api/init` (step 5) |
-| 5 | (bonus) **Connection-slot exhaustion** on serverless | `53300` / "too many clients" | Use the provider's POOLED URL + keep `PG_POOL_MAX=2` |
+| 4 | **Schema drift** → deployed code expects a newer column | `code: "42703"` (for example, `column "can_delete_inventory" does not exist`) | Redeploy this revision; its additive release migration adds the column before `next build`. Or run `DATABASE_URL="<managed-url>" npm run db:migrate` once. |
+| 5 | **Schema never pushed** → tables don't exist | `code: "42P01"` (`relation "users" does not exist`) | Run `drizzle-kit push` against the managed DB (step 4), then `/api/init` (step 5) |
+| 6 | (bonus) **Connection-slot exhaustion** on serverless | `53300` / "too many clients" | Use the provider's POOLED URL + keep `PG_POOL_MAX=2` |
 
 > `/api/health` is an authentication-readiness check, not just a network ping:
 > it validates the complete `users`, `user_sessions`, and
@@ -66,6 +67,10 @@ password). Remove it when done. Each cold start also logs one sanitized
 - **`drizzle.config.ts`** is env-driven and has no implicit local URL. Running
   `drizzle-kit push` without a configured target now stops with instructions
   instead of silently checking an unrelated localhost database.
+- **`npm run db:migrate`** applies the idempotent, additive
+  `users.can_delete_inventory` release migration. Vercel runs it before
+  `next build`, so the schema expansion finishes before new functions receive
+  traffic; builds with no DB URL still skip safely and never use localhost.
 - **Business backup import/export** are App Router Route Handlers on the Node.js
   runtime. Multipart uploads use the Web `Request.formData()` API; no legacy
   Pages Router `config.api.bodyParser` export is used.
@@ -107,8 +112,10 @@ for you — the app accepts those automatically, so you may skip adding
 
 ### C. Redeploy
 Deployments → ⋯ → **Redeploy** → uncheck *Use existing build cache*.
+The build runs `npm run db:migrate` before `next build`; on an existing database
+this safely adds the `users.can_delete_inventory` column if it is missing.
 
-### D. Push the schema (one time, from your machine)
+### D. Push the full schema (one time for a brand-new database, from your machine)
 ```bash
 git clone <your repo> && cd gomina360_app_V1 && npm install
 DATABASE_URL="<the managed URL>" npx drizzle-kit push
