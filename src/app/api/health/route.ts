@@ -19,6 +19,10 @@ function hintFor(root: any): string | null {
   if (/not configured|misconfiguration/i.test(msg)) {
     return "Set DATABASE_URL to your MANAGED PostgreSQL connection string in Vercel → Project → Settings → Environment Variables (Production AND Preview), then redeploy — OR attach the database via the Storage tab so Vercel auto-creates POSTGRES_URL / POSTGRES_PRISMA_URL (also accepted). 127.0.0.1/localhost can never work on Vercel — that address means the serverless function itself.";
   }
+  // A table exists but is older than the application schema.
+  if (code === "42703" || /column "?[a-z_]+"? does not exist/.test(m)) {
+    return "The connected database schema is older than this deployment. Run the checked-in migration against this exact database: DATABASE_URL=\"<managed-url>\" npm run db:migrate — then redeploy. Do not run the command without the managed URL.";
+  }
   // Schema was never pushed to this database.
   if (code === "42P01" || /relation "?[a-z_]+"? does not exist/.test(m)) {
     return "The database has no tables yet. From your machine run: DATABASE_URL=\"<managed-url>\" npx drizzle-kit push  — then open https://<your-app>/api/init once to seed the owner account.";
