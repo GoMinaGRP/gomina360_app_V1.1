@@ -63,22 +63,60 @@ try {
     );
   }
 
-  const before = await client.query(`
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'users'
-      and column_name = 'can_delete_inventory'
-  `);
+  // Keep this list aligned with every additive users column in src/db/schema.ts.
+  // Foundational NOT NULL identity columns (id, name, email, role, phone) are
+  // intentionally excluded: a database without those requires the full schema.
+  const userColumns = [
+    ["assigned_business_id", "integer"],
+    ["avatar_url", "text"],
+    ["region", "text"],
+    ["district", "text"],
+    ["town", "text"],
+    ["is_active", "boolean default true"],
+    ["is_worker_enabled", "boolean default true"],
+    ["created_by_user_id", "integer"],
+    ["can_record_sales", "boolean default true"],
+    ["can_record_expenses", "boolean default false"],
+    ["can_manage_stock", "boolean default false"],
+    ["can_export_data", "boolean default false"],
+    ["can_manage_records", "boolean default false"],
+    ["can_delete_inventory", "boolean default false"],
+    ["can_manage_expenses", "boolean default false"],
+    ["can_manage_users", "boolean default false"],
+    ["can_manage_cctv", "boolean default false"],
+    ["can_manage_auditors", "boolean default false"],
+    ["can_manage_online", "boolean default false"],
+    ["can_create_business", "boolean default false"],
+    ["can_view_finance", "boolean default false"],
+    ["can_manage_support", "boolean default false"],
+    ["business_manage_ids", "jsonb"],
+    ["password_hash", "text"],
+    ["password_changed_at", "timestamp"],
+    ["failed_login_attempts", "integer default 0"],
+    ["locked_until", "timestamp"],
+    ["access_revoked_at", "timestamp"],
+    ["created_at", "timestamp default now()"],
+  ];
 
-  await client.query(`
-    alter table public.users
-      add column if not exists can_delete_inventory boolean default false
+  const existing = await client.query(`
+    select column_name
+    from information_schema.columns
+    where table_schema = 'public' and table_name = 'users'
   `);
+  const existingNames = new Set(existing.rows.map((row) => row.column_name));
+  const missingNames = userColumns
+    .filter(([name]) => !existingNames.has(name))
+    .map(([name]) => name);
+
+  for (const [name, definition] of userColumns) {
+    await client.query(
+      `alter table public.users add column if not exists ${name} ${definition}`,
+    );
+  }
 
   await client.query("commit");
   console.log(
-    `[db:migrate] ${before.rowCount ? "verified" : "applied"} users.can_delete_inventory via ${dbUrlEnv} (${describeTarget()})`,
+    `[db:migrate] ${missingNames.length ? `applied users.${missingNames.join(", users.")}` : "verified all users columns"} via ${dbUrlEnv} (${describeTarget()})`,
   );
 } catch (error) {
   await client.query("rollback").catch(() => {});
