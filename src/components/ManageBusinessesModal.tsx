@@ -181,15 +181,27 @@ export default function ManageBusinessesModal({
   const [deleteCounts, setDeleteCounts] = useState<any | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
-  // ── Super Admin cross-owner view: Owner/Org identity + filter ───────────
+  // ── Super Admin cross-owner view: Owner/Org identity + filters ──────────
   const orgNameOf = (orgId: any) =>
     organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
     (orgId ? `Organization #${orgId}` : "Unassigned");
   const [orgFilter, setOrgFilter] = useState<string>("ALL");
+  const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const scopedBusinesses = useMemo(() => {
-    if (!isSuperAdmin || orgFilter === "ALL") return businesses;
-    return businesses.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
-  }, [businesses, isSuperAdmin, orgFilter]);
+    let list = businesses;
+    if (isSuperAdmin && orgFilter !== "ALL") {
+      list = list.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+    }
+    if (isSuperAdmin && typeFilter !== "ALL") {
+      list = list.filter((b: any) => (b.category || "Other") === typeFilter);
+    }
+    return list;
+  }, [businesses, isSuperAdmin, orgFilter, typeFilter]);
+  // Distinct business types present — drives the Super Admin type filter.
+  const typeOptions = useMemo(
+    () => Array.from(new Set(businesses.map((b: any) => b.category || "Other"))).sort(),
+    [businesses]
+  );
 
   // Category re-type options: restricted orgs are offered ONLY their granted
   // types (the current category always stays selectable — it's what the unit
@@ -214,8 +226,20 @@ export default function ManageBusinessesModal({
   const [branchLogoFile, setBranchLogoFile] = useState<string | null>(null);
 
   const sorted = useMemo(
-    () => [...scopedBusinesses].sort((a, b) => a.id - b.id),
-    [scopedBusinesses]
+    () =>
+      [...scopedBusinesses].sort((a, b) => {
+        // Super Admin "all" view is grouped: the MAIN OWNER's own workspace
+        // (org 1) first, then every other Owner's organization, then by id.
+        if (isSuperAdmin && orgFilter === "ALL") {
+          const ga = Number(a.ownerId) === 1 ? 0 : 1;
+          const gb = Number(b.ownerId) === 1 ? 0 : 1;
+          if (ga !== gb) return ga - gb;
+          const oa = Number(a.ownerId ?? 0), ob = Number(b.ownerId ?? 0);
+          if (oa !== ob) return oa - ob;
+        }
+        return a.id - b.id;
+      }),
+    [scopedBusinesses, isSuperAdmin, orgFilter]
   );
 
   useEffect(() => {
@@ -928,6 +952,7 @@ export default function ManageBusinessesModal({
                     </span>
                   )}
                 </div>
+                <div className="flex items-center gap-2 flex-wrap">
                 {isSuperAdmin && organizations.length > 0 && (
                   <select
                     data-testid="org-filter-select"
@@ -939,11 +964,28 @@ export default function ManageBusinessesModal({
                     <option value="ALL">All Owners / Orgs</option>
                     {organizations.map((o) => (
                       <option key={o.id} value={String(o.id)}>
-                        {o.name}
+                        {Number(o.id) === 1 ? `${o.name} — main (you)` : o.name}
                       </option>
                     ))}
                   </select>
                 )}
+                {isSuperAdmin && typeOptions.length > 1 && (
+                  <select
+                    data-testid="type-filter-select"
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    title="Filter branches by business type"
+                    className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
+                  >
+                    <option value="ALL">All business types</option>
+                    {typeOptions.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                </div>
                 {isOwner && (
                   <button
                     onClick={() => {
@@ -959,12 +1001,35 @@ export default function ManageBusinessesModal({
               </div>
 
               <div className="space-y-2">
-                {sorted.map((biz) => {
+                {sorted.map((biz, idx) => {
                   const inactive = (biz.status || "").toUpperCase() === "INACTIVE";
                   const armed = armedCode === biz.code;
+                  // Super Admin "all" view: an ownership group header whenever
+                  // the owning organization changes — the main Owner's own
+                  // units are visually separated from every other Owner's.
+                  const showGroupHead =
+                    isSuperAdmin &&
+                    orgFilter === "ALL" &&
+                    (idx === 0 || Number(sorted[idx - 1].ownerId ?? 0) !== Number(biz.ownerId ?? 0));
+                  const mine = Number(biz.ownerId) === 1;
                   return (
+                    <React.Fragment key={biz.code}>
+                    {showGroupHead && (
+                      <div
+                        data-testid={`manage-biz-group-${biz.ownerId ?? 0}`}
+                        className={`flex items-center gap-2 pt-2 pb-1 text-[11px] font-black tracking-wide ${
+                          mine ? "text-violet-300" : "text-sky-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block w-2 h-2 rounded-full ${mine ? "bg-violet-400" : "bg-sky-400"}`}
+                        />
+                        {mine
+                          ? "YOUR BUSINESSES — GoMina Group (Main Owner)"
+                          : `OWNED BY ${orgNameOf(biz.ownerId).toUpperCase()}`}
+                      </div>
+                    )}
                     <div
-                      key={biz.code}
                       data-testid={`manage-biz-row-${biz.code}`}
                       className={`rounded-xl border p-3.5 transition ${
                         inactive
@@ -974,6 +1039,14 @@ export default function ManageBusinessesModal({
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start space-x-3 min-w-0">
+                          {biz.logo ? (
+                            <img
+                              src={biz.logo}
+                              alt={`${biz.name} crest`}
+                              data-testid={`manage-biz-logo-${biz.code}`}
+                              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800"
+                            />
+                          ) : (
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                               inactive
@@ -983,6 +1056,7 @@ export default function ManageBusinessesModal({
                           >
                             <Building2 className="w-5 h-5" />
                           </div>
+                          )}
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span
@@ -1178,6 +1252,7 @@ export default function ManageBusinessesModal({
                         )}
                       </div>
                     </div>
+                    </React.Fragment>
                   );
                 })}
               </div>

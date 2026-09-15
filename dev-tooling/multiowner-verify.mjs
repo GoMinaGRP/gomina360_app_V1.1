@@ -384,6 +384,109 @@ async function main() {
   });
   check("unrestricted orgs keep creating unknown/future types (back-compat)", cFuture.status === 200 && cFuture.body.success, `${cFuture.status}`);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Section 9 — Owner lifecycle: suspend → reactivate → delete → restore,
+  // every step preserving the Owner's data & access settings
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log(`\n── Section 9: Owner lifecycle (suspend/reactivate/delete/restore) ──`);
+  // Establish org-B state we can integrity-check around the lifecycle:
+  // an allowed-business-types restriction and a marker customer.
+  await api(kwame.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: orgB.id, action: "SET_BUSINESS_TYPES", businessTypeKeys: ["AQUACULTURE"] }),
+  });
+  const custB = await api(B.token, "/api/enterprise", {
+    method: "POST",
+    body: JSON.stringify({ entityType: "customer", data: { businessId: bizBId, name: `${tag} Lifecycle Customer`, phone: "0244111000", category: "RETAIL" } }),
+  });
+  check("org B marker customer created", [200, 201].includes(custB.status), `${custB.status} ${custB.body.error || ""}`);
+  const bizCountB0 = (await api(B.token, "/api/businesses")).body.businesses?.length ?? -1;
+
+  // ── SUSPEND → login blocked, data untouched ──
+  await api(kwame.token, "/api/admin/organizations", { method: "PATCH", body: JSON.stringify({ id: orgB.id, action: "SUSPEND" }) });
+  const deadB = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: `bravo.${tag.toLowerCase()}@mw-test.local`, password: "BravoOwner@26" }),
+  });
+  check("suspended owner cannot log in", deadB.status === 403, `${deadB.status}`);
+  const kwBizMid = await api(kwame.token, "/api/businesses");
+  check("suspension deletes nothing: org B units still visible to Super Admin",
+    (kwBizMid.body.businesses || []).some((b) => b.id === bizBId));
+
+  // ── REACTIVATE → everything returns exactly as before ──
+  await api(kwame.token, "/api/admin/organizations", { method: "PATCH", body: JSON.stringify({ id: orgB.id, action: "ACTIVATE" }) });
+  const B3 = await login(`bravo.${tag.toLowerCase()}@mw-test.local`, "BravoOwner@26");
+  check("reactivated owner logs back in", !!B3.token);
+  const initB3res = await api(B3.token, "/api/init");
+  check("reactivation preserves allowed-business-types settings",
+    initB3res.body.allowedBusinessTypes?.restricted === true &&
+    JSON.stringify(initB3res.body.allowedBusinessTypes?.types || []).includes("AQUACULTURE"));
+  const bizB3 = await api(B3.token, "/api/businesses");
+  check("reactivation preserves every business", (bizB3.body.businesses || []).length === bizCountB0 && bizCountB0 > 0);
+  check("reactivation preserves customers/data", JSON.stringify(initB3res.body.customers || []).includes(`${tag} Lifecycle Customer`));
+
+  // ── DELETE (typed confirm) → access revoked, ALL data preserved ──
+  const delNoConfirm = await api(kwame.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: orgB.id, action: "DELETE_ORGANIZATION", confirmName: "wrong name" }),
+  });
+  check("delete refused without typed confirmation", delNoConfirm.status === 400, `${delNoConfirm.status}`);
+  const delMain = await api(kwame.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: 1, action: "DELETE_ORGANIZATION", confirmName: "GoMina Group" }),
+  });
+  check("main Owner workspace cannot be deleted", delMain.status === 400, `${delMain.status}`);
+  const delOwnerSelf = await api(B3.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: orgB.id, action: "DELETE_ORGANIZATION", confirmName: orgB.name }),
+  });
+  check("an Owner cannot delete organizations themselves", delOwnerSelf.status === 403, `${delOwnerSelf.status}`);
+  const delB = await api(kwame.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: orgB.id, action: "DELETE_ORGANIZATION", confirmName: orgB.name }),
+  });
+  check("super admin deletes org B (typed confirm)", delB.status === 200 && delB.body.organization?.status === "DELETED", `${delB.status} ${delB.body.error || ""}`);
+  const delLoginB = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: `bravo.${tag.toLowerCase()}@mw-test.local`, password: "BravoOwner@26" }),
+  });
+  check("deleted org's owner cannot log in", delLoginB.status === 403, `${delLoginB.status}`);
+  const deadSessB = await api(B3.token, "/api/init");
+  check("deleted org: live sessions ended at once", deadSessB.status === 401, `${deadSessB.status}`);
+  const menuDel = await fetch(`${BASE}/api/menu`).then((r) => r.json());
+  check("deleted org removed from marketplace", !(menuDel.businesses || menuDel || []).some((b) => b.businessId === bizBId));
+  const dirDel = await api(kwame.token, "/api/admin/organizations");
+  const rowDel = (dirDel.body.organizations || []).find((o) => o.id === orgB.id);
+  check("directory shows org B as DELETED", rowDel?.status === "DELETED");
+  check("deletion preserves granted business types setting", rowDel?.businessTypesRestricted === true);
+  // DATA preserved: Super Admin still sees every org-B unit & customer
+  const kwBizDel = await api(kwame.token, "/api/businesses");
+  check("deleted org: all business units preserved (Super Admin view)", (kwBizDel.body.businesses || []).some((b) => b.id === bizBId));
+  const kwCustDel = await api(kwame.token, "/api/init", { headers: { "x-gomina-org": String(orgB.id) } });
+  check("deleted org: customer data preserved", JSON.stringify(kwCustDel.body.customers || []).includes(`${tag} Lifecycle Customer`));
+
+  // ── RESTORE a deleted org → accounts back, data & settings in place ──
+  const restB = await api(kwame.token, "/api/admin/organizations", {
+    method: "PATCH",
+    body: JSON.stringify({ id: orgB.id, action: "ACTIVATE" }),
+  });
+  check("super admin restores the deleted org", restB.status === 200 && restB.body.organization?.status === "ACTIVE", `${restB.status}`);
+  const B4 = await login(`bravo.${tag.toLowerCase()}@mw-test.local`, "BravoOwner@26");
+  check("restored owner logs back in (accounts reactivated)", !!B4.token);
+  const initB4 = await api(B4.token, "/api/init");
+  check("restore brings back allowed-business-types settings", initB4.body.allowedBusinessTypes?.restricted === true);
+  check("restore brings back every business", (await api(B4.token, "/api/businesses")).body.businesses?.length === bizCountB0);
+
+  // ── Super-Admin cross-owner display integrity (labels & separation) ──
+  const initK2 = await api(kwame.token, "/api/init");
+  const dirForUI = initK2.body.organizations || [];
+  check("super admin receives org directory for business views", dirForUI.some((o) => o.id === 1) && dirForUI.some((o) => o.id === orgB.id));
+  const initA2 = await api(A.token, "/api/init");
+  check("owner NEVER receives the cross-owner directory", (initA2.body.organizations || []).length === 0);
+  const kwAllBiz2 = await api(kwame.token, "/api/businesses");
+  const groupSample = (kwAllBiz2.body.businesses || []).find((b) => b.id === bizBId);
+  check("every business row carries its owning org id (grouping source)", groupSample?.ownerId === orgB.id);
+
   // ── Admin lifecycle: suspend org B → sessions end + storefront closed ──
   const susp = await api(kwame.token, "/api/admin/organizations", { method: "PATCH", body: JSON.stringify({ id: orgB.id, action: "SUSPEND" }) });
   check("super admin suspends org B", susp.status === 200 && susp.body.organization?.status === "SUSPENDED", `${susp.status}`);

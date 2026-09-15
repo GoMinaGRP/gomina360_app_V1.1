@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Building2, RefreshCw, Plus, Ban, CheckCircle2, CheckSquare, Square, Unlock } from "lucide-react";
+import { Building2, RefreshCw, Plus, Ban, CheckCircle2, CheckSquare, Square, Unlock, Trash2, ArchiveRestore } from "lucide-react";
 
 type AllowedType = { key: string; label: string };
 
@@ -37,6 +37,10 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
   const [typesOpenFor, setTypesOpenFor] = useState<number | null>(null);
   const [typeDraft, setTypeDraft] = useState<Set<string>>(new Set());
   const [typeNotice, setTypeNotice] = useState<string | null>(null);
+  // Owner lifecycle: status filter + typed-confirm DELETE panel.
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "SUSPENDED" | "DELETED">("ALL");
+  const [deleteFor, setDeleteFor] = useState<number | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,6 +108,32 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      if (action === "ACTIVATE" && statusFilter === "DELETED") setTypeNotice("Organization restored — the Owner's accounts, businesses, settings and allowed business types are exactly as before.");
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // DELETE an Owner organization: access fully revoked (accounts + sessions),
+  // but every byte of their data, settings and business-type grants survives.
+  const deleteOrg = async (o: Org) => {
+    setBusyId(o.id);
+    setError(null);
+    setTypeNotice(null);
+    try {
+      const res = await fetch("/api/admin/organizations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: o.id, action: "DELETE_ORGANIZATION", confirmName: deleteConfirm }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      setTypeNotice(`${o.name} deleted: the Owner's access is revoked; ALL of their data (businesses, users, stock, money, settings) is preserved and restorable.`);
+      setDeleteFor(null);
+      setDeleteConfirm("");
       await load();
     } catch (e: any) {
       setError(e.message);
@@ -265,14 +295,26 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
               <th className="px-4 py-3">Members</th>
               <th className="px-4 py-3">Businesses</th>
               <th className="px-4 py-3">Business Types</th>
-              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">
+                <select
+                  data-testid="org-status-filter"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="bg-transparent text-[10px] font-bold uppercase tracking-wide text-slate-400 focus:outline-none cursor-pointer"
+                >
+                  <option className="bg-slate-900" value="ALL">Status: all</option>
+                  <option className="bg-slate-900" value="ACTIVE">Active</option>
+                  <option className="bg-slate-900" value="SUSPENDED">Suspended</option>
+                  <option className="bg-slate-900" value="DELETED">Deleted</option>
+                </select>
+              </th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {orgs.map((o) => (
+            {(statusFilter === "ALL" ? orgs : orgs.filter((o) => (o.status || "ACTIVE") === statusFilter)).map((o) => (
               <React.Fragment key={o.id}>
-              <tr className="border-b border-slate-800/60 last:border-0">
+              <tr className={`border-b border-slate-800/60 last:border-0 ${o.status === "DELETED" ? "opacity-60" : ""}`}>
                 <td className="px-4 py-3">
                   <div className="font-semibold text-slate-100">{o.name}</div>
                   <div className="text-xs text-slate-500">
@@ -333,34 +375,113 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
                     className={`text-[10px] font-bold px-2 py-1 rounded border ${
                       o.status === "ACTIVE"
                         ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-                        : "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                        : o.status === "DELETED"
+                          ? "bg-slate-500/15 text-slate-400 border-slate-500/40"
+                          : "bg-rose-500/15 text-rose-300 border-rose-500/30"
                     }`}
                   >
                     {o.status}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3">
+                  <div className="flex items-center justify-end gap-3">
                   {o.id === 1 ? (
                     <span className="text-[10px] text-slate-600">main</span>
-                  ) : o.status === "ACTIVE" ? (
+                  ) : o.status === "DELETED" ? (
                     <button
-                      onClick={() => setStatus(o.id, "SUSPEND")}
-                      disabled={busyId === o.id}
-                      className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-300 hover:text-rose-200 disabled:opacity-50"
-                    >
-                      <Ban className="w-3.5 h-3.5" /> Suspend
-                    </button>
-                  ) : (
-                    <button
+                      data-testid={`restore-org-${o.id}`}
                       onClick={() => setStatus(o.id, "ACTIVATE")}
                       disabled={busyId === o.id}
-                      className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                      title="Bring the Owner back — all preserved data and access settings return unchanged"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-300 hover:text-sky-200 disabled:opacity-50"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Reactivate
+                      <ArchiveRestore className="w-3.5 h-3.5" /> Restore
                     </button>
+                  ) : (
+                    <>
+                      <button
+                        data-testid={`suspend-org-${o.id}`}
+                        onClick={() => setStatus(o.id, o.status === "ACTIVE" ? "SUSPEND" : "ACTIVATE")}
+                        disabled={busyId === o.id}
+                        title={
+                          o.status === "ACTIVE"
+                            ? "Temporarily lock every member out; data & settings fully preserved"
+                            : "Reactivate — all data and access settings are back exactly as before"
+                        }
+                        className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${
+                          o.status === "ACTIVE"
+                            ? "text-rose-300 hover:text-rose-200"
+                            : "text-emerald-300 hover:text-emerald-200"
+                        }`}
+                      >
+                        {o.status === "ACTIVE" ? (
+                          <>
+                            <Ban className="w-3.5 h-3.5" /> Suspend
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Reactivate
+                          </>
+                        )}
+                      </button>
+                      <button
+                        data-testid={`delete-org-${o.id}`}
+                        onClick={() => { setDeleteFor(deleteFor === o.id ? null : o.id); setDeleteConfirm(""); }}
+                        disabled={busyId === o.id}
+                        title="Permanently revoke the Owner's platform access — all data & settings preserved and restorable"
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Delete
+                      </button>
+                    </>
                   )}
+                  </div>
                 </td>
               </tr>
+              {deleteFor === o.id && (
+                <tr className="bg-rose-950/20">
+                  <td colSpan={7} className="px-4 py-4">
+                    <div data-testid={`delete-confirm-${o.id}`} className="space-y-2 max-w-xl">
+                      <div className="text-sm font-bold text-rose-200">
+                        Delete Owner &quot;{o.name}&quot;?
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        This permanently revokes their platform access: every member
+                        account is deactivated and all live sessions end.{" "}
+                        <span className="text-slate-200 font-semibold">
+                          Nothing is erased
+                        </span>{" "}
+                        — all businesses, users, customers, stock, money, ledgers,
+                        settings and allowed business types remain intact and can be
+                        brought back with <span className="text-sky-300 font-semibold">Restore</span>.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          data-testid={`delete-confirm-input-${o.id}`}
+                          value={deleteConfirm}
+                          onChange={(e) => setDeleteConfirm(e.target.value)}
+                          placeholder={`Type "${o.name}" to confirm`}
+                          className="flex-1 bg-slate-800/70 border border-rose-500/40 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                        />
+                        <button
+                          data-testid={`delete-confirm-btn-${o.id}`}
+                          disabled={busyId === o.id || deleteConfirm.trim() !== o.name}
+                          onClick={() => deleteOrg(o)}
+                          className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-bold"
+                        >
+                          Confirm Delete
+                        </button>
+                        <button
+                          onClick={() => { setDeleteFor(null); setDeleteConfirm(""); }}
+                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
               {typesOpenFor === o.id && (
                 <tr className="bg-slate-900/50">
                   <td colSpan={7} className="px-4 py-4">

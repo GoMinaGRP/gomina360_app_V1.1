@@ -53,20 +53,31 @@ export async function POST(request: Request) {
       );
     }
 
-    // Platform-level suspension: members of a SUSPENDED organization cannot
-    // authenticate at all (the Super Admin is never org-limited in practice —
-    // their primary org stays ACTIVE by construction).
+    // Platform-level suspension / removal: members of a SUSPENDED organization
+    // cannot authenticate (temporary, reversible). Members of a DELETED
+    // organization are locked out too — deletion permanently revokes platform
+    // access while preserving every row of their data (Super-Admin restorable).
+    // The Super Admin's primary org stays ACTIVE by construction.
     {
       const memberships = await db
         .select({ status: organizations.status })
         .from(organizationMembers)
         .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
         .where(eq(organizationMembers.userId, user.id));
-      if (memberships.length > 0 && memberships.every((m) => (m.status || "ACTIVE").toUpperCase() === "SUSPENDED")) {
-        return NextResponse.json(
-          { success: false, error: "This organization's workspace is suspended. Contact the platform administrator." },
-          { status: 403 }
-        );
+      const stat = (m: any) => (m.status || "ACTIVE").toUpperCase();
+      if (memberships.length > 0) {
+        if (memberships.every((m) => stat(m) === "DELETED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace was removed from the platform. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
+        if (memberships.every((m) => stat(m) === "SUSPENDED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace is suspended. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
       }
     }
 

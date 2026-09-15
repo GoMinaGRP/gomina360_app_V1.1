@@ -27,8 +27,12 @@ import {
  * POST   → provision a NEW independent Owner: organization + OWNER member +
  *          clean workspace (no demo data) + per-org company settings row.
  *          Returns the generated initial password ONCE.
- * PATCH  → rename, or suspend / reactivate an organization. Suspending an org
- *          immediately ends every live session of all of its members.
+ * PATCH  → rename; SUSPEND / ACTIVATE (reactivate suspended, or RESTORE a
+ *          deleted org — suspending ends every live member session at once);
+ *          DELETE_ORGANIZATION (typed-name confirm) — permanently revokes the
+ *          Owner's platform access (accounts deactivated, sessions ended)
+ *          while preserving ALL of their data and configuration, restorable;
+ *          SET/GRANT/REVOKE/UNRESTRICT_BUSINESS_TYPES — allowed business types.
  * Every mutation is written to the immutable audit trail.
  */
 
@@ -241,6 +245,29 @@ export async function PATCH(request: Request) {
     if (action === "SUSPEND" || action === "ACTIVATE") {
       updates.status = action === "SUSPEND" ? "SUSPENDED" : "ACTIVE";
     }
+    // ── DELETE — permanently revoke the Owner's platform access while
+    // preserving ALL of their data and configuration. Soft-remove: the
+    // organization row, businesses, users, stock, money, ledgers, settings
+    // and allowed business types all stay intact (and the Super Admin can
+    // RESTORE the workspace with ACTIVATE). Every member account is
+    // deactivated and all live sessions are ended at once.
+    if (action === "DELETE_ORGANIZATION") {
+      if (id === 1) {
+        return NextResponse.json(
+          { success: false, error: "The main Owner workspace cannot be deleted." },
+          { status: 400 },
+        );
+      }
+      if (String(body.confirmName || "").trim() !== org.name) {
+        return NextResponse.json(
+          { success: false, error: `Type the organization name "${org.name}" to confirm deletion.` },
+          { status: 400 },
+        );
+      }
+      if ((org.status || "").toUpperCase() !== "DELETED") {
+        updates.status = "DELETED";
+      }
+    }
 
     // ── Allowed Business Types management (Main Owner / Super Admin only) ──
     const TYPES_ACTIONS = new Set([
@@ -314,8 +341,8 @@ export async function PATCH(request: Request) {
 
     await db.update(organizations).set(updates).where(eq(organizations.id, id));
 
-    if (action === "SUSPEND") {
-      // Immediately sign out every member of the suspended organization.
+    if (action === "SUSPEND" || action === "DELETE_ORGANIZATION") {
+      // Immediately sign out every member of the suspended/removed organization.
       const memberRows = await db
         .select({ userId: organizationMembers.userId })
         .from(organizationMembers)
@@ -324,21 +351,53 @@ export async function PATCH(request: Request) {
       if (memberIds.length) {
         await db
           .update(userSessions)
-          .set({ endedAt: new Date(), endReason: "ORG_SUSPENDED" })
+          .set({ endedAt: new Date(), endReason: action === "SUSPEND" ? "ORG_SUSPENDED" : "ORG_DELETED" })
           .where(inArray(userSessions.userId, memberIds));
+      }
+      if (action === "DELETE_ORGANIZATION" && memberIds.length) {
+        // Deactivate every member account — platform access fully revoked.
+        // Their user ROWS (and all org data) stay untouched, so a RESTORE
+        // brings every account back with the same roles & settings.
+        await db.update(users).set({ isActive: false }).where(inArray(users.id, memberIds));
+      }
+    }
+    if (action === "ACTIVATE") {
+      // Restore member accounts on reactivation/restoration (data, roles and
+      // settings were never touched by suspension or deletion).
+      const memberRows = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(eq(organizationMembers.organizationId, id));
+      const memberIds = memberRows.map((m) => Number(m.userId));
+      if (memberIds.length) {
+        await db.update(users).set({ isActive: true }).where(inArray(users.id, memberIds));
       }
     }
 
     await writeAdminTrail(
       actor,
-      action === "SUSPEND" ? "SUSPEND_ORGANIZATION" : action === "ACTIVATE" ? "ACTIVATE_ORGANIZATION" : typesDetail ? action : "UPDATE_ORGANIZATION",
+      action === "SUSPEND"
+        ? "SUSPEND_ORGANIZATION"
+        : action === "ACTIVATE"
+          ? org.status === "DELETED"
+            ? "RESTORE_ORGANIZATION"
+            : "ACTIVATE_ORGANIZATION"
+          : action === "DELETE_ORGANIZATION"
+            ? "DELETE_ORGANIZATION"
+            : typesDetail
+              ? action
+              : "UPDATE_ORGANIZATION",
       `${org.name} (#${org.id})`,
       typesDetail ??
         (action === "SUSPEND"
-          ? `Organization suspended; all member sessions ended.`
+          ? `Organization suspended; all member sessions ended. Data and settings fully preserved.`
           : action === "ACTIVATE"
-            ? `Organization reactivated.`
-            : `Organization details updated.`),
+            ? org.status === "DELETED"
+              ? `Deleted organization restored; member accounts reactivated. All preserved data and access settings are back in place.`
+              : `Organization reactivated.`
+            : action === "DELETE_ORGANIZATION"
+              ? `Organization deleted by ${actor.name}: platform access revoked for all members, sessions ended, accounts deactivated. ALL data (businesses, users, customers, stock, money, ledgers, settings, allowed business types) preserved for compliance/restore.`
+              : `Organization details updated.`),
       id,
     );
 
