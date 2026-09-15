@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, dbFailureMessage } from "@/db";
-import { users } from "@/db/schema";
+import { users, organizationMembers, organizations } from "@/db/schema";
 import {
   createSession,
   verifyPassword,
@@ -51,6 +51,23 @@ export async function POST(request: Request) {
         { success: false, error: "This account is deactivated. Contact the OWNER." },
         { status: 403 }
       );
+    }
+
+    // Platform-level suspension: members of a SUSPENDED organization cannot
+    // authenticate at all (the Super Admin is never org-limited in practice —
+    // their primary org stays ACTIVE by construction).
+    {
+      const memberships = await db
+        .select({ status: organizations.status })
+        .from(organizationMembers)
+        .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
+        .where(eq(organizationMembers.userId, user.id));
+      if (memberships.length > 0 && memberships.every((m) => (m.status || "ACTIVE").toUpperCase() === "SUSPENDED")) {
+        return NextResponse.json(
+          { success: false, error: "This organization's workspace is suspended. Contact the platform administrator." },
+          { status: 403 }
+        );
+      }
     }
 
     // Brute-force lockout

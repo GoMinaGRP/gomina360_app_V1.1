@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { businesses, inventoryItems, serviceAreas, pickupLocations } from "@/db/schema";
+import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations } from "@/db/schema";
 import { asc, eq, gt, ne, and } from "drizzle-orm";
 
 /**
@@ -13,7 +13,7 @@ import { asc, eq, gt, ne, and } from "drizzle-orm";
  */
 export async function GET() {
   try {
-    const [bizRows, itemRows, areaRows, pickupRows] = await Promise.all([
+    const [bizRows, itemRows, areaRows, pickupRows, orgRows] = await Promise.all([
       db.select().from(businesses).orderBy(asc(businesses.id)),
       db
         .select()
@@ -22,10 +22,18 @@ export async function GET() {
         .orderBy(asc(inventoryItems.name)),
       db.select().from(serviceAreas).where(eq(serviceAreas.active, true)),
       db.select().from(pickupLocations).where(eq(pickupLocations.active, true)),
+      db.select().from(organizations),
     ]);
+
+    // Shared centralized marketplace across ALL participating organizations.
+    // A SUSPENDED organization never trades publicly — its branches vanish
+    // from the marketplace (platform-level kill switch).
+    const orgById = new Map(orgRows.map((o) => [Number(o.id), o]));
 
     const result = [];
     for (const b of bizRows) {
+      const org = b.ownerId != null ? orgById.get(Number(b.ownerId)) : undefined;
+      if (org && (org.status || "").toUpperCase() !== "ACTIVE") continue;
       // Only ACTIVE / EXPANDING units trade publicly — MAINTENANCE and
       // INACTIVE are hidden from the storefront (and refused at checkout).
       if (!["ACTIVE", "EXPANDING"].includes((b.status || "").toUpperCase())) continue;
@@ -63,6 +71,12 @@ export async function GET() {
         businessId: b.id,
         businessName: b.name,
         businessCode: b.code,
+        // D1 — centralized shared marketplace with seller attribution:
+        // each listing is attributed to the Owner/Organization that runs the
+        // branch (products/orders route to that Owner's org internally).
+        organizationId: org?.id ?? null,
+        organizationName: org?.name ?? null,
+        organizationSlug: org?.slug ?? null,
         // Branch identity — the storefront unit the order is linked to
         // (Business → Branch → Products → Orders → Delivery → Tracking).
         branchCode: b.code,

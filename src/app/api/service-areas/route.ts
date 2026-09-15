@@ -35,10 +35,13 @@ async function gate(request: Request, businessId: number) {
   const session = await getSessionInfo(request);
   if (!session) return { error: UNAUTHENTICATED() };
   const user = session.user as any;
-  if (user.role === "OWNER") return { user };
+  if (user.isSuperAdmin) return { user };
+  const inScope = await canAccessBusiness(user, businessId);
+  // Org OWNER — full power, strictly inside their organization's units.
+  if (user.role === "OWNER" && inScope) return { user };
   // "Manage Unit" grantee — owner-equivalent for their granted unit (this
   // includes the service/ordering settings that live here).
-  if (managesBusiness(user, businessId)) return { user };
+  if (inScope && managesBusiness(user, businessId)) return { user };
   if (!user.canManageOnline) {
     return {
       error: FORBIDDEN(
@@ -46,7 +49,7 @@ async function gate(request: Request, businessId: number) {
       ),
     };
   }
-  if (!(await canAccessBusiness(user, businessId))) {
+  if (!inScope) {
     return { error: FORBIDDEN("You do not have access to this business.") };
   }
   return { user };

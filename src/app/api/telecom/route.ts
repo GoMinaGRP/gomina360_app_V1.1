@@ -13,7 +13,7 @@ import {
 import { eq, and, inArray, lt, desc } from "drizzle-orm";
 import QRCode from "qrcode";
 import crypto from "node:crypto";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 /**
  * Telecom & Digital Services API — MoMo, airtime, data bundles & Wi-Fi.
@@ -144,6 +144,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: MoMo/airtime lines (float + CASH balances), transactions
+    // and vouchers stay inside the caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     if (!biz) return NextResponse.json({ success: false, error: "Business not found" }, { status: 404 });
 
@@ -176,6 +181,9 @@ export async function POST(request: NextRequest) {
     const { entity, data } = body;
     if (!entity || !data?.businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, Number(data.businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, Number(data.businessId)));
     if (!biz) return NextResponse.json({ success: false, error: "Business not found" }, { status: 404 });
@@ -480,6 +488,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "LINE") {
       const [before] = await db.select().from(telecomLines).where(eq(telecomLines.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Line not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const set: any = {
         label: data?.label ?? undefined,
         msisdn: data?.msisdn !== undefined ? data.msisdn : undefined,
@@ -507,6 +518,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "PACKAGE") {
       const [before] = await db.select().from(telecomWifiPackages).where(eq(telecomWifiPackages.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Package not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(telecomWifiPackages)
         .set({
@@ -527,6 +541,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "VOUCHER") {
       const [before] = await db.select().from(telecomVouchers).where(eq(telecomVouchers.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Voucher not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const next = ["AVAILABLE", "USED", "REVOKED"].includes(data?.status) ? data.status : null;
       if (!next) return NextResponse.json({ success: false, error: "status must be USED or REVOKED" }, { status: 400 });
       if (next === "USED" && before.status !== "SOLD") {
@@ -548,6 +565,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "TXN") {
       const [before] = await db.select().from(telecomTxns).where(eq(telecomTxns.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Transaction not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(telecomTxns)
         .set({ notes: data?.notes !== undefined ? data.notes : undefined, reference: data?.reference !== undefined ? data.reference : undefined })

@@ -46,7 +46,7 @@ export const otPayFor = (salary: number, hours: number) =>
   round2((Number(salary) / OT_DIVISOR) * Number(hours) * OT_MULTIPLIER);
 
 async function assertManage(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
+  if (user.isSuperAdmin) return null;
   if (!canManageSharedRecords(user)) {
     return FORBIDDEN(
       "Only the OWNER (or a manager the OWNER has granted record-management permission) can run payroll."
@@ -58,10 +58,11 @@ async function assertManage(user: any, businessId: number) {
   return null;
 }
 
-/** Load the live statutory configuration (single row id=1); falls back to
- *  Ghana defaults if the row has never been saved. */
-async function loadStatutory(): Promise<{ cfg: StatutoryConfig; row: any | null }> {
-  const [row] = await db.select().from(payrollStatutoryConfig).where(eq(payrollStatutoryConfig.id, 1));
+/** Load the live statutory configuration for the caller's organization (one
+ *  row per org); falls back to Ghana defaults if that org never saved one. */
+async function loadStatutory(orgId?: number | null): Promise<{ cfg: StatutoryConfig; row: any | null }> {
+  if (orgId == null) return { cfg: cfgFromRow(null), row: null };
+  const [row] = await db.select().from(payrollStatutoryConfig).where(eq(payrollStatutoryConfig.organizationId, orgId));
   return { cfg: cfgFromRow(row), row: row || null };
 }
 
@@ -221,7 +222,7 @@ export async function GET(request: Request) {
       composition: Object.fromEntries(Object.entries(comp).map(([k, v]) => [k, round2(v)])),
     };
 
-    const { cfg, row: cfgRow } = await loadStatutory();
+    const { cfg, row: cfgRow } = await loadStatutory(session.orgId ?? null);
 
     return NextResponse.json({
       success: true,
@@ -297,7 +298,7 @@ export async function POST(request: Request) {
         const n = Number(v);
         return Number.isFinite(n) && n >= 0 && n <= 100 ? n : fallback;
       };
-      const { row: existing } = await loadStatutory();
+      const { row: existing } = await loadStatutory(session.orgId ?? null);
       const cur = cfgFromRow(existing);
 
       const bandsRaw = Array.isArray(d.payeBands) ? d.payeBands : cur.payeBands;
@@ -340,10 +341,11 @@ export async function POST(request: Request) {
       };
 
       let row;
-      if (existing) {
-        [row] = await db.update(payrollStatutoryConfig).set(values).where(eq(payrollStatutoryConfig.id, 1)).returning();
+      const orgId = session.orgId ?? null;
+      if (existing && orgId != null) {
+        [row] = await db.update(payrollStatutoryConfig).set(values).where(eq(payrollStatutoryConfig.organizationId, orgId)).returning();
       } else {
-        [row] = await db.insert(payrollStatutoryConfig).values({ id: 1, ...values }).returning();
+        [row] = await db.insert(payrollStatutoryConfig).values({ organizationId: orgId, ...values }).returning();
       }
       return NextResponse.json({
         success: true,
@@ -399,7 +401,7 @@ export async function POST(request: Request) {
       otByEmp.set(a.employeeId, (otByEmp.get(a.employeeId) || 0) + (a.overtimeHours || 0));
     }
 
-    const { cfg } = await loadStatutory();
+    const { cfg } = await loadStatutory(session.orgId ?? null);
 
     const [run] = await db
       .insert(payrollRuns)
@@ -503,7 +505,7 @@ export async function PATCH(request: Request) {
       const otHours = body.overtimeHours !== undefined ? round2(Number(body.overtimeHours) || 0) : entry.overtimeHours;
       const otPay = body.overtimeHours !== undefined || body.baseSalaryGhs !== undefined ? otPayFor(baseSalary, otHours) : entry.overtimePayGhs;
       const applyStatutory = body.applyStatutory !== undefined ? !!body.applyStatutory : entry.applyStatutory !== false;
-      const { cfg } = await loadStatutory();
+      const { cfg } = await loadStatutory(session.orgId ?? null);
       const b = computeStatutory(
         { basic: baseSalary, allowances, overtimePay: otPay, manualDeductions: deductions, applyStatutory },
         cfg
@@ -536,7 +538,7 @@ export async function PATCH(request: Request) {
       if (run.status === "PAID") {
         return NextResponse.json({ success: false, error: "A paid run is locked on the audit trail." }, { status: 400 });
       }
-      const { cfg } = await loadStatutory();
+      const { cfg } = await loadStatutory(session.orgId ?? null);
       const entries = await db.select().from(payrollEntries).where(eq(payrollEntries.runId, runId));
       let recalculated = 0;
       for (const entry of entries) {

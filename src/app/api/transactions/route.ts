@@ -38,7 +38,7 @@ export async function GET(request: Request) {
       .select()
       .from(transactions)
       .orderBy(desc(transactions.id));
-    if (session.user.role === "OWNER") {
+    if (session.user.isSuperAdmin) {
       return NextResponse.json({ success: true, transactions: allTrx });
     }
     const { accessibleBusinessIds } = await import("@/lib/auth");
@@ -168,6 +168,10 @@ export async function PATCH(request: Request) {
         { status: 404 }
       );
     }
+    // Tenant boundary: permission flags never act across organizations.
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, existing.businessId))) {
+      return FORBIDDEN("That transaction belongs to a business you cannot access.");
+    }
 
     const d = data || {};
     const updates: Record<string, any> = {};
@@ -293,7 +297,12 @@ export async function DELETE(request: Request) {
         { status: 403 }
       );
     }
+    // Tenant boundary: permission flags never act across organizations.
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, existing.businessId))) {
+      return FORBIDDEN("That transaction belongs to a business you cannot access.");
+    }
 
+    const [bizRow] = await db.select({ ownerId: businesses.ownerId }).from(businesses).where(eq(businesses.id, existing.businessId));
     const [log] = await db
       .insert(recordDeletionLogs)
       .values({
@@ -305,6 +314,7 @@ export async function DELETE(request: Request) {
         deletedByUserId: actor?.id ?? null,
         deletedByName: actor?.name || "Unknown",
         deletedByRole: actor?.role || "UNKNOWN",
+        ownerId: bizRow?.ownerId ?? null,
       })
       .returning();
 

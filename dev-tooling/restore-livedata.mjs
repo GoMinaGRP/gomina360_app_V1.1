@@ -40,8 +40,14 @@ for (const [table, rows] of Object.entries(backup.tables || {})) {
   let inserted = 0;
   for (const row of rows) {
     const cols = wanted.filter((c) => row[c] !== undefined);
+    // Multi-owner NOT NULL tenant columns: rows archived before the upgrade
+    // all belong to the main organization — stamp them on the way in.
+    for (const tenantCol of ["owner_id", "organization_id"]) {
+      if (live.has(tenantCol) && !cols.includes(tenantCol)) cols.push(tenantCol);
+    }
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
     const values = cols.map((c) => {
+      if (c === "owner_id" || c === "organization_id") return row[c] ?? 1;
       const v = row[c];
       if (v === null || typeof v !== "object") return v;
       return JSON.stringify(v); // jsonb columns

@@ -9,6 +9,7 @@ import {
   canAccessBusiness,
   accessibleBusinessIds,
 } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 
 /**
  * GET /api/expense-categories?businessId=1&branchCode=POULTRY-01
@@ -82,11 +83,14 @@ export async function POST(request: NextRequest) {
       return FORBIDDEN("You do not have access to record categories for that business.");
     }
 
-    // Check if category already exists
-    const [existing] = await db
+    const catOwnerId = (await ownerOrgOfBusiness(Number(businessId))) ?? session.orgId ?? null;
+
+    // Check if this OWNER's organization already has that category
+    const existingRows = await db
       .select()
       .from(expenseCategories)
       .where(eq(expenseCategories.name, name.trim()));
+    const existing = existingRows.find((r) => Number(r.ownerId) === Number(catOwnerId));
 
     if (existing) {
       return NextResponse.json(
@@ -103,6 +107,7 @@ export async function POST(request: NextRequest) {
         name: name.trim(),
         icon: icon || null,
         createdBy: session.user.name || createdBy || "User",
+        ownerId: catOwnerId,
         isActive: true,
       })
       .returning();

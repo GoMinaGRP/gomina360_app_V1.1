@@ -12,7 +12,7 @@ import {
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 /**
  * Auto Car Wash module API.
@@ -160,6 +160,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: services, bookings, washes and activity stay inside the
+    // caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     if (!biz) return NextResponse.json({ success: false, error: "Business not found" }, { status: 404 });
 
@@ -190,6 +195,9 @@ export async function POST(request: NextRequest) {
     const { entity, data } = body;
     if (!entity || !data?.businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, Number(data.businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, Number(data.businessId)));
     if (!biz) return NextResponse.json({ success: false, error: "Business not found" }, { status: 404 });
@@ -362,6 +370,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "SERVICE") {
       const [before] = await db.select().from(carWashServices).where(eq(carWashServices.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Service not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(carWashServices)
         .set({
@@ -385,6 +396,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "BOOKING") {
       const [before] = await db.select().from(carWashBookings).where(eq(carWashBookings.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Booking not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const next = ["BOOKED", "CHECKED_IN", "COMPLETED", "CANCELLED"].includes(data?.status) ? data.status : before.status;
       const [row] = await db
         .update(carWashBookings)
@@ -408,6 +422,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "WASH") {
       const [before] = await db.select().from(carWashWashes).where(eq(carWashWashes.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Wash not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const next = ["IN_PROGRESS", "COMPLETED", "CANCELLED"].includes(data?.status) ? data.status : before.status;
       if (before.status === "COMPLETED" && next !== "COMPLETED") {
         return NextResponse.json({ success: false, error: "A completed wash is final — it has already posted to Finance" }, { status: 400 });

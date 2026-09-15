@@ -9,6 +9,7 @@ import {
 } from "@/lib/businessProvisioning";
 import { resolveOwnerActor } from "@/lib/recordPermissions";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { businessTypeAllowed, businessTypeLabelOf } from "@/lib/businessTypes";
 
 export async function GET(request: Request) {
   try {
@@ -68,6 +69,18 @@ export async function POST(request: Request) {
     } = body;
 
     const resolvedCategory = category || "Other";
+
+    // Allowed Business Types gate (Super-Admin-managed per organization):
+    // a restricted org may create ONLY the granted types; the Super Admin and
+    // unrestricted orgs are unaffected. Back-compat: unknown/future types pass
+    // for unrestricted orgs, and every org defaults to unrestricted.
+    const typeVerdict = await businessTypeAllowed(session.orgId, resolvedCategory, !!actor.isSuperAdmin);
+    if (!typeVerdict.allowed) {
+      return FORBIDDEN(
+        `Your organization is not authorized to operate "${businessTypeLabelOf(resolvedCategory)}" businesses. Ask the platform Super Admin to grant this business type.`,
+      );
+    }
+
     const all = await db.select({ code: businesses.code }).from(businesses);
 
     // Pretty sequential code per category (BLOCK-02, WASH-02, …). If the caller
@@ -100,6 +113,8 @@ export async function POST(request: Request) {
         initialCapitalGhs: Number(initialCapitalGhs) || 100000,
         monthlyTargetRevenueGhs: Number(monthlyTargetRevenueGhs) || 50000,
         iconName: iconName || CATEGORY_ICON[resolvedCategory] || "Building2",
+        // Tenant: a new unit always belongs to its creator's organization.
+        ownerId: session.orgId ?? null,
       })
       .returning();
 

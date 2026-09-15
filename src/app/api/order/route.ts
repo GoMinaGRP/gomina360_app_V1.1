@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { customerTrackings, businesses, inventoryItems, serviceAreas, pickupLocations } from "@/db/schema";
+import { customerTrackings, businesses, inventoryItems, serviceAreas, pickupLocations, organizations } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import {
   uniqueTrackingCode,
@@ -33,6 +33,16 @@ export async function POST(request: NextRequest) {
     // Only ACTIVE / EXPANDING units trade publicly (mirrors /api/menu).
     if (!biz || !["ACTIVE", "EXPANDING"].includes((biz.status || "").toUpperCase())) {
       return NextResponse.json({ success: false, error: "That business is not taking online orders." }, { status: 404 });
+    }
+    // Platform kill switch: a suspended organization never takes online orders.
+    if (biz.ownerId != null) {
+      const [owningOrg] = await db
+        .select({ status: organizations.status })
+        .from(organizations)
+        .where(eq(organizations.id, Number(biz.ownerId)));
+      if (owningOrg && (owningOrg.status || "").toUpperCase() !== "ACTIVE") {
+        return NextResponse.json({ success: false, error: "That business is not taking online orders." }, { status: 404 });
+      }
     }
     // Switched off the customer storefront by the OWNER / authorized staff
     // (Manage Businesses → Online).

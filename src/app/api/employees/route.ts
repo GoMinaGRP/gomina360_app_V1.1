@@ -72,7 +72,7 @@ async function nextEmployeeNo(): Promise<string> {
 }
 
 async function assertEmployeeAccess(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
+  if (user.isSuperAdmin) return null;
   if (!canManageSharedRecords(user)) {
     return FORBIDDEN("Only the OWNER (or a manager the OWNER has granted record-management permission) can manage employee records.");
   }

@@ -10,6 +10,7 @@ import {
   UNAUTHENTICATED,
   FORBIDDEN,
 } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 import {
   buildTrackingCode,
   isValidTransition,
@@ -406,6 +407,7 @@ export async function POST(request: NextRequest) {
             businessId: row.businessId,
             branchCode: row.branchCode,
             actorName: me.name || "Staff",
+            ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : null,
           });
           pushAfterBell([Number(row.createdByUserId)], {
             type: "ORDER_TRACKING_STATUS",

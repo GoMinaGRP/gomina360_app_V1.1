@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { users, userSessions, businesses, userBusinessAccess } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
-import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, UNAUTHENTICATED } from "@/lib/auth";
+import { users, userSessions, businesses, userBusinessAccess, organizationMembers } from "@/db/schema";
+import { desc, eq, inArray } from "drizzle-orm";
+import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, UNAUTHENTICATED } from "@/lib/auth";
 
 /**
  * Signed-In Staff console — who is signed in right now, from where, since
@@ -77,8 +77,20 @@ export async function GET(request: NextRequest) {
       (sessByUser[s.userId] ||= []).push(s);
     }
 
+    // Org boundary: non-Super-Admin viewers only ever see people who share
+    // their own organization — never another Owner's staff.
+    let orgMemberIds: Set<number> | null = null;
+    if (!me.isSuperAdmin) {
+      const memberRows = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(inArray(organizationMembers.organizationId, me.organizationIds?.length ? me.organizationIds : [-1]));
+      orgMemberIds = new Set(memberRows.map((m) => Number(m.userId)));
+    }
+
     const staff = userRows
       .filter((u) => {
+        if (orgMemberIds && !orgMemberIds.has(Number(u.id)) && u.id !== me.id) return false;
         if (isOwner) return true;
         // delegated manager: only staff whose primary branch is in-scope
         return u.assignedBusinessId != null && (allowed ?? []).includes(Number(u.assignedBusinessId));
@@ -191,6 +203,14 @@ export async function POST(request: NextRequest) {
     if (!target) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
     if (target.id === me.id) return FORBID("You cannot change your own access from this console.");
     if (target.role === "OWNER") return FORBID("The OWNER account can never be disabled or revoked.");
+    // Tenant boundary: never act outside your own organization, and never on
+    // the platform Super Admin account.
+    if (!me.isSuperAdmin) {
+      if (target.isSuperAdmin) return FORBID("The platform Super Admin account is outside your reach.");
+      if (!(await sharesOrganization(me, target))) {
+        return FORBID("That user belongs to a different organization.");
+      }
+    }
 
     if (!isOwner) {
       // Delegated managers: Workers & Branch Managers inside their scope only.

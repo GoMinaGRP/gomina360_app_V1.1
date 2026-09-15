@@ -7,7 +7,7 @@ import {
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { tasksForBusiness, type TaskSeed } from "@/lib/checklistDefaults";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 // Roles allowed to manage checklist templates and generate daily checklists.
 const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
@@ -49,6 +49,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: checklist templates & dated entries stay inside the
+    // caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const branchCode = searchParams.get("branchCode");
     const date = searchParams.get("date");
 
@@ -81,7 +86,12 @@ export async function POST(request: NextRequest) {
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
     }
-    const role = String(data?.createdByRole || data?.role || "").toUpperCase();
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
+    // Authorization comes from the signed-in session — NEVER from a
+    // client-supplied role field in the request body.
+    const role = String(__authSession.user.role || "").toUpperCase();
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const branchCode = data.branchCode || biz?.code || null;
     const today = new Date().toISOString().split("T")[0];
@@ -200,6 +210,9 @@ export async function PATCH(request: NextRequest) {
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
       }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const nowCompleted = !existing.isCompleted;
       const [row] = await db
         .update(checklistEntries)
@@ -217,7 +230,9 @@ export async function PATCH(request: NextRequest) {
 
     // ── TEMPLATE: edit label/category/assignment or activate/deactivate ─
     if (entity === "TEMPLATE") {
-      const role = String(data?.role || data?.updatedByRole || "").toUpperCase();
+      // Authorization comes from the signed-in session — NEVER from a
+      // client-supplied role field in the request body.
+      const role = String(__authSession.user.role || "").toUpperCase();
       if (!MANAGE_ROLES.includes(role)) {
         return NextResponse.json(
           { success: false, error: "Only the Owner or an authorized manager can edit checklist items" },
@@ -230,6 +245,9 @@ export async function PATCH(request: NextRequest) {
         .where(eq(checklistTemplates.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const [row] = await db
         .update(checklistTemplates)
@@ -260,7 +278,9 @@ export async function DELETE(request: NextRequest) {
     if (!__authSession) return UNAUTHENTICATED();
     const { searchParams } = new URL(request.url);
     const id = Number(searchParams.get("id"));
-    const role = String(searchParams.get("role") || "").toUpperCase();
+    // Authorization comes from the signed-in session — NEVER from a
+    // client-supplied ?role= query parameter.
+    const role = String(__authSession.user.role || "").toUpperCase();
     if (!id) {
       return NextResponse.json({ success: false, error: "id required" }, { status: 400 });
     }
@@ -269,6 +289,16 @@ export async function DELETE(request: NextRequest) {
         { success: false, error: "Only the Owner or an authorized manager can remove checklist items" },
         { status: 403 },
       );
+    }
+    const [existing] = await db
+      .select()
+      .from(checklistTemplates)
+      .where(eq(checklistTemplates.id, id));
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     await db.delete(checklistTemplates).where(eq(checklistTemplates.id, id));
     return NextResponse.json({ success: true });

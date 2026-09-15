@@ -15,6 +15,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
@@ -76,6 +77,11 @@ export async function GET(request: Request) {
       .orderBy(desc(recordDeletionLogs.id))
       .limit(50);
     if (module) rows = rows.filter((r) => r.module === module);
+    // Tenant scope: the deletion audit is per-Owner — the Super Admin sees all.
+    if (!session.user.isSuperAdmin) {
+      const myOrgs = new Set(session.user.organizationIds || []);
+      rows = rows.filter((r) => r.ownerId != null && myOrgs.has(Number(r.ownerId)));
+    }
     return NextResponse.json({ success: true, logs: rows });
   } catch (error: any) {
     return NextResponse.json(
@@ -145,8 +151,25 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // Tenant boundary: capability flags never cross organizations.
+    if (!actor.isSuperAdmin) {
+      if (moduleKey === "SUPPLIERS") {
+        if (existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
+          return FORBIDDEN("That supplier belongs to a different organization.");
+        }
+      } else if (!(await canAccessBusiness(actor, existing.businessId))) {
+        return FORBIDDEN("That record belongs to a business you cannot access.");
+      }
+    }
+
     const d = data || {};
     const updates: Record<string, any> = {};
+    // Reassignment to a different business must stay inside the actor's scope.
+    if (moduleKey !== "SUPPLIERS" && d.businessId !== undefined && Number(d.businessId) && Number(d.businessId) !== Number(existing.businessId)) {
+      if (!(await canAccessBusiness(actor, Number(d.businessId)))) {
+        return FORBIDDEN("You cannot move that record to a business you cannot access.");
+      }
+    }
     if (moduleKey === "SUPPLIERS") {
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
       if (typeof d.category === "string" && d.category.trim()) updates.category = d.category.trim();
@@ -318,6 +341,17 @@ export async function DELETE(request: Request) {
       );
     }
 
+    // Tenant boundary: capability flags never cross organizations.
+    if (!actor.isSuperAdmin) {
+      if (moduleKey === "SUPPLIERS") {
+        if (existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
+          return FORBIDDEN("That supplier belongs to a different organization.");
+        }
+      } else if (!(await canAccessBusiness(actor, existing.businessId))) {
+        return FORBIDDEN("That record belongs to a business you cannot access.");
+      }
+    }
+
     const label =
       moduleKey === "SUPPLIERS"
         ? existing.name
@@ -325,7 +359,13 @@ export async function DELETE(request: Request) {
           ? `${existing.name} (${existing.sku})`
           : `${existing.name} (${existing.role})`;
 
-    // Immutable audit row BEFORE the delete lands.
+    // Immutable audit row BEFORE the delete lands — tenant-stamped.
+    const logOwnerId =
+      moduleKey === "SUPPLIERS"
+        ? (existing.ownerId ?? session.orgId ?? null)
+        : (existing.businessId != null
+            ? await ownerOrgOfBusiness(Number(existing.businessId))
+            : (session.orgId ?? null));
     const [log] = await db
       .insert(recordDeletionLogs)
       .values({
@@ -337,6 +377,7 @@ export async function DELETE(request: Request) {
         deletedByUserId: actor?.id ?? null,
         deletedByName: actor?.name || "Unknown",
         deletedByRole: actor?.role || "UNKNOWN",
+        ownerId: logOwnerId,
       })
       .returning();
 
@@ -375,6 +416,22 @@ export async function POST(request: Request) {
     };
 
     if (entityType === "employee") {
+      // Business is REQUIRED: the explicit client choice, or — when a branch
+      // UI omits it — the caller's own primary assignment. Never a blind
+      // default into an arbitrary unit ("business #1"): the resolved business
+      // is access-checked either way. (Mirrors the customer path below.)
+      const empBizId = data.businessId != null
+        ? Number(data.businessId)
+        : (session.user.assignedBusinessId ?? null);
+      if (!empBizId || !Number.isFinite(empBizId)) {
+        return NextResponse.json(
+          { success: false, error: "Choose the business this employee belongs to." },
+          { status: 400 },
+        );
+      }
+      if (!(await canAccessBusiness(session.user, empBizId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       // Quick-add path — auto-assign the employee number and record the
       // registration in the employee record history (same as the full
       // Employee Registration flow in /api/employees).
@@ -387,7 +444,7 @@ export async function POST(request: Request) {
         .values({
           name: data.name || "New Employee",
           role: data.role || "Staff",
-          businessId: Number(data.businessId) || 1,
+          businessId: empBizId,
           branch: data.branch || "Accra Main",
           ...loc,
           salaryGhs: Number(data.salaryGhs) || 3000,
@@ -558,6 +615,7 @@ export async function POST(request: Request) {
         assetId: inserted.id,
         assetCode: inserted.assetCode,
         action: "CREATE",
+        ownerId: (await ownerOrgOfBusiness(inserted.businessId)) ?? session.orgId ?? null,
         status: "COMPLETED",
         requestedByUserId: data.registeredByUserId
           ? Number(data.registeredByUserId)
@@ -579,7 +637,21 @@ export async function POST(request: Request) {
     if (entityType === "inventory") {
       const qty = Number(data.quantity) || 100;
       const threshold = Number(data.minStockThreshold) || 10;
-      const bizId = Number(data.businessId) || 1;
+      // Same rule as employees: explicit business, else the caller's own
+      // primary assignment — never a blind "business #1" fallback; the
+      // resolved business is access-checked before any stock row is written.
+      const bizId = data.businessId != null
+        ? Number(data.businessId)
+        : (session.user.assignedBusinessId ?? 0);
+      if (!bizId || !Number.isFinite(bizId)) {
+        return NextResponse.json(
+          { success: false, error: "Choose the business this stock item belongs to." },
+          { status: 400 },
+        );
+      }
+      if (!(await canAccessBusiness(session.user, bizId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       // Branch/register defaults to the owning business code (same convention
       // as transactions) so every stock row is always business+branch stamped.
       let branchCode = data.branchCode ? String(data.branchCode).trim() : "";
@@ -672,6 +744,7 @@ export async function POST(request: Request) {
           totalSpentGhs: 0,
           loyaltyPoints: 0,
           businessId: custBizId,
+          ownerId: (await ownerOrgOfBusiness(custBizId)) ?? session.orgId ?? null,
         })
         .returning();
       return NextResponse.json({ success: true, item: inserted });
@@ -689,6 +762,7 @@ export async function POST(request: Request) {
           paymentTerms: data.paymentTerms || "NET_30",
           ...loc,
           totalSuppliedGhs: 0,
+          ownerId: session.orgId ?? null,
         })
         .returning();
       return NextResponse.json({ success: true, item: inserted });

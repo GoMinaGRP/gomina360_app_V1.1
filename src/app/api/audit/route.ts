@@ -15,7 +15,7 @@
 // Every mutation also writes an immutable audit_trail row.
 
 import { NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   users,
@@ -44,9 +44,11 @@ import {
   auditIssueUpdates,
   auditTrail,
   notifications,
+  organizationMembers,
   AUDIT_MODULES,
 } from "@/db/schema";
-import { getSessionInfo, accessibleBusinessIds, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, accessibleBusinessIds, sharesOrganization, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 
@@ -72,6 +74,7 @@ const isOpenIssue = (r: any) => isIssue(r) && OPEN_STATUSES.includes(normStatus(
  *  mirrors the event as an OS-level push so it lands even outside the app. */
 async function notify(userId: number | null | undefined, n: { type: string; title: string; body?: string | null; issueId?: number | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; businessId?: number | null; branchCode?: string | null; actorName?: string | null }) {
   if (!userId) return;
+  const nOwnerId = n.businessId != null ? await ownerOrgOfBusiness(Number(n.businessId)) : null;
   await db.insert(notifications).values({
     userId,
     type: n.type,
@@ -84,6 +87,7 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
     businessId: n.businessId ?? null,
     branchCode: n.branchCode ?? null,
     actorName: n.actorName ?? null,
+    ownerId: nOwnerId,
   });
   pushAfterBell([Number(userId)], {
     type: n.type,
@@ -96,7 +100,9 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
 type Scope = {
   eligible: boolean;
   level: "OWNER" | "SUPERVISOR" | "AUDITOR" | "NONE";
-  businessIds: number[] | null; // null = unrestricted (OWNER)
+  businessIds: number[] | null; // null = unrestricted (Super Admin)
+  /** Caller organizations — used to scope platform-level (businessId=null) rows. */
+  ownerIds: number[];
   moduleByBusiness: Record<number, string[]>;
   /** Branch restriction per business: undefined/null ⇒ all branches of the
    *  business; otherwise the exact branch codes the auditor may see. */
@@ -107,8 +113,16 @@ type Scope = {
 };
 
 async function scopeFor(user: any): Promise<Scope> {
+  if (user.isSuperAdmin) {
+    return { eligible: true, level: "OWNER", businessIds: null, ownerIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: true, grantBusinessIds: null };
+  }
   if (user.role === "OWNER") {
-    return { eligible: true, level: "OWNER", businessIds: null, moduleByBusiness: {}, branchByBusiness: {}, canGrant: true, grantBusinessIds: null };
+    // Org OWNER: full audit control of their OWN organization's units only.
+    const orgBiz = ((await accessibleBusinessIds(user)) || []).map(Number);
+    const moduleByBusiness: Record<number, string[]> = {};
+    const branchByBusiness: Record<number, string[] | null> = {};
+    for (const bid of orgBiz) { moduleByBusiness[bid] = MODULES; branchByBusiness[bid] = null; }
+    return { eligible: true, level: "OWNER", businessIds: orgBiz, ownerIds: user.organizationIds || [], moduleByBusiness, branchByBusiness, canGrant: true, grantBusinessIds: orgBiz };
   }
   // Audit & Review is ASSIGNMENT-ONLY: no role (WORKER / BRANCH_MANAGER /
   // SUPERVISOR / GENERAL_MANAGER) gets it by default. A user sees the center
@@ -127,7 +141,7 @@ async function scopeFor(user: any): Promise<Scope> {
     .where(eq(auditAssignments.userId, user.id))).filter((g) => g.isActive);
   const canGrant = !!user.canManageAuditors;
   if (grants.length === 0 && !canGrant && managedIds.length === 0) {
-    return { eligible: false, level: "NONE", businessIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
+    return { eligible: false, level: "NONE", businessIds: [], ownerIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
   }
   const moduleByBusiness: Record<number, string[]> = {};
   const branchByBusiness: Record<number, string[] | null> = {};
@@ -147,6 +161,7 @@ async function scopeFor(user: any): Promise<Scope> {
   return {
     eligible: true,
     level: grants.length > 0 ? "AUDITOR" : "SUPERVISOR",
+    ownerIds: user.organizationIds || [],
     businessIds: [...new Set([...grants.map((g) => g.businessId), ...managedIds])],
     moduleByBusiness,
     branchByBusiness,
@@ -430,7 +445,15 @@ async function scopedTrail(scope: Scope) {
   const all = await db.select().from(auditTrail).orderBy(desc(auditTrail.id)).limit(300);
   if (scope.businessIds === null) return all;
   const ids = scope.businessIds;
-  return all.filter((t) => t.businessId == null || (ids.includes(t.businessId) && (!t.branchCode || branchOk(scope, t.businessId, t.branchCode))));
+  const orgs = new Set(scope.ownerIds);
+  return all.filter((t) => {
+    if (t.businessId == null) {
+      // Platform-level trail rows (grants, delegations) are tenant data too:
+      // visible only inside the organization they were recorded for.
+      return t.ownerId != null && orgs.has(Number(t.ownerId));
+    }
+    return ids.includes(t.businessId) && (!t.branchCode || branchOk(scope, t.businessId, t.branchCode));
+  });
 }
 
 function buildReport(records: AuditRecordRow[], reviews: any[]) {
@@ -553,11 +576,20 @@ export async function GET(request: Request) {
       const rid = Number(url.searchParams.get("recordId") || 0);
       if (!rt || !rid) return NextResponse.json({ success: false, error: "recordType and recordId are required" }, { status: 400 });
       if (rt === "SUPPLIER" || rt === "CUSTOMER") {
-        // Global vendor/customer directory — shared across units, so it is
-        // visible to every eligible auditor (they already see the full party
-        // summary in the parent transaction's related list).
+        // Vendor/customer directories are PER-ORGANIZATION: an auditor may
+        // inspect a party detail only when that party belongs to one of the
+        // organizations they belong to (Super Admin sees all).
         const detail = await loadFullRecord(rt, rs, rid);
         if (!detail) return NextResponse.json({ success: false, error: "Record not found" }, { status: 404 });
+        if (!user.isSuperAdmin) {
+          const myOrgs = new Set(user.organizationIds || []);
+          const partyOrg = ((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId) != null
+            ? Number((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId)
+            : null;
+          if (partyOrg == null || !myOrgs.has(partyOrg)) {
+            return FORBIDDEN("This record belongs to another organization.");
+          }
+        }
         return NextResponse.json({ success: true, detail });
       }
       const scoped = await resolveRecord(rt, rs, rid);
@@ -621,8 +653,21 @@ export async function GET(request: Request) {
       const g = await db.select().from(auditAssignments).orderBy(desc(auditAssignments.id));
       grants = scope.grantBusinessIds === null ? g : g.filter((x) => scope.grantBusinessIds!.includes(x.businessId));
       const all = await db.select().from(users);
+      // Auditor candidates are strictly members of the caller's own
+      // organization(s) — the platform Super Admin sees everyone.
+      const memberUserIds = user.isSuperAdmin
+        ? null
+        : new Set(
+            (
+              await db
+                .select({ userId: organizationMembers.userId })
+                .from(organizationMembers)
+                .where(inArray(organizationMembers.organizationId, user.organizationIds?.length ? user.organizationIds : [-1]))
+            ).map((m) => Number(m.userId)),
+          );
       grantUsers = all
         .filter((u) => u.role !== "OWNER" && u.isActive)
+        .filter((u) => memberUserIds === null || memberUserIds.has(Number(u.id)))
         .filter((u) => scope.grantBusinessIds === null || ["GENERAL_MANAGER"].includes(u.role) || u.assignedBusinessId == null || scope.grantBusinessIds!.includes(u.assignedBusinessId))
         .map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email, assignedBusinessId: u.assignedBusinessId, canManageAuditors: !!u.canManageAuditors }));
     }
@@ -911,6 +956,7 @@ async function resolveAssignee(rec: any, explicitUserId: number | null) {
 const cFriendly = (c: any) => `${c.cameraType} @ ${c.location}`;
 
 async function writeTrail(actor: any, entry: { action: string; targetType: string; targetLabel: string; recordType?: string | null; recordId?: number | null; businessId?: number | null; branchCode?: string | null; reason?: string | null; detail?: string | null }) {
+  const tOwnerId = entry.businessId != null ? await ownerOrgOfBusiness(Number(entry.businessId)) : (actor.orgId ?? null);
   await db.insert(auditTrail).values({
     actorUserId: actor.id,
     actorName: actor.name,
@@ -924,6 +970,7 @@ async function writeTrail(actor: any, entry: { action: string; targetType: strin
     branchCode: entry.branchCode ?? null,
     reason: entry.reason ?? null,
     detail: entry.detail ?? null,
+    ownerId: tOwnerId,
   });
 }
 
@@ -956,6 +1003,10 @@ export async function POST(request: Request) {
       const [target] = await db.select().from(users).where(eq(users.id, targetId));
       if (!target || !target.isActive) return NextResponse.json({ success: false, error: "User not found or inactive." }, { status: 404 });
       if (target.role === "OWNER") return NextResponse.json({ success: false, error: "The OWNER already controls all audits." }, { status: 400 });
+      // Auditor assignments can never cross an organization boundary.
+      if (!user.isSuperAdmin && !(await sharesOrganization(user, target))) {
+        return FORBIDDEN("You can only grant Auditor access to users inside your own organization.");
+      }
       const bizRows = await db.select().from(businesses);
       const note = body.note ? String(body.note).trim() : null;
       // Per-business branch selection (multi mode): { [businessId]: [codes] }

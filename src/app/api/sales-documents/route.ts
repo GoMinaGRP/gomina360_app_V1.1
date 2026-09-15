@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { salesDocuments, businesses } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 /**
  * GET /api/sales-documents
@@ -16,6 +16,17 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const businessId = searchParams.get("businessId");
     const documentType = searchParams.get("documentType");
+
+    // Invoices / quotations / receipts are scoped to businesses the caller
+    // can access. An explicit businessId must be one of them; an unfiltered
+    // listing only ever returns rows from accessible businesses (OWNER ⇒ all).
+    const { accessibleBusinessIds } = await import("@/lib/auth");
+    const allowed = await accessibleBusinessIds(__authSession.user);
+    if (businessId && !(await canAccessBusiness(__authSession.user, Number(businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
+    const inScope = (rows: any[]) =>
+      allowed === null ? rows : rows.filter((r) => allowed.includes(Number(r.businessId)));
 
     // Build filter conditions dynamically
     let rows;
@@ -39,7 +50,7 @@ export async function GET(request: NextRequest) {
         .orderBy(desc(salesDocuments.createdAt));
     }
 
-    return NextResponse.json({ success: true, documents: rows });
+    return NextResponse.json({ success: true, documents: inScope(rows) });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -83,6 +94,9 @@ export async function POST(request: NextRequest) {
 
     if (!documentType || !businessId || !customerName || !lineItems || !Array.isArray(lineItems)) {
       return NextResponse.json({ success: false, error: "Missing required fields" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     // Compute totals
@@ -206,6 +220,9 @@ export async function PATCH(request: NextRequest) {
       .where(eq(salesDocuments.id, Number(documentId)));
     if (!existing) {
       return NextResponse.json({ success: false, error: "Document not found" }, { status: 404 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     // Handle quotation-to-invoice conversion

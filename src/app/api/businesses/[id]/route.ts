@@ -72,6 +72,7 @@ import {
   provisionBusiness,
 } from "@/lib/businessProvisioning";
 import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/lib/auth";
+import { businessTypeAllowed } from "@/lib/businessTypes";
 import { managesBusiness } from "@/lib/permissions";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
@@ -127,8 +128,10 @@ async function businessControlLevel(
   const session = await getSessionInfo(request);
   const user = session?.user as any;
   if (!user) return null;
-  if (user.role === "OWNER") return "OWNER";
-  if (managesBusiness(user, businessId)) return "UNIT_MANAGER";
+  if (user.isSuperAdmin) return "OWNER";
+  // Org OWNER ⇒ owner-level control strictly of their own organization's units.
+  if (user.role === "OWNER" && (await canAccessBusiness(user, businessId))) return "OWNER";
+  if (managesBusiness(user, businessId) && (await canAccessBusiness(user, businessId))) return "UNIT_MANAGER";
   return null;
 }
 
@@ -322,6 +325,20 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           { status: 400 }
         );
       }
+      // Re-typing an existing unit is bound by the same Allowed Business
+      // Types gate as creating one — otherwise a category flip would bypass
+      // the per-Owner grant control. Existing (already-owned) units stay
+      // fully manageable: only re-typing into a non-granted type is refused.
+      {
+        const catSession = await getSessionInfo(request);
+        const catUser = catSession?.user as any;
+        const verdict = await businessTypeAllowed(catSession?.orgId ?? null, category, !!catUser?.isSuperAdmin);
+        if (!verdict.allowed) {
+          return FORBIDDEN(
+            `Your organization is not authorized to operate "${category}" businesses.`,
+          );
+        }
+      }
       updates.category = category;
       updates.iconName = CATEGORY_ICON[category] || "Building2";
       categoryChanged = true;
@@ -489,6 +506,12 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     // Session-verified OWNER gate (secure login cookie — no spoofing).
     const actor = await requireOwner(request);
     if (!actor) return FORBIDDEN("Only the OWNER can delete businesses.");
+    // Tenant boundary FIRST: a non-platform Owner can only ever delete a unit
+    // of their own organization (cross-org deletions are refused outright,
+    // before the public-ish code-confirmation gate runs).
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, businessId))) {
+      return FORBIDDEN("You do not have access to this business.");
+    }
     // Mandatory confirmation gate — the caller must echo the exact unit code.
     if (body.confirmCode !== biz.code) {
       return NextResponse.json(

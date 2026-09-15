@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { transactions, inventoryItems, salesDocuments, businesses, customers, customerTrackings } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { buildTrackingCode } from "@/lib/tracking";
 
 /**
@@ -51,6 +51,11 @@ export async function POST(request: NextRequest) {
         { success: false, error: "businessId and at least one cart item are required." },
         { status: 400 }
       );
+    }
+    // A sale deducts stock and posts revenue — only inside businesses the
+    // signed-in user can actually access.
+    if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     // ── 1. Validate every item against inventory ──────────────────────

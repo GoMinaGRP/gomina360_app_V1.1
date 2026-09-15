@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 
 /**
@@ -76,6 +76,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: orders, serials (with customer data), warranties and
+    // purchases stay inside the caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const [orders, serials, warranties, purchases] = await Promise.all([
       db.select().from(electronicsOrders).where(eq(electronicsOrders.businessId, businessId)),
       db.select().from(electronicsSerials).where(eq(electronicsSerials.businessId, businessId)),
@@ -104,6 +109,9 @@ export async function POST(request: NextRequest) {
     const businessId = Number(data?.businessId);
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const branchCode = data.branchCode || biz?.code || null;
@@ -338,6 +346,10 @@ export async function PATCH(request: NextRequest) {
         .select()
         .from(electronicsOrders)
         .where(eq(electronicsOrders.id, Number(id)));
+      if (!before) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(electronicsOrders)
         .set({
@@ -365,6 +377,9 @@ export async function PATCH(request: NextRequest) {
       if (!existing) {
         return NextResponse.json({ success: false, error: "Claim not found" }, { status: 404 });
       }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const newStatus = data?.status || existing.status;
       const [row] = await db
         .update(electronicsWarranties)
@@ -387,6 +402,14 @@ export async function PATCH(request: NextRequest) {
 
     // ── SERIAL status update ────────────────────────────────────────────
     if (entity === "SERIAL") {
+      const [serialBefore] = await db
+        .select()
+        .from(electronicsSerials)
+        .where(eq(electronicsSerials.id, Number(id)));
+      if (!serialBefore) return NextResponse.json({ success: false, error: "Serial not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, serialBefore.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(electronicsSerials)
         .set({

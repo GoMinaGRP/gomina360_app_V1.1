@@ -29,11 +29,11 @@ function sanitize(cam: any) {
   return { ...rest, hasCredentials: !!password };
 }
 
-/** OWNER => full; otherwise needs canManageCctv + business scope. Returns
- * null when allowed, or a NextResponse describing the denial. */
+/** Super Admin => full; org OWNER or canManageCctv + business scope (org-bound).
+ * Returns null when allowed, or a NextResponse describing the denial. */
 async function assertManage(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
-  if (!user.canManageCctv) {
+  if (user.isSuperAdmin) return null;
+  if (user.role !== "OWNER" && !user.canManageCctv) {
     return FORBIDDEN(
       "The OWNER has not granted you CCTV management. Ask the OWNER to enable it under Users & Access."
     );

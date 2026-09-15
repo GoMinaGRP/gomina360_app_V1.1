@@ -105,6 +105,13 @@ export const users = pgTable("users", {
   // and re-admission requires an explicit owner re-enable + password reset.
   // Null while access is ACTIVE or only temporarily DISABLED.
   accessRevokedAt: timestamp("access_revoked_at"),
+  // ── Multi-owner tenancy ──────────────────────────────────────────────
+  // Platform-level Super Admin (the Main Owner) — administers organizations
+  // and may read across them; normal org OWNERs never gain this flag.
+  isSuperAdmin: boolean("is_super_admin").default(false),
+  // The organization this user primarily operates in (organizations.id);
+  // membership rows in organization_members are authoritative.
+  primaryOrgId: integer("primary_org_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -143,6 +150,57 @@ export const userBusinessAccess = pgTable("user_business_access", {
 // Immutable audit trail of every shared-record deletion: WHO deleted WHAT,
 // WHEN (date + time) and WHY (mandatory reason), with a full snapshot of the
 // removed record so nothing is ever lost without trace.
+// 1b. Organizations (multi-owner tenancy root)
+// Each independent Owner gets exactly one organization; every business, user
+// and record of that Owner hangs off it. The platform Main Owner (Super
+// Admin) administers organizations themselves and can read across them.
+export const organizations = pgTable("organizations", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(), // reserved for future per-owner storefronts (/[slug])
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE' | 'SUSPENDED'
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  // Informational primary-owner pointer; organization_members is authoritative.
+  ownerUserId: integer("owner_user_id"),
+  createdByUserId: integer("created_by_user_id"),
+  // Allowed Business Types gate: when FALSE (default, all pre-existing orgs)
+  // the Owner may create every current and FUTURE business type. When TRUE,
+  // the organization_business_types allowlist is authoritative.
+  businessTypesRestricted: boolean("business_types_restricted").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// ─── Allowed Business Types per organization (Super-Admin-managed) ─────────
+// Which business categories ("Poultry Farm", "Block Factory", …) the Owner of
+// an organization is authorized to create and operate. Rows ONLY matter when
+// organizations.business_types_restricted = TRUE; an unrestricted org ignores
+// this list (so revoking a type can never brick existing businesses — it only
+// gates NEW creation, never access to units the Owner legitimately owns).
+export const organizationBusinessTypes = pgTable("organization_business_types", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  businessTypeKey: text("business_type_key").notNull(), // canonical key from src/lib/businessTypes.ts
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("organization_business_types_org_type_uq").on(t.organizationId, t.businessTypeKey),
+]);
+
+// user ↔ organization membership. A user normally belongs to exactly one
+// organization; is_primary marks the org they land in after login.
+export const organizationMembers = pgTable("organization_members", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  roleInOrg: text("role_in_org").notNull().default("MEMBER"), // 'OWNER' | 'MEMBER'
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("organization_members_org_user_uq").on(t.organizationId, t.userId),
+]);
+
 export const recordDeletionLogs = pgTable("record_deletion_logs", {
   id: serial("id").primaryKey(),
   module: text("module").notNull(), // 'TRANSACTIONS' | 'SUPPLIERS' | 'EMPLOYEES'
@@ -153,6 +211,7 @@ export const recordDeletionLogs = pgTable("record_deletion_logs", {
   deletedByUserId: integer("deleted_by_user_id"),
   deletedByName: text("deleted_by_name").notNull(),
   deletedByRole: text("deleted_by_role").notNull(),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id); backfilled per org
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -202,6 +261,8 @@ export const businesses = pgTable("businesses", {
   customerHelpPhone: text("customer_help_phone"), // "Need help? Call/WhatsApp …"
   momoNumber: text("momo_number"), // mobile-money number customers pay to
   momoName: text("momo_name"), // payee name shown beside the MoMo number
+  // Tenant scope: which organization (Owner) this business belongs to.
+  ownerId: integer("owner_id").references(() => organizations.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -258,6 +319,7 @@ export const pickupLocations = pgTable("pickup_locations", {
  *  and on group-level reports that span multiple businesses. */
 export const companySettings = pgTable("company_settings", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id"), // one settings row per organization
   companyLogo: text("company_logo"),
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
@@ -282,6 +344,7 @@ export const customerSupportInfo = pgTable("customer_support_info", {
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
+  organizationId: integer("organization_id"), // one support-info row per organization
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -316,7 +379,8 @@ export const customers = pgTable("customers", {
   town: text("town"),
   totalSpentGhs: doublePrecision("total_spent_ghs").default(0),
   loyaltyPoints: integer("loyalty_points").default(0),
-  businessId: integer("business_id"), // null if shared across multiple units
+  businessId: integer("business_id"), // null if shared across the Owner's units
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -334,6 +398,7 @@ export const suppliers = pgTable("suppliers", {
   district: text("district"),
   town: text("town"),
   totalSuppliedGhs: doublePrecision("total_supplied_ghs").default(0),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -459,6 +524,7 @@ export const assetAuditLogs = pgTable("asset_audit_logs", {
   approvedByUserId: integer("approved_by_user_id"),
   approvedByName: text("approved_by_name"),
   detailsJson: jsonb("details_json"),
+  ownerId: integer("owner_id"), // tenant scope (denormalized from the asset's business)
   createdAt: timestamp("created_at").defaultNow(),
   resolvedAt: timestamp("resolved_at"),
 });
@@ -515,6 +581,7 @@ export const inventoryDownloads = pgTable("inventory_downloads", {
   qrCodeData: text("qr_code_data"),
   qrCodePayload: jsonb("qr_code_payload"),
   status: text("status").notNull().default("COMPLETED"),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -534,6 +601,7 @@ export const universalExports = pgTable("universal_exports", {
   businessName: text("business_name"),
   branchCode: text("branch_code"),
   branchName: text("branch_name"),
+  ownerId: integer("owner_id"), // tenant scope
   filtersJson: jsonb("filters_json"),
   recordCount: integer("record_count").default(0),
   qrCodeData: text("qr_code_data"),
@@ -574,12 +642,15 @@ export const expenseCategories = pgTable("expense_categories", {
   id: serial("id").primaryKey(),
   businessId: integer("business_id").notNull(),
   branchCode: text("branch_code"),
-  name: text("name").notNull().unique(), // e.g. "Generator Diesel", "Egg Tray Restock"
+  name: text("name").notNull(), // e.g. "Generator Diesel", "Egg Tray Restock"
   icon: text("icon"), // emoji or icon name
   isActive: boolean("is_active").default(true),
   createdBy: text("created_by"),
+  ownerId: integer("owner_id"), // tenant scope — unique per Owner organization, not global
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("expense_categories_owner_name_uq").on(t.ownerId, t.name),
+]);
 
 // 9b. Sales Documents (Invoices, Quotations, Receipts)
 export const salesDocuments = pgTable("sales_documents", {
@@ -1560,6 +1631,7 @@ export const aiInsights = pgTable("ai_insights", {
   metricAffected: text("metric_affected").notNull(), // e.g. "Net Profit (+GH₵ 42,000)", "Breakage Rate (-4.5%)"
   projectedGainGhs: doublePrecision("projected_gain_ghs").default(0),
   status: text("status").default("NEW"), // 'NEW', 'ACTIONED', 'ARCHIVED'
+  ownerId: integer("owner_id"), // tenant scope; businessId null = this Owner's enterprise-wide
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1575,6 +1647,7 @@ export const scenarioSimulations = pgTable("scenario_simulations", {
   expectedProfitImpactGhs: doublePrecision("expected_profit_impact_ghs").notNull(),
   expectedRoiDelta: doublePrecision("expected_roi_delta").notNull(), // e.g. +3.4% or -1.8%
   createdBy: text("created_by").notNull(),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1587,6 +1660,7 @@ export const integrations = pgTable("integrations", {
   status: text("status").notNull(), // 'CONNECTED', 'READY_TO_CONNECT', 'OFFLINE_SYNCING'
   lastSync: text("last_sync").notNull(),
   configJson: jsonb("config_json"),
+  ownerId: integer("owner_id"), // tenant scope
 });
 
 // 19b. CCTV Security Cameras — organised Business → Branch → Cameras.
@@ -1757,6 +1831,7 @@ export const payrollStatutoryConfig = pgTable("payroll_statutory_config", {
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
+  organizationId: integer("organization_id"), // one config row per organization
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1904,6 +1979,7 @@ export const notifications = pgTable("notifications", {
   businessId: integer("business_id"),
   branchCode: text("branch_code"),
   actorName: text("actor_name"), // who triggered it
+  ownerId: integer("owner_id"), // tenant scope of the recipient
   isRead: boolean("is_read").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -1960,6 +2036,7 @@ export const auditTrail = pgTable("audit_trail", {
   branchCode: text("branch_code"),
   reason: text("reason"),
   detail: text("detail"),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1976,6 +2053,7 @@ export const assetDownloads = pgTable("asset_downloads", {
   recordCount: integer("record_count").notNull(),
   qrCodeData: text("qr_code_data").notNull(), // Base64 encoded QR code image
   qrCodePayload: jsonb("qr_code_payload"), // QR code content (download details)
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
   status: text("status").notNull().default("COMPLETED"), // 'COMPLETED' or 'APPROVED'
 });

@@ -12,6 +12,7 @@ import { db } from "@/db";
 import { businesses, auditIssueUpdates, auditReviews, auditTrail, notifications } from "@/db/schema";
 import { pushAfterBell } from "@/lib/push";
 import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];
 const normStatus = (s: string | null | undefined) => (s === "OPEN" ? "FLAGGED" : s || "INFO");
@@ -105,6 +106,7 @@ export async function POST(request: Request) {
       recordType: row.recordType, recordId: row.recordId,
       businessId: row.businessId, branchCode: row.branchCode,
       reason: row.reason, detail: `${from} → ${to}: ${note}`,
+      ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : (user.orgId ?? null),
     });
     const issueNotifType = action === "RESPOND" ? "AUDIT_ISSUE_RESPONSE" : "AUDIT_ISSUE_RESOLVED";
     const issueNotifTitle = `${action === "RESPOND" ? "Response ready for review" : "Marked resolved"}: ${row.issueTitle || row.recordRef}`;
@@ -115,6 +117,7 @@ export async function POST(request: Request) {
       body: note.slice(0, 600),
       issueId: row.id, recordType: row.recordType, recordId: row.recordId, recordRef: row.recordRef,
       businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+      ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : (user.orgId ?? null),
     });
     pushAfterBell([Number(row.reviewerUserId)], {
       type: issueNotifType,

@@ -16,10 +16,12 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { pushAfterBell, urlForNotification } from "@/lib/push";
 import {
+  businesses,
   customerTrackings,
   electronicsPurchases,
   hardwarePurchases,
   notifications,
+  organizationMembers,
   restaurantPurchases,
   userBusinessAccess,
   users,
@@ -33,30 +35,52 @@ function round2(n: number) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+/** The organization (tenant) that owns a business. */
+export async function ownerOrgOfBusiness(businessId: number): Promise<number | null> {
+  const [b] = await db
+    .select({ ownerId: businesses.ownerId })
+    .from(businesses)
+    .where(eq(businesses.id, Number(businessId)));
+  return b?.ownerId != null ? Number(b.ownerId) : null;
+}
+
 /**
  * All users who must see events for `businessId` in their bell:
- * the OWNER + assigned staff + user_business_access grantees.
+ * the business's organization OWNER(s) + assigned staff +
+ * user_business_access grantees — strictly members of the business's own
+ * organization. A notification can never cross to another Owner's users.
  */
 export async function orderNotificationRecipients(businessId: number) {
-  const [staff, grants] = await Promise.all([
-    db
-      .select({
-        id: users.id,
-        name: users.name,
-        role: users.role,
-        assignedBusinessId: users.assignedBusinessId,
-        isActive: users.isActive,
-      })
-      .from(users),
+  const orgId = await ownerOrgOfBusiness(businessId);
+  const memberRows = orgId
+    ? await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(eq(organizationMembers.organizationId, orgId))
+    : [];
+  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
+  const [staffAll, grants] = await Promise.all([
+    memberIds.size
+      ? db
+          .select({
+            id: users.id,
+            name: users.name,
+            role: users.role,
+            assignedBusinessId: users.assignedBusinessId,
+            isActive: users.isActive,
+          })
+          .from(users)
+      : Promise.resolve([]),
     db
       .select({ userId: userBusinessAccess.userId })
       .from(userBusinessAccess)
       .where(eq(userBusinessAccess.businessId, Number(businessId))),
   ]);
   const granted = new Set(grants.map((g: { userId: number }) => Number(g.userId)));
-  return staff.filter(
+  return staffAll.filter(
     (u) =>
       u.isActive !== false &&
+      memberIds.has(Number(u.id)) &&
       (u.role === "OWNER" ||
         Number(u.assignedBusinessId) === Number(businessId) ||
         granted.has(Number(u.id))),
@@ -84,6 +108,7 @@ async function fanOut(
 ): Promise<number> {
   let sent = 0;
   const pushedIds: number[] = [];
+  const ownerId = (row as any).ownerId ?? (await ownerOrgOfBusiness(Number(row.businessId)));
   for (const u of recipients) {
     const dupes = await db
       .select({ id: notifications.id })
@@ -108,6 +133,7 @@ async function fanOut(
       businessId: row.businessId,
       branchCode: row.branchCode ?? null,
       actorName: row.actorName ?? null,
+      ownerId: ownerId ?? null,
     });
     sent++;
     pushedIds.push(Number(u.id));

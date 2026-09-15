@@ -22,6 +22,7 @@ import WorkerDashboard from "./WorkerDashboard";
 import BranchManagerWorkerPanel from "./BranchManagerWorkerPanel";
 import BranchManagerSalesView from "./BranchManagerSalesView";
 import EnterpriseUserPanel from "./EnterpriseUserPanel";
+import PlatformAdminPanel from "./PlatformAdminPanel";
 import EnterpriseFinanceView from "./EnterpriseFinanceView";
 import AuditCommandCenter from "./AuditCommandCenter";
 import NotificationBell from "./NotificationBell";
@@ -110,6 +111,18 @@ export default function GoMinaApp() {
   const [isChangePwOpen, setIsChangePwOpen] = useState(false);
   // Self-service profile photo (account menu → My Profile Photo).
   const [isProfilePhotoOpen, setIsProfilePhotoOpen] = useState(false);
+  // Allowed Business Types of the caller's organization (Super-Admin-managed
+  // in the platform console): the create-modal and the category editor only
+  // ever offer these. restricted=false ⇒ every (current & future) type.
+  const [bizTypeAccess, setBizTypeAccess] = useState<{
+    restricted: boolean;
+    types: { key: string; label: string }[];
+  } | null>(null);
+  // Super Admin platform org directory ({id,name,slug,status}) — labels &
+  // filters for the cross-owner "Manage Businesses & Branches" view.
+  const [orgDirectory, setOrgDirectory] = useState<
+    { id: number; name: string; slug: string; status: string }[]
+  >([]);
   // Secure-session state (declared with the other UI state so the data
   // refresh callback below can safely bounce a dead session to sign-in).
   const [signedIn, setSignedIn] = useState(false);
@@ -158,6 +171,9 @@ export default function GoMinaApp() {
         });
         setCustomers(data.customers || []);
         setCreditSales(data.creditSales || []);
+        // Per-Owner Allowed Business Types + (Super Admin) org directory.
+        setBizTypeAccess(data.allowedBusinessTypes || null);
+        setOrgDirectory(Array.isArray(data.organizations) ? data.organizations : []);
         setSuppliers(data.suppliers || []);
         setEmployees(data.employees || []);
         setAssets(data.assets || []);
@@ -753,6 +769,11 @@ export default function GoMinaApp() {
       );
     }
 
+    // SUPER ADMIN ONLY: Platform Owners & Organizations console
+    if (activeTab === "PLATFORM_ADMIN") {
+      return <PlatformAdminPanel currentUser={currentUser} />;
+    }
+
     if (activeTab === "COMMAND_CENTER") {
       return (
         <CommandCenterDashboard
@@ -1342,6 +1363,7 @@ export default function GoMinaApp() {
         isOpen={isNewBusinessModalOpen}
         onClose={() => setIsNewBusinessModalOpen(false)}
         actorUserId={currentUser?.id ?? null}
+        allowedTypes={bizTypeAccess}
         onBusinessCreated={async (biz?: any) => {
           await refreshAllData();
           if (biz?.code) setActiveTab(biz.code as ActiveTab);
@@ -1398,6 +1420,8 @@ export default function GoMinaApp() {
         onClose={() => setIsManageBizOpen(false)}
         businesses={businesses}
         currentUser={currentUser}
+        allowedTypes={bizTypeAccess}
+        organizations={orgDirectory}
         initialOnlineBizId={manageBizOnlineId}
         onChanged={refreshAllData}
         onAddNew={() => setIsNewBusinessModalOpen(true)}

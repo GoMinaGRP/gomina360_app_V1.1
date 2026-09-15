@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { aiInsights } from "@/db/schema";
 import { desc } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 import { computeScenarioBaseline } from "@/lib/scenarioEngine";
 
 export async function GET(request: Request) {
@@ -10,7 +11,13 @@ export async function GET(request: Request) {
   const session = await getSessionInfo(request);
   if (!session) return UNAUTHENTICATED();
   try {
-    const rows = await db.select().from(aiInsights).orderBy(desc(aiInsights.id));
+    let rows = await db.select().from(aiInsights).orderBy(desc(aiInsights.id));
+    // Tenant boundary: normal users see only their own organization's
+    // insights; the Super Admin sees everything (D4 platform visibility).
+    if (!session.user.isSuperAdmin) {
+      const myOrgs = new Set(session.user.organizationIds || []);
+      rows = rows.filter((r: any) => r.ownerId != null && myOrgs.has(Number(r.ownerId)));
+    }
     return NextResponse.json({ success: true, insights: rows });
   } catch (error: any) {
     return NextResponse.json(
@@ -27,11 +34,25 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { prompt, targetBusinessId } = body;
 
+    // The AI advisor is an executive console: OWNER / GENERAL_MANAGER only,
+    // and a targeted analysis must target a reachable business (tenant boundary).
+    const advisorRole = __authSession.user.role;
+    if (!__authSession.user.isSuperAdmin && advisorRole !== "OWNER" && advisorRole !== "GENERAL_MANAGER") {
+      return FORBIDDEN("The AI Advisor is reserved for the OWNER and GENERAL_MANAGER.");
+    }
+    if (targetBusinessId && !(await canAccessBusiness(__authSession.user, Number(targetBusinessId)))) {
+      return FORBIDDEN("That business belongs to a different organization.");
+    }
+
     // Real baseline of the queried scope — the canned multi-thousand
     // "projected gains" used to be invented constants; now every figure
     // derives from the unit's (or the enterprise's) quarterly books plus the
-    // live ledger, via the shared scenario engine.
-    const baseline = await computeScenarioBaseline(targetBusinessId ? Number(targetBusinessId) : null);
+    // live ledger, via the shared scenario engine. An untargeted query scans
+    // only the caller's reachable scope (Super Admin ⇒ whole platform).
+    const advisorScope = targetBusinessId
+      ? Number(targetBusinessId)
+      : ((await accessibleBusinessIds(__authSession.user)) ?? null);
+    const baseline = await computeScenarioBaseline(advisorScope);
     const money = (n: number) => `GH₵ ${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
 
     // Intelligent AI Decision Advisor logic tailored for Ghanaian business dynamics
@@ -108,6 +129,9 @@ export async function POST(request: Request) {
         recommendation: generatedRecommendation,
         metricAffected: generatedMetric,
         projectedGainGhs: projectedGain,
+        ownerId: targetBusinessId
+          ? (await ownerOrgOfBusiness(Number(targetBusinessId)))
+          : (__authSession.orgId ?? null),
         status: "NEW",
       })
       .returning();

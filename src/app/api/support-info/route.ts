@@ -32,12 +32,17 @@ function clean(value: any, max: number): string | null {
   return s === "" ? null : s;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    // Centralized marketplace ⇒ organization #1 (GoMina Group) runs platform
+    // support. ?org=<id> resolves a specific Owner's support row (reserved
+    // for future per-owner storefronts / org-scoped HELP panels).
+    const orgParam = new URL(request.url).searchParams.get("org");
+    const orgId = orgParam ? Number(orgParam) : 1;
     const [row] = await db
       .select()
       .from(customerSupportInfo)
-      .where(eq(customerSupportInfo.id, 1));
+      .where(eq(customerSupportInfo.organizationId, orgId));
     return NextResponse.json(
       {
         success: true,
@@ -99,21 +104,23 @@ export async function POST(request: Request) {
       );
     }
 
+    // Each organization edits its OWN support row.
+    const orgId = session.orgId ?? 1;
     const [existing] = await db
       .select({ id: customerSupportInfo.id })
       .from(customerSupportInfo)
-      .where(eq(customerSupportInfo.id, 1));
+      .where(eq(customerSupportInfo.organizationId, orgId));
     let row;
     if (existing) {
       [row] = await db
         .update(customerSupportInfo)
         .set(values)
-        .where(eq(customerSupportInfo.id, 1))
+        .where(eq(customerSupportInfo.organizationId, orgId))
         .returning();
     } else {
       [row] = await db
         .insert(customerSupportInfo)
-        .values({ id: 1, ...values })
+        .values({ organizationId: orgId, ...values })
         .returning();
     }
 

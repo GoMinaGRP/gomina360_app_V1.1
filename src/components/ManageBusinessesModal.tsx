@@ -88,6 +88,19 @@ const STATUS_STYLE: Record<string, string> = {
   INACTIVE: "bg-rose-500/15 text-rose-300 border-rose-500/40",
 };
 
+/** Category label → canonical business-type key (mirrors src/lib/businessTypes.ts). */
+const CATEGORY_KEY: Record<string, string> = {
+  "Poultry Farm": "POULTRY_FARM",
+  "Block Factory": "BLOCK_FACTORY",
+  Aquaculture: "AQUACULTURE",
+  Livestock: "LIVESTOCK",
+  "Restaurant & Food": "RESTAURANT_FOOD",
+  "Electronic Shop": "ELECTRONIC_SHOP",
+  "Car Wash": "CAR_WASH",
+  "Hardware Store": "HARDWARE_STORE",
+  "Telecom & Digital Services": "TELECOM_DIGITAL",
+};
+
 interface ManageBusinessesModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -98,6 +111,12 @@ interface ManageBusinessesModalProps {
   onDeleted?: (code: string) => void;
   /** Deep-link straight into a unit's Online Ordering panel (navbar entry). */
   initialOnlineBizId?: number | null;
+  /** Per-Owner Allowed Business Types from /api/init — drives the allowed
+   *  set offered when re-typing a unit. null / restricted=false ⇒ all. */
+  allowedTypes?: { restricted: boolean; types: { key: string; label: string }[] } | null;
+  /** Super Admin only: organization directory from /api/init — powers the
+   *  per-branch Owner/Org identity chip plus the org filter in this view. */
+  organizations?: { id: number; name: string; slug: string; status: string }[];
 }
 
 type Mode = "list" | "edit" | "delete" | "reset" | "logos" | "online";
@@ -111,8 +130,11 @@ export default function ManageBusinessesModal({
   onAddNew,
   onDeleted,
   initialOnlineBizId = null,
+  allowedTypes = null,
+  organizations = [],
 }: ManageBusinessesModalProps) {
   const isOwner = currentUser?.role === "OWNER";
+  const isSuperAdmin = !!currentUser?.isSuperAdmin;
   // OWNER-delegated "Manage Unit" grants: owner-equivalent management controls
   // (Edit, Business Type, service/ordering settings, Reset) — strictly for the
   // granted units. Deactivate & Delete stay OWNER-only.
@@ -159,6 +181,27 @@ export default function ManageBusinessesModal({
   const [deleteCounts, setDeleteCounts] = useState<any | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
+  // ── Super Admin cross-owner view: Owner/Org identity + filter ───────────
+  const orgNameOf = (orgId: any) =>
+    organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
+    (orgId ? `Organization #${orgId}` : "Unassigned");
+  const [orgFilter, setOrgFilter] = useState<string>("ALL");
+  const scopedBusinesses = useMemo(() => {
+    if (!isSuperAdmin || orgFilter === "ALL") return businesses;
+    return businesses.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+  }, [businesses, isSuperAdmin, orgFilter]);
+
+  // Category re-type options: restricted orgs are offered ONLY their granted
+  // types (the current category always stays selectable — it's what the unit
+  // already is). The server refuses anything else, so nothing is bypassable.
+  const categoryOptionsForEdit = (currentCat: string) => {
+    const allowedKeys = new Set((allowedTypes?.types || []).map((t) => t.key));
+    if (!allowedTypes || !allowedTypes.restricted) return CATEGORIES;
+    return CATEGORIES.filter(
+      (c) => allowedKeys.has(CATEGORY_KEY[c] || "") || c === currentCat
+    );
+  };
+
   // Reset-confirmation state
   const [resetCounts, setResetCounts] = useState<any | null>(null);
   const [resetMasters, setResetMasters] = useState(false);
@@ -171,8 +214,8 @@ export default function ManageBusinessesModal({
   const [branchLogoFile, setBranchLogoFile] = useState<string | null>(null);
 
   const sorted = useMemo(
-    () => [...businesses].sort((a, b) => a.id - b.id),
-    [businesses]
+    () => [...scopedBusinesses].sort((a, b) => a.id - b.id),
+    [scopedBusinesses]
   );
 
   useEffect(() => {
@@ -875,11 +918,32 @@ export default function ManageBusinessesModal({
           {/* ============ LIST MODE ============ */}
           {mode === "list" && (
             <>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="text-xs text-slate-400">
                   <span className="font-black text-white">{sorted.length}</span> enterprise units
                   under management
+                  {isSuperAdmin && organizations.length > 0 && (
+                    <span className="ml-1.5 text-slate-500">
+                      · every owner's scope
+                    </span>
+                  )}
                 </div>
+                {isSuperAdmin && organizations.length > 0 && (
+                  <select
+                    data-testid="org-filter-select"
+                    value={orgFilter}
+                    onChange={(e) => setOrgFilter(e.target.value)}
+                    title="Filter branches by owning Owner / Organization"
+                    className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
+                  >
+                    <option value="ALL">All Owners / Orgs</option>
+                    {organizations.map((o) => (
+                      <option key={o.id} value={String(o.id)}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 {isOwner && (
                   <button
                     onClick={() => {
@@ -931,6 +995,19 @@ export default function ManageBusinessesModal({
                               <span className="text-[10px] font-black bg-slate-700/70 text-slate-300 px-1.5 py-0.5 rounded border border-slate-600">
                                 {biz.code}
                               </span>
+                              {isSuperAdmin && (
+                                <span
+                                  data-testid={`manage-biz-org-${biz.code}`}
+                                  title="Owning Owner / Organization"
+                                  className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                                    Number(biz.ownerId) === 1
+                                      ? "bg-violet-500/15 text-violet-300 border-violet-500/40"
+                                      : "bg-sky-500/15 text-sky-300 border-sky-500/40"
+                                  }`}
+                                >
+                                  {orgNameOf(biz.ownerId)}
+                                </span>
+                              )}
                               <span
                                 data-testid={`manage-status-${biz.code}`}
                                 className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
@@ -1782,12 +1859,18 @@ export default function ManageBusinessesModal({
                     data-testid="manage-biz-category"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                   >
-                    {CATEGORIES.map((c) => (
+                    {categoryOptionsForEdit(selected.category).map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
                     ))}
                   </select>
+                  {allowedTypes?.restricted && (
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Your Super-Admin-granted types only. To convert this unit to another
+                      type, ask the platform Super Admin to grant it.
+                    </p>
+                  )}
                   {category !== selected.category && (
                     <p className="text-[10px] text-amber-300 mt-1">
                       Type change: this unit will mount the {category} module; new-type starter

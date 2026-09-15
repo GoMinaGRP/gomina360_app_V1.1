@@ -696,6 +696,24 @@ export default function Sidebar({
                 <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">HQ</span>
               </button>
             )}
+
+            {/* SUPER ADMIN ONLY — Platform Owner/Organization lifecycle console */}
+            {!!currentUser?.isSuperAdmin && (
+              <button
+                onClick={() => selectTab("PLATFORM_ADMIN")}
+                className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                  activeTab === "PLATFORM_ADMIN"
+                    ? "bg-fuchsia-500/15 text-fuchsia-300 font-bold border-l-2 border-fuchsia-400"
+                    : "hover:bg-slate-800/70 text-slate-300"
+                }`}
+              >
+                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                  <Building2 className="w-4 h-4 text-fuchsia-300" />
+                  <span>Platform Owners</span>
+                </div>
+                <span className="hidden sm:inline text-[9px] bg-fuchsia-500/20 text-fuchsia-200 px-1 py-0.5 rounded font-bold border border-fuchsia-500/30">PLATFORM</span>
+              </button>
+            )}
           </div>
         </div>
       )}
