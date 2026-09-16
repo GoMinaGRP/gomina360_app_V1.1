@@ -298,3 +298,40 @@ Per-Owner control of which business *types* each organization may operate, manag
 - **Super-Admin "Manage Businesses & Branches":** with "All Owners / Orgs" the list is grouped — `YOUR BUSINESSES — GoMina Group (Main Owner)` first, then `OWNED BY <ORG NAME>` sections; every row keeps an Owner/Org chip, shows the business crest (logo) when one exists, plus per-Owner and per-business-type filter dropdowns. Normal Owners never receive the cross-owner directory.
 - **Login:** DELETED workspaces are hard-blocked (403) alongside SUSPENDED, with a distinct message.
 - **Tests:** multiowner-verify Section 9 (+25 checks; total 118/118 green): suspend→login-block + zero data loss; reactivate→identity of businesses/customers/type-grants; delete→typed-confirm, no self-delete, no org-1 delete, sessions killed, marketplace removal, data preserved (Super-Admin view + org-context customers); restore→accounts reactivated with all settings; UI integrity (directory only for Super Admin, ownerId stamps).
+
+## 13. Addendum — Organization Lens (delivered)
+
+The Super Admin's intentional "whose data am I looking at" context —
+sidebar selector with three modes:
+
+- **My Workspace** (default, the normal operational view): everything is
+  scoped to the Main Owner's own organization (#1) — businesses, metrics,
+  customers, inventory, transactions, staff, specialized logs — exactly as
+  any Owner sees their own workspace.
+- **All Organizations** (platform-wide oversight): the full payload remains
+  (Super Admin data never disappears), but every interface becomes
+  organization-aware — the sidebar groups businesses as
+  `YOUR BUSINESSES — GoMina Group (MAIN OWNER)` first and
+  `OWNED BY <ORG NAME>` per Owner (org crest when available, status chips,
+  unit counts); the Command Center shows per-organization financial rollup
+  cards (units, revenue, expenses, net profit) above the platform totals,
+  explicitly labeled as combining every Owner.
+- **One Owner/Organization**: focused single-org view with the same
+  labeling, header lens chip, and automatic Command-Center return when an
+  open dashboard leaves the focused org.
+
+Business dashboards themselves carry an org-identity banner (crest, owning
+Organization, MAIN-OWNER vs another Owner). Organization grouping per row
+is basis testable via data-testids (`org-lens-select`,
+`sidebar-org-group-<orgId>`, `org-identity-banner-<code>`,
+`org-rollup-grid`, `lens-banner`).
+
+Scope is computed CLIENT-SIDE over the already-fetched payload
+(`ownerId` → businesses; `businessId` lookups for linked records) — the
+server contract never changes, tenant isolation is untouched, and normal
+Owners' views are byte-identical (verified: no directory, no flags, org-1
+scoped payloads). Shared pure logic lives in `src/lib/orgGrouping.ts`
+(grouping + rollups; mirrored by `dev-tooling/lens-verify.mjs`, 15 checks).
+
+Verification: multiowner-verify 118/118, phase0 authz 63/63, security
+23/23, lens-verify 15/15 (multi-org), `tsc --noEmit` src-clean.

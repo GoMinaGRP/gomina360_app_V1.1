@@ -123,6 +123,85 @@ export default function GoMinaApp() {
   const [orgDirectory, setOrgDirectory] = useState<
     { id: number; name: string; slug: string; status: string }[]
   >([]);
+  // ── Organization Lens (SUPER ADMIN ONLY) ─────────────────────────────
+  // The intentional "whose data am I looking at" context:
+  //   "MY"   → the Main Owner's own workspace (org 1) — the NORMAL
+  //             operational view (default; looks exactly like any Owner's).
+  //   "ALL"  → platform-wide oversight: every org fused, with per-org
+  //             rollups & grouped business lists.
+  //   "<id>" → a single Owner/Organization.
+  // Normal Owners never see the lens and their views are byte-identical.
+  const [orgLens, setOrgLens] = useState<string>("MY");
+  const isSuperAdminUser = !!currentUser?.isSuperAdmin;
+  const lensOrgId: number | null = !isSuperAdminUser
+    ? null
+    : orgLens === "ALL"
+      ? null
+      : orgLens === "MY"
+        ? 1
+        : Number(orgLens);
+  // Everything is scoped client-side over the already-loaded payload (the
+  // server contract — Super Admin ⇒ full payload — never changes).
+  const bizOwnerOf = useMemo(
+    () => new Map(businesses.map((b: any) => [Number(b.id), Number(b?.ownerId ?? 1)])),
+    [businesses]
+  );
+  const lensScope = useMemo(
+    () => (rows: any[]) => {
+      if (lensOrgId == null) return rows;
+      return rows.filter((r: any) => {
+        if (r?.ownerId != null) return Number(r.ownerId) === lensOrgId;
+        if (r?.businessId != null) return (bizOwnerOf.get(Number(r.businessId)) ?? 1) === lensOrgId;
+        return true; // org-agnostic row (settings etc.)
+      });
+    },
+    [lensOrgId, bizOwnerOf]
+  );
+  const scopedBusinesses = useMemo(() => lensScope(businesses), [lensScope, businesses]);
+  const scopedMetrics = useMemo(() => lensScope(metrics), [lensScope, metrics]);
+  const scopedCustomers = useMemo(() => lensScope(customers), [lensScope, customers]);
+  const scopedCreditSales = useMemo(() => lensScope(creditSales), [lensScope, creditSales]);
+  const scopedSuppliers = useMemo(() => lensScope(suppliers), [lensScope, suppliers]);
+  const scopedEmployees = useMemo(() => lensScope(employees), [lensScope, employees]);
+  const scopedAssets = useMemo(() => lensScope(assets), [lensScope, assets]);
+  const scopedInventory = useMemo(() => lensScope(inventory), [lensScope, inventory]);
+  const scopedTransactions = useMemo(() => lensScope(transactions), [lensScope, transactions]);
+  const scopedAiInsights = useMemo(() => lensScope(aiInsights), [lensScope, aiInsights]);
+  const scopedScenarios = useMemo(() => lensScope(scenarios), [lensScope, scenarios]);
+  const scopedIntegrations = useMemo(() => lensScope(integrations), [lensScope, integrations]);
+  const scopedUsers = useMemo(
+    () =>
+      lensOrgId == null
+        ? usersList
+        : usersList.filter(
+            (u: any) =>
+              Number(u?.primaryOrgId ?? 1) === lensOrgId ||
+              (Array.isArray(u?.organizationIds) && u.organizationIds.map(Number).includes(lensOrgId))
+          ),
+    [usersList, lensOrgId]
+  );
+  const scopedChecklistData = useMemo(
+    () => ({ templates: lensScope(checklistData.templates || []), entries: lensScope(checklistData.entries || []) }),
+    [lensScope, checklistData]
+  );
+  const scopedSpecializedLogs = useMemo(
+    () => Object.fromEntries(Object.entries(specializedLogs).map(([k, v]) => [k, lensScope(v as any[])])),
+    [lensScope, specializedLogs]
+  );
+  const activeLensOrgName =
+    orgLens === "MY"
+      ? orgDirectory.find((o) => Number(o.id) === 1)?.name || "GoMina Group"
+      : orgLens === "ALL"
+        ? "All Organizations"
+        : orgDirectory.find((o) => Number(o.id) === Number(orgLens))?.name || `Organization #${orgLens}`;
+  // Switching the lens while a now-hidden business dashboard is open:
+  // return to the Command Center of the new scope.
+  useEffect(() => {
+    if (!isSuperAdminUser) return;
+    if (activeTab === "COMMAND_CENTER") return;
+    if (!scopedBusinesses.some((b: any) => b?.code === activeTab)) setActiveTab("COMMAND_CENTER");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lensOrgId, scopedBusinesses, isSuperAdminUser]);
   // Secure-session state (declared with the other UI state so the data
   // refresh callback below can safely bounce a dead session to sign-in).
   const [signedIn, setSignedIn] = useState(false);
@@ -371,7 +450,7 @@ export default function GoMinaApp() {
 
     // Sum current asset value grouped by businessId
     const assetValueByBiz: Record<number, number> = {};
-    for (const a of assets) {
+    for (const a of scopedAssets) {
       const bid = a.businessId;
       if (bid === undefined || bid === null) continue;
       assetValueByBiz[bid] = (assetValueByBiz[bid] || 0) + (a.currentValueGhs || 0);
@@ -380,8 +459,8 @@ export default function GoMinaApp() {
     // Units created after the quarterly close have no business_metrics row:
     // synthesise an honest zero baseline so their live transactions still
     // layer onto dashboards like every other unit.
-    const metricRows: any[] = metrics.slice();
-    for (const b of businesses || []) {
+    const metricRows: any[] = scopedMetrics.slice();
+    for (const b of scopedBusinesses || []) {
       if (b?.id == null) continue;
       if (!metricRows.some((m) => m.businessId === b.id)) {
         metricRows.push({
@@ -407,7 +486,7 @@ export default function GoMinaApp() {
 
       // Overlay = every live transaction (id above the seeded watermark),
       // not only the ones recorded inside this browser session.
-      const newTx = transactions.filter(
+      const newTx = scopedTransactions.filter(
         (t) => t.businessId === m.businessId && (t.id || 0) > baseId && !isSeededBaselineTxn(t)
       );
       const income = newTx
@@ -439,7 +518,7 @@ export default function GoMinaApp() {
         baselineTxId: baseId,
       };
     });
-  }, [metrics, transactions, assets, businesses]);
+  }, [scopedMetrics, scopedTransactions, scopedAssets, scopedBusinesses]);
 
   // Reset to a role-appropriate landing tab whenever the active user changes.
   // Prevents a lower-privilege user from inheriting an executive tab (data leak).
@@ -549,7 +628,7 @@ export default function GoMinaApp() {
       return (
         <AuditCommandCenter
           currentUser={currentUser}
-          businesses={businesses}
+          businesses={scopedBusinesses}
           focusIssueId={auditFocusIssue}
           onFocusHandled={() => setAuditFocusIssue(null)}
         />
@@ -561,8 +640,8 @@ export default function GoMinaApp() {
     // customer, view branch inventory, my activity) live inside WorkerDashboard,
     // which is strictly scoped to the worker's own branch — no enterprise data.
     if (currentUser?.role === "WORKER") {
-      const bizCode = businesses.find((b) => b.id === currentUser?.assignedBusinessId)?.code;
-      const bizInfo = businesses.find((b) => b.id === currentUser?.assignedBusinessId);
+      const bizCode = scopedBusinesses.find((b) => b.id === currentUser?.assignedBusinessId)?.code;
+      const bizInfo = scopedBusinesses.find((b) => b.id === currentUser?.assignedBusinessId);
       const bizMetric = liveMetrics.find((m) => m.businessId === bizInfo?.id);
 
       // Operations logs of the worker's OWN branch only — prefix-based so any
@@ -586,9 +665,9 @@ export default function GoMinaApp() {
           businessInfo={bizInfo}
           businessMetrics={bizMetric}
           specializedLogs={logs}
-          inventory={inventory}
-          customers={customers}
-          transactions={transactions}
+          inventory={scopedInventory}
+          customers={scopedCustomers}
+          transactions={scopedTransactions}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
           onRefreshData={refreshAllData}
@@ -599,7 +678,7 @@ export default function GoMinaApp() {
     // BRANCH_MANAGER: strictly scoped to their own branch. Any attempt to reach an
     // executive/enterprise tab falls back to their branch Sales & Payments center.
     if (isBranchManager) {
-      const ownBranch = businesses.find((b) => b.id === currentUser?.assignedBusinessId);
+      const ownBranch = scopedBusinesses.find((b) => b.id === currentUser?.assignedBusinessId);
       const allowed = new Set<string>([
         "BRANCH_SALES",
         "WORKERS_MANAGE",
@@ -613,7 +692,7 @@ export default function GoMinaApp() {
       // OWNER-granted branch dashboards ("Extra business access"): every code
       // inside the server-scoped business list is a dashboard this manager may
       // open — the data itself stays scoped to those same branches.
-      for (const b of businesses) if (b?.code) allowed.add(b.code);
+      for (const b of scopedBusinesses) if (b?.code) allowed.add(b.code);
       if (!allowed.has(activeTab)) {
         const bizMetric = liveMetrics.find((m) => m.businessId === ownBranch?.id);
         return (
@@ -621,10 +700,10 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={ownBranch}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            transactions={transactions}
-            businesses={businesses}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            businesses={scopedBusinesses}
             metrics={liveMetrics}
             currentCurrency={currentCurrency}
             isOnline={isOnline}
@@ -639,13 +718,13 @@ export default function GoMinaApp() {
       return (
         <BranchManagerSalesView
           currentUser={currentUser}
-          businessInfo={businesses[0]}
+          businessInfo={scopedBusinesses[0]}
           businessMetrics={undefined}
-          inventory={inventory}
-          customers={customers}
-          creditSales={creditSales}
-          transactions={transactions}
-          businesses={businesses}
+          inventory={scopedInventory}
+          customers={scopedCustomers}
+          creditSales={scopedCreditSales}
+          transactions={scopedTransactions}
+          businesses={scopedBusinesses}
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
@@ -705,13 +784,13 @@ export default function GoMinaApp() {
       return (
         <SharedEnterpriseModule
           moduleType="ASSETS"
-          customers={customers}
-          suppliers={suppliers}
-          employees={employees}
-          assets={assets}
-          inventory={inventory}
-          transactions={transactions}
-          businesses={businesses}
+          customers={scopedCustomers}
+          suppliers={scopedSuppliers}
+          employees={scopedEmployees}
+          assets={scopedAssets}
+          inventory={scopedInventory}
+          transactions={scopedTransactions}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
           onRefreshData={refreshAllData}
@@ -724,7 +803,7 @@ export default function GoMinaApp() {
     // BRANCH_MANAGER: Worker Management panel. Delegated managers also get the
     // entry point to the full Users & Access console from here.
     if (activeTab === "WORKERS_MANAGE") {
-      const bizInfo = businesses.find((b) => b.id === currentUser?.assignedBusinessId);
+      const bizInfo = scopedBusinesses.find((b) => b.id === currentUser?.assignedBusinessId);
       return (
         <BranchManagerWorkerPanel
           currentUser={currentUser}
@@ -737,18 +816,18 @@ export default function GoMinaApp() {
 
     // BRANCH_MANAGER: Sales & Payments Center
     if (activeTab === "BRANCH_SALES") {
-      const bizInfo = businesses.find((b) => b.id === currentUser?.assignedBusinessId);
+      const bizInfo = scopedBusinesses.find((b) => b.id === currentUser?.assignedBusinessId);
       const bizMetric = liveMetrics.find((m) => m.businessId === bizInfo?.id);
       return (
         <BranchManagerSalesView
           currentUser={currentUser}
           businessInfo={bizInfo}
           businessMetrics={bizMetric}
-          inventory={inventory}
-          customers={customers}
-          creditSales={creditSales}
-          transactions={transactions}
-          businesses={businesses}
+          inventory={scopedInventory}
+          customers={scopedCustomers}
+          creditSales={scopedCreditSales}
+          transactions={scopedTransactions}
+          businesses={scopedBusinesses}
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
@@ -762,8 +841,8 @@ export default function GoMinaApp() {
       return (
         <EnterpriseUserPanel
           currentUser={currentUser}
-          usersList={usersList}
-          businesses={businesses}
+          usersList={scopedUsers}
+          businesses={scopedBusinesses}
           onRefreshData={refreshAllData}
         />
       );
@@ -777,11 +856,15 @@ export default function GoMinaApp() {
     if (activeTab === "COMMAND_CENTER") {
       return (
         <CommandCenterDashboard
-          businesses={businesses}
+          businesses={scopedBusinesses}
           metrics={liveMetrics}
-          transactions={transactions}
-          inventory={inventory}
+          transactions={scopedTransactions}
+          inventory={scopedInventory}
           currentCurrency={currentCurrency}
+          currentUser={currentUser}
+          organizations={orgDirectory}
+          orgLens={orgLens}
+          lensOrgName={activeLensOrgName}
           onSelectTab={setActiveTab}
           onOpenNewBusinessModal={() => setIsNewBusinessModalOpen(true)}
           onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
@@ -803,7 +886,7 @@ export default function GoMinaApp() {
           // any user carrying the OWNER's canManageSupport grant.
           onOpenSupportInfo={() => setIsSupportOpen(true)}
           canManageSupportInfo={currentUser?.role === "OWNER" || !!currentUser?.canManageSupport}
-          checklists={checklistData}
+          checklists={scopedChecklistData}
         />
       );
     }
@@ -826,7 +909,7 @@ export default function GoMinaApp() {
       "Telecom & Digital Services": "TELECOM",
     };
     const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM"];
-    const tabBiz = businesses.find((b) => b.code === activeTab);
+    const tabBiz = scopedBusinesses.find((b) => b.code === activeTab);
     if (tabBiz) {
       const bizInfo = tabBiz;
       const bizMetric = liveMetrics.find((m) => m.businessId === bizInfo?.id);
@@ -842,12 +925,12 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
-            businesses={businesses}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
+            businesses={scopedBusinesses}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -861,10 +944,10 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -878,12 +961,12 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            suppliers={suppliers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            suppliers={scopedSuppliers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -897,12 +980,12 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            suppliers={suppliers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            suppliers={scopedSuppliers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -916,10 +999,10 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -935,12 +1018,12 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            suppliers={suppliers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            suppliers={scopedSuppliers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -958,11 +1041,11 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -979,11 +1062,11 @@ export default function GoMinaApp() {
             currentUser={currentUser}
             businessInfo={bizInfo}
             businessMetrics={bizMetric}
-            inventory={inventory}
-            customers={customers}
-            transactions={transactions}
-            assets={assets}
-            employees={employees}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
           />
@@ -1008,10 +1091,10 @@ export default function GoMinaApp() {
             onRefreshLogs={() => handleRefreshLogsForBusiness(bizInfo.code)}
             onRefreshData={refreshAllData}
             currentUser={currentUser}
-            employees={employees}
-            transactions={transactions}
-            inventory={inventory}
-            customers={customers}
+            employees={scopedEmployees}
+            transactions={scopedTransactions}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
           />
         );
       }
@@ -1024,12 +1107,12 @@ export default function GoMinaApp() {
           currentUser={currentUser}
           businessInfo={bizInfo}
           businessMetrics={{ ...bizMetric, monthlyTargetRevenueGhs: bizInfo.monthlyTargetRevenueGhs }}
-          inventory={inventory}
-          transactions={transactions}
-          assets={assets}
-          employees={employees}
-          customers={customers}
-          businesses={businesses}
+          inventory={scopedInventory}
+          transactions={scopedTransactions}
+          assets={scopedAssets}
+          employees={scopedEmployees}
+          customers={scopedCustomers}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshData={refreshAllData}
           onSelectTab={setActiveTab}
@@ -1041,11 +1124,11 @@ export default function GoMinaApp() {
     if (activeTab === "FINANCE") {
       return (
         <EnterpriseFinanceView
-          businesses={businesses}
+          businesses={scopedBusinesses}
           metrics={liveMetrics}
-          transactions={transactions}
-          inventory={inventory}
-          customers={customers}
+          transactions={scopedTransactions}
+          inventory={scopedInventory}
+          customers={scopedCustomers}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
           onRefreshData={refreshAllData}
@@ -1062,7 +1145,7 @@ export default function GoMinaApp() {
       return (
         <CustomerTrackingPanel
           currentUser={currentUser}
-          businesses={businesses}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
         />
       );
@@ -1084,13 +1167,13 @@ export default function GoMinaApp() {
       return (
         <SharedEnterpriseModule
           moduleType={sharedModules[activeTab]}
-          customers={customers}
-          suppliers={suppliers}
-          employees={employees}
-          assets={assets}
-          inventory={inventory}
-          transactions={transactions}
-          businesses={businesses}
+          customers={scopedCustomers}
+          suppliers={scopedSuppliers}
+          employees={scopedEmployees}
+          assets={scopedAssets}
+          inventory={scopedInventory}
+          transactions={scopedTransactions}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
           onRefreshData={refreshAllData}
@@ -1103,8 +1186,8 @@ export default function GoMinaApp() {
     if (activeTab === "AI_ADVISOR") {
       return (
         <AiAdvisorView
-          insights={aiInsights}
-          businesses={businesses}
+          insights={scopedAiInsights}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshInsights={refreshAllData}
         />
@@ -1114,8 +1197,8 @@ export default function GoMinaApp() {
     if (activeTab === "SCENARIO_PLANNER") {
       return (
         <ScenarioPlannerView
-          scenarios={scenarios}
-          businesses={businesses}
+          scenarios={scopedScenarios}
+          businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshScenarios={refreshAllData}
         />
@@ -1125,10 +1208,10 @@ export default function GoMinaApp() {
     if (activeTab === "INTEGRATIONS") {
       return (
         <IntegrationsHubView
-          integrations={integrations}
+          integrations={scopedIntegrations}
           onRefreshIntegrations={refreshAllData}
           currentUser={currentUser}
-          businesses={businesses}
+          businesses={scopedBusinesses}
         />
       );
     }
@@ -1203,7 +1286,7 @@ export default function GoMinaApp() {
         offlineQueueCount={offlineQueueCount}
         onSyncComplete={refreshAllData}
         currentUser={currentUser}
-        usersList={usersList}
+        usersList={scopedUsers}
         onUserSelect={setCurrentUser}
         onLogout={handleLogout}
         onOpenChangePassword={() => setIsChangePwOpen(true)}
@@ -1225,7 +1308,7 @@ export default function GoMinaApp() {
                   currentUser?.role === "BRANCH_MANAGER"
                     ? currentUser?.assignedBusinessId ?? null
                     : businesses.length === 1
-                    ? businesses[0].id
+                    ? scopedBusinesses[0].id
                     : null;
                 setManageBizOnlineId(preset);
                 setIsManageBizOpen(true);
@@ -1300,9 +1383,12 @@ export default function GoMinaApp() {
         <Sidebar
           activeTab={activeTab}
           onSelectTab={setActiveTab}
-          businesses={businesses}
+          businesses={scopedBusinesses}
           currentUser={currentUser}
           auditEligible={auditEligible}
+          organizations={orgDirectory}
+          orgLens={orgLens}
+          onLensChange={setOrgLens}
           onOpenSupportInfo={() => setIsSupportOpen(true)}
           accessibleBusinessIds={accessibleIds}
           onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
@@ -1315,7 +1401,7 @@ export default function GoMinaApp() {
             <div className="xl:hidden min-w-0 flex-1 flex">
               <ContextBar
                 activeTab={activeTab}
-                businesses={businesses}
+                businesses={scopedBusinesses}
                 currentUser={currentUser}
                 onOpen={() => setContextNavOpen(true)}
               />
@@ -1323,23 +1409,67 @@ export default function GoMinaApp() {
             <UniversalExportCenter
               activeModule={activeTab}
               currentUser={currentUser}
-              businesses={businesses}
+              businesses={scopedBusinesses}
               data={{
                 metrics: liveMetrics,
-                users: usersList,
-                customers,
-                suppliers,
-                employees,
-                assets,
-                inventory,
-                transactions,
-                aiInsights,
-                scenarios,
-                integrations,
-                specializedLogs,
+                users: scopedUsers,
+                customers: scopedCustomers,
+                suppliers: scopedSuppliers,
+                employees: scopedEmployees,
+                assets: scopedAssets,
+                inventory: scopedInventory,
+                transactions: scopedTransactions,
+                aiInsights: scopedAiInsights,
+                scenarios: scopedScenarios,
+                integrations: scopedIntegrations,
+                specializedLogs: scopedSpecializedLogs,
               }}
             />
           </div>
+          {/* Super Admin lens: when a business dashboard is open, the owning
+              Owner/Organization is announced on the dashboard itself. */}
+          {isSuperAdminUser && activeTab !== "COMMAND_CENTER" &&
+            (() => {
+              const openBiz = scopedBusinesses.find((b: any) => b.code === activeTab);
+              if (!openBiz) return null;
+              const oId = Number(openBiz.ownerId ?? 1);
+              const org = orgDirectory.find((o) => Number(o.id) === oId);
+              const orgName = org?.name || (oId === 1 ? "GoMina Group" : `Organization #${oId}`);
+              const mine = oId === 1;
+              return (
+                <div
+                  data-testid={`org-identity-banner-${openBiz.code}`}
+                  className={`mx-4 sm:mx-6 mt-3 flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 ${
+                    mine
+                      ? "bg-violet-500/10 border-violet-500/40"
+                      : "bg-sky-500/10 border-sky-500/40"
+                  }`}
+                >
+                  {openBiz.logo && (
+                    <img src={openBiz.logo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-black tracking-wide text-white truncate">
+                      {mine ? "YOUR BUSINESS" : "OWNED BY ANOTHER OWNER"} · {orgName}
+                    </div>
+                    <div className={`text-[10px] ${mine ? "text-violet-300" : "text-sky-300"}`}>
+                      Organization: {orgName}
+                      {org?.status && org.status !== "ACTIVE" ? ` · ${org.status}` : ""}
+                      {" — Super Admin cross-owner view. Switch the Organization Lens in the sidebar to focus one Owner."}
+                    </div>
+                  </div>
+                  <span
+                    className={`ml-auto shrink-0 text-[10px] font-black px-2 py-1 rounded-full border ${
+                      mine
+                        ? "bg-violet-500/20 text-violet-200 border-violet-500/50"
+                        : "bg-sky-500/20 text-sky-200 border-sky-500/50"
+                    }`}
+                  >
+                    {mine ? "MAIN OWNER" : orgName.toUpperCase()}
+                  </span>
+                </div>
+              );
+            })()}
           {renderActiveView()}
         </main>
 
@@ -1352,7 +1482,7 @@ export default function GoMinaApp() {
             setActiveTab(t);
             setContextNavOpen(false);
           }}
-          businesses={businesses}
+          businesses={scopedBusinesses}
           currentUser={currentUser}
           open={contextNavOpen}
           onClose={() => setContextNavOpen(false)}
