@@ -1855,6 +1855,7 @@ export const AUDIT_MODULES = [
   "ASSETS",
   "CCTV",
   "USERS",
+  "TRANSPORT",
 ] as const;
 
 /** Issue lifecycle for flagged records / correction requests:
@@ -1986,6 +1987,9 @@ export const notifications = pgTable("notifications", {
   businessId: integer("business_id"),
   branchCode: text("branch_code"),
   actorName: text("actor_name"), // who triggered it
+  /** Priority carried from the flagged audit issue (LOW|MEDIUM|HIGH|CRITICAL);
+   *  null for non-audit events (orders, purchases…). */
+  priority: text("priority"),
   ownerId: integer("owner_id"), // tenant scope of the recipient
   isRead: boolean("is_read").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),

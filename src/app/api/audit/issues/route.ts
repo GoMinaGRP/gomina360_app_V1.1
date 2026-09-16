@@ -11,7 +11,7 @@ import { and, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { db } from "@/db";
 import { businesses, auditIssueUpdates, auditReviews, auditTrail, notifications } from "@/db/schema";
 import { pushAfterBell } from "@/lib/push";
-import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, resolveUserOrgIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];

@@ -298,3 +298,56 @@ export async function businessIdsForUser(userId: number, assignedBusinessId: num
   for (const g of grants) ids.add(Number(g.businessId));
   return Array.from(ids);
 }
+
+/**
+ * Who should be *watching* an audit issue on a business when it is flagged:
+ *  - every active Branch/General Manager whose assigned business is this
+ *    business (or who holds a user_business_access grant for it) — always;
+ *  - the org OWNER(S) — always when the issue could not be routed to a
+ *    concrete user, and on HIGH/CRITICAL severities regardless of assignment.
+ * Strictly members of the business's own organization: a notification can
+ * never cross into another Owner's tenant.
+ */
+export async function auditEscalationRecipients(
+  businessId: number,
+  priority: string,
+  opts: { unassigned?: boolean; excludeIds?: (number | null)[] } = {},
+): Promise<{ id: number; name: string | null; role: string | null }[]> {
+  const orgId = await ownerOrgOfBusiness(businessId);
+  const memberRows = orgId
+    ? await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(eq(organizationMembers.organizationId, orgId))
+    : [];
+  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
+  const [staffAll, grants] = await Promise.all([
+    memberIds.size
+      ? db
+          .select({
+            id: users.id,
+            name: users.name,
+            role: users.role,
+            assignedBusinessId: users.assignedBusinessId,
+            isActive: users.isActive,
+          })
+          .from(users)
+      : Promise.resolve([]),
+    db
+      .select({ userId: userBusinessAccess.userId })
+      .from(userBusinessAccess)
+      .where(eq(userBusinessAccess.businessId, Number(businessId))),
+  ]);
+  const granted = new Set(grants.map((g: { userId: number }) => Number(g.userId)));
+  const excluded = new Set((opts.excludeIds || []).filter((x): x is number => x != null).map(Number));
+  const sev = String(priority || "MEDIUM").toUpperCase();
+  const wantOwner = sev === "HIGH" || sev === "CRITICAL" || !!opts.unassigned;
+  const isManagerRole = (r: string | null | undefined) =>
+    !!r && ["GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"].includes(String(r).toUpperCase());
+  return staffAll.filter((u: any) => {
+    if (u.isActive === false || !memberIds.has(Number(u.id)) || excluded.has(Number(u.id))) return false;
+    if (String(u.role).toUpperCase() === "OWNER") return wantOwner;
+    if (!isManagerRole(u.role)) return false;
+    return Number(u.assignedBusinessId) === Number(businessId) || granted.has(Number(u.id));
+  });
+}

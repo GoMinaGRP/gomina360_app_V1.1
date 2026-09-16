@@ -40,6 +40,7 @@ import {
   transportTrips,
   transportBookings,
   transportMaintenance,
+  transportTrackerViolations,
   recordDeletionLogs,
   employeeHistory,
   assetAuditLogs,
@@ -52,7 +53,7 @@ import {
   AUDIT_MODULES,
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, sharesOrganization, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
-import { ownerOrgOfBusiness } from "@/lib/notify";
+import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 
@@ -814,7 +815,11 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
     }
     case "TRANSPORT_MAINTENANCE": {
       const r = await first(await db.select().from(transportMaintenance).where(eq(transportMaintenance.id, recordId)));
-      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `MNT-${r.scheduledDate?.slice(0, 7)?.replaceAll("-", "") || "WK"}-${r.id}`, title: `${r.title} — ${r.jobType} · GH₵ ${ghc(r.costGhs)} · ${r.status}`, workerName: r.mechanic || r.createdByName };
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `MNT-${(r.dueDate || "").slice(0, 7).replaceAll("-", "") || "WK"}-${r.id}`, title: `${r.title} — ${r.category} · GH₵ ${ghc(r.actualCostGhs ?? r.estimatedCostGhs)} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_VIOLATION": {
+      const r = await first(await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `VIO-${r.kind}-${r.id}`, title: `${r.vehiclePlate || "Vehicle"} — ${r.kind} · ${r.severity} · ${r.status}`, workerName: r.createdByName };
     }
     default:
       return null;
@@ -967,6 +972,73 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
       if (r.runId) {
         const run = await first(await db.select().from(payrollRuns).where(eq(payrollRuns.id, r.runId)));
         if (run) rel.push({ key: `PAYROLL_RUN:payroll_runs:${run.id}`, recordType: "PAYROLL_RUN", recordSource: "payroll_runs", recordId: run.id, ref: `PR-${run.id} · ${run.period}`, title: `Payroll ${run.period} (${run.status})`, detail: `${run.status}${run.approvedByName ? ` · approved by ${run.approvedByName}` : ""}`, module: "PAYROLL", businessId: run.businessId, branchCode: run.branchCode, date: tsDay(run.createdAt), amountGhs: null, status: run.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    // ── Transportation module records (detail drawer + related links) ─────
+    case "TRANSPORT_VEHICLE": {
+      const r = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      const trips = await db.select().from(transportTrips).where(eq(transportTrips.vehicleId, recordId)).limit(10);
+      for (const t of trips) rel.push({ key: `TRANSPORT_TRIP:transport_trips:${t.id}`, recordType: "TRANSPORT_TRIP", recordSource: "transport_trips", recordId: t.id, ref: `TRP-T${t.id}`, title: `Trip ${t.source || "?"} → ${t.destination || "?"} — ${t.status}`, detail: `${t.actualKm ?? t.expectedKm ?? "?"} km${t.startTs ? ` · ${tsDay(t.startTs)}` : ""}`, module: "TRANSPORT", businessId: t.businessId, branchCode: t.branchCode, date: tsDay(t.startTs), amountGhs: t.fareGhs, status: t.status, imageCount: 0 });
+      if (r.assetId) {
+        const a = await first(await db.select().from(assets).where(eq(assets.id, Number(r.assetId))));
+        if (a) rel.push({ key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id, ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`, detail: `value GH₵ ${ghc(a.currentValueGhs)} · ${a.location}`, module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode), date: tsDay(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition, imageCount: Array.isArray(a.assetImages) ? a.assetImages.length : 0 });
+      }
+      const viols = await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.vehicleId, recordId)).limit(8);
+      for (const v of viols) rel.push({ key: `TRANSPORT_VIOLATION:transport_tracker_violations:${v.id}`, recordType: "TRANSPORT_VIOLATION", recordSource: "transport_tracker_violations", recordId: v.id, ref: `VIO-${v.kind}-${v.id}`, title: `${v.kind} — ${v.severity}`, detail: v.detail || "", module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      return { record: r, photos: photoList(r as any), related: related(rel) };
+    }
+    case "TRANSPORT_TRIP": {
+      const r = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate}) — ${v.vehicleType} · ${v.status}`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      }
+      if (r.bookingId) {
+        const b = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, Number(r.bookingId))));
+        if (b) rel.push({ key: `TRANSPORT_BOOKING:transport_bookings:${b.id}`, recordType: "TRANSPORT_BOOKING", recordSource: "transport_bookings", recordId: b.id, ref: `BKG-${b.id}`, title: `Booking — ${b.customerName} · GH₵ ${ghc(b.fareGhs)} · ${b.status}`, detail: `${b.origin || "?"} → ${b.destination || "?"}`, module: "TRANSPORT", businessId: b.businessId, branchCode: b.branchCode, date: tsDay(b.scheduledFor), amountGhs: b.fareGhs, status: b.status, imageCount: 0 });
+      }
+      if (r.customerId) {
+        const c = await first(await db.select().from(customers).where(eq(customers.id, Number(r.customerId))));
+        if (c) rel.push({ key: `CUSTOMER:customers:${c.id}`, recordType: "CUSTOMER", recordSource: "customers", recordId: c.id, ref: `CUS-${c.id}`, title: `${c.name} — ${c.type}`, detail: c.phone, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(c.createdAt), amountGhs: c.totalSpentGhs, status: null, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_BOOKING": {
+      const r = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.customerId) {
+        const c = await first(await db.select().from(customers).where(eq(customers.id, Number(r.customerId))));
+        if (c) rel.push({ key: `CUSTOMER:customers:${c.id}`, recordType: "CUSTOMER", recordSource: "customers", recordId: c.id, ref: `CUS-${c.id}`, title: `${c.name} — ${c.type}`, detail: c.phone, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(c.createdAt), amountGhs: c.totalSpentGhs, status: null, imageCount: 0 });
+      }
+      if (r.tripId) {
+        const t = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, Number(r.tripId))));
+        if (t) rel.push({ key: `TRANSPORT_TRIP:transport_trips:${t.id}`, recordType: "TRANSPORT_TRIP", recordSource: "transport_trips", recordId: t.id, ref: `TRP-T${t.id}`, title: `Trip ${t.source || "?"} → ${t.destination || "?"} — ${t.status}`, detail: `${t.actualKm ?? t.expectedKm ?? "?"} km`, module: "TRANSPORT", businessId: t.businessId, branchCode: t.branchCode, date: tsDay(t.startTs), amountGhs: t.fareGhs, status: t.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_MAINTENANCE": {
+      const r = await first(await db.select().from(transportMaintenance).where(eq(transportMaintenance.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate}) — ${v.vehicleType} · ${v.status}`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_VIOLATION": {
+      const r = await first(await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate})`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
       }
       return { record: r, photos: [], related: related(rel) };
     }
