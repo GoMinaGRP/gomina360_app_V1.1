@@ -236,7 +236,11 @@ export async function GET(request: NextRequest) {
     const expTotal = rexp.reduce((s, t) => s + Number(t.amountGhs || 0), 0);
     const tripsCompleted = trips.filter((t) => t.status === "COMPLETED");
     const tripsActive = trips.filter((t) => t.status === "EN_ROUTE");
-    const util30 = utilizationOf(trips, day(new Date(Date.now() - 29 * 86400000)), today, Number(Math.max(1, vehicles.filter((v) => v.status !== "OUT_OF_SERVICE").length)));
+    // NOTE: `day()` expects a string (String(v).slice(0,10)); a Date object
+    // stringifies to "Sun Aug 16 2026 …" and breaks the window comparison in
+    // utilizationOf — build the ISO day explicitly.
+    const from30 = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+    const util30 = utilizationOf(trips, from30, today, Number(Math.max(1, vehicles.filter((v) => v.status !== "OUT_OF_SERVICE").length)));
     const byVehicle: Record<number, { km: number; trips: number; revenue: number; fuelGhs: number; maintGhs: number }> = {};
     for (const t of tripsCompleted) {
       if (!t.vehicleId) continue;

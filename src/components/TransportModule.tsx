@@ -376,7 +376,7 @@ export default function TransportModule(props: Props) {
             <Tile label="Revenue" value={money(M.revenueGhs)} sub="transport income" icon={CircleDot || Gauge} />
             <Tile label="Fuel spend" value={money(M.fuelSpendGhs)} sub={M.fleetEconomyKmpl ? `fleet ${M.fleetEconomyKmpl} km/L` : "log fuel to compute"} icon={Fuel} tone="text-amber-300" />
             <Tile label="Maintenance" value={money(M.maintenanceSpendGhs)} sub="workshop + parts" icon={Wrench} tone="text-amber-300" />
-            <Tile label="Net profit" value={money(M.profitGhs)} sub={`utilisation ${Math.round((M.utilization30d || 0) * 100)}% (30d)`} icon={BarChart3} tone={Number(M.profitGhs) >= 0 ? "text-emerald-300" : "text-rose-300"} />
+            <Tile label="Net profit" value={money(M.profitGhs)} sub={`utilisation ${(() => { const u: any = M.utilization30d; const pct = u == null ? 0 : typeof u === "object" ? Number(u.utilizationPct || u.utilization || 0) : Number(u) * 100; return Math.round(Number.isFinite(pct) ? pct : 0); })()}% (30d)`} icon={BarChart3} tone={Number(M.profitGhs) >= 0 ? "text-emerald-300" : "text-rose-300"} />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
