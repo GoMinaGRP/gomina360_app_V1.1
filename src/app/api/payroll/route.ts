@@ -42,7 +42,7 @@ const OT_DIVISOR = 208; // 26 working days × 8 hours (Ghana standard month)
 const OT_MULTIPLIER = 1.5; // statutory overtime loading
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-export const otPayFor = (salary: number, hours: number) =>
+const otPayFor = (salary: number, hours: number) =>
   round2((Number(salary) / OT_DIVISOR) * Number(hours) * OT_MULTIPLIER);
 
 async function assertManage(user: any, businessId: number) {

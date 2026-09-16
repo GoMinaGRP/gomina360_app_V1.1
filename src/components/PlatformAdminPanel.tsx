@@ -42,7 +42,12 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
   const [deleteFor, setDeleteFor] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   // SUSPEND is a disruption (all member sessions end immediately), so it
-  // takes an explicit second click. Reactivate/Restore stay one click.
+  // takes an explicit confirmation. The confirm lives in an EXPANDED ROW
+  // below the entry (same pattern as Delete) rather than swapping the cell's
+  // buttons in place: when the badge flips the cell re-renders "Reactivate"
+  // in the exact spot the old Confirm button occupied, and the trailing edge
+  // of the same pointer click could land on it and instantly UNDO the
+  // suspension (click-through). Reactivate/Restore stay one click.
   const [confirmSuspendFor, setConfirmSuspendFor] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -288,9 +293,14 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
         </button>
       </form>
 
-      {/* Directory */}
+      {/* Directory — wrapped in a horizontal scroller: on narrow viewports
+          (laptop with the sidebar open, or mobile) the 7-column table can
+          otherwise overflow the rounded container and `overflow-hidden`
+          clips the rightmost Status/Actions columns, making Suspend /
+          Reactivate / Delete / Restore unreachable. Now it scrolls. */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[1080px] text-sm">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 border-b border-slate-800">
               <th className="px-4 py-3">Organization</th>
@@ -402,54 +412,34 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
                     </button>
                   ) : (
                     <>
-                      {o.status === "ACTIVE" && confirmSuspendFor === o.id ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="text-[10px] text-amber-300 font-bold">Ends all member sessions now?</span>
-                          <button
-                            data-testid={`confirm-suspend-org-${o.id}`}
-                            onClick={() => { setConfirmSuspendFor(null); setStatus(o.id, "SUSPEND"); }}
-                            disabled={busyId === o.id}
-                            className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-300 hover:text-rose-200 disabled:opacity-50"
-                          >
-                            <Ban className="w-3.5 h-3.5" /> Confirm
-                          </button>
-                          <button
-                            onClick={() => setConfirmSuspendFor(null)}
-                            className="text-[11px] font-bold text-slate-400 hover:text-slate-200"
-                          >
-                            Cancel
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          data-testid={`suspend-org-${o.id}`}
-                          onClick={() => {
-                            if (o.status === "ACTIVE") setConfirmSuspendFor(o.id);
-                            else setStatus(o.id, "ACTIVATE");
-                          }}
-                          disabled={busyId === o.id}
-                          title={
-                            o.status === "ACTIVE"
-                              ? "Temporarily lock every member out; data & settings fully preserved"
-                              : "Reactivate — all data and access settings are back exactly as before"
-                          }
-                          className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${
-                            o.status === "ACTIVE"
-                              ? "text-rose-300 hover:text-rose-200"
-                              : "text-emerald-300 hover:text-emerald-200"
-                          }`}
-                        >
-                          {o.status === "ACTIVE" ? (
-                            <>
-                              <Ban className="w-3.5 h-3.5" /> Suspend
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Reactivate
-                            </>
-                          )}
-                        </button>
-                      )}
+                      <button
+                        data-testid={`suspend-org-${o.id}`}
+                        onClick={() => {
+                          if (o.status === "ACTIVE") setConfirmSuspendFor(confirmSuspendFor === o.id ? null : o.id);
+                          else setStatus(o.id, "ACTIVATE");
+                        }}
+                        disabled={busyId === o.id}
+                        title={
+                          o.status === "ACTIVE"
+                            ? "Temporarily lock every member out; data & settings fully preserved"
+                            : "Reactivate — all data and access settings are back exactly as before"
+                        }
+                        className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${
+                          o.status === "ACTIVE"
+                            ? "text-rose-300 hover:text-rose-200"
+                            : "text-emerald-300 hover:text-emerald-200"
+                        }`}
+                      >
+                        {o.status === "ACTIVE" ? (
+                          <>
+                            <Ban className="w-3.5 h-3.5" /> {confirmSuspendFor === o.id ? "Close" : "Suspend"}
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Reactivate
+                          </>
+                        )}
+                      </button>
                       <button
                         data-testid={`delete-org-${o.id}`}
                         onClick={() => { setDeleteFor(deleteFor === o.id ? null : o.id); setDeleteConfirm(""); }}
@@ -464,6 +454,44 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
                   </div>
                 </td>
               </tr>
+              {confirmSuspendFor === o.id && (
+                <tr className="bg-amber-950/20">
+                  <td colSpan={7} className="px-4 py-4">
+                    <div data-testid={`suspend-confirm-${o.id}`} className="space-y-2 max-w-xl">
+                      <div className="text-sm font-bold text-amber-200">
+                        Suspend Owner &quot;{o.name}&quot;?
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        This signs out every member of the organization immediately and
+                        blocks all sign-ins, and hides their units from the public
+                        marketplace.{" "}
+                        <span className="text-slate-200 font-semibold">Nothing is erased</span>{" "}
+                        — businesses, users, customers, stock, money, settings and
+                        allowed business types stay intact, and{" "}
+                        <span className="text-emerald-300 font-semibold">Reactivate</span>{" "}
+                        brings everything back exactly as before.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          data-testid={`confirm-suspend-org-${o.id}`}
+                          disabled={busyId === o.id}
+                          onClick={() => { setStatus(o.id, "SUSPEND"); setConfirmSuspendFor(null); }}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-bold"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          {busyId === o.id ? "Suspending…" : "Confirm Suspension"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmSuspendFor(null)}
+                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
               {deleteFor === o.id && (
                 <tr className="bg-rose-950/20">
                   <td colSpan={7} className="px-4 py-4">
@@ -591,6 +619,7 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

@@ -18,7 +18,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
-export const POULTRY_PRODUCTS = {
+const POULTRY_PRODUCTS = {
   EGGS: {
     // matches the seeded product SKU so production tops up the existing item
     sku: "POUL-EGG-L01",

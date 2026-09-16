@@ -372,3 +372,60 @@ unchanged — verified by scope-parity tests):
 JS↔SQL scope parity, cache behavior, index coverage, invariants) plus all
 suites: multiowner 118/118, phase0 63/63, security 23/23, lens 15/15,
 tsc clean.
+
+---
+
+## 15. Owner-Management Console — end-to-end UI audit & lifecycle verification (2026-09-16)
+
+The Platform Owners & Organizations console was audited against the
+observed UI, which rendered **only the Status column** — the Suspend,
+Reactivate, Delete and Restore controls were unreachable. Two root
+causes were found and fixed (no backend duplication; all lifecycle
+APIs already existed from §12):
+
+1. **Actions column clipped off-screen (layout).** The directory table
+   sits in a `rounded-2xl overflow-hidden` card with no scroll wrapper.
+   Its seven columns have a natural minimum width (~1080px) but at
+   laptop viewports (sidebar open) only ~690px is available, so the
+   rightmost **Actions** column was physically clipped. The table is
+   now wrapped in `overflow-x-auto` with `min-w-[1080px]` — measured in
+   a real headless Chromium: before the fix the controls were off-screen,
+   after the fix they are reachable by scrolling.
+2. **Suspend confirm could self-undo (interaction hazard).** The old
+   two-click confirm swapped the cell's buttons in place; when the badge
+   flipped, the re-rendered cell placed "Reactivate" in the exact spot
+   the Confirm click ended, and the trailing edge of the same click
+   could re-fire it (observed in audit trails as SUSPEND→ACTIVATE
+   ~120ms apart). Confirmation now opens an **expanded panel row**
+   (same proven pattern as the typed-name Delete panel): the click
+   geometry is disjoint, making accidental immediate reactivation
+   impossible. Verified: exactly one audit row per lifecycle action.
+
+**Also this round:**
+- `next build` was failing on pre-existing invalid route exports
+  (`MIN_PASSWORD_LENGTH`, `otPayFor`, `POULTRY_PRODUCTS`); constants
+  de-exported, production build + `next start` now run green. All
+  lifecycle verification (and the suites below) were executed against
+  the **production build**.
+- Dev-only flake explanation for history: `next dev` auto-restarts
+  ("Server is approaching the used memory threshold") and transiently
+  serves HTML error pages ("Manifest file is empty") mid-flight —
+  production serving is unaffected.
+
+**Verification — `dev-tooling/owner-lifecycle-ui-verify.mjs`** drives
+the real console in headless Chromium (`playwright-core` +
+`@sparticuz/chromium` dev-deps): sidebar entry, main-org protection,
+UI provisioning (one-time password capture), actions-column geometry,
+two-step suspend + cancel semantics, session termination, blocked
+logins, marketplace hide/show, typed-name delete enablement rules,
+deleted-org soft-delete data preservation (SQL), status filtering,
+restore (login + same business id back on the marketplace), and the
+audit trail (CREATE/SUSPEND/ACTIVATE/DELETE/RESTORE organization).
+**52/52 passed** — five consecutive full-lifecycle runs, plus
+multiowner 118/118 · phase0 63/63 · security 23/23 · lens 15/15 ·
+perf 13/13 · `next build` clean.
+
+Run it: `LD_LIBRARY_PATH=/tmp/nss-stub node dev-tooling/owner-lifecycle-ui-verify.mjs`
+(in sandboxes without system NSS libs, the tiny stub set in
+`/tmp/nss-stub` satisfies the runtime linker for http-only testing;
+with normal system Chromium deps installed, the env var is unnecessary).
