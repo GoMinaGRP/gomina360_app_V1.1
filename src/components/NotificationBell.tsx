@@ -146,6 +146,19 @@ export default function NotificationBell({
                     <div className="text-[11px] font-bold text-slate-100 flex items-center gap-1.5">
                       {String(n.type).includes("CORRECTION") ? <Flag className="w-3 h-3 text-amber-400 shrink-0" /> : null}
                       <span className="truncate">{n.title}</span>
+                      {n.priority && (
+                        <span
+                          className={`shrink-0 text-[8px] font-black px-1 py-px rounded border leading-[1.3] ${
+                            String(n.priority).toUpperCase() === "CRITICAL" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" :
+                            String(n.priority).toUpperCase() === "HIGH" ? "bg-orange-500/15 text-orange-300 border-orange-500/40" :
+                            String(n.priority).toUpperCase() === "MEDIUM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40" :
+                            "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                          }`}
+                          data-testid={`notif-priority-${n.id}`}
+                        >
+                          {String(n.priority).toUpperCase()}
+                        </span>
+                      )}
                     </div>
                     {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
                     <div className="text-[9px] text-slate-500 mt-1">

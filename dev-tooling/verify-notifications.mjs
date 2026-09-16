@@ -37,7 +37,7 @@ import https from "https";
 import fs from "fs";
 import crypto from "crypto";
 const require = createRequire("/home/user/pgtooling/package.json");
-const requireApp = createRequire("/home/user/gomina360_app_V1/package.json");
+const requireApp = createRequire(new URL("../package.json", import.meta.url));
 const puppeteer = require("puppeteer-core");
 const { Client } = require("pg");
 const webpush = requireApp("web-push");

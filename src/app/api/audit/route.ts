@@ -36,6 +36,10 @@ import {
   carWashLogs,
   hardwareLogs,
   checklistEntries,
+  transportVehicles,
+  transportTrips,
+  transportBookings,
+  transportMaintenance,
   recordDeletionLogs,
   employeeHistory,
   assetAuditLogs,
@@ -72,7 +76,7 @@ const isOpenIssue = (r: any) => isIssue(r) && OPEN_STATUSES.includes(normStatus(
 
 /** Notifies a user's dashboard (bell) about issue workflow events — and
  *  mirrors the event as an OS-level push so it lands even outside the app. */
-async function notify(userId: number | null | undefined, n: { type: string; title: string; body?: string | null; issueId?: number | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; businessId?: number | null; branchCode?: string | null; actorName?: string | null }) {
+async function notify(userId: number | null | undefined, n: { type: string; title: string; body?: string | null; issueId?: number | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; businessId?: number | null; branchCode?: string | null; actorName?: string | null; priority?: string | null }) {
   if (!userId) return;
   const nOwnerId = n.businessId != null ? await ownerOrgOfBusiness(Number(n.businessId)) : null;
   await db.insert(notifications).values({
@@ -95,6 +99,26 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
     body: (n.body || "").slice(0, 600),
     url: "/?tab=AUDIT",
   });
+}
+
+/** An issue transition supercedes every bell item that pointed to it — mark
+ *  ALL earlier notifications for the issue read (assigned user, watchers,
+ *  reviewer), so bells always reflect the CURRENT state of the issue. The
+ *  fresh notification for the new state is inserted afterwards and stays
+ *  unread for its recipient. */
+async function autoReadIssue(issueId: number) {
+  await db.update(notifications).set({ isRead: true }).where(eq(notifications.issueId, Number(issueId)));
+}
+
+const ISSUE_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+const normPriority = (v: any) => (ISSUE_PRIORITIES.includes(String(v || "").toUpperCase() as any) ? String(v).toUpperCase() : "MEDIUM");
+const PRIORITY_LABEL: Record<string, string> = { LOW: "LOW 🟢", MEDIUM: "MEDIUM 🟡", HIGH: "HIGH 🟠", CRITICAL: "CRITICAL 🔴" };
+
+/** Business + branch naming for notification text (resolved per flag — the
+ *  record row snapshots survive later edits). */
+async function bizLabels(businessId: number, branchCode: string | null | undefined) {
+  const [b] = await db.select({ name: businesses.name, code: businesses.code }).from(businesses).where(eq(businesses.id, Number(businessId)));
+  return { businessName: b?.name || `Business #${businessId}`, branchLabel: branchCode || b?.code || "—" };
 }
 
 type Scope = {
@@ -775,6 +799,23 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
       const r = await first(await db.select().from(payrollEntries).where(eq(payrollEntries.id, recordId)));
       return r && { businessId: r.businessId, branchCode: r.branchCode, module: "PAYROLL", ref: `PE-${r.id}`, title: `${r.employeeName} — net GH₵ ${Number(r.netPayGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, workerName: r.employeeName };
     }
+    // Transportation module records
+    case "TRANSPORT_VEHICLE": {
+      const r = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `TRP-V${r.assetId || r.id} · ${r.licensePlate}`, title: `${r.name} (${r.licensePlate}) — ${r.vehicleType} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_TRIP": {
+      const r = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `TRP-T${r.tripRef || r.id}`, title: `Trip ${r.source || "?"} → ${r.destination || "?"} — ${r.status}${r.actualKm ? ` · ${r.actualKm} km` : ""}`, workerName: r.driverName };
+    }
+    case "TRANSPORT_BOOKING": {
+      const r = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `BKG-${r.reference}`, title: `Booking ${r.reference} — ${r.customerName || "walk-in"} · GH₵ ${ghc(r.finalPriceGhs ?? r.quotedPriceGhs)} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_MAINTENANCE": {
+      const r = await first(await db.select().from(transportMaintenance).where(eq(transportMaintenance.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `MNT-${r.scheduledDate?.slice(0, 7)?.replaceAll("-", "") || "WK"}-${r.id}`, title: `${r.title} — ${r.jobType} · GH₵ ${ghc(r.costGhs)} · ${r.status}`, workerName: r.mechanic || r.createdByName };
+    }
     default:
       return null;
   }
@@ -938,17 +979,30 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
  *  record's own worker account (checklists), then the active user whose name
  *  matches the record's worker — preferring someone assigned to that business. */
 async function resolveAssignee(rec: any, explicitUserId: number | null) {
+  // Tenant guard: an issue may only ever be routed to a member of the
+  // record's own organization — never a same-named user in another Owner's
+  // organization (explicit, linked, or fuzzy name path alike).
+  const orgId = rec.businessId != null ? await ownerOrgOfBusiness(Number(rec.businessId)) : null;
+  let memberIds: Set<number> | null = null;
+  if (orgId != null) {
+    const ms = await db
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, Number(orgId)));
+    memberIds = new Set(ms.map((m) => Number(m.userId)));
+  }
+  const inOrg = (u: any) => memberIds == null || memberIds.has(Number(u.id));
   if (explicitUserId) {
     const [u] = await db.select().from(users).where(eq(users.id, explicitUserId));
-    if (u && u.isActive) return u;
+    if (u && u.isActive && inOrg(u)) return u;
   }
   if (rec.workerUserId) {
     const [u] = await db.select().from(users).where(eq(users.id, Number(rec.workerUserId)));
-    if (u && u.isActive) return u;
+    if (u && u.isActive && inOrg(u)) return u;
   }
   if (rec.workerName) {
     const all = await db.select().from(users);
-    const matches = all.filter((u) => u.isActive && (u.name || "").toLowerCase() === String(rec.workerName).toLowerCase());
+    const matches = all.filter((u) => u.isActive && inOrg(u) && (u.name || "").toLowerCase() === String(rec.workerName).toLowerCase());
     if (matches.length > 0) return matches.find((u) => u.assignedBusinessId === rec.businessId) || matches[0];
   }
   return null;
@@ -1076,30 +1130,51 @@ export async function POST(request: Request) {
     }
     // Route the issue to the user responsible for the record (their dashboard).
     const assignee = ISSUE_ACTIONS.includes(action) ? await resolveAssignee(rec, Number(body.assignedUserId) || null) : null;
+    const priority = normPriority(body.priority);
     const [review] = await db.insert(auditReviews).values({
       recordType, recordSource: body.recordSource ? String(body.recordSource) : null, recordId,
       recordRef: rec.ref, recordTitle: rec.title, module: rec.module,
       businessId: rec.businessId, branchCode: rec.branchCode, workerName: rec.workerName,
       action, status, reason: reason || null, comment: comment || null, evidence: evidence || null,
+      priority,
       issueTitle: ISSUE_ACTIONS.includes(action) ? issueTitle : null,
       evidencePhoto: photo || null,
       assignedUserId: assignee?.id ?? null, assignedUserName: assignee?.name ?? null, assignedUserRole: assignee?.role ?? null,
       reviewerUserId: user.id, reviewerName: user.name, reviewerRole: user.role,
     }).returning();
-    await writeTrail(user, { action: REVIEW_TO_TRAIL[action], targetType: "RECORD", targetLabel: rec.ref || rec.title, recordType, recordId, businessId: rec.businessId, branchCode: rec.branchCode, reason: reason || null, detail: comment || evidence || null });
+    await writeTrail(user, { action: REVIEW_TO_TRAIL[action], targetType: "RECORD", targetLabel: rec.ref || rec.title, recordType, recordId, businessId: rec.businessId, branchCode: rec.branchCode, reason: reason || null, detail: `${comment || evidence || ""} [priority ${priority}]`.trim() });
     if (ISSUE_ACTIONS.includes(action)) {
       await db.insert(auditIssueUpdates).values({
         issueId: review.id, actorUserId: user.id, actorName: user.name, actorRole: user.role,
         action: REVIEW_TO_TRAIL[action], statusFrom: null, statusTo: status,
         note: reason || comment || null, evidence: evidence || null, photo: photo || null,
       });
+      const { businessName, branchLabel } = await bizLabels(rec.businessId, rec.branchCode);
+      const reasonLine = `${reason || ""}${comment ? ` — ${comment}` : ""}`;
+      const whereLine = `Flagged by ${user.name} (${user.role}) · Business: ${businessName} · Branch: ${branchLabel} · Record: ${rec.ref}`;
       if (assignee) {
         await notify(assignee.id, {
           type: action === "CORRECTION_REQUESTED" ? "AUDIT_CORRECTION_REQUIRED" : "AUDIT_ISSUE_ASSIGNED",
-          title: `${action === "CORRECTION_REQUESTED" ? "Correction required" : "Issue flagged"}: ${issueTitle || rec.ref}`,
-          body: `${reason || ""}${comment ? ` — ${comment}` : ""}`,
+          title: `${action === "CORRECTION_REQUESTED" ? "Correction required" : "Issue flagged"} [${PRIORITY_LABEL[priority]}]: ${issueTitle || rec.ref}`,
+          body: `${reasonLine}\n${whereLine}\nRequired action: open My Audit Issues, respond with your fix/evidence, then mark it resolved.`,
           issueId: review.id, recordType, recordId, recordRef: rec.ref,
-          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name,
+          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name, priority,
+        });
+      }
+      // Escalation watch: responsible managers always see flagged issues in
+      // their businesses; the org OWNER is pulled in on HIGH/CRITICAL — and
+      // always when the issue could not be assigned to a user account.
+      const watchers = await auditEscalationRecipients(rec.businessId, priority, {
+        unassigned: !assignee,
+        excludeIds: [user.id, assignee?.id ?? null],
+      });
+      for (const w of watchers) {
+        await notify(w.id, {
+          type: "AUDIT_ISSUE_WATCH",
+          title: `${action === "CORRECTION_REQUESTED" ? "Correction watch" : "Issue watch"} [${PRIORITY_LABEL[priority]}]: ${issueTitle || rec.ref}`,
+          body: `${reasonLine}\n${whereLine}\n${assignee ? `Assigned to ${assignee.name} — you are notified as ${w.role === "OWNER" ? "the organization Owner" : "a responsible manager"}.` : "No user account is linked to this record — review and route it from the Audit Command Center."}`,
+          issueId: review.id, recordType, recordId, recordRef: rec.ref,
+          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name, priority,
         });
       }
     }
@@ -1136,6 +1211,7 @@ export async function PATCH(request: Request) {
       const note = String(body.resolution || "").trim();
       if (!note) return NextResponse.json({ success: false, error: "Add a verification note — what did you confirm before closing it?" }, { status: 400 });
       const from = normStatus(row.status);
+      await autoReadIssue(row.id); // closing the issue retires every earlier bell item for it
       const [updated] = await db.update(auditReviews)
         .set({ status: "VERIFIED", resolvedByUserId: user.id, resolvedByName: user.name, resolvedAt: new Date(), resolutionNote: note })
         .where(eq(auditReviews.id, row.id)).returning();
@@ -1146,9 +1222,9 @@ export async function PATCH(request: Request) {
       await writeTrail(user, { action: "VERIFY", targetType: "RECORD", targetLabel: row.recordRef || row.recordTitle, recordType: row.recordType, recordId: row.recordId, businessId: row.businessId, branchCode: row.branchCode, reason: row.reason, detail: `Verified & closed (${from} → VERIFIED): ${note}` });
       if (row.assignedUserId && row.assignedUserId !== user.id) {
         await notify(row.assignedUserId, {
-          type: "AUDIT_ISSUE_VERIFIED", title: `Verified & closed: ${row.issueTitle || row.recordRef}`,
+          type: "AUDIT_ISSUE_VERIFIED", title: `Verified & closed [${PRIORITY_LABEL[normPriority(row.priority)]}]: ${row.issueTitle || row.recordRef}`,
           body: note, issueId: row.id, recordType: row.recordType, recordId: row.recordId,
-          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name, priority: normPriority(row.priority),
         });
       }
       return NextResponse.json({ success: true, review: updated });
@@ -1180,6 +1256,7 @@ export async function PATCH(request: Request) {
       const [updated] = await db.update(auditReviews)
         .set({ status: "CORRECTION_REQUIRED" })
         .where(eq(auditReviews.id, row.id)).returning();
+      await autoReadIssue(row.id); // the fresh correction-required notice below replaces everything prior
       await db.insert(auditIssueUpdates).values({
         issueId: row.id, actorUserId: user.id, actorName: user.name, actorRole: user.role,
         action: "REQUEST_CORRECTION", statusFrom: from, statusTo: "CORRECTION_REQUIRED", note, photo: photo || null,
@@ -1187,9 +1264,10 @@ export async function PATCH(request: Request) {
       await writeTrail(user, { action: "REQUEST_CORRECTION", targetType: "RECORD", targetLabel: row.recordRef || row.recordTitle, recordType: row.recordType, recordId: row.recordId, businessId: row.businessId, branchCode: row.branchCode, reason: row.reason, detail: `${from} → CORRECTION_REQUIRED: ${note}` });
       if (row.assignedUserId && row.assignedUserId !== user.id) {
         await notify(row.assignedUserId, {
-          type: "AUDIT_CORRECTION_REQUIRED", title: `Correction required: ${row.issueTitle || row.recordRef}`,
-          body: note, issueId: row.id, recordType: row.recordType, recordId: row.recordId,
-          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+          type: "AUDIT_CORRECTION_REQUIRED", title: `Correction required [${PRIORITY_LABEL[normPriority(row.priority)]}]: ${row.issueTitle || row.recordRef}`,
+          body: `${note}\nRequired action: fix the issue, respond with what you did, then mark it resolved in My Audit Issues.`,
+          issueId: row.id, recordType: row.recordType, recordId: row.recordId,
+          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name, priority: normPriority(row.priority),
         });
       }
       return NextResponse.json({ success: true, review: updated });

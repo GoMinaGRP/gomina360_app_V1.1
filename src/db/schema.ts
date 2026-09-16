@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   serial,
@@ -1923,6 +1924,12 @@ export const auditReviews = pgTable("audit_reviews", {
   workerName: text("worker_name"), // employee/recorder the record belongs to
   action: text("action").notNull(), // VERIFIED | FLAGGED | COMMENT | CORRECTION_REQUESTED
   status: text("status").notNull().default("INFO"), // FLAGGED | UNDER_REVIEW | CORRECTION_REQUIRED | RESOLVED | VERIFIED | INFO (OPEN = legacy FLAGGED)
+  /** Priority the auditor assigns when flagging: LOW | MEDIUM | HIGH | CRITICAL.
+   *  Carried into every bell notification and drives escalation: branch
+   *  managers always see flagged issues in their businesses; the org OWNER
+   *  is additionally pulled in on HIGH/CRITICAL (and always when the issue
+   *  could not be assigned to a user account). */
+  priority: text("priority").notNull().default("MEDIUM"),
   issueTitle: text("issue_title"), // short label shown on dashboards & notifications
   reason: text("reason"), // why flagged / why correction requested / verification basis
   comment: text("comment"),
@@ -2296,4 +2303,254 @@ export const restaurantPurchases = pgTable("restaurant_purchases", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRANSPORTATION & HAULAGE MODULE — fleet, trips, bookings, fuel, maintenance,
+// daily checklists, geofences and GPS tracker violations. Mirrors the shared
+// linkage discipline of every other module:
+//   • BOOKING completed      → INCOME transaction ("Transport Booking") +
+//                              customer upsert (spend) + trip can reference it
+//   • TRIP started/completed → vehicle odometer / status / utilization sync
+//   • FUEL logged            → EXPENSE transaction ("Transport Fuel") + odometer
+//   • MAINTENANCE done       → EXPENSE transaction ("Transport Maintenance") +
+//                              vehicle service stamps (last/next due)
+//   • Tracker violation      → transports bell notification for business
+//                              managers + OWNER (push mirrored)
+// Every table carries org-scoping (ownerId) and per-unit scoping (businessId +
+// branchCode) so existing access rules apply unchanged.
+// ════════════════════════════════════════════════════════════════════════════
+
+export const transportVehicles = pgTable("transport_vehicles", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  name: text("name").notNull(), // e.g. "Tipper Truck 01"
+  vehicleType: text("vehicle_type").notNull().default("TRUCK"), // TRUCK|VAN|PICKUP|TRAILER|BUS|BIKE|CAR
+  licensePlate: text("license_plate").notNull(),
+  make: text("make"),
+  model: text("model"),
+  year: integer("year"),
+  color: text("color"),
+  fuelType: text("fuel_type").default("DIESEL"), // PETROL|DIESEL|LPG|EV
+  odometerUnit: text("odometer_unit").notNull().default("KM"), // KM|MILES
+  odometerKm: doublePrecision("odometer_km").notNull().default(0), // base unit: KM (miles converted on write)
+  loadCapacity: doublePrecision("load_capacity"), // tonnes
+  seats: integer("seats"),
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE|MAINTENANCE|OUT_OF_SERVICE
+  assignedEmployeeId: integer("assigned_employee_id"), // employees.id (default driver)
+  defaultDriverName: text("default_driver_name"), // snapshot for displays
+  insuranceCompany: text("insurance_company"),
+  insuranceExpiry: text("insurance_expiry"), // yyyy-mm-dd
+  licenseExpiry: text("license_expiry"), // roadworthy / vehicle registration
+  fitnessExpiry: text("fitness_expiry"),
+  roadworthyExpiry: text("roadworthy_expiry"),
+  tags: text("tags"),
+  notes: text("notes"),
+  assetId: integer("asset_id"), // linked assets.id (VEHICLE module visibility)
+  photo: text("photo"),
+  purchaseCostGhs: doublePrecision("purchase_cost_ghs").default(0),
+  purchaseDate: text("purchase_date"),
+  // GPS tracker wiring (any provider; "SIMULATED" = built-in test generator)
+  gpsDeviceImei: text("gps_device_imei"),
+  gpsDeviceSecret: text("gps_device_secret"), // bearer token for the ingest endpoint
+  gpsProviderKey: text("gps_provider_key"), // GPS_PROVIDER_LIBRARY key or CUSTOM
+  gpsEnabled: boolean("gps_enabled").notNull().default(false),
+  gpsHealth: text("gps_health").default("UNKNOWN"), // ONLINE|STALE|OFFLINE|UNKNOWN
+  gpsLastLat: doublePrecision("gps_last_lat"),
+  gpsLastLng: doublePrecision("gps_last_lng"),
+  gpsLastSpeedKmh: doublePrecision("gps_last_speed_kmh"),
+  gpsLastSeenTs: timestamp("gps_last_seen_ts"),
+  gpsMileageTodayKm: doublePrecision("gps_mileage_today_km").notNull().default(0),
+  gpsBreadcrumbs: jsonb("gps_breadcrumbs").default(sql`'[]'::jsonb`), // ring buffer ≤ 500 pts
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const transportTrips = pgTable("transport_trips", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  driverEmployeeId: integer("driver_employee_id"), // employees.id
+  driverName: text("driver_name"),
+  status: text("status").notNull().default("PLANNED"), // PLANNED|EN_ROUTE|COMPLETED|CANCELLED
+  purpose: text("purpose"), // DELIVERY|PICKUP|CHARTER|STAFF|RUNNING|PERSONAL|MAINTENANCE
+  source: text("source"),
+  destination: text("destination"),
+  startTs: timestamp("start_ts"),
+  endTs: timestamp("end_ts"),
+  startOdometerKm: doublePrecision("start_odometer_km"),
+  endOdometerKm: doublePrecision("end_odometer_km"),
+  expectedKm: doublePrecision("expected_km"),
+  actualKm: doublePrecision("actual_km"),
+  cargo: text("cargo"),
+  notes: text("notes"),
+  customerId: integer("customer_id"),
+  bookingId: integer("booking_id"), // transport_bookings.id (when booked)
+  fareGhs: doublePrecision("fare_ghs").default(0),
+  routePoints: jsonb("route_points").default(sql`'[]'::jsonb`), // [{lat,lng,label}]
+  gpsStarted: boolean("gps_started").default(false),
+  gpsCompletedTs: timestamp("gps_completed_ts"),
+  gpsRoute: jsonb("gps_route").default(sql`'[]'::jsonb`), // recorded track ≤ 5000 pts
+  gpsDistanceKm: doublePrecision("gps_distance_km").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const transportBookings = pgTable("transport_bookings", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  customerName: text("customer_name").notNull(),
+  customerPhone: text("customer_phone"),
+  customerId: integer("customer_id"), // linked/upserted customers.id
+  status: text("status").notNull().default("PENDING"), // PENDING|CONFIRMED|IN_PROGRESS|COMPLETED|CANCELLED
+  cargo: text("cargo"),
+  passengers: integer("passengers").default(0),
+  origin: text("origin"),
+  destination: text("destination"),
+  scheduledFor: timestamp("scheduled_for"),
+  completedAt: timestamp("completed_at"),
+  fareGhs: doublePrecision("fare_ghs").notNull().default(0),
+  depositGhs: doublePrecision("deposit_ghs").default(0),
+  notes: text("notes"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"), // transport_trips.id
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  cancelledReason: text("cancelled_reason"),
+});
+
+export const transportFuelLogs = pgTable("transport_fuel_logs", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  driverEmployeeId: integer("driver_employee_id"),
+  odometerKm: doublePrecision("odometer_km").notNull(),
+  quantityLiters: doublePrecision("quantity_liters").notNull(),
+  pricePerLiterGhs: doublePrecision("price_per_liter_ghs").notNull(),
+  totalGhs: doublePrecision("total_ghs").notNull(),
+  fuelType: text("fuel_type").notNull().default("DIESEL"),
+  station: text("station"),
+  notes: text("notes"),
+  receiptPhoto: text("receipt_photo"), // data:image/*
+  loggedDate: text("logged_date").notNull(), // yyyy-mm-dd
+  loggedAt: timestamp("logged_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const transportMaintenance = pgTable("transport_maintenance", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  category: text("category").notNull().default("PREVENTIVE"), // PREVENTIVE|REPAIR|INSPECTION|TYRES|BATTERY|OTHER|ENGINE|BRAKES|ELECTRICAL|SUSPENSION|BODY
+  status: text("status").notNull().default("DUE"), // DUE|IN_PROGRESS|DONE
+  title: text("title").notNull(),
+  description: text("description"),
+  assignedToEmployeeId: integer("assigned_to_employee_id"), // employees (tech) id; null = external
+  vendorName: text("vendor_name"),
+  odometerKm: doublePrecision("odometer_km"),
+  estimatedCostGhs: doublePrecision("estimated_cost_ghs").default(0),
+  actualCostGhs: doublePrecision("actual_cost_ghs").default(0),
+  dueDate: text("due_date"),
+  doneDate: text("done_date"),
+  nextDueOdometerKm: doublePrecision("next_due_odometer_km"),
+  nextDueDate: text("next_due_date"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+});
+
+export const transportVehicleChecklists = pgTable("transport_vehicle_checklists", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"),
+  shiftDate: text("shift_date").notNull(), // yyyy-mm-dd
+  odometerKm: doublePrecision("odometer_km").notNull(),
+  fuelLevelPct: integer("fuel_level_pct"),
+  lightsOk: boolean("lights_ok").notNull().default(false),
+  brakesOk: boolean("brakes_ok").notNull().default(false),
+  tyresOk: boolean("tyres_ok").notNull().default(false),
+  oilOk: boolean("oil_ok").notNull().default(false),
+  coolantOk: boolean("coolant_ok").notNull().default(false),
+  beltsOk: boolean("belts_ok").notNull().default(false),
+  mirrorsOk: boolean("mirrors_ok").notNull().default(false),
+  hornOk: boolean("horn_ok").notNull().default(false),
+  fireExtinguisherOk: boolean("fire_extinguisher_ok").notNull().default(false),
+  firstAidOk: boolean("first_aid_ok").notNull().default(false),
+  documentationOk: boolean("documentation_ok").notNull().default(false),
+  cleaningOk: boolean("cleaning_ok").notNull().default(false),
+  notes: text("notes"),
+  photo: text("photo"),
+  completedAt: timestamp("completed_at").defaultNow(),
+  userName: text("user_name"),
+  userRole: text("user_role"),
+  employeeId: integer("employee_id"), // employees.id (driver)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const transportGeofences = pgTable("transport_geofences", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("CIRCLE"), // CIRCLE|POLYGON
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  radiusM: integer("radius_m"),
+  polygon: jsonb("polygon"), // [[lat,lng],...] — only for POLYGON kind
+  notifyOnEnter: boolean("notify_on_enter").notNull().default(true),
+  notifyOnExit: boolean("notify_on_exit").notNull().default(true),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+});
+
+export const transportTrackerViolations = pgTable("transport_tracker_violations", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"),
+  kind: text("kind").notNull(), // SPEEDING|ROUTE_DEVIATION|UNAUTHORIZED_MOVEMENT|PROLONGED_STOP|GEOFENCE_ENTER|GEOFENCE_EXIT|TRACKER_OFFLINE|TRACKER_TAMPERED
+  severity: text("severity").notNull().default("CRITICAL"), // LOW|MEDIUM|HIGH|CRITICAL
+  detail: text("detail"),
+  remedyHint: text("remedy_hint"),
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  vehiclePlate: text("vehicle_plate"),
+  tripLabel: text("trip_label"),
+  status: text("status").notNull().default("UNRESOLVED"), // UNRESOLVED|ACKNOWLEDGED|RESOLVED
+  resolvedAt: timestamp("resolved_at"),
+  resolvedByName: text("resolved_by_name"),
+  resolutionNote: text("resolution_note"),
+  createdAt: timestamp("created_at").defaultNow(),
+  notifiedManagerUserIds: jsonb("notified_manager_user_ids").default(sql`'[]'::jsonb`),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
 });
