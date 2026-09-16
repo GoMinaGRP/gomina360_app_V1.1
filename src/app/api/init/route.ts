@@ -27,7 +27,7 @@ import {
   companySettings,
 } from "@/db/schema";
 import { seedDatabase } from "@/db/seed";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import { getSessionInfo, accessibleBusinessIds, filterByAccess } from "@/lib/auth";
 import { organizations, organizationMembers } from "@/db/schema";
 import { allowedBusinessTypesOfOrg } from "@/lib/businessTypes";
@@ -54,32 +54,101 @@ export async function GET(request: Request) {
     // Super Admin ⇒ all; everyone else ⇒ only their own organization(s).
     const inMyOrg = (ownerId: any) => me.isSuperAdmin || myOrgs.includes(Number(ownerId));
 
-    const allBusinesses = await db.select().from(businesses).orderBy(businesses.id);
-    const allMetrics = await db.select().from(businessMetrics);
-    const allUsers = await db.select().from(users).orderBy(users.id);
-    const allCustomers = await db.select().from(customers);
-    const allSuppliers = await db.select().from(suppliers);
-    const allEmployees = await db.select().from(employees);
-    const allAssets = await db.select().from(assets);
-    const allInventory = await db.select().from(inventoryItems);
-    const allTransactions = await db.select().from(transactions);
-    const allCreditSales = await db.select().from(creditSales);
-    const allAiInsights = await db.select().from(aiInsights);
-    const allScenarios = await db.select().from(scenarioSimulations);
-    const allIntegrations = await db.select().from(integrations);
-    // Unified enterprise daily checklists (master items + dated completions)
-    const allChecklistTemplates = await db.select().from(checklistTemplates);
-    const allChecklistEntries = await db.select().from(checklistEntries);
+    // ── Data fetch: ONE parallel batch with SQL-level pre-scoping.
+    // Before, this was 24+ SEQUENTIAL round trips of full-table dumps that
+    // were filtered only in JavaScript. Now:
+    //  • every independent read fires concurrently (one round trip of latency
+    //    instead of twenty+), and
+    //  • non-Super-Admin reads are narrowed in SQL by the access scope
+    //    (far fewer rows cross the wire as the platform grows).
+    // The JavaScript scoping below remains the final enforcement layer —
+    // semantics are identical; this is a pure access-path optimization.
+    // The Super Admin keeps full-table reads by design (D4: sees everything).
+    const bids: number[] | null = allowed === null ? null : allowed.length ? allowed : [-1];
+    const orgScope: number[] | null = me.isSuperAdmin ? null : myOrgs.length ? myOrgs : [-1];
+    const inBids = (col: any) => (bids ? inArray(col, bids) : undefined);
+    const inOrgScope = (col: any) => (orgScope ? inArray(col, orgScope) : undefined);
+    const execMemberQ = isExecutive && !me.isSuperAdmin
+      ? db.select({ userId: organizationMembers.userId })
+          .from(organizationMembers)
+          .where(inArray(organizationMembers.organizationId, myOrgs.length ? myOrgs : [-1]))
+      : Promise.resolve([]);
 
-    // Specialized logs
-    const poultry = await db.select().from(poultryLogs);
-    const blockFactory = await db.select().from(blockFactoryLogs);
-    const aquaculture = await db.select().from(aquacultureLogs);
-    const livestock = await db.select().from(livestockLogs);
-    const restaurant = await db.select().from(restaurantLogs);
-    const electronics = await db.select().from(electronicsLogs);
-    const carWash = await db.select().from(carWashLogs);
-    const hardware = await db.select().from(hardwareLogs);
+    const [
+      allBusinesses,
+      allMetrics,
+      allUsers,
+      allCustomers,
+      allSuppliers,
+      allEmployees,
+      allAssets,
+      allInventory,
+      allTransactions,
+      allCreditSales,
+      allAiInsights,
+      allScenarios,
+      allIntegrations,
+      allChecklistTemplates,
+      allChecklistEntries,
+      poultry,
+      blockFactory,
+      aquaculture,
+      livestock,
+      restaurant,
+      electronics,
+      carWash,
+      hardware,
+      memberRows0,
+    ] = await Promise.all([
+      bids
+        ? db.select().from(businesses).where(inArray(businesses.id, bids)).orderBy(businesses.id)
+        : db.select().from(businesses).orderBy(businesses.id),
+      db.select().from(businessMetrics).where(inBids(businessMetrics.businessId)),
+      // users stay small and directory-wide (executives/member visibility logic below);
+      // sensitive fields are stripped before returning.
+      db.select().from(users).orderBy(users.id),
+      // customers: business-stamped rows follow the business scope; untyped rows
+      // follow the owner's org — narrow to the union, JS refines below.
+      db.select().from(customers).where(
+        bids
+          ? orgScope
+            ? or(inArray(customers.businessId, bids), inArray(customers.ownerId, orgScope))
+            : inArray(customers.businessId, bids)
+          : undefined
+      ),
+      db.select().from(suppliers).where(inOrgScope(suppliers.ownerId)),
+      db.select().from(employees).where(inBids(employees.businessId)),
+      db.select().from(assets).where(inBids(assets.businessId)),
+      db.select().from(inventoryItems).where(inBids(inventoryItems.businessId)),
+      db.select().from(transactions).where(inBids(transactions.businessId)),
+      db.select().from(creditSales).where(inBids(creditSales.businessId)),
+      db.select().from(aiInsights).where(
+        bids
+          ? orgScope
+            ? or(inArray(aiInsights.businessId, bids), inArray(aiInsights.ownerId, orgScope))
+            : inArray(aiInsights.businessId, bids)
+          : undefined
+      ),
+      db.select().from(scenarioSimulations).where(
+        bids
+          ? orgScope
+            ? or(inArray(scenarioSimulations.targetBusinessId, bids), inArray(scenarioSimulations.ownerId, orgScope))
+            : inArray(scenarioSimulations.targetBusinessId, bids)
+          : undefined
+      ),
+      db.select().from(integrations).where(inOrgScope(integrations.ownerId)),
+      db.select().from(checklistTemplates).where(inBids(checklistTemplates.businessId)),
+      db.select().from(checklistEntries).where(inBids(checklistEntries.businessId)),
+      db.select().from(poultryLogs).where(inBids(poultryLogs.businessId)),
+      db.select().from(blockFactoryLogs).where(inBids(blockFactoryLogs.businessId)),
+      db.select().from(aquacultureLogs).where(inBids(aquacultureLogs.businessId)),
+      db.select().from(livestockLogs).where(inBids(livestockLogs.businessId)),
+      db.select().from(restaurantLogs).where(inBids(restaurantLogs.businessId)),
+      db.select().from(electronicsLogs).where(inBids(electronicsLogs.businessId)),
+      db.select().from(carWashLogs).where(inBids(carWashLogs.businessId)),
+      db.select().from(hardwareLogs).where(inBids(hardwareLogs.businessId)),
+      execMemberQ,
+    ]);
 
     // ── Scope everything to the user's accessible businesses ────────────
     const scopedBusinesses =
@@ -97,11 +166,7 @@ export async function GET(request: Request) {
     // their OWN organization(s) only; others ⇒ same-business accounts.
     let execMemberIds: Set<number> | null = null;
     if (isExecutive && !me.isSuperAdmin) {
-      const memberRows = await db
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(inArray(organizationMembers.organizationId, myOrgs.length ? myOrgs : [-1]));
-      execMemberIds = new Set(memberRows.map((m) => Number(m.userId)));
+      execMemberIds = new Set((memberRows0 as any[]).map((m) => Number(m.userId)));
     }
     const scopedUsers = (isExecutive
       ? (me.isSuperAdmin ? allUsers : allUsers.filter((u) => u.id === me.id || execMemberIds!.has(u.id)))

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { customerTrackings, businesses, inventoryItems, serviceAreas, pickupLocations, organizations } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -23,6 +24,8 @@ import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
  * page — their only key to this order.
  */
 export async function POST(request: NextRequest) {
+  // Orders decrement stock — refresh the short-lived public catalog cache.
+  ttlInvalidate("menu");
   try {
     const body = await request.json();
     const businessId = Number(body.businessId);

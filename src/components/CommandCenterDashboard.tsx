@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   TrendingUp,
@@ -226,8 +226,12 @@ export default function CommandCenterDashboard({
   // The dataset used by charts & tables
   const displayData = groupedData;
 
-  // Super Admin platform oversight: one financial rollup per Owner/Org.
-  const orgRollups = orgLens === "ALL" ? rollupsByOrg(businesses, metrics, organizations) : [];
+  // Super Admin platform oversight: one financial rollup per Owner/Org
+  // (memoized — this maps every business × metric row per render).
+  const orgRollups = useMemo(
+    () => (orgLens === "ALL" ? rollupsByOrg(businesses, metrics, organizations) : []),
+    [orgLens, businesses, metrics, organizations]
+  );
 
   // Calculate combined KPI totals across the SELECTED + grouped scope
   const totalRevenue = displayData.reduce((acc, b) => acc + b.revenueGhs, 0);
@@ -421,7 +425,7 @@ export default function CommandCenterDashboard({
               >
                 <div className="flex items-center gap-2.5">
                   {o.orgLogo && (
-                    <img src={o.orgLogo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800 shrink-0" />
+                    <img src={o.orgLogo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0">
                     <div className="text-sm font-black text-white truncate">{o.orgName}</div>

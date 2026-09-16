@@ -73,6 +73,7 @@ import {
 } from "@/lib/businessProvisioning";
 import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/lib/auth";
 import { businessTypeAllowed } from "@/lib/businessTypes";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { managesBusiness } from "@/lib/permissions";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
@@ -246,6 +247,7 @@ export async function GET(
  * dashboard, inventory, finance and report view stays correct.
  */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  ttlInvalidate("menu");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -486,6 +488,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
  * (never deleted). Body: { confirmCode: "<BUSINESS-CODE>" }.
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  ttlInvalidate("menu");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);

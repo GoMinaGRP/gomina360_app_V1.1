@@ -145,8 +145,7 @@ export default function Sidebar({
               src={biz.logo}
               alt=""
               data-testid={`sidebar-biz-logo-${biz.code}`}
-              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0"
-            />
+              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
           ) : (
             <IconComp
               className={`w-4 h-4 ${
@@ -384,8 +383,7 @@ export default function Sidebar({
                         src={group.orgLogo}
                         alt=""
                         data-testid={`sidebar-org-logo-${group.orgId}`}
-                        className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0"
-                      />
+                        className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
                     ) : (
                       <span
                         className={`inline-block w-2 h-2 rounded-full shrink-0 ${

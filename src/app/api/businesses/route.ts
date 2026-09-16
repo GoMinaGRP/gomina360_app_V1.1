@@ -10,6 +10,7 @@ import {
 import { resolveOwnerActor } from "@/lib/recordPermissions";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { businessTypeAllowed, businessTypeLabelOf } from "@/lib/businessTypes";
+import { ttlInvalidate } from "@/lib/ttlCache";
 
 export async function GET(request: Request) {
   try {
@@ -42,6 +43,7 @@ export async function GET(request: Request) {
  * for the unit they created so it appears in their sidebar at once.
  */
 export async function POST(request: Request) {
+  ttlInvalidate("menu");
   try {
     const body = await request.json();
     // Session-verified gate (credentials from the secure login cookie —

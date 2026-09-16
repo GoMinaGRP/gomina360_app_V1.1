@@ -215,7 +215,14 @@ export default function GoMinaApp() {
   // must layer onto the seeded quarter — across sessions, not only in-session.
   const baselineMaxTxnId = useRef<number | null>(null);
 
+  // In-flight refresh dedupe: multiple components calling onChanged ->
+  // refreshAllData in one burst used to fan out N identical /api/init
+  // requests. Everyone shares the single in-flight refresh instead.
+  const refreshInFlight = useRef<Promise<"ok" | "unauthorized" | "error"> | null>(null);
+
   const refreshAllData = useCallback(async (): Promise<"ok" | "unauthorized" | "error"> => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const run = (async (): Promise<"ok" | "unauthorized" | "error"> => {
     try {
       const res = await fetch("/api/init");
       // Session gone (expired, revoked by the OWNER, or the server/database
@@ -295,6 +302,11 @@ export default function GoMinaApp() {
       setOfflineQueueCount(getOfflineQueue().length);
     }
     return "error";
+    })();
+    refreshInFlight.current = run;
+    const result = await run;
+    refreshInFlight.current = null;
+    return result;
   }, []);
 
   // Attach the bearer-token channel to every /api fetch before ANY fetch can
@@ -1446,7 +1458,7 @@ export default function GoMinaApp() {
                   }`}
                 >
                   {openBiz.logo && (
-                    <img src={openBiz.logo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800" />
+                    <img src={openBiz.logo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0">
                     <div className="text-[11px] font-black tracking-wide text-white truncate">

@@ -12,6 +12,7 @@ import {
 } from "@/db/schema";
 import { desc, eq, inArray, and, sql } from "drizzle-orm";
 import { BUSINESS_TYPES, businessTypeKeyOf, businessTypeLabelOf } from "@/lib/businessTypes";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import {
   requireSuperAdmin,
   getSessionInfo,
@@ -109,6 +110,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  ttlInvalidate("menu");
   try {
     const actor = await requireSuperAdmin(request);
     if (!actor) return FORBIDDEN("Only the platform Super Admin can create organizations.");
@@ -221,6 +223,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  ttlInvalidate("menu");
   try {
     const actor = await requireSuperAdmin(request);
     if (!actor) return FORBIDDEN("Only the platform Super Admin can manage organizations.");

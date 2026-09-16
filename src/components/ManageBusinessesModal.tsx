@@ -1044,8 +1044,7 @@ export default function ManageBusinessesModal({
                               src={biz.logo}
                               alt={`${biz.name} crest`}
                               data-testid={`manage-biz-logo-${biz.code}`}
-                              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800"
-                            />
+                              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
                           ) : (
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
@@ -1625,8 +1624,7 @@ export default function ManageBusinessesModal({
                             width={104}
                             height={104}
                             className="rounded-lg border border-slate-600 bg-white p-1.5"
-                            data-testid="mb-onl-qr-order"
-                          />
+                            data-testid="mb-onl-qr-order" loading="lazy" decoding="async" />
                         ) : (
                           <div className="w-[104px] h-[104px] rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[9px] text-slate-500" data-testid="mb-onl-qr-order-loading">
                             Building QR…
@@ -1672,8 +1670,7 @@ export default function ManageBusinessesModal({
                             width={104}
                             height={104}
                             className="rounded-lg border border-slate-600 bg-white p-1.5"
-                            data-testid="mb-onl-qr-track"
-                          />
+                            data-testid="mb-onl-qr-track" loading="lazy" decoding="async" />
                         ) : (
                           <div className="w-[104px] h-[104px] rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[9px] text-slate-500" data-testid="mb-onl-qr-track-loading">
                             Building QR…
@@ -1726,7 +1723,7 @@ export default function ManageBusinessesModal({
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
                         {companyLogo ? (
-                          <img src={companyLogo} alt="GoMina company logo" className="max-h-12 max-w-12 object-contain" data-testid="bizlogo-company-preview" />
+                          <img src={companyLogo} alt="GoMina company logo" className="max-h-12 max-w-12 object-contain" data-testid="bizlogo-company-preview" loading="lazy" decoding="async" />
                         ) : (
                           <Building2 className="w-6 h-6 text-slate-400" />
                         )}
@@ -1774,7 +1771,7 @@ export default function ManageBusinessesModal({
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
                         {bizRow.logo ? (
-                          <img src={bizRow.logo} alt={`${bizRow.name} logo`} className="max-h-12 max-w-12 object-contain" data-testid={`bizlogo-preview-${bizRow.id}`} />
+                          <img src={bizRow.logo} alt={`${bizRow.name} logo`} className="max-h-12 max-w-12 object-contain" data-testid={`bizlogo-preview-${bizRow.id}`} loading="lazy" decoding="async" />
                         ) : (
                           <Building2 className="w-6 h-6 text-slate-400" />
                         )}
@@ -1848,7 +1845,7 @@ export default function ManageBusinessesModal({
                       />
                     </label>
                     {branchLogoFile && (
-                      <img src={branchLogoFile} alt="pending branch logo" className="h-8 w-8 rounded-lg object-contain bg-white p-0.5" data-testid={`bizlogo-branch-pending-${bizRow.id}`} />
+                      <img src={branchLogoFile} alt="pending branch logo" className="h-8 w-8 rounded-lg object-contain bg-white p-0.5" data-testid={`bizlogo-branch-pending-${bizRow.id}`} loading="lazy" decoding="async" />
                     )}
                     <button
                       onClick={saveBranchLogo}
@@ -1866,7 +1863,7 @@ export default function ManageBusinessesModal({
                     {branchEntries.map((code) => (
                       <div key={code} className="flex items-center justify-between gap-3 rounded-lg bg-slate-900/60 border border-slate-700 px-2.5 py-1.5">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <img src={branchMap[code]} alt={`Branch ${code} logo`} className="h-8 w-8 rounded-lg object-contain bg-white p-0.5 shrink-0" />
+                          <img src={branchMap[code]} alt={`Branch ${code} logo`} className="h-8 w-8 rounded-lg object-contain bg-white p-0.5 shrink-0" loading="lazy" decoding="async" />
                           <span className="text-xs font-mono font-bold text-white">{code}</span>
                           <span className="text-[10px] text-slate-500">documents for this branch use this logo automatically</span>
                         </div>

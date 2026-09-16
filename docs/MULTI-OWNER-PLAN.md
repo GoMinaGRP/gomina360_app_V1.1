@@ -335,3 +335,40 @@ scoped payloads). Shared pure logic lives in `src/lib/orgGrouping.ts`
 
 Verification: multiowner-verify 118/118, phase0 authz 63/63, security
 23/23, lens-verify 15/15 (multi-org), `tsc --noEmit` src-clean.
+
+## 14. Addendum — Owner Management confirmations & performance optimization (delivered)
+
+**Owner lifecycle UX:** suspend now requires an explicit two-click
+confirmation ("Ends all member sessions now?"); delete keeps the typed-name
+confirmation; every lifecycle mutation is audit-trailed
+(SUSPEND/ACTIVATE/DELETE/RESTORE_ORGANIZATION).
+
+**Performance audit & optimization** (no features removed, semantics
+unchanged — verified by scope-parity tests):
+
+1. **`/api/init` access path** — previously 24+ sequential full-table
+   `select()` round trips filtered only in JavaScript; now ONE parallel
+   batch with SQL-level pre-scoping for non-Super-Admins (businessId /
+   ownerId IN scope). The JS scoping remains the final enforcement layer;
+   D4 (Super Admin ⇒ full payload) is untouched by design.
+2. **28 perf indexes** (`business_id` / `owner_id` / session & membership
+   columns across every hot table), idempotent in
+   `migrate-production-schema.mjs`.
+3. **Public marketplace `/api/menu`** — previously built the full catalog
+   per request; now per-process 10-second TTL cache (`src/lib/ttlCache.ts`)
+   with explicit invalidation from every catalog-affecting write
+   (enterprise CRUD, businesses CRUD, org lifecycle, order placement).
+   Warm hit ~5–6ms (was ~13–15ms); checkout still re-validates stock, so
+   staleness can never oversell.
+4. **Frontend:** shared in-flight refresh dedupe (a burst of `onChanged`
+   calls used to fan out N identical `/api/init` refetches); per-org
+   rollups memoized in the Command Center; 11 crest/logo `<img>` rendered
+   `loading="lazy" decoding="async"`.
+5. **Measured (fixture DB, warm):** init ~50ms both users, menu hit ~6ms,
+   login ~59ms, root ~35ms. Cold first-hits in dev are webpack compile
+   costs, eliminated in production builds.
+
+**Verification:** `dev-tooling/perf-verify.mjs` (13/13 — latency gates,
+JS↔SQL scope parity, cache behavior, index coverage, invariants) plus all
+suites: multiowner 118/118, phase0 63/63, security 23/23, lens 15/15,
+tsc clean.

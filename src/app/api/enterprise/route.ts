@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import {
   employees,
   employeeHistory,
@@ -98,6 +99,7 @@ export async function GET(request: Request) {
  * INVENTORY), resolved server-side from the database.
  */
 export async function PATCH(request: Request) {
+  ttlInvalidate("menu");
   try {
     const body = await request.json();
     const { entityType, id, data, actorUserId } = body || {};
@@ -281,6 +283,7 @@ export async function PATCH(request: Request) {
  * snapshot, user, date+time, mandatory reason) first.
  */
 export async function DELETE(request: Request) {
+  ttlInvalidate("menu");
   try {
     const body = await request.json().catch(() => ({}));
     const { entityType, id, reason, actorUserId } = body || {};
@@ -397,6 +400,7 @@ export async function DELETE(request: Request) {
 }
 
 export async function POST(request: Request) {
+  ttlInvalidate("menu");
   try {
     const body = await request.json();
     const { entityType, data } = body;

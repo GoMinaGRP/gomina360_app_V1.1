@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations } from "@/db/schema";
 import { asc, eq, gt, ne, and } from "drizzle-orm";
+import { ttlGet, ttlSet } from "@/lib/ttlCache";
 
 /**
  * PUBLIC online-ordering menu — NO login required.
@@ -10,9 +11,24 @@ import { asc, eq, gt, ne, and } from "drizzle-orm";
  * unit, selling price, live availability. Deliberately excludes cost prices,
  * margins, thresholds and any internal fields. Photos are passed through
  * when the branch registered one.
+ *
+ * Performance: the catalog is identical for every customer and expensive to
+ * build, so it is cached server-side for a few seconds and invalidated by
+ * every inventory/business write. Checkout always re-validates stock, so a
+ * couple of seconds of catalog staleness can never oversell.
  */
+const MENU_CACHE_KEY = "menu:v1";
+const MENU_TTL_MS = 10_000;
+
 export async function GET() {
   try {
+    const cached = ttlGet<any>(MENU_CACHE_KEY);
+    if (cached !== undefined) {
+      return NextResponse.json(
+        { success: true, businesses: cached },
+        { headers: { "Cache-Control": "no-store", "X-Menu-Cache": "hit" } },
+      );
+    }
     const [bizRows, itemRows, areaRows, pickupRows, orgRows] = await Promise.all([
       db.select().from(businesses).orderBy(asc(businesses.id)),
       db
@@ -126,9 +142,10 @@ export async function GET() {
       });
     }
 
+    ttlSet(MENU_CACHE_KEY, result, MENU_TTL_MS);
     return NextResponse.json(
       { success: true, businesses: result },
-      { headers: { "Cache-Control": "no-store" } },
+      { headers: { "Cache-Control": "no-store", "X-Menu-Cache": "miss" } },
     );
   } catch (error: any) {
     console.error("GET /api/menu error:", error);

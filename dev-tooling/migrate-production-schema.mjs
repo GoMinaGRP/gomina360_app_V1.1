@@ -173,6 +173,41 @@ try {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Performance indexes (additive; IF NOT EXISTS ⇒ idempotent). These serve the
+  // hot access paths: per-business scoping in /api/init & module queries and the
+  // per-organization tenant filters. Read-only accelerator — zero data change.
+  // ──────────────────────────────────────────────────────────────────────────────
+  const perfIndexes = [
+    ["customers", "business_id"], ["customers", "owner_id"],
+    ["credit_sales", "business_id"],
+    ["employees", "business_id"],
+    ["assets", "business_id"],
+    ["inventory_items", "business_id"],
+    ["transactions", "business_id"],
+    ["business_metrics", "business_id"],
+    ["suppliers", "owner_id"],
+    ["integrations", "owner_id"],
+    ["ai_insights", "business_id"], ["ai_insights", "owner_id"],
+    ["scenario_simulations", "target_business_id"], ["scenario_simulations", "owner_id"],
+    ["checklist_templates", "business_id"], ["checklist_entries", "business_id"],
+    ["poultry_logs", "business_id"], ["block_factory_logs", "business_id"],
+    ["aquaculture_logs", "business_id"], ["livestock_logs", "business_id"],
+    ["restaurant_logs", "business_id"], ["electronics_logs", "business_id"],
+    ["car_wash_logs", "business_id"], ["hardware_logs", "business_id"],
+    ["organization_members", "organization_id"], ["organization_members", "user_id"],
+    ["user_sessions", "user_id"],
+    ["audit_trail", "owner_id"],
+  ];
+  for (const [tbl, col] of perfIndexes) {
+    const t = await client.query("select to_regclass($1) as name", [`public.${tbl}`]);
+    if (t.rows[0]?.name) {
+      await client.query(
+        `create index if not exists ${tbl}_${col}_idx on public.${tbl} (${col})`,
+      );
+    }
+  }
+
   // ── Backfill: single existing Owner ⇒ org #1 owns everything it does today ──
   await client.query(`insert into public.organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
       select 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
