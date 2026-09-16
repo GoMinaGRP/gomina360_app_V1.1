@@ -17,6 +17,7 @@ const ALL_CATEGORY_OPTIONS: { value: string; text: string; key: string }[] = [
   { value: "Car Wash", text: "Car Wash", key: "CAR_WASH" },
   { value: "Hardware Store", text: "Hardware Store (Construction & Building Materials)", key: "HARDWARE_STORE" },
   { value: "Telecom & Digital Services", text: "Telecom & Digital Services (MoMo, Airtime, Data, Wi-Fi)", key: "TELECOM_DIGITAL" },
+  { value: "Transportation", text: "Transportation / Fleet & Logistics", key: "TRANSPORTATION" },
 ];
 
 interface NewBusinessModalProps {

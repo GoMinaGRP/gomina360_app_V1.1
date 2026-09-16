@@ -38,6 +38,7 @@ import RestaurantKitchenModule from "./RestaurantKitchenModule";
 import HardwareStoreModule from "./HardwareStoreModule";
 import CarWashModule from "./CarWashModule";
 import TelecomServicesModule from "./TelecomServicesModule";
+import TransportModule from "./TransportModule";
 import BusinessDashboardModule from "./BusinessDashboardModule";
 import UniversalExportCenter from "./UniversalExportCenter";
 import { CurrencyCode } from "@/lib/currency";
@@ -919,8 +920,11 @@ export default function GoMinaApp() {
       "Car Wash": "WASH",
       "Hardware Store": "HARDWARE",
       "Telecom & Digital Services": "TELECOM",
+      Transportation: "TRANSPORT",
+      "Transport & Logistics": "TRANSPORT",
+      Logistics: "TRANSPORT",
     };
-    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM"];
+    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT"];
     const tabBiz = scopedBusinesses.find((b) => b.code === activeTab);
     if (tabBiz) {
       const bizInfo = tabBiz;
@@ -1107,6 +1111,24 @@ export default function GoMinaApp() {
             transactions={scopedTransactions}
             inventory={scopedInventory}
             customers={scopedCustomers}
+          />
+        );
+      }
+
+      // Transportation / fleet units get the full fleet module (trips, GPS…).
+      if (moduleKey === "TRANSPORT") {
+        return (
+          <TransportModule
+            currentUser={currentUser}
+            businessInfo={bizInfo}
+            businessMetrics={bizMetric}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
+            currentCurrency={currentCurrency}
+            onRefreshData={refreshAllData}
           />
         );
       }
