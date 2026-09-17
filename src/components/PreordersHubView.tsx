@@ -110,8 +110,9 @@ function GuidePane() {
           <Step n={4} title="Add a pre-order option to a product">
             Click <b>Offer</b> → pick the <b>Product</b> (from that unit's stock catalogue) and a{" "}
             <b>Fulfilment method</b> → set the <b>price</b>, <b>lead-time min/max days</b>,{" "}
-            <b>deposit</b> (none / % / fixed) and <b>balance timing</b> (on arrival vs. when ready). Save —
-            the option goes live immediately.
+            <b>deposit</b> (none / % / fixed) and <b>balance timing</b> (on arrival vs. when ready), plus
+            an optional <b>preferred supplier</b>, <b>capacity cap</b> and <b>delivery-address rule</b>.
+            Save — the option goes live immediately. Methods can be edited or disabled later from their rows.
           </Step>
           <Step n={5} title="It publishes instantly">
             The product card on <b>/order</b> now shows the option (indigo card: method · days · price ·

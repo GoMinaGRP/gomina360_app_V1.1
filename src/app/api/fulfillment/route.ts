@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { businesses, fulfillmentMethods, fulfillmentOptions, inventoryItems, organizations } from "@/db/schema";
+import { businesses, fulfillmentMethods, fulfillmentOptions, inventoryItems, organizations, suppliers } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { canAccessBusiness, filterByAccess, accessibleBusinessIds, getSessionInfo } from "@/lib/auth";
 import { DEFAULT_FULFILLMENT_METHODS, ensureDefaultMethods } from "@/lib/preorder";
@@ -47,6 +47,20 @@ export async function GET(request: NextRequest) {
       .filter((i) => (bizFilter ? Number(i.businessId) === bizFilter : true))
       .map((i) => ({ id: i.id, businessId: i.businessId, name: i.name, sku: i.sku, quantity: i.quantity, status: i.status, unitPriceGhs: i.sellingPriceGhs, category: i.category }));
 
+    // Suppliers the caller may link to options / purchase orders (org-scoped).
+    let supplierRows = await db.select().from(suppliers);
+    if (!me.isSuperAdmin) {
+      supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? -1)));
+    }
+    const suppliersOut = supplierRows.map((sp) => ({
+      id: sp.id,
+      name: sp.name,
+      category: sp.category,
+      contactPhone: sp.phone,
+      contactPerson: sp.contactPerson,
+      paymentTerms: sp.paymentTerms,
+    }));
+
     return NextResponse.json({
       success: true,
       methods: methodRows.map((m) => ({
@@ -73,6 +87,7 @@ export async function GET(request: NextRequest) {
       }),
       defaults: DEFAULT_FULFILLMENT_METHODS,
       inventory,
+      suppliers: suppliersOut,
       preorderFlags,
     });
   } catch (error: any) {
@@ -143,6 +158,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: true, method: created });
       }
       const id = Number(body.id);
+      // TENANT SCOPE: the method must belong to the caller's org (and to a
+      // unit the caller can manage when it's unit-scoped). Without this a
+      // signed-in user of org B could rewrite org A's fulfilment methods.
+      const [existing] = await db.select().from(fulfillmentMethods).where(eq(fulfillmentMethods.id, id));
+      if (!existing || Number(existing.ownerId) !== Number(ownerOrg)) {
+        return NextResponse.json({ success: false, error: "Method not found." }, { status: 404 });
+      }
+      if (existing.businessId != null && !(await canAccessBusiness(me, Number(existing.businessId)))) {
+        return NextResponse.json({ success: false, error: "You cannot manage this unit." }, { status: 403 });
+      }
       const [row] = await db
         .update(fulfillmentMethods)
         .set({
@@ -209,6 +234,17 @@ export async function POST(request: NextRequest) {
       if (meth.active === false) {
         return NextResponse.json({ success: false, error: "That fulfilment method is disabled — enable it first." }, { status: 400 });
       }
+      // Preferred supplier (optional): must belong to the SAME org — cross-
+      // tenant supplier binding is rejected, missing id maps to NULL.
+      let supplierId: number | null = null;
+      if (body.supplierId != null && body.supplierId !== "") {
+        const sid = Number(body.supplierId);
+        const [sup] = await db.select().from(suppliers).where(eq(suppliers.id, sid));
+        if (!sup || Number(sup.ownerId ?? -1) !== Number(ownerOrg)) {
+          return NextResponse.json({ success: false, error: "That supplier does not belong to your organization." }, { status: 400 });
+        }
+        supplierId = sid;
+      }
       const depType = ["NONE", "PERCENT", "FIXED"].includes(body.depositType) ? body.depositType : "NONE";
       let depVal = Math.max(0, Number(body.depositValue) || 0);
       if (depType === "PERCENT") depVal = Math.min(100, depVal);
@@ -235,6 +271,7 @@ export async function POST(request: NextRequest) {
             depositValue: depVal,
             termsKey,
             capacityPerPeriod: body.capacityPerPeriod != null ? Math.max(0, Number(body.capacityPerPeriod) || 0) : null,
+            supplierId,
             requiresAddress: body.requiresAddress == null ? null : Boolean(body.requiresAddress),
             sortOrder: Number(body.sortOrder) || 0,
             createdByUserId: me.id ?? null,
@@ -257,6 +294,7 @@ export async function POST(request: NextRequest) {
           depositValue: depVal,
           termsKey,
           capacityPerPeriod: body.capacityPerPeriod != null ? Math.max(0, Number(body.capacityPerPeriod) || 0) : null,
+          supplierId,
           requiresAddress: body.requiresAddress == null ? null : Boolean(body.requiresAddress),
           sortOrder: Number(body.sortOrder) || 0,
           active: Boolean(body.active),

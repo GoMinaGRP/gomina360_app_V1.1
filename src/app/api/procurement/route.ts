@@ -25,6 +25,14 @@ export async function GET(request: NextRequest) {
     const statusFilter = (url.searchParams.get("status") || "").trim().toUpperCase();
 
     const allowed = await accessibleBusinessIds(me);
+    // Suppliers for the Raise-PO dropdown — org-scoped like everything else.
+    const myOrgIds: number[] = Array.isArray(me.organizationIds) ? me.organizationIds.map(Number) : [];
+    let supplierRows = await db.select().from(suppliers);
+    if (!me.isSuperAdmin) supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? -1)));
+    const suppliersOut = supplierRows.map((sp) => ({
+      id: sp.id, name: sp.name, category: sp.category,
+      contactPhone: sp.phone, contactPerson: sp.contactPerson, paymentTerms: sp.paymentTerms,
+    }));
     let rows = filterByAccess(await db.select().from(supplierOrders), allowed);
     if (bizFilter) rows = rows.filter((r) => Number(r.businessId) === bizFilter);
     if (statusFilter) rows = rows.filter((r) => r.status === statusFilter);
@@ -47,6 +55,7 @@ export async function GET(request: NextRequest) {
         receipts: byPo.get(r.id) || [],
         canAdvance: (SUPPLIER_ORDER_NEXT[r.status as SupplierOrderStatus] || []),
       })),
+      suppliers: suppliersOut,
       meta: { scope: allowed === null ? "ALL" : allowed },
     });
   } catch (error: any) {

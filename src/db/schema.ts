@@ -831,6 +831,9 @@ export const fulfillmentOptions = pgTable("fulfillment_options", {
   // balance timing: 'ON_ARRIVAL' | 'ON_FULFILLMENT'
   termsKey: text("terms_key").notNull().default("ON_FULFILLMENT"),
   capacityPerPeriod: doublePrecision("capacity_per_period"), // optional cap
+  /** Preferred supplier for re-ordering this pre-order item (org-scoped).
+   *  Shown in setup + pre-fills the procurement raise. NULL = choose later. */
+  supplierId: integer("supplier_id").references(() => suppliers.id),
   requiresAddress: boolean("requires_address"), // override method default
   active: boolean("active").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
