@@ -130,6 +130,42 @@ const Field = ({ label, children, span }: any) => (
 );
 const inp = "w-full rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none";
 
+/** Shared modal shell. NOTE: defined at MODULE scope on purpose — components
+ *  created inline inside TransportModule got a fresh type identity on every
+ *  keystroke-driven re-render, so React unmounted/remounted all inputs in the
+ *  form and focus dropped after a single character. */
+function Modal({ title, onSubmit, submitLabel = "Save", saving = false, onClose, children }: any) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" data-testid="transport-modal">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-800 p-4 shadow-2xl sm:rounded-2xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-white">{title}</h3>
+          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-white" data-testid="transport-modal-close"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700">Cancel</button>
+          <button onClick={onSubmit} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50" data-testid="transport-modal-submit">
+            {saving ? "Saving…" : submitLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Vehicle picker — hoisted with Modal (same remount-on-keystroke fix). */
+function VehicleSelect({ value, onChange, onlyActive = false, vehicles }: any) {
+  return (
+    <select className={inp} value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)} data-testid="transport-vehicle-select">
+      <option value="">Select vehicle…</option>
+      {(vehicles || []).filter((v: any) => !onlyActive || v.status === "ACTIVE").map((v: any) => (
+        <option key={v.id} value={v.id}>{v.licensePlate} — {v.name}</option>
+      ))}
+    </select>
+  );
+}
+
 export default function TransportModule(props: Props) {
   const { currentUser, businessInfo, currentCurrency, onRefreshData } = props;
   const bizId = Number(businessInfo?.id);
@@ -356,33 +392,6 @@ export default function TransportModule(props: Props) {
   };
 
   /* ═══════════════════ RENDER ═══════════════════ */
-  const Modal = ({ title, onSubmit, submitLabel = "Save", children }: any) => (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" data-testid="transport-modal">
-      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-800 p-4 shadow-2xl sm:rounded-2xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white">{title}</h3>
-          <button onClick={() => setForm(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-white" data-testid="transport-modal-close"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => setForm(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700">Cancel</button>
-          <button onClick={onSubmit} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50" data-testid="transport-modal-submit">
-            {saving ? "Saving…" : submitLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const VehicleSelect = ({ value, onChange, onlyActive = false }: any) => (
-    <select className={inp} value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)} data-testid="transport-vehicle-select">
-      <option value="">Select vehicle…</option>
-      {vehicles.filter((v) => !onlyActive || v.status === "ACTIVE").map((v) => (
-        <option key={v.id} value={v.id}>{v.licensePlate} — {v.name}</option>
-      ))}
-    </select>
-  );
-
   const rowCls = "rounded-xl border border-slate-700/60 bg-slate-800/60 p-3";
 
   return (
@@ -765,7 +774,7 @@ export default function TransportModule(props: Props) {
                 <div className="flex items-center gap-1.5">
                   <Badge text={m.status} />
                   {canEdit && m.status === "DUE" && <button onClick={() => maintAct(m.id, "START")} className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[10px] font-bold text-violet-300" data-testid={`transport-mstart-${m.id}`}>Start (grounds vehicle)</button>}
-                  {canEdit && m.status === "IN_WORKSHOP" && (
+                  {canEdit && (m.status === "IN_WORKSHOP" || m.status === "IN_PROGRESS") && (
                     <>
                       <input className="w-20 rounded-md border border-slate-600 bg-slate-900 px-1.5 py-1 text-[10px] text-white" placeholder={`cost (${m.estimatedCostGhs || 0})`} value={draft[`mc_${m.id}`] ?? ""} onChange={(e) => setDraft({ ...draft, [`mc_${m.id}`]: e.target.value })} data-testid={`transport-mcost-${m.id}`} />
                       <button onClick={() => maintAct(m.id, "DONE", { actualCostGhs: Number(draft[`mc_${m.id}`] || m.estimatedCostGhs || 0) })} className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-300" data-testid={`transport-mdone-${m.id}`}>Done</button>
@@ -982,7 +991,7 @@ export default function TransportModule(props: Props) {
             <p className="mt-3 text-[10px] text-slate-500">Devices/warehouses point at <b>POST /api/transport/trackers</b> with <code className="rounded bg-slate-900 px-1">action=INGEST</code> + <code className="rounded bg-slate-900 px-1">deviceId</code> + <code className="rounded bg-slate-900 px-1">secret</code> + <code className="rounded bg-slate-900 px-1">lat/lng/speed</code>. The device secret is shown ONCE at registration above — store it in the installer sheet.</p>
           </div>
 
-          <AiSectionGuide moduleKey="TRANSPORT" section="GPS" businessInfo={businessInfo} />
+          <AiSectionGuide moduleKey="TRANSPORT" section="TRACKERS" businessInfo={businessInfo} />
         </div>
       )}
 
@@ -1120,7 +1129,7 @@ export default function TransportModule(props: Props) {
 
       {/* ══════════ FORMS ══════════ */}
       {form === "VEHICLE" && (
-        <Modal title="Register vehicle" onSubmit={submitVehicle} submitLabel="Register">
+        <Modal onClose={() => setForm(null)} saving={saving} title="Register vehicle" onSubmit={submitVehicle} submitLabel="Register">
           <Field label="Vehicle name *"><input className={inp} placeholder="12-Ton Cargo #1" value={draft.name || ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="transport-f-name" /></Field>
           <Field label="License plate *"><input className={inp} placeholder="GR 4567-25" value={draft.licensePlate || ""} onChange={(e) => setDraft({ ...draft, licensePlate: e.target.value })} data-testid="transport-f-plate" /></Field>
           <Field label="Type"><select className={inp} value={draft.vehicleType || "TRUCK"} onChange={(e) => setDraft({ ...draft, vehicleType: e.target.value })}>{VEHICLE_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
@@ -1139,8 +1148,8 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "TRIP" && (
-        <Modal title="Create trip" onSubmit={submitTrip} submitLabel="Create">
-          <Field label="Vehicle"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
+        <Modal onClose={() => setForm(null)} saving={saving} title="Create trip" onSubmit={submitTrip} submitLabel="Create">
+          <Field label="Vehicle"><VehicleSelect vehicles={vehicles} value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
           <Field label="Driver"><select className={inp} value={draft.driverEmployeeId || ""} onChange={(e) => setDraft({ ...draft, driverEmployeeId: e.target.value ? Number(e.target.value) : undefined })}><option value="">name free…</option>{drivers.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field>
           <Field label="Driver name (optional)"><input className={inp} value={draft.driverName || ""} onChange={(e) => setDraft({ ...draft, driverName: e.target.value })} /></Field>
           <Field label="Purpose"><select className={inp} value={draft.purpose || "DELIVERY"} onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}>{TRIP_PURPOSES.map((t) => <option key={t}>{t}</option>)}</select></Field>
@@ -1156,10 +1165,10 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "BOOKING" && (
-        <Modal title="New booking / order" onSubmit={submitBooking} submitLabel="Create booking">
+        <Modal onClose={() => setForm(null)} saving={saving} title="New booking / order" onSubmit={submitBooking} submitLabel="Create booking">
           <Field label="Customer name *"><input className={inp} value={draft.customerName || ""} onChange={(e) => setDraft({ ...draft, customerName: e.target.value })} data-testid="transport-f-cust" /></Field>
           <Field label="Phone"><input className={inp} value={draft.customerPhone || ""} onChange={(e) => setDraft({ ...draft, customerPhone: e.target.value })} /></Field>
-          <Field label="From"><input className={inp} value={draft.origin || ""} onChange={(e) => setDraft({ ...draft, origin: e.target.value })} /></Field>
+          <Field label="From"><input className={inp} value={draft.origin || ""} onChange={(e) => setDraft({ ...draft, origin: e.target.value })} data-testid="transport-f-origin" /></Field>
           <Field label="To"><input className={inp} value={draft.destination || ""} onChange={(e) => setDraft({ ...draft, destination: e.target.value })} /></Field>
           <Field label="Cargo"><input className={inp} value={draft.cargo || ""} onChange={(e) => setDraft({ ...draft, cargo: e.target.value })} /></Field>
           <Field label="Passengers"><input className={inp} type="number" value={draft.passengers ?? 0} onChange={(e) => setDraft({ ...draft, passengers: Number(e.target.value) })} /></Field>
@@ -1170,8 +1179,8 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "FUEL" && (
-        <Modal title="Log fuel" onSubmit={submitFuel} submitLabel="Log → Expenses">
-          <Field label="Vehicle *"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => { const veh = vehById(v); setDraft({ ...draft, vehicleId: v, odometerKm: veh?.odometerKm ?? draft.odometerKm, fuelType: veh?.fuelType ?? draft.fuelType }); }} /></Field>
+        <Modal onClose={() => setForm(null)} saving={saving} title="Log fuel" onSubmit={submitFuel} submitLabel="Log → Expenses">
+          <Field label="Vehicle *"><VehicleSelect vehicles={vehicles} value={draft.vehicleId} onChange={(v: number) => { const veh = vehById(v); setDraft({ ...draft, vehicleId: v, odometerKm: veh?.odometerKm ?? draft.odometerKm, fuelType: veh?.fuelType ?? draft.fuelType }); }} /></Field>
           <Field label="Odometer (km)"><input className={inp} type="number" value={draft.odometerKm ?? ""} onChange={(e) => setDraft({ ...draft, odometerKm: Number(e.target.value) })} data-testid="transport-f-odo" /></Field>
           <Field label="Liters *"><input className={inp} type="number" value={draft.quantityLiters ?? ""} onChange={(e) => setDraft({ ...draft, quantityLiters: Number(e.target.value) })} data-testid="transport-f-liters" /></Field>
           <Field label="Price per liter *"><input className={inp} type="number" step="0.01" value={draft.pricePerLiterGhs ?? ""} onChange={(e) => setDraft({ ...draft, pricePerLiterGhs: Number(e.target.value) })} data-testid="transport-f-ppl" /></Field>
@@ -1183,8 +1192,8 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "MAINT" && (
-        <Modal title="New maintenance job" onSubmit={submitMaint} submitLabel="Create job">
-          <Field label="Vehicle *"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
+        <Modal onClose={() => setForm(null)} saving={saving} title="New maintenance job" onSubmit={submitMaint} submitLabel="Create job">
+          <Field label="Vehicle *"><VehicleSelect vehicles={vehicles} value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
           <Field label="Category"><select className={inp} value={draft.category || "PREVENTIVE"} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>{MAINT_CATEGORIES.map((t) => <option key={t}>{t}</option>)}</select></Field>
           <Field label="Title *" span><input className={inp} placeholder="e.g. Replace brake pads + resurface discs" value={draft.title || ""} onChange={(e) => setDraft({ ...draft, title: e.target.value })} data-testid="transport-f-title" /></Field>
           <Field label="Estimated cost"><input className={inp} type="number" value={draft.estimatedCostGhs ?? 0} onChange={(e) => setDraft({ ...draft, estimatedCostGhs: Number(e.target.value) })} /></Field>
@@ -1196,7 +1205,7 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "REVENUE" && (
-        <Modal title="Record daily revenue" onSubmit={submitRevenue} submitLabel="Book income → Finance">
+        <Modal onClose={() => setForm(null)} saving={saving} title="Record daily revenue" onSubmit={submitRevenue} submitLabel="Book income → Finance">
           <Field label="Income kind *">
             <select className={inp} value={draft.kind || "FREIGHT"} onChange={(e) => setDraft({ ...draft, kind: e.target.value })} data-testid="transport-rev-kind">
               {Object.entries(REVENUE_KINDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -1211,7 +1220,7 @@ export default function TransportModule(props: Props) {
               {PAYMENT_METHODS.map((m) => <option key={m}>{m}</option>)}
             </select>
           </Field>
-          <Field label="Link vehicle (optional)"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
+          <Field label="Link vehicle (optional)"><VehicleSelect vehicles={vehicles} value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
           <Field label="Link trip (optional)">
             <select className={inp} value={draft.tripId || ""} onChange={(e) => setDraft({ ...draft, tripId: e.target.value ? Number(e.target.value) : undefined })} data-testid="transport-rev-trip">
               <option value="">none</option>
@@ -1228,8 +1237,8 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "CHECKLIST" && (
-        <Modal title="Daily vehicle checklist" onSubmit={submitChecklist} submitLabel="Submit checklist">
-          <Field label="Vehicle *"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => { const veh = vehById(v); setDraft({ ...draft, vehicleId: v, odometerKm: veh?.odometerKm ?? draft.odometerKm }); }} /></Field>
+        <Modal onClose={() => setForm(null)} saving={saving} title="Daily vehicle checklist" onSubmit={submitChecklist} submitLabel="Submit checklist">
+          <Field label="Vehicle *"><VehicleSelect vehicles={vehicles} value={draft.vehicleId} onChange={(v: number) => { const veh = vehById(v); setDraft({ ...draft, vehicleId: v, odometerKm: veh?.odometerKm ?? draft.odometerKm }); }} /></Field>
           <Field label="Odometer (km)"><input className={inp} type="number" value={draft.odometerKm ?? ""} onChange={(e) => setDraft({ ...draft, odometerKm: Number(e.target.value) })} /></Field>
           <Field label="Fuel level (%)"><input className={inp} type="number" value={draft.fuelLevelPct ?? ""} onChange={(e) => setDraft({ ...draft, fuelLevelPct: Number(e.target.value) })} /></Field>
           <Field label="Driver (employee)"><select className={inp} value={draft.employeeId || ""} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value ? Number(e.target.value) : undefined })}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field>
@@ -1258,7 +1267,7 @@ export default function TransportModule(props: Props) {
       )}
 
       {form === "GEOFENCE" && (
-        <Modal title="Create geofence" onSubmit={submitGeofence} submitLabel="Arm geofence">
+        <Modal onClose={() => setForm(null)} saving={saving} title="Create geofence" onSubmit={submitGeofence} submitLabel="Arm geofence">
           <Field label="Name *"><input className={inp} placeholder="Main Depot" value={draft.name || ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="transport-f-fencename" /></Field>
           <Field label="Radius (m)"><input className={inp} type="number" value={draft.radiusM ?? 500} onChange={(e) => setDraft({ ...draft, radiusM: Number(e.target.value) })} /></Field>
           <Field label="Latitude"><input className={inp} type="number" step="0.0001" value={draft.lat ?? ""} onChange={(e) => setDraft({ ...draft, lat: Number(e.target.value) })} placeholder="5.6037" data-testid="transport-f-lat" /></Field>
