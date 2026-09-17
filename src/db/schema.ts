@@ -2360,6 +2360,8 @@ export const transportVehicles = pgTable("transport_vehicles", {
   gpsDeviceImei: text("gps_device_imei"),
   gpsDeviceSecret: text("gps_device_secret"), // bearer token for the ingest endpoint
   gpsProviderKey: text("gps_provider_key"), // GPS_PROVIDER_LIBRARY key or CUSTOM
+  gpsDeviceLabel: text("gps_device_label"), // friendly device nickname shown in the Trackers hub
+  gpsSimNumber: text("gps_sim_number"), // data SIM MSISDN inside the tracker (Ghana networks)
   gpsEnabled: boolean("gps_enabled").notNull().default(false),
   gpsHealth: text("gps_health").default("UNKNOWN"), // ONLINE|STALE|OFFLINE|UNKNOWN
   gpsLastLat: doublePrecision("gps_last_lat"),

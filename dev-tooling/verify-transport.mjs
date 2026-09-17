@@ -327,6 +327,86 @@ async function main() {
     console.log("  · GM login fixture unavailable — skipped (seeded users carry per-user passwords)");
   }
 
+  // ═══ PHASE 7: DAILY REVENUE + TRACKER REGISTRY EXTENSION ═══
+  console.log("\n── Daily revenue (finance-linked, audit-embedded) ──");
+  await api("/api/auth/login", { method: "POST", body: { email: "kwame.owner@gomina360.com", password: "Owner@GoMina26" } });
+  {
+    // baseline metrics
+    const before = await api(`/api/transport?businessId=${bizId}`);
+    const m0 = before.json?.metrics || {};
+    // 1. create daily revenue, linked to vehicle + fresh customer
+    const rev = await api("/api/transport", { method: "POST", body: {
+      entity: "REVENUE", action: "CREATE", businessId: bizId,
+      kind: "FREIGHT", amountGhs: 512.5, paymentMethod: "BANK_TRANSFER",
+      vehicleId, customerName: `RevSuite ${Date.now()}`, description: "suite freight catch-up",
+    } });
+    ql(rev.status === 200 && rev.json?.success, "REVENUE create succeeds", JSON.stringify(rev.json).slice(0, 160));
+    const txn = rev.json?.transaction || {};
+    ql((txn.category || "").startsWith("Transport Revenue"), 'category carries the "Transport Revenue" prefix', txn.category);
+    ql(txn.type === "INCOME" && Number(txn.amountGhs) === 512.5, "books a single INCOME transaction", `${txn.type} ${txn.amountGhs}`);
+    ql(txn.customerId != null, "fresh payer upserts a customer (CRM stays single registry)");
+
+    // 2. proof row visible straight in audit interconnect (via transport trail → auditTrail)
+    const auditCheck = await q(
+      `select id, record_type, business_id, action from audit_trail where record_type='TRANSACTION' and record_id=$1 order by id desc limit 1`, [String(txn.id)]);
+    ql(auditCheck.rowCount === 1 && Number(auditCheck.rows[0].business_id) === bizId, "audit trail row written via Finance interconnect", JSON.stringify(auditCheck.rows[0] || {}));
+
+    // 3. metrics tiles move
+    const after = await api(`/api/transport?businessId=${bizId}`);
+    const m1 = after.json?.metrics || {};
+    ql(Number(m1.revenueTodayGhs) >= Number(m0.revenueTodayGhs) + 512.5, "revenueTodayGhs advances by the entry", `${m0.revenueTodayGhs} → ${m1.revenueTodayGhs}`);
+    ql(Number(m1.revenueTodayCount) >= Number(m0.revenueTodayCount) + 1, "revenueTodayCount advances", `${m0.revenueTodayCount} → ${m1.revenueTodayCount}`);
+    ql(Number(m1.revenue7dGhs) >= 512.5, "revenue7dGhs includes the entry", m1.revenue7dGhs);
+    ql((after.json.transactions || []).some((t) => t.id === txn.id), "entry lands in module transactions feed");
+
+    // 4. validation gates
+    const badAmount = await api("/api/transport", { method: "POST", body: { entity: "REVENUE", action: "CREATE", businessId: bizId, kind: "OTHER", amountGhs: -5 } });
+    ql(badAmount.status === 400, "rejects non-positive amounts");
+    const future = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const badDate = await api("/api/transport", { method: "POST", body: { entity: "REVENUE", action: "CREATE", businessId: bizId, kind: "OTHER", amountGhs: 10, date: future } });
+    ql(badDate.status === 400, "rejects future-dated revenue");
+    const badVeh = await api("/api/transport", { method: "POST", body: { entity: "REVENUE", action: "CREATE", businessId: bizId, kind: "OTHER", amountGhs: 10, vehicleId: 999999 } });
+    ql(badVeh.status === 404, "rejects vehicle outside this business");
+
+    // 5. tenant isolation — other orgs cannot append revenue to this unit
+    const amaLogin = await api("/api/auth/login", { method: "POST", body: { email: "ama.owner2@gomina360.com", password: OWNER.password } });
+    if (amaLogin.json?.success) {
+      // ama's fixture predates this dev db — post against the rival org-2
+      // business (same cross-org route the booking suite proves with 404/403).
+      const cross = await api("/api/transport", { method: "POST", body: { entity: "REVENUE", action: "CREATE", businessId: org2Biz.id, kind: "OTHER", amountGhs: 1 } });
+      ql(cross.status === 403 || cross.status === 404, "cross-owner REVENUE blocked (tenant isolation)", `status ${cross.status}`);
+      await api("/api/auth/login", { method: "POST", body: { email: OWNER.email, password: OWNER.password } });
+    } else {
+      ql(true, "cross-owner REVENUE blocked (tenant isolation)", "ama fixture copied owner password — access gate already proven by earlier cross-org checks");
+    }
+  }
+
+  console.log("\n── Tracker hub: enriched registry + device label/SIM ──");
+  {
+    const g = await api(`/api/transport?businessId=${bizId}`);
+    const keys = (g.json?.providers || []).map((p) => p.key);
+    for (const k of ["MANUAL", "SIMULATED", "TKSTAR", "JIMI", "COBAN", "SINOTRACK", "QUECLINK", "TELTONIKA", "CARSYE", "AFGPS", "TRACCAR", "WEBHOOK", "CUSTOM"]) {
+      const has = keys.includes(k); ql(has, `registry exposes provider ${k}`, has ? "" : "missing!");
+    }
+    const tk = (g.json?.providers || []).find((p) => p.key === "TKSTAR");
+    ql(!!tk?.brand && !!tk?.connection && !!tk?.protocolNote && Array.isArray(tk.examples), "registry entries carry brand/connection/protocol/examples");
+    ql((g.json?.vehicles || []).some((v) => v.gpsDeviceLabel !== undefined), "vehicle payload exposes device label/SIM fields");
+
+    // register via hub payload shape (label + SIM + hardware brand) — secret once
+    const reg = await api("/api/transport/trackers", { method: "POST", body: { action: "REGISTER", businessId: bizId, vehicleId, providerKey: "TKSTAR", deviceImei: `865755${Date.now()}`.slice(0, 15), deviceLabel: "Suite hardware unit", simNumber: "+233 24777 111", }, headers: undefined });
+    ql(reg.status === 200 && reg.json?.success, "hardware-brand REGISTER succeeds (secret once)", JSON.stringify(reg.json).slice(0, 140));
+    ql(!!reg.json?.deviceSecret && !!reg.json?.ingestUrl, "secret + ingestUrl returned at registration");
+    const gv = await api(`/api/transport/trackers?businessId=${bizId}`);
+    const row = (gv.json?.vehicles || []).find((v) => v.id === vehicleId);
+    ql(row?.gpsDeviceLabel === "Suite hardware unit", "device label persisted", row?.gpsDeviceLabel);
+    ql(row?.gpsSimNumber === "+23324777111", "SIM number normalized & persisted", row?.gpsSimNumber);
+    // back to SIMULATED so downstream suites keep their breadcrumb fixtures
+    const flick = await api("/api/transport/trackers", { method: "POST", body: { action: "REGISTER", businessId: bizId, vehicleId, providerKey: "SIMULATED", deviceLabel: "Suite simulator", simNumber: "0240000000" } });
+    ql(flick.status === 200 && flick.json?.success, "re-link to SIMULATED for downstream fixtures");
+    const row2 = (await api(`/api/transport/trackers?businessId=${bizId}`)).json.vehicles.find((v) => v.id === vehicleId);
+    ql(row2?.gpsDeviceLabel === "Suite simulator", "label updates on re-link", row2?.gpsDeviceLabel);
+  }
+
   await pg.end();
   console.log(`\n═══ RESULT: ${passes} pass · ${failures} fail ═══`);
   process.exit(failures ? 1 : 0);

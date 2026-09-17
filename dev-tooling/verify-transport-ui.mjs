@@ -4,7 +4,7 @@
  * logs in as the owner, opens the TRANSPORT-01 business tab, walks every module
  * tab (desktop + mobile viewport), and asserts:
  *   · the Transport module actually mounts (data-testid=transport-module)
- *   · all 11 tabs render without console page errors
+ *   · all 12 tabs render without console page errors
  *   · fleet card with the E2E vehicle is visible
  *   · GPS tab shows tracked vehicle + SVG track
  *   · dashboards show live metrics (revenue > 0)
@@ -94,8 +94,8 @@ const mounted = await page.$('[data-testid="transport-module"]') != null;
 ql(mounted, "TransportModule mounts (data-testid=transport-module)");
 await shot(page, "transport-dashboard-desktop");
 const mTabs = await page.$$eval("[data-testid^='transport-tab-']", (els) => els.map((e) => e.getAttribute("data-testid")));
-ql(mTabs.length >= 10, "tab bar exposes module sections", `${mTabs.length} tabs`);
-for (const t of ["fleet", "trips", "bookings", "fuel", "maintenance", "gps", "compliance", "checklist", "reports", "drivers"]) {
+ql(mTabs.length >= 12, "tab bar exposes module sections (incl. GPS Trackers)", `${mTabs.length} tabs`);
+for (const t of ["fleet", "trips", "bookings", "fuel", "maintenance", "gps", "trackers", "compliance", "checklist", "reports", "drivers"]) {
   await page.click(`[data-testid="transport-tab-${t}"]`).catch(() => {});
   await new Promise((r) => setTimeout(r, 900));
 }
@@ -129,6 +129,64 @@ const revenueText = await page.evaluate(() => {
 });
 ql(/GH|₵|GHS/.test(revenueText), "dashboard revenue tile renders currency", revenueText.slice(0, 40));
 
+// ── Daily Revenue section: record through the modal, see it land ──
+console.log("· Daily Revenue section …");
+const revSection = await page.$('[data-testid="transport-daily-revenue"]') != null;
+ql(revSection, "Daily Revenue section on dashboard");
+await page.click('[data-testid="transport-record-revenue"]').catch(() => {});
+await page.waitForSelector('[data-testid="transport-rev-amount"]', { timeout: 15000 }).then(() => true).catch(() => false);
+await page.select('[data-testid="transport-rev-kind"]', "PASSENGER").catch(() => {});
+const REV_AMT = "761.25"; // distinctive value to spot in the recent list
+await page.evaluate((amt) => {
+  const input = document.querySelector('[data-testid="transport-rev-amount"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+  setter.call(input, amt);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}, REV_AMT);
+const amtRead = await page.$eval('[data-testid="transport-rev-amount"]', (el) => el.value);
+ql(amtRead === REV_AMT, "amount field committed to React state", amtRead);
+await page.type('[data-testid="transport-rev-desc"]', "UI suite trotro fares");
+await page.click('[data-testid="transport-modal-submit"]').catch(() => {});
+await new Promise((r) => setTimeout(r, 3500));
+const revAfter = await page.evaluate(() => {
+  const sec = document.querySelector('[data-testid="transport-daily-revenue"]');
+  const recent = document.querySelector('[data-testid="transport-revenue-recent"]');
+  return { section: sec ? sec.innerText : "", recent: recent ? recent.innerText : "" };
+});
+ql(/Passenger/.test(revAfter.recent), "new income row visible in recent list", revAfter.recent.slice(0, 70).replace(/\n/g, " · "));
+ql(/761\.25/.test(revAfter.recent), "amount reflects on recent income", revAfter.recent.slice(0, 100).replace(/\n/g, " · "));
+await shot(page, "transport-revenue-desktop");
+
+// ── GPS Trackers hub: provider guide + link flow with label/SIM ──
+console.log("· GPS Trackers hub …");
+await page.click('[data-testid="transport-tab-trackers"]').catch(() => {});
+await new Promise((r) => setTimeout(r, 1500));
+const hub = await page.$('[data-testid="transport-trackers-hub"]') != null;
+ql(hub, "Trackers hub section renders");
+await shot(page, "transport-trackers-desktop");
+await page.select('[data-testid="transport-hub-provider"]', "TKSTAR").catch(() => {});
+await new Promise((r) => setTimeout(r, 500));
+const guide = await page.evaluate(() => document.querySelector('[data-testid="transport-hub-providerguide"]')?.innerText || "");
+ql(/TKStar/i.test(guide) && /(GT06|TK905|SETY|GPS303|SMS)/i.test(guide), "provider pick shows brand + protocol guide", guide.slice(0, 90).replace(/\n/g, " · "));
+await page.select('[data-testid="transport-hub-provider"]', "SIMULATED").catch(() => {});
+const hubVehicleVal = await page.evaluate(() => {
+  const sel = document.querySelector('[data-testid="transport-hub-vehicle"]');
+  const opt = [...sel.options].find((o) => o.value);
+  return opt ? opt.value : "";
+});
+ql(!!hubVehicleVal, "hub vehicle dropdown has a selectable vehicle", hubVehicleVal);
+if (hubVehicleVal) await page.select('[data-testid="transport-hub-vehicle"]', hubVehicleVal).catch(() => {});
+await page.type('[data-testid="transport-hub-label"]', "UI hub unit").catch(() => {});
+await page.type('[data-testid="transport-hub-sim"]', "0249988770").catch(() => {});
+await page.click('[data-testid="transport-hub-register"]').catch(() => {});
+await new Promise((r) => setTimeout(r, 2500));
+const secretShown = await page.waitForSelector('[data-testid="transport-secret-key-hub"], [data-testid="transport-secret-key"]', { timeout: 30000 }).then(() => true).catch(() => false);
+ql(secretShown, "secret shown once after linking");
+const hubBody = await page.evaluate(() => document.querySelector('[data-testid="transport-trackers-hub"]')?.innerText || "");
+ql(/UI hub unit/.test(hubBody), "linked tracker row shows device label", hubBody.slice(0, 60).replace(/\n/g, " · "));
+ql(/0249988770/.test(hubBody), "linked tracker row shows SIM number", "…");
+await shot(page, "transport-trackers-linked");
+
 // ── mobile pass (same browser context: reuses the owner session) ──
 console.log("· mobile (390×844) …");
 const mpage = await newPage(390, 844, 2);
@@ -150,6 +208,13 @@ await shot(mpage, "transport-fleet-mobile");
 await mpage.click('[data-testid="transport-tab-gps"]').catch(() => {});
 await new Promise((r) => setTimeout(r, 1100));
 await shot(mpage, "transport-gps-mobile");
+await mpage.click('[data-testid="transport-tab-trackers"]').catch(() => {});
+await new Promise((r) => setTimeout(r, 1200));
+const mHub = await mpage.$('[data-testid="transport-trackers-hub"]') != null;
+ql(mHub, "Trackers hub renders on mobile");
+await shot(mpage, "transport-trackers-mobile");
+const mOverflowAfter = await mpage.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+ql(mOverflowAfter <= 1, "trackers hub introduces no horizontal overflow", `${mOverflowAfter}px`);
 const mConsoleErr = consoleErrors.length;
 
 await browser.close();

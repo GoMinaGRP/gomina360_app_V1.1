@@ -132,6 +132,7 @@ export async function GET(request: NextRequest) {
       vehicles: vehicles.map((v) => ({
         id: v.id, name: v.name, licensePlate: v.licensePlate, status: v.status,
         gpsEnabled: v.gpsEnabled, gpsProviderKey: v.gpsProviderKey, gpsDeviceImei: v.gpsDeviceImei,
+        gpsDeviceLabel: v.gpsDeviceLabel ?? null, gpsSimNumber: v.gpsSimNumber ?? null,
         gpsHealth: v.gpsHealth,
         live: v.gpsLastLat != null ? {
           lat: v.gpsLastLat, lng: v.gpsLastLng, speedKmh: v.gpsLastSpeedKmh,
@@ -196,6 +197,8 @@ export async function POST(request: NextRequest) {
           gpsProviderKey: provider.key,
           gpsDeviceImei: imei,
           gpsDeviceSecret: secret,
+          gpsDeviceLabel: body.deviceLabel ? String(body.deviceLabel).trim().slice(0, 80) || null : null,
+          gpsSimNumber: body.simNumber ? String(body.simNumber).trim().replace(/[^0-9+]/g, "").slice(0, 24) || null : null,
           gpsHealth: provider.driver === "simulated" ? "STALE" : veh.gpsHealth ?? "UNKNOWN",
           updatedAt: new Date(),
         })

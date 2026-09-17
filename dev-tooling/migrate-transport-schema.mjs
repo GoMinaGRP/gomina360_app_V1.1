@@ -217,7 +217,10 @@ const STATEMENTS = [
   )`,
   `create index if not exists transport_tracker_violations_biz_idx on public.transport_tracker_violations (business_id, status, kind)`,
   `create index if not exists transport_tracker_violations_vehicle_idx on public.transport_tracker_violations (vehicle_id, created_at desc)`,
-  `alter table public.assets add column if not exists transport_vehicle_id integer`
+  `alter table public.assets add column if not exists transport_vehicle_id integer`,
+  // Trackers hub (Phase: dedicated Link/Add GPS Tracker section) — additive.
+  `alter table public.transport_vehicles add column if not exists gps_device_label text`,
+  `alter table public.transport_vehicles add column if not exists gps_sim_number text`
 ];
 
 const PRETTY = process.argv.includes("--dry");

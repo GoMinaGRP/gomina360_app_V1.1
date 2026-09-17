@@ -57,6 +57,20 @@ const VEHICLE_STATUSES = ["ACTIVE", "MAINTENANCE", "OUT_OF_SERVICE"];
 const VEHICLE_TYPES = ["TRUCK", "VAN", "PICKUP", "TRAILER", "BUS", "BIKE", "CAR"];
 const VEHICLE_FUEL = ["PETROL", "DIESEL", "LPG", "EV"];
 const MAINT_CATS = ["PREVENTIVE", "ENGINE", "BRAKES", "TYRES", "BATTERY", "ELECTRICAL", "SUSPENSION", "BODY", "INSPECTION", "OTHER"];
+// Daily Revenue capture (dashboard "Record Daily Revenue"): kinds are the
+// market-facing income lines of a transport business; the transaction
+// category keeps the "Transport Revenue — …" convention so Finance/Reports,
+// the dashboard section and exports split manual daily revenue from
+// booking-posted "Transport Booking" income by prefix.
+const REVENUE_KINDS: Record<string, string> = {
+  FREIGHT: "Freight & Haulage",
+  PASSENGER: "Passenger Fares",
+  CHARTER: "Charter / Private Hire",
+  RENTAL: "Vehicle Rental",
+  ADHOC_DELIVERY: "Ad-hoc Delivery",
+  CONTRACT: "Contract / Retainer",
+  OTHER: "Other Income",
+};
 
 async function bookTransaction(
   biz: { id: number; code: string | null; name: string | null },
@@ -66,7 +80,7 @@ async function bookTransaction(
   description: string,
   paymentMethod: string,
   actor: any,
-  refs?: { customerId?: number | null; supplierId?: number | null },
+  refs?: { customerId?: number | null; supplierId?: number | null; dateStr?: string | null },
 ) {
   const now = new Date();
   const [row] = await db
@@ -83,7 +97,7 @@ async function bookTransaction(
       customerId: refs?.customerId ?? null,
       supplierId: refs?.supplierId ?? null,
       description,
-      date: now.toISOString().split("T")[0],
+      date: refs?.dateStr || now.toISOString().split("T")[0],
       createdAt: now,
       status: "COMPLETED",
       recordedBy: actor?.name || "Transportation",
@@ -262,6 +276,9 @@ export async function GET(request: NextRequest) {
       trackersOnline: vehicles.filter((v) => v.gpsEnabled && v.gpsHealth === "ONLINE").length,
       trackersOffline: vehicles.filter((v) => v.gpsEnabled && v.gpsHealth === "OFFLINE").length,
       revenueGhs: Math.round(revTotal * 100) / 100,
+      revenueTodayGhs: Math.round(rein.filter((t) => day(t.date) === today).reduce((sum, t) => sum + Number(t.amountGhs || 0), 0) * 100) / 100,
+      revenueTodayCount: rein.filter((t) => day(t.date) === today).length,
+      revenue7dGhs: Math.round(rein.filter((t) => { const d = day(t.date); return d >= day(String(new Date(Date.now() - 6 * 86_400_000).toISOString()).slice(0, 10)); }).reduce((sum, t) => sum + Number(t.amountGhs || 0), 0) * 100) / 100,
       fuelSpendGhs: Math.round(fuelExp * 100) / 100,
       maintenanceSpendGhs: Math.round(maintExp * 100) / 100,
       expensesGhs: Math.round(expTotal * 100) / 100,
@@ -576,6 +593,67 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: true, booking: u });
       }
       return bad("Unknown booking action.");
+    }
+
+    // ── DAILY REVENUE (dashboard section — manual daily income capture) ──
+    // Books ONE INCOME transaction into the shared `transactions` table
+    // (category prefix "Transport Revenue"), so Finance, Reports & AI,
+    // exports and the audit trail all consume the same record. Bookings keep
+    // booking their income as category "Transport Booking" — two distinct
+    // configured channels into the same ledger, never double-posted.
+    if (entity === "REVENUE") {
+      if (action !== "CREATE") return bad("Unknown revenue action.");
+      const amount = num(body.amountGhs, NaN);
+      if (!Number.isFinite(amount) || amount <= 0) return bad("Enter a valid revenue amount (> 0).");
+      const kindKey = String(body.kind || "OTHER").toUpperCase();
+      const kindLabel = REVENUE_KINDS[kindKey] || REVENUE_KINDS.OTHER;
+      // Optional lineage — richly annotated so Finance/Audit can trace the
+      // income back to the vehicle/trip that earned it.
+      let vehicle: any = null;
+      if (body.vehicleId != null && body.vehicleId !== "") {
+        const [veh] = await db.select().from(transportVehicles).where(and(eq(transportVehicles.id, Number(body.vehicleId)), eq(transportVehicles.businessId, businessId)));
+        if (!veh) return bad("Vehicle not in this business.", 404);
+        vehicle = veh;
+      }
+      let trip: any = null;
+      if (body.tripId != null && body.tripId !== "") {
+        const [t] = await db.select().from(transportTrips).where(and(eq(transportTrips.id, Number(body.tripId)), eq(transportTrips.businessId, businessId)));
+        if (!t) return bad("Trip not in this business.", 404);
+        trip = t;
+        if (!vehicle && t.vehicleId) [vehicle] = await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(t.vehicleId)));
+      }
+      // Back-dating inside the current month allowed for statement catch-up,
+      // never future-dated (keeps the daily monitor truthful).
+      let dateStr: string | null = null;
+      if (body.date) {
+        const d = day(body.date);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return bad("Date must be YYYY-MM-DD.");
+        const todayStr = day(null);
+        if (d > todayStr) return bad("Revenue cannot be recorded for a future date.");
+        dateStr = d;
+      }
+      // Optional customer — same find-or-create rule as bookings (CRM stays
+      // the single customer registry).
+      let customerId: number | null = null;
+      const customerName = String(body.customerName || "").trim();
+      if (customerName) customerId = await upsertCustomer(biz.id, customerName, null, amount, ownerId);
+      const payer = customerName ? ` · payer ${customerName}` : "";
+      const lineage = `${trip ? ` · trip #${trip.id} ${trip.source || "?"}→${trip.destination || "?"}` : ""}${vehicle ? ` · ${vehicle.licensePlate}` : ""}`;
+      const note = String(body.description || "").trim();
+      const txn = await bookTransaction(
+        { id: biz.id, code: biz.code, name: biz.name },
+        "INCOME", amount, `Transport Revenue — ${kindLabel}`,
+        `${kindLabel}${lineage}${payer}${note ? ` · ${note}` : ""}`,
+        String(body.paymentMethod || "CASH"), actor,
+        { customerId, dateStr },
+      );
+      await writeTransportTrail(actor, {
+        action: "CREATE", targetType: "TRANSPORT",
+        targetLabel: `Revenue ${kindLabel} · GH₵ ${amount}`,
+        recordType: "TRANSACTION", recordId: txn.id, businessId, branchCode: biz.code,
+        detail: `INCOME GH₵ ${amount} · ${kindKey}${lineage}${payer} · txn ${txn.transactionNumber}`,
+      });
+      return NextResponse.json({ success: true, transaction: txn });
     }
 
     // ── FUEL ──────────────────────────────────────────────────────────────

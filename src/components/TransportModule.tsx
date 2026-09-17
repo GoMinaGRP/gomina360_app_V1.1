@@ -29,9 +29,9 @@ type Props = {
 
 type Tab =
   | "DASHBOARD" | "FLEET" | "DRIVERS" | "TRIPS" | "BOOKINGS" | "FUEL"
-  | "MAINTENANCE" | "GPS" | "COMPLIANCE" | "CHECKLIST" | "REPORTS";
+  | "MAINTENANCE" | "GPS" | "TRACKERS" | "COMPLIANCE" | "CHECKLIST" | "REPORTS";
 
-type FormType = null | "VEHICLE" | "TRIP" | "BOOKING" | "FUEL" | "MAINT" | "CHECKLIST" | "GEOFENCE";
+type FormType = null | "VEHICLE" | "TRIP" | "BOOKING" | "FUEL" | "MAINT" | "CHECKLIST" | "GEOFENCE" | "REVENUE";
 
 const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
@@ -42,6 +42,7 @@ const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "FUEL", label: "Fuel", icon: Fuel },
   { key: "MAINTENANCE", label: "Maintenance", icon: Wrench },
   { key: "GPS", label: "Live GPS", icon: Satellite },
+  { key: "TRACKERS", label: "GPS Trackers", icon: Radio },
   { key: "COMPLIANCE", label: "Safety & Alerts", icon: ShieldAlert },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardList },
   { key: "REPORTS", label: "Reports & AI", icon: BarChart3 },
@@ -51,6 +52,19 @@ const VEHICLE_TYPES = ["TRUCK", "VAN", "CAR", "MOTORCYCLE", "MINIBUS", "TANKER",
 const FUEL_TYPES = ["DIESEL", "PETROL", "LPG", "ELECTRIC"];
 const MAINT_CATEGORIES = ["PREVENTIVE", "REPAIR", "INSPECTION", "TIRES", "BODYWORK", "ELECTRICAL", "OTHER"];
 const TRIP_PURPOSES = ["DELIVERY", "PASSENGER", "HAULAGE", "PICKUP", "FIELD", "OTHER"];
+// Mirrors REVENUE_KINDS in /api/transport/route.ts (presentation list for the
+// Daily Revenue form; the server validates and re-labels authoritatively).
+const REVENUE_KINDS: Record<string, string> = {
+  FREIGHT: "Freight & Haulage",
+  PASSENGER: "Passenger Fares",
+  CHARTER: "Charter / Private Hire",
+  RENTAL: "Vehicle Rental",
+  ADHOC_DELIVERY: "Ad-hoc Delivery",
+  CONTRACT: "Contract / Retainer",
+  OTHER: "Other Income",
+};
+const PAYMENT_METHODS = ["CASH", "MTN_MOMO", "BANK_TRANSFER", "CARD", "CHEQUE"];
+
 const STATUS_STYLE: Record<string, string> = {
   ACTIVE: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   MAINTENANCE: "bg-amber-500/15 text-amber-300 border-amber-500/40",
@@ -199,6 +213,32 @@ export default function TransportModule(props: Props) {
   const canEdit = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"].includes(String(currentUser?.role || "").toUpperCase());
   const vehById = useCallback((id: any) => vehicles.find((v) => v.id === Number(id)), [vehicles]);
 
+  // Daily Revenue monitor — all income transactions for this unit flow here
+  // (manual "Transport Revenue — …" entries AND booking-posted "Transport
+  // Booking" income); the series powers the dashboard section + Reports tab.
+  const revenueTxns = useMemo(() => (data?.transactions || []).filter((t: any) => t.type === "INCOME"), [data]);
+  const rev14 = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const t of revenueTxns) {
+      const d = String(t.date || "").slice(0, 10) || String(t.createdAt || "").slice(0, 10);
+      if (!d) continue;
+      map[d] = (map[d] || 0) + Number(t.amountGhs || 0);
+    }
+    const out: { day: string; date: string; ghs: number }[] = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      out.push({ day: d.slice(5), date: d, ghs: Math.round((map[d] || 0) * 100) / 100 });
+    }
+    return out;
+  }, [revenueTxns]);
+
+  // Trackers hub — merge live telemetry (breadcrumbs/seen) with vehicle
+  // records (label/SIM/provider) keyed by vehicle id.
+  const liveByIdHub: Record<number, any> = useMemo(() => Object.fromEntries((live?.vehicles || []).map((v: any) => [Number(v.id), v])), [live]);
+  const providerByKey: Record<string, any> = useMemo(() => Object.fromEntries((data?.providers || []).map((p: any) => [String(p.key).toUpperCase(), p])), [data]);
+  const trackedVehicles = useMemo(() => vehicles.filter((v) => v.gpsEnabled), [vehicles]);
+  const untrackedActive = useMemo(() => vehicles.filter((v) => !v.gpsEnabled && v.status !== "OUT_OF_SERVICE"), [vehicles]);
+
   // expiry radar for compliance
   const expiries = useMemo(() => {
     const rows: { vehicle: any; kind: string; date: string; days: number }[] = [];
@@ -280,6 +320,27 @@ export default function TransportModule(props: Props) {
   const simulate = async (vehicleId: number, opts: any = {}) => {
     const j = await post({ action: "SIMULATE", vehicleId, steps: 8, ...opts }, "/api/transport/trackers");
     if (j.success) { flash(`✓ Simulated ${j.accepted} positions`); load(); }
+  };
+  const submitRevenue = async () => {
+    const j = await post({ entity: "REVENUE", action: "CREATE", ...draft });
+    if (j.success) done(`✓ Daily revenue booked — ${money(j.transaction?.amountGhs)} (${j.transaction?.transactionNumber})`);
+  };
+  // Trackers hub — richer registration (provider metadata + label + SIM).
+  const hubRegister = async () => {
+    if (!draft.hubVehicleId) { flash("⚠ Pick the vehicle this tracker belongs to."); return; }
+    const j = await post({
+      action: "REGISTER", vehicleId: Number(draft.hubVehicleId),
+      providerKey: draft.hubProvider || "MANUAL",
+      deviceImei: draft.hubImei || undefined,
+      deviceLabel: draft.hubLabel || undefined,
+      simNumber: draft.hubSim || undefined,
+    }, "/api/transport/trackers");
+    if (j.success) {
+      setSecretBox({ secret: j.deviceSecret, deviceId: j.deviceId });
+      setDraft({ ...draft, hubVehicleId: undefined, hubImei: "", hubLabel: "", hubSim: "" });
+      flash(`✓ Tracker linked to ${vehById(draft.hubVehicleId)?.licensePlate || "vehicle"} (${j.provider?.label || "provider"}) — save the install details below once`);
+      load();
+    }
   };
   const tripAct = async (id: number, action: string, extra: any = {}) => {
     const j = await post({ entity: "TRIP", action, id, ...extra });
@@ -377,6 +438,58 @@ export default function TransportModule(props: Props) {
             <Tile label="Fuel spend" value={money(M.fuelSpendGhs)} sub={M.fleetEconomyKmpl ? `fleet ${M.fleetEconomyKmpl} km/L` : "log fuel to compute"} icon={Fuel} tone="text-amber-300" />
             <Tile label="Maintenance" value={money(M.maintenanceSpendGhs)} sub="workshop + parts" icon={Wrench} tone="text-amber-300" />
             <Tile label="Net profit" value={money(M.profitGhs)} sub={`utilisation ${(() => { const u: any = M.utilization30d; const pct = u == null ? 0 : typeof u === "object" ? Number(u.utilizationPct || u.utilization || 0) : Number(u) * 100; return Math.round(Number.isFinite(pct) ? pct : 0); })()}% (30d)`} icon={BarChart3} tone={Number(M.profitGhs) >= 0 ? "text-emerald-300" : "text-rose-300"} />
+          </div>
+
+          {/* ═══ DAILY REVENUE — record & monitor income; books to Finance,
+              feeds Reports/AI + audit trail (single ledger, no double post:
+              bookings keep their "Transport Booking" category) ═══ */}
+          <div className={rowCls} data-testid="transport-daily-revenue">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300"><Landmark className="h-4 w-4 text-emerald-400" /> Daily Revenue</h3>
+              {canEdit && (
+                <button onClick={() => { setDraft({}); setForm("REVENUE"); }} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-500" data-testid="transport-record-revenue">
+                  <Plus className="h-3.5 w-3.5" /> Record Daily Revenue
+                </button>
+              )}
+            </div>
+            <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Tile label="Today" value={money(M.revenueTodayGhs || 0)} sub={`${M.revenueTodayCount || 0} income record(s)`} icon={Landmark} />
+              <Tile label="Last 7 days" value={money(M.revenue7dGhs || 0)} sub="income window" icon={CalendarClock} />
+              <Tile label="Lifetime revenue" value={money(M.revenueGhs || 0)} sub="all income" icon={CircleDot} />
+              <Tile label="Net profit" value={money(M.profitGhs || 0)} sub="after all expenses" icon={BarChart3} tone={Number(M.profitGhs) >= 0 ? "text-emerald-300" : "text-rose-300"} />
+            </div>
+            <div className="grid gap-3 lg:grid-cols-5">
+              <div className="h-40 lg:col-span-3" data-testid="transport-revenue-chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={rev14} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="revFade" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#34d399" stopOpacity={0.45} />
+                        <stop offset="100%" stopColor="#34d399" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#334155" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="day" stroke="#64748b" tick={{ fontSize: 9 }} />
+                    <YAxis stroke="#64748b" tick={{ fontSize: 9 }} width={56} tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))} />
+                    <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} formatter={(v: any) => [money(Number(v)), "Revenue"] as any} labelFormatter={((_: any, pl: any) => (pl?.[0]?.payload?.date ? pl[0].payload.date : "")) as any} />
+                    <Area type="monotone" dataKey="ghs" stroke="#34d399" strokeWidth={2} fill="url(#revFade)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-700/60 lg:col-span-2" data-testid="transport-revenue-recent">
+                {revenueTxns.length === 0 && <p className="p-3 text-xs text-slate-500">No income yet — record your first daily revenue, or complete a booking.</p>}
+                {revenueTxns.slice(0, 6).map((t: any) => (
+                  <div key={t.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-slate-200">{String(t.category || "Income")}</p>
+                      <p className="truncate text-[10px] text-slate-500">{String(t.date || "").slice(0, 10)} · {t.recordedBy || "—"}</p>
+                    </div>
+                    <p className="shrink-0 font-black text-emerald-300">+{money(t.amountGhs)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <p className="mt-2 text-[10px] text-slate-500">Every entry is one INCOME transaction in Finance with an audit-trail line — Reports & AI, exports and the Finance &amp; Reports module read the same ledger.</p>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -694,7 +807,7 @@ export default function TransportModule(props: Props) {
             <div className={rowCls}>
               <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-300">Tracked fleet</h3>
               {vehicles.filter((v) => v.gpsEnabled).length === 0 && (
-                <p className="text-xs text-slate-500">No trackers linked yet. Open <b>Fleet</b>, pick a vehicle card and hit “Link tracker” — the SIMULATED provider works out of the box for pilots; MANUAL accepts staff-pushed positions; TRACCAR/TKSTAR/JIMI etc. point at the device ingest endpoint.</p>
+                <p className="text-xs text-slate-500">No trackers linked yet. Open the <b>GPS Trackers</b> tab and use <b>Link / Add GPS Tracker</b> — pick any brand/provider (cheap GT06 family, Teltonika, Traccar relayed or the built-in simulator for pilots) and it lands here live.</p>
               )}
               {vehicles.filter((v) => v.gpsEnabled).map((v) => {
                 const lv = liveById[v.id];
@@ -743,6 +856,133 @@ export default function TransportModule(props: Props) {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {data && tab === "TRACKERS" && (
+        <div className="space-y-4" data-testid="transport-trackers-hub">
+          {/* Health rollup — rows derive from transport_vehicles gps flags */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Tile label="Online" value={trackedVehicles.filter((v) => v.gpsHealth === "ONLINE").length} sub="reporting now" icon={Satellite} tone="text-emerald-300" />
+            <Tile label="Stale" value={trackedVehicles.filter((v) => v.gpsHealth === "STALE").length} sub="> 30 min silent" icon={Clock} tone="text-amber-300" />
+            <Tile label="Offline" value={trackedVehicles.filter((v) => v.gpsHealth === "OFFLINE").length} sub="needs attention" icon={AlertTriangle} tone="text-rose-300" />
+            <Tile label="Unlinked vehicles" value={untrackedActive.length} sub="no tracker yet" icon={Radio} tone="text-sky-300" />
+          </div>
+
+          {/* ── LINK / ADD GPS TRACKER ─────────────────────────────── */}
+          {canEdit && (
+            <div className={rowCls} data-testid="transport-tracker-link">
+              <h3 className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300"><Radio className="h-4 w-4 text-sky-400" /> Link / Add GPS Tracker</h3>
+              <p className="mb-3 text-[11px] text-slate-400">Attach a real device, vendor platform, phone-based manual tracker or the built-in simulator to a vehicle in <b className="text-slate-200">{data.business?.name}</b> ({data.business?.code}). Brands &amp; connection methods come from the provider registry — new vendors are added there, no rebuild needed.</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Tracker brand / provider *">
+                  <select className={inp} value={draft.hubProvider || "MANUAL"} onChange={(e) => setDraft({ ...draft, hubProvider: e.target.value })} data-testid="transport-hub-provider">
+                    {(data.providers || []).map((p: any) => (
+                      <option key={p.key} value={p.key}>{p.label}{p.brand ? ` (${p.brand})` : ""} — {p.connection === "HTTP_PUSH" ? "HTTP push" : p.connection === "TCP_RELAY" ? "edge relay" : p.connection === "WEBHOOK" ? "webhook" : p.connection === "OTA_API" ? "vendor API" : p.connection === "PHONE_APP" ? "phone GPS" : p.connection === "SIMULATED" ? "simulator" : "custom"}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Vehicle *">
+                  <select className={inp} value={draft.hubVehicleId || ""} onChange={(e) => setDraft({ ...draft, hubVehicleId: e.target.value ? Number(e.target.value) : undefined })} data-testid="transport-hub-vehicle">
+                    <option value="">Pick a vehicle…</option>
+                    {[...untrackedActive, ...trackedVehicles].map((v) => (
+                      <option key={v.id} value={v.id}>{v.licensePlate} — {v.name}{v.gpsEnabled ? " (replace current)" : ""}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Device IMEI / ID">
+                  <input className={inp} placeholder={providerByKey[String(draft.hubProvider || "MANUAL").toUpperCase()]?.devMode ? "auto-generated" : "e.g. 861234567890123"} value={draft.hubImei || ""} onChange={(e) => setDraft({ ...draft, hubImei: e.target.value })} data-testid="transport-hub-imei" />
+                </Field>
+                <Field label="Data SIM number">
+                  <input className={inp} placeholder="+233 24 000 0000" value={draft.hubSim || ""} onChange={(e) => setDraft({ ...draft, hubSim: e.target.value })} data-testid="transport-hub-sim" />
+                </Field>
+                <Field label="Device nickname" span>
+                  <input className={inp} placeholder="e.g. Box truck unit #2 (Simon's unit)" value={draft.hubLabel || ""} onChange={(e) => setDraft({ ...draft, hubLabel: e.target.value })} data-testid="transport-hub-label" />
+                </Field>
+              </div>
+
+              {/* provider guide — registry-driven, updates with selection */}
+              {(() => {
+                const prov = providerByKey[String(draft.hubProvider || "MANUAL").toUpperCase()];
+                if (!prov) return null;
+                return (
+                  <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3" data-testid="transport-hub-providerguide">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-black text-sky-200">{prov.label}</p>
+                      {prov.brand && <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[10px] font-bold text-slate-300">{prov.brand}</span>}
+                      {prov.capabilities?.slice(0, 5).map((c: string) => <span key={c} className="rounded-full border border-emerald-500/40 px-2 py-0.5 text-[9px] font-bold text-emerald-300">{c}</span>)}
+                    </div>
+                    {prov.protocolNote && <p className="text-[11px] text-slate-300">{prov.protocolNote}</p>}
+                    {prov.examples?.length ? <p className="mt-1 text-[10px] text-slate-500">Popular units: {prov.examples.join(", ")}</p> : null}
+                    {prov.docs && <a href={prov.docs} target="_blank" rel="noreferrer" className="mt-1 inline-block text-[10px] font-bold text-cyan-300 underline">Install docs ↗</a>}
+                  </div>
+                );
+              })()}
+
+              <div className="mt-3 flex justify-end gap-2">
+                <button onClick={hubRegister} disabled={saving} className="rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50" data-testid="transport-hub-register">
+                  {saving ? "Linking…" : "Link tracker"}
+                </button>
+              </div>
+              {secretBox && (
+                <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3" data-testid="transport-secret-panel">
+                  <p className="mb-1 text-[10px] font-extrabold uppercase tracking-widest text-amber-300">Save these install details — secret shown once</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg bg-slate-900/80 p-2"><p className="text-[9px] uppercase text-slate-500">Device IMEI / ID</p><p className="font-mono text-xs text-white">{secretBox.deviceId}</p></div>
+                    <div className="rounded-lg bg-slate-900/80 p-2"><p className="text-[9px] uppercase text-slate-500">Device secret</p><p className="break-all font-mono text-xs text-white" data-testid="transport-secret-key-hub">{secretBox.secret}</p></div>
+                  </div>
+                  <button onClick={() => { navigator.clipboard?.writeText(JSON.stringify({ action: "INGEST", deviceId: secretBox.deviceId, secret: secretBox.secret, lat: 5.6037, lng: -0.187, speed: 60 })); flash("✓ Example payload copied"); }} className="mt-2 rounded-lg border border-cyan-500/40 px-3 py-1.5 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/20">Copy example payload</button>
+                </div>
+              )}
+              {untrackedActive.length > 0 && <p className="mt-2 text-[10px] text-slate-500">{untrackedActive.length} active vehicle(s) still untracked: {untrackedActive.slice(0, 4).map((v) => v.licensePlate).join(", ")}{untrackedActive.length > 4 ? "…" : ""}</p>}
+            </div>
+          )}
+
+          {/* ── REGISTERED TRACKERS ────────────────────────────────── */}
+          <div className={rowCls}>
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300"><Satellite className="h-4 w-4 text-emerald-400" /> Linked trackers · {trackedVehicles.length}</h3>
+            {trackedVehicles.length === 0 && <p className="text-xs text-slate-500">No trackers linked yet. Use <b>Link / Add GPS Tracker</b> above — the SIMULATED provider works out of the box for pilots.</p>}
+            <div className="grid gap-2 lg:grid-cols-2">
+              {trackedVehicles.map((v) => {
+                const prov = providerByKey[String(v.gpsProviderKey || "").toUpperCase()];
+                const lv = liveByIdHub[v.id] || {};
+                const healthCls =
+                  v.gpsHealth === "ONLINE" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  : v.gpsHealth === "STALE" ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  : v.gpsHealth === "OFFLINE" ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                  : "border-slate-600 bg-slate-800 text-slate-400";
+                return (
+                  <div key={v.id} className="rounded-xl border border-slate-700/60 bg-slate-900/50 p-3" data-testid={`transport-trackerrow-${v.id}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-white">{v.licensePlate}{v.gpsDeviceLabel ? <span className="ml-1.5 text-[11px] font-bold text-sky-300">· {v.gpsDeviceLabel}</span> : null}</p>
+                        <p className="truncate text-[10px] text-slate-400">{v.name} · {prov?.label || v.gpsProviderKey || "provider"}</p>
+                        <p className="mt-0.5 font-mono text-[10px] text-slate-500">IMEI {v.gpsDeviceImei || "—"}{v.gpsSimNumber ? ` · SIM ${v.gpsSimNumber}` : ""}</p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${healthCls}`}>{v.gpsHealth || "UNKNOWN"}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                      <span>last seen {lv.live?.seenTs ? new Date(lv.live.seenTs).toLocaleTimeString() : "never"}</span>
+                      <span>· today {Number(lv.mileageTodayKm ?? 0).toFixed(1)} km</span>
+                      <span>· {(lv.breadcrumbs || []).length} pings</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <button onClick={() => { setGpsVehicle(v.id); setTab("GPS"); }} className="rounded-lg border border-slate-600 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-700"><MapPin className="mr-1 inline h-3 w-3" />Live map</button>
+                      {String(v.gpsProviderKey).toUpperCase() === "SIMULATED" && (
+                        <button onClick={() => simulate(v.id)} className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/20" data-testid={`transport-hub-sim-simulate-${v.id}`}><PlayCircle className="mr-1 inline h-3 w-3" />Simulate</button>
+                      )}
+                      {canEdit && (
+                        <button onClick={async () => (await post({ action: "UNREGISTER", vehicleId: v.id }, "/api/transport/trackers")).success && done("✓ Tracker unlinked")} className="rounded-lg border border-rose-500/40 px-2.5 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500/20" data-testid={`transport-hub-unlink-${v.id}`}>Unlink</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[10px] text-slate-500">Devices/warehouses point at <b>POST /api/transport/trackers</b> with <code className="rounded bg-slate-900 px-1">action=INGEST</code> + <code className="rounded bg-slate-900 px-1">deviceId</code> + <code className="rounded bg-slate-900 px-1">secret</code> + <code className="rounded bg-slate-900 px-1">lat/lng/speed</code>. The device secret is shown ONCE at registration above — store it in the installer sheet.</p>
+          </div>
+
+          <AiSectionGuide moduleKey="TRANSPORT" section="GPS" businessInfo={businessInfo} />
         </div>
       )}
 
@@ -952,6 +1192,38 @@ export default function TransportModule(props: Props) {
           <Field label="Vendor / workshop"><input className={inp} value={draft.vendorName || ""} onChange={(e) => setDraft({ ...draft, vendorName: e.target.value })} /></Field>
           <Field label="Next due odometer"><input className={inp} type="number" value={draft.nextDueOdometerKm ?? ""} onChange={(e) => setDraft({ ...draft, nextDueOdometerKm: Number(e.target.value) })} /></Field>
           <Field label="Description" span><input className={inp} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+        </Modal>
+      )}
+
+      {form === "REVENUE" && (
+        <Modal title="Record daily revenue" onSubmit={submitRevenue} submitLabel="Book income → Finance">
+          <Field label="Income kind *">
+            <select className={inp} value={draft.kind || "FREIGHT"} onChange={(e) => setDraft({ ...draft, kind: e.target.value })} data-testid="transport-rev-kind">
+              {Object.entries(REVENUE_KINDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </Field>
+          <Field label="Amount (GH₵) *"><input className={inp} type="number" step="0.01" min="0" placeholder="0.00" value={draft.amountGhs ?? ""} onChange={(e) => setDraft({ ...draft, amountGhs: e.target.value })} data-testid="transport-rev-amount" /></Field>
+          <Field label="Date">
+            <input className={inp} type="date" max={new Date().toISOString().slice(0, 10)} value={draft.date || new Date().toISOString().slice(0, 10)} onChange={(e) => setDraft({ ...draft, date: e.target.value })} data-testid="transport-rev-date" />
+          </Field>
+          <Field label="Payment method">
+            <select className={inp} value={draft.paymentMethod || "CASH"} onChange={(e) => setDraft({ ...draft, paymentMethod: e.target.value })} data-testid="transport-rev-payment">
+              {PAYMENT_METHODS.map((m) => <option key={m}>{m}</option>)}
+            </select>
+          </Field>
+          <Field label="Link vehicle (optional)"><VehicleSelect value={draft.vehicleId} onChange={(v: number) => setDraft({ ...draft, vehicleId: v })} /></Field>
+          <Field label="Link trip (optional)">
+            <select className={inp} value={draft.tripId || ""} onChange={(e) => setDraft({ ...draft, tripId: e.target.value ? Number(e.target.value) : undefined })} data-testid="transport-rev-trip">
+              <option value="">none</option>
+              {trips.slice(0, 30).map((t) => <option key={t.id} value={t.id}>#{t.id} · {vehById(t.vehicleId)?.licensePlate || "—"} · {t.source || "?"}→{t.destination || "?"} ({t.status})</option>)}
+            </select>
+          </Field>
+          <Field label="Payer / customer (optional)" span>
+            <input className={inp} placeholder="e.g. Accra Mall contract — auto-adds to Customers" value={draft.customerName || ""} onChange={(e) => setDraft({ ...draft, customerName: e.target.value })} data-testid="transport-rev-customer" />
+          </Field>
+          <Field label="Description" span>
+            <input className={inp} placeholder="Batch of maize from Ejisu — 2 trips" value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} data-testid="transport-rev-desc" />
+          </Field>
         </Modal>
       )}
 

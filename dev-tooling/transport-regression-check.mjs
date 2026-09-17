@@ -7,7 +7,7 @@
  * 2. Walks EVERY seeded business module tab (POULTRY/BLOCK/AQUA/…/WASH/HARDWARE)
  *    + the Transport module and asserts: no pageerror, no 4xx/5xx document
  *    response, and the module root renders (`main` contains >200 chars).
- * 3. Transport-specific checks in the SAME session: module mounts, 11 tabs,
+ * 3. Transport-specific checks in the SAME session: module mounts, 12 tabs,
  *    fleet card present, GPS tab shows tracked vehicle + SVG track, dashboard
  *    revenue tile shows currency, violations tab lists SPEEDING + geofence
  *    violations from the API suite run.
@@ -138,7 +138,7 @@ await shot("transport-dashboard");
 
 QL_TABS: {
   const tabs = await page.$$eval("[data-testid^='transport-tab-']", (els) => els.length).catch(() => 0);
-  ql(tabs >= 10, "module tab bar complete", `${tabs} tabs`);
+  ql(tabs >= 12, "module tab bar complete", `${tabs} tabs`);
   break QL_TABS;
 }
 

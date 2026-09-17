@@ -54,18 +54,41 @@ export type GpsProvider = {
   docs?: string;
   noKey?: boolean;
   devMode?: boolean;
+  /** Hub metadata — how the device physically connects (GUIDE-driven, no code change to add a provider). */
+  brand?: string; // hardware brand on the box (may differ from the cloud vendor)
+  connection?: "HTTP_PUSH" | "WEBHOOK" | "TCP_RELAY" | "OTA_API" | "PHONE_APP" | "SIMULATED" | "CUSTOM";
+  protocolNote?: string; // one-line install hint shown in the Trackers hub
+  examples?: string[]; // popular device models this entry covers
 };
 
+/**
+ * GPS_PROVIDER_LIBRARY — the single registry of tracker brands/protocols the
+ * module can connect. Adding a future provider = appending ONE entry here:
+ * the Trackers hub, provider dropdown, ingest routing and guide panels derive
+ * from this array — no module rebuild needed.
+ *
+ *   driver "ingest"   device/platform pushes positions → POST /api/transport/trackers (action=INGEST)
+ *   driver "poll"     platform periodically polled (device reports to vendor cloud; bridge forwards)
+ *   driver "simulated" built-in demo generator (SIMULATE action)
+ *   driver "none"     placeholder/speculative entries
+ */
 export const GPS_PROVIDER_LIBRARY: GpsProvider[] = [
-  { key: "MANUAL", label: "Manual / Phone GPS", vendor: "GoMina", driver: "ingest", capabilities: ["live", "history", "speed", "mileage"], noKey: true },
-  { key: "SIMULATED", label: "Simulated tracker (pilot/demo)", vendor: "GoMina", driver: "simulated", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], devMode: true, noKey: true },
-  { key: "TRACCAR", label: "Traccar Server (self-hosted)", vendor: "Traccar", driver: "ingest", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], docs: "https://www.traccar.org/osmand/" },
-  { key: "TKSTAR", label: "TKStar series", vendor: "TKStar", driver: "poll", capabilities: ["live", "history", "speed", "geofence"] },
-  { key: "JIMI", label: "Jimi/Concox (GT06N, GV25…)", vendor: "JimiIoT", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper", "fuel"] },
-  { key: "CARSYE", label: "Carsye GoTrail", vendor: "Carsye", driver: "ingest", capabilities: ["live", "speed", "geofence", "tamper"] },
-  { key: "AFGPS", label: "AfriTrack GPS", vendor: "AfriTrack", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence"] },
-  { key: "WEBHOOK", label: "Generic webhook (any provider)", vendor: "Custom", driver: "ingest", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], noKey: true },
-  { key: "CUSTOM", label: "Custom provider (future)", vendor: "Custom", driver: "ingest", capabilities: ["live", "speed", "geofence"], noKey: true },
+  // — No hardware needed —
+  { key: "MANUAL", label: "Manual / Phone GPS", vendor: "GoMina", driver: "ingest", capabilities: ["live", "history", "speed", "mileage"], noKey: true, brand: "Any smartphone", connection: "PHONE_APP", protocolNote: "Staff phone/driver app pushes positions through the ingest endpoint (or the PWA location picker).", examples: ["Driver smartphone"] },
+  { key: "SIMULATED", label: "Simulated tracker (pilot/demo)", vendor: "GoMina", driver: "simulated", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], devMode: true, noKey: true, brand: "Virtual", connection: "SIMULATED", protocolNote: "Zero hardware — generates realistic town-to-town routes for pilots and demos.", examples: ["Virtual device"] },
+  // — Vehicle hardware (Ghana & regional market) —
+  { key: "TKSTAR", label: "TKStar series", vendor: "TKStar", driver: "poll", capabilities: ["live", "history", "speed", "geofence"], brand: "TKStar", connection: "TCP_RELAY", protocolNote: "OBD/magnetic trackers (app 'SETY'/'GPS365'). Point device APN/server to a relay (e.g. Traccar) that forwards via webhook.", examples: ["TK905", "TK911", "TK102"] },
+  { key: "JIMI", label: "Jimi/Concox (GT06N, GV25…)", vendor: "JimiIoT", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper", "fuel"], brand: "Concox/Jimi", connection: "TCP_RELAY", protocolNote: "Very common on the Ghana market. GT06-family protocol; relay via Traccar port 5023-compatible forwarding.", examples: ["GT06N", "GV25", "HV808T"] },
+  { key: "COBAN", label: "Coban tracker family", vendor: "Coban", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], brand: "Coban", connection: "TCP_RELAY", protocolNote: "Classic SMS+GPRS trackers — point GPRS server via SMS 'adminip' to a relay that forwards positions.", examples: ["TK103", "TK303", "GPS306"] },
+  { key: "SINOTRACK", label: "Sinotrack (ST-901, ST-902…)", vendor: "Sinotrack", driver: "poll", capabilities: ["live", "history", "speed", "geofence"], brand: "Sinotrack", connection: "TCP_RELAY", protocolNote: "Budget trackers (SinoTrack GPS365 app) — H02/GT06 dialect; same Traccar relay flow.", examples: ["ST-901", "ST-902", "ST-906"] },
+  { key: "QUECLINK", label: "Queclink (GV-series)", vendor: "Queclink Wireless", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper", "fuel"], brand: "Queclink", connection: "TCP_RELAY", protocolNote: "Enterprise-grade; @Track air protocol — Traccar devices list covers the full GV range.", examples: ["GV300", "GV350", "GT300"] },
+  { key: "TELTONIKA", label: "Teltonika (FMB/FMB9xx)", vendor: "Teltonika", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper", "fuel"], brand: "Teltonika", connection: "TCP_RELAY", protocolNote: "Codec 8/8E fleets — configure server A/IP + port via Teltonika Configurator; relay via Traccar.", examples: ["FMB920", "FMB140", "FMB130"] },
+  { key: "CARSYE", label: "Carsye GoTrail", vendor: "Carsye", driver: "ingest", capabilities: ["live", "speed", "geofence", "tamper"], brand: "Carsye", connection: "HTTP_PUSH", protocolNote: "HTTP-forward capable platform — set the account webhook to the ingest URL.", examples: ["GoTrail M1"] },
+  { key: "AFGPS", label: "AfriTrack GPS", vendor: "AfriTrack", driver: "poll", capabilities: ["live", "history", "speed", "mileage", "geofence"], brand: "AfriTrack", connection: "OTA_API", protocolNote: "West-African fleet platform — positions bridged from the vendor API on a schedule.", examples: ["AfriTrack fleet units"] },
+  // — Platforms & catch-alls —
+  { key: "TRACCAR", label: "Traccar Server (self-hosted)", vendor: "Traccar", driver: "ingest", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], docs: "https://www.traccar.org/osmand/", brand: "Any TCP device", connection: "TCP_RELAY", protocolNote: "Self-host Traccar to receive ANY brand above, then enable Traccar's event/data forward to the ingest webhook.", examples: ["1,700+ device protocols"] },
+  { key: "WEBHOOK", label: "Generic webhook (any provider)", vendor: "Custom", driver: "ingest", capabilities: ["live", "history", "speed", "mileage", "geofence", "tamper"], noKey: true, brand: "Any platform", connection: "WEBHOOK", protocolNote: "For platforms that can push HTTP (Zapier/Make, vendor webhooks, custom firmware) — see the ingest recipe.", examples: ["Zapier/Make bridges"] },
+  { key: "CUSTOM", label: "Custom provider (future)", vendor: "Custom", driver: "ingest", capabilities: ["live", "speed", "geofence"], noKey: true, brand: "Future vendor", connection: "CUSTOM", protocolNote: "Reserved slot for a vendor not in the list; same secure ingest endpoint and flow.", examples: ["—"] },
 ];
 
 export const PROVIDER_BY_KEY: Record<string, GpsProvider> = Object.fromEntries(GPS_PROVIDER_LIBRARY.map((p) => [p.key, p]));
