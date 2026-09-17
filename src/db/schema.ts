@@ -252,6 +252,11 @@ export const businesses = pgTable("businesses", {
   // delivery pins are refused at checkout and the storefront's
   // "serving my location" filter hides the unit beyond the radius.
   onlineOrderingEnabled: boolean("online_ordering_enabled").default(true),
+  // Pre-Order enable flag — OWNER (or Manage-Unit grantee) turns this on per
+  // unit/branch to publish fulfilment options and accept pre-orders on the
+  // customer storefront. Server-enforced: menu emits options, checkout accepts
+  // them and the catalogue editor writes options ONLY while this is true.
+  preOrderEnabled: boolean("pre_order_enabled").default(false),
   pickupEnabled: boolean("pickup_enabled").default(true),
   deliveryEnabled: boolean("delivery_enabled").default(true),
   serviceRadiusKm: doublePrecision("service_radius_km"),

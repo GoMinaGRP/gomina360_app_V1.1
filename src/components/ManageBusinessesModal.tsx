@@ -259,6 +259,7 @@ export default function ManageBusinessesModal({
 
   // ── Online ordering & service area (mode === "online") ──────────────────
   const [onlEnabled, setOnlEnabled] = useState(true);
+  const [onlPreorder, setOnlPreorder] = useState(false);
   const [onlPickup, setOnlPickup] = useState(true);
   const [onlDelivery, setOnlDelivery] = useState(true);
   const [onlRadius, setOnlRadius] = useState(""); // "" = no geographic limit
@@ -286,6 +287,7 @@ export default function ManageBusinessesModal({
   const openOnline = (biz: any) => {
     setSelected(biz);
     setOnlEnabled(biz.onlineOrderingEnabled !== false);
+    setOnlPreorder(biz.preOrderEnabled === true);
     setOnlPickup(biz.pickupEnabled !== false);
     setOnlDelivery(biz.deliveryEnabled !== false);
     setOnlRadius(biz.serviceRadiusKm != null ? String(biz.serviceRadiusKm) : "");
@@ -334,6 +336,7 @@ export default function ManageBusinessesModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actorUserId: currentUser?.id ?? null,
+          ...(canFullyManage(selected) ? { preOrderEnabled: onlPreorder } : {}),
           onlineOrderingEnabled: onlEnabled,
           pickupEnabled: onlPickup,
           deliveryEnabled: onlDelivery,
@@ -352,7 +355,7 @@ export default function ManageBusinessesModal({
         setNotice(
           d.business.onlineOrderingEnabled === false
             ? `"${d.business.name}" switched OFF the customer storefront — hidden from /order and blocked at checkout until you switch it back on.`
-            : `"${d.business.name}" online-ordering settings saved — the customer storefront reflects them immediately.`,
+            : `"${d.business.name}" online-ordering settings saved — the customer storefront reflects them immediately.${d.business.preOrderEnabled === true ? " Pre-Orders stay ENABLED for this unit." : ""}`,
         );
       } else {
         setError(d?.error || "Failed to save online-ordering settings.");
@@ -1311,7 +1314,7 @@ export default function ManageBusinessesModal({
                 )}
 
                 {/* Storefront switches */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                   <SwitchRow
                     label="Online ordering"
                     desc="Show on the public customer storefront"
@@ -1319,6 +1322,20 @@ export default function ManageBusinessesModal({
                     onFlip={setOnlEnabled}
                     tid="mb-onl-toggle-enabled"
                   />
+                  {canFullyManage(selected) ? (
+                    <SwitchRow
+                      label="Pre-Orders"
+                      desc="Sell goods before they reach branch stock (indigo offers on the storefront)"
+                      on={onlPreorder}
+                      onFlip={(v: boolean) => { setOnlPreorder(v); setOnlDirty(true); }}
+                      tid="mb-onl-toggle-preorder"
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 opacity-60" data-testid="mb-onl-preorder-locked">
+                      <p className="text-[11px] font-bold text-slate-300">Pre-Orders {selected?.preOrderEnabled === true ? "· ON" : "· OFF"}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Only the Owner or a "Manage Unit" grantee can flip this.</p>
+                    </div>
+                  )}
                   <SwitchRow
                     label="Pickup"
                     desc="Customers collect at this branch"

@@ -995,6 +995,12 @@ function OrderInner() {
                 {biz.serviceNote}
               </p>
             )}
+            {biz?.preOrderEnabled === true && (biz?.products || []).some((p: any) => (p.preorderOptions || []).length > 0) && (
+              <p className="text-[9px] font-extrabold text-indigo-700 px-1 flex items-center gap-1" data-testid="oo-biz-preorder-badge">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                This branch accepts pre-orders — indigo options ship in and land for you automatically.
+              </p>
+            )}
             {biz && (biz.serviceAreas || []).length > 0 && (
               <div className="flex flex-wrap items-center gap-1 px-1" data-testid="oo-biz-areas">
                 <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Delivers to:</span>

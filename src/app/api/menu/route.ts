@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
-import { asc, eq, gt, inArray, ne, and } from "drizzle-orm";
+import { asc, eq, gt, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 
 /**
@@ -31,10 +31,13 @@ export async function GET() {
     }
     const [bizRows, itemRows, areaRows, pickupRows, orgRows] = await Promise.all([
       db.select().from(businesses).orderBy(asc(businesses.id)),
+      // Every catalogue row — including OUT_OF_STOCK products that carry an
+      // active pre-order option (that is the whole point of pre-orders: sell
+      // goods before they arrive). The per-product `sellable` gate below
+      // still drops zero-stock items with NO option, so nothing extra leaks.
       db
         .select()
         .from(inventoryItems)
-        .where(ne(inventoryItems.status, "OUT_OF_STOCK"))
         .orderBy(asc(inventoryItems.name)),
       db.select().from(serviceAreas).where(eq(serviceAreas.active, true)),
       db.select().from(pickupLocations).where(eq(pickupLocations.active, true)),
@@ -43,12 +46,14 @@ export async function GET() {
 
     const invHasStock = (i: any) => (i.quantity || 0) > 0 && i.status !== "OUT_OF_STOCK";
     // Pre-order options for the whole catalog (ACTIVE only, method ACTIVE
-    // only) — the catalogue is org-scoped, so no other tenant's options leak.
+    // only) — scoped to units whose OWNER switched pre-orders ON, and the
+    // catalogue is org-scoped, so no other tenant's options leak.
+    const preorderBizIds = new Set(bizRows.filter((b: any) => b.preOrderEnabled === true).map((b: any) => Number(b.id)));
     const invIdsAll = itemRows.map((i) => i.id);
     const optsRows = invIdsAll.length
       ? await db.select().from(fulfillmentOptions).where(inArray(fulfillmentOptions.inventoryId, invIdsAll))
       : [];
-    const activeOpts = optsRows.filter((o) => o.active);
+    const activeOpts = optsRows.filter((o) => o.active && preorderBizIds.has(Number(o.businessId)));
     const methodIds = [...new Set(activeOpts.map((o) => o.methodId))];
     const methods = methodIds.length
       ? await db.select().from(fulfillmentMethods).where(inArray(fulfillmentMethods.id, methodIds))
@@ -140,6 +145,7 @@ export async function GET() {
       result.push({
         businessId: b.id,
         businessName: b.name,
+        preOrderEnabled: b.preOrderEnabled === true,
         businessCode: b.code,
         // D1 — centralized shared marketplace with seller attribution:
         // each listing is attributed to the Owner/Organization that runs the

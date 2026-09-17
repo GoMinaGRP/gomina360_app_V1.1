@@ -395,6 +395,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.onlineOrderingEnabled !== undefined) {
       updates.onlineOrderingEnabled = !!body.onlineOrderingEnabled;
     }
+    // Pre-order capability toggle — OWNER / Manage-Unit scope only (deliberately
+    // NOT in ONLINE_ORDERING_FIELDS: deferred-sales liability belongs with the
+    // unit owner, never with Online-Storefront grantees).
+    if (body.preOrderEnabled !== undefined) {
+      updates.preOrderEnabled = !!body.preOrderEnabled;
+    }
     if (body.pickupEnabled !== undefined) {
       updates.pickupEnabled = !!body.pickupEnabled;
     }

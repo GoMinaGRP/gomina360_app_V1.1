@@ -9,6 +9,7 @@ import CommandCenterDashboard from "./CommandCenterDashboard";
 import LivestockModule from "./LivestockModule";
 import SharedEnterpriseModule from "./SharedEnterpriseModule";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
+import PreordersHubView from "./PreordersHubView";
 import AiAdvisorView from "./AiAdvisorView";
 import ScenarioPlannerView from "./ScenarioPlannerView";
 import IntegrationsHubView from "./IntegrationsHubView";
@@ -698,6 +699,9 @@ export default function GoMinaApp() {
         "BRANCH_ASSETS",
         "TRACKING", // Customer Order & Tracking register (scoped server-side to own branch)
       ]);
+      // Pre-Orders hub: branch managers the OWNER granted "Manage Unit" power
+      // get the same pre-order console (flag + offers stay server-scoped).
+      if (businessManageIdsOf(currentUser).length > 0) allowed.add("PREORDERS");
       // Managers the OWNER trusted with CCTV may open the Integrations Hub,
       // where the CCTV Command Center stays scoped to their authorised branches.
       if (currentUser?.canManageCctv) allowed.add("INTEGRATIONS");
@@ -1175,6 +1179,17 @@ export default function GoMinaApp() {
     // Managers (their branch) via the sidebar. Server enforces the same
     // Business/Branch access scoping as the rest of the platform. Workers
     // get the same console embedded as a tab inside their sales workspace.
+    // Pre-Orders hub (Setup + Procurement + Guide) — executives see every
+    // business; Manage-Unit grantees stay scoped to their server-vetted units.
+    if (activeTab === "PREORDERS") {
+      return (
+        <PreordersHubView
+          currentUser={currentUser}
+          businesses={scopedBusinesses}
+        />
+      );
+    }
+
     if (activeTab === "TRACKING") {
       return (
         <CustomerTrackingPanel

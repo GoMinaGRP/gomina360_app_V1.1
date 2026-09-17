@@ -57,6 +57,7 @@ export default function PreorderSetupView({
   const [bizId, setBizId] = useState<string>(scopedBusinesses[0] ? String(scopedBusinesses[0].id) : "");
   const [methods, setMethods] = useState<Method[]>([]);
   const [options, setOptions] = useState<Option[]>([]);
+  const [flags, setFlags] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -77,6 +78,7 @@ export default function PreorderSetupView({
       if (d?.success) {
         setMethods(d.methods || []);
         setOptions(d.options || []);
+        setFlags(d.preorderFlags || []);
         setInventory((d.inventory || []).filter((i: any) => (bizId ? Number(i.businessId) === Number(bizId) : true)));
         setError("");
       } else {
@@ -196,6 +198,39 @@ export default function PreorderSetupView({
     }
   };
 
+  const unitEnabled = useMemo(
+    () => {
+      if (!bizId) return true; // "All units" view — no single switch
+      const f = flags.find((x: any) => Number(x.businessId) === Number(bizId));
+      return f ? f.preOrderEnabled === true : false;
+    },
+    [flags, bizId],
+  );
+
+  const toggleUnitPreorders = async () => {
+    if (!bizId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/businesses/${bizId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ preOrderEnabled: !unitEnabled }),
+      });
+      const d = await res.json();
+      if (!d?.success) throw new Error(d?.error || "Could not update the unit.");
+      setFlash(!unitEnabled
+        ? "Pre-Orders enabled — this unit's active offers now appear on the customer storefront."
+        : "Pre-Orders disabled — storefront stops showing this unit's offers (orders already placed still complete).");
+      await loadCatalogue();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const activeOptions = options.filter((o) => o.active);
 
   return (
@@ -220,6 +255,20 @@ export default function PreorderSetupView({
           <button onClick={loadCatalogue} className="p-2 rounded-lg hover:bg-slate-700/70 text-slate-300" title="Refresh" data-testid="po-refresh">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
+          {bizId && (
+            <button
+              onClick={toggleUnitPreorders}
+              disabled={busy}
+              title={unitEnabled ? "Pre-Orders ON for this unit — click to disable" : "Pre-Orders OFF for this unit — click to enable"}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition disabled:opacity-50 ${unitEnabled ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" : "bg-slate-900/70 border-slate-600 text-slate-400 hover:text-slate-200"}`}
+              data-testid="po-unit-enabled"
+            >
+              <span className={`w-7 h-4 rounded-full relative transition ${unitEnabled ? "bg-emerald-500" : "bg-slate-600"}`}>
+                <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${unitEnabled ? "left-3.5" : "left-0.5"}`} />
+              </span>
+              {unitEnabled ? "Pre-Orders ON" : "Pre-Orders OFF"}
+            </button>
+          )}
           {methodsForScope.length === 0 && (
             <button onClick={seedDefaults} disabled={busy || !bizId} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50" data-testid="po-seed">
               Seed standard methods
@@ -236,6 +285,17 @@ export default function PreorderSetupView({
 
       {flash && <p className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2" data-testid="po-flash">{flash}</p>}
       {error && <p className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2" data-testid="po-error">{error}</p>}
+
+      {bizId && !unitEnabled && (
+        <div className="flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3" data-testid="po-off-banner">
+          <span className="text-amber-300 text-sm leading-5">⚠</span>
+          <div className="text-[11px] text-amber-200/90 leading-relaxed">
+            <b>Pre-Orders are OFF for this unit.</b> You can prepare methods and offers here, but the storefront
+            hides them and customers cannot place pre-orders until an Owner or Manage-Unit grantee flips the
+            <b>&nbsp;Pre-Orders ON</b> switch above (also in <b>Manage Businesses → Online</b>).
+          </div>
+        </div>
+      )}
 
       {/* ── Methods ── */}
       <div className="bg-slate-800/90 border border-slate-700/80 rounded-xl overflow-hidden">

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { fulfillmentMethods, fulfillmentOptions, inventoryItems, organizations } from "@/db/schema";
+import { businesses, fulfillmentMethods, fulfillmentOptions, inventoryItems, organizations } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { canAccessBusiness, filterByAccess, accessibleBusinessIds, getSessionInfo } from "@/lib/auth";
 import { DEFAULT_FULFILLMENT_METHODS, ensureDefaultMethods } from "@/lib/preorder";
@@ -29,6 +29,13 @@ export async function GET(request: NextRequest) {
     const invIds = [...new Set(optionRows.map((o) => o.inventoryId))];
     const invRows = invIds.length ? await db.select().from(inventoryItems) : [];
     const byInv = new Map(invRows.map((i) => [i.id, i]));
+
+    // Per-unit enable state (drives the setup toggle next to the unit picker).
+    const bizAll = await db.select().from(businesses);
+    const scopeSet = allowed === null ? null : new Set(allowed);
+    const preorderFlags = bizAll
+      .filter((b) => (scopeSet == null ? true : scopeSet.has(Number(b.id))))
+      .map((b) => ({ businessId: b.id, businessName: b.name, businessCode: b.code, preOrderEnabled: b.preOrderEnabled === true, onlineOrderingEnabled: b.onlineOrderingEnabled !== false }));
 
     // Scoped inventory list for the option editor: only units the caller
     // actually sees, only the fields the setup dropdown needs. When a
@@ -66,6 +73,7 @@ export async function GET(request: NextRequest) {
       }),
       defaults: DEFAULT_FULFILLMENT_METHODS,
       inventory,
+      preorderFlags,
     });
   } catch (error: any) {
     console.error("GET /api/fulfillment error:", error);
@@ -155,6 +163,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (["ADD_OPTION", "UPDATE_OPTION", "TOGGLE_OPTION"].includes(action)) {
+      // Pre-orders are a per-unit ON-flag controlled by the OWNER. Adding or
+      // editing options on a unit that hasn't opted in is refused with the
+      // guidance to enable it first (toggle in Setup or Manage Businesses).
+      // TOGGLE is exempt so existing options can always be switched OFF,
+      // including after the owner flipped pre-orders off.
+      if (action !== "TOGGLE_OPTION") {
+        const [bizCheck] = await db.select().from(businesses).where(eq(businesses.id, businessId));
+        if (bizCheck && bizCheck.preOrderEnabled !== true) {
+          return NextResponse.json(
+            { success: false, error: "Pre-Orders are not enabled for this unit. Turn the “Pre-Orders Enabled” switch ON first — in Setup (above) or Manage Businesses." },
+            { status: 409 },
+          );
+        }
+      }
       if (action === "TOGGLE_OPTION") {
         const id = Number(body.id);
         const [row] = await db.select().from(fulfillmentOptions).where(eq(fulfillmentOptions.id, id));

@@ -196,6 +196,16 @@ export async function POST(request: NextRequest) {
     // lines never require stock on hand (that's the entire point) but validate
     // every option again cross-checked to this branch/org.
     const fulfilmentPicker: Record<string, number> = body.fulfillmentPicker && typeof body.fulfillmentPicker === "object" ? body.fulfillmentPicker : {};
+    // Pre-orders are a per-unit OFF/ON capability chosen by the OWNER (Manage
+    // Businesses / Pre-Order Setup). If the unit is not enabled, any picker
+    // entry is a stale or forged page-state — reject it with a clear reason.
+    const wantsPreorders = Object.keys(fulfilmentPicker || {}).length > 0;
+    if (wantsPreorders && biz.preOrderEnabled !== true) {
+      return NextResponse.json(
+        { success: false, error: "This branch does not accept pre-orders yet. Ask the branch to enable Pre-Orders in their setup." },
+        { status: 403 },
+      );
+    }
     const ownerOrg = biz.ownerId != null ? Number(biz.ownerId) : null;
     const preorderResolution = await resolvePreorders({ businessId, ownerOrg, cart, fulfilmentPicker });
     const problems: string[] = [];

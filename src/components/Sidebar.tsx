@@ -33,6 +33,7 @@ import {
   Landmark,
   Wifi,
   Settings2,
+  CalendarClock,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -525,6 +526,22 @@ export default function Sidebar({
                 <span>Customer Order & Tracking</span>
               </div>
               <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">LIVE</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("PREORDERS")}
+              data-testid="sidebar-tab-preorders"
+              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "PREORDERS"
+                  ? "bg-indigo-500/15 text-indigo-300 font-bold border-l-2 border-indigo-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                <CalendarClock className="w-4 h-4 text-indigo-400/90" />
+                <span>Pre-Orders</span>
+              </div>
+              <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
             </button>
 
             <button
