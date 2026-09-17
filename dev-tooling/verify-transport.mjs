@@ -72,7 +72,12 @@ async function main() {
   let biz = null;
   const byList = await api("/api/businesses");
   if (byList.json?.success) {
-    biz = (byList.json.businesses || []).find((b) => String(b.category).toLowerCase().includes("transport"));
+    // As SUPER-ADMIN the list spans every org — pick only an org-1 transport
+    // unit (the rival fixture TRANSPORT-02/intrabies belongs to org 2).
+    biz = (byList.json.businesses || []).find((b) =>
+      String(b.category).toLowerCase().includes("transport")
+      && (b.ownerId == null || Number(b.ownerId) === 1)
+      && !String(b.code || "").endsWith("-02"));
   }
   if (!biz) {
     const mk = await api("/api/businesses", { method: "POST", body: {
@@ -313,7 +318,7 @@ async function main() {
   } else {
     ql(false, "non-super owner fixture login failed", JSON.stringify(amaLogin.json).slice(0, 80));
   }
-  const crossCat = await api("/api/transport", { method: "POST", body: { entity: "BOOKING", action: "COMPLETE", businessId: org2Biz.id, id: bookingId } });
+  const crossCat = await api("/api/transport", { method: "POST", body: { entity: "BOOKING", action: "COMPLETE", businessId: org2Biz.id, id: bookingId, endOdometerKm: 999999 } });
   ql(crossCat.status === 403 || (crossCat.status === 404 && !crossCat.json?.success), "cross-org booking action blocked", `status ${crossCat.status}`);
   const payloadAfter = await api(`/api/transport?businessId=${bizId}`);
   ql(payloadAfter.json.vehicles.every((v) => v.licensePlate !== "XX-1-RIVAL" && v.licensePlate !== "XX-1"), "no cross-org data leak into org-1 payload");
