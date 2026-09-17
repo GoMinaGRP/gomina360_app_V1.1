@@ -11,6 +11,7 @@ import {
 } from "@/lib/trackingServer";
 import { googleMapsLink, businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
+import { buildPreorderSnapshot, optionDepositPerUnit, orderKindFor, resolvePreorders } from "@/lib/preorder";
 
 /**
  * PUBLIC online checkout — customers order WITHOUT logging in.
@@ -190,12 +191,45 @@ export async function POST(request: NextRequest) {
     }
 
     // Re-price & validate every line against live inventory — never trust the client.
+    // Pre-order fulfillment selections (fulfillmentPicker {inventoryId: optionId})
+    // resolve against the ACTIVE seller-configured options server-side; preorder
+    // lines never require stock on hand (that's the entire point) but validate
+    // every option again cross-checked to this branch/org.
+    const fulfilmentPicker: Record<string, number> = body.fulfillmentPicker && typeof body.fulfillmentPicker === "object" ? body.fulfillmentPicker : {};
+    const ownerOrg = biz.ownerId != null ? Number(biz.ownerId) : null;
+    const preorderResolution = await resolvePreorders({ businessId, ownerOrg, cart, fulfilmentPicker });
     const problems: string[] = [];
+    if (preorderResolution?.problems?.length) {
+      return NextResponse.json({ success: false, error: preorderResolution.problems.join(" "), errors: preorderResolution.problems }, { status: 409 });
+    }
+    const pByInv = new Map((preorderResolution?.lines || []).filter((l) => l.fulfill).map((l) => [l.inventoryId, l.fulfill]));
     const lines: any[] = [];
     for (const li of cart) {
       const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, li.inventoryId));
       if (!inv || inv.businessId !== businessId) {
         problems.push("One of the products is no longer sold by this branch — please refresh the menu.");
+        continue;
+      }
+      const fu = pByInv.get(li.inventoryId);
+      if (fu) {
+        // Pre-order line — stock is irrelevant here; goods arrive later.
+        lines.push({
+          inventoryId: inv.id,
+          description: `${inv.name} (${inv.sku})`,
+          sku: inv.sku,
+          quantity: li.quantity,
+          unit: inv.unit,
+          unitPrice: fu.priceGhs,
+          total: fu.priceGhs * li.quantity,
+          preorder: true,
+          fulfillmentOptionId: fu.optionId,
+          methodKey: fu.methodKey,
+          methodLabel: fu.methodLabel,
+          leadMinDays: fu.leadMinDays,
+          leadMaxDays: fu.leadMaxDays,
+          depositGhs: fu.depositGhs,
+          termsKey: fu.termsKey,
+        });
         continue;
       }
       if (inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
@@ -223,6 +257,37 @@ export async function POST(request: NextRequest) {
     const totalGhs = lines.reduce((acc: number, li: any) => acc + li.total, 0);
     const code = await uniqueTrackingCode(biz.code);
     const now = new Date();
+
+    // ── Pre-order canon: kind, snapshot, payment plan ──────────────────
+    const resolvedForKind = (lines as any[]).map((li: any) =>
+      li.preorder ? { inventoryId: li.inventoryId, quantity: li.quantity, fulfill: { optionId: li.fulfillmentOptionId, methodKey: li.methodKey, methodLabel: li.methodLabel, priceGhs: li.unitPrice, leadMinDays: li.leadMinDays, leadMaxDays: li.leadMaxDays, depositGhs: li.depositGhs, termsKey: li.termsKey } } : { inventoryId: li.inventoryId, quantity: li.quantity, fulfill: null },
+    );
+    const orderKind = orderKindFor(resolvedForKind as any);
+    const hasPre = orderKind !== "STOCK";
+    const snap = hasPre ? buildPreorderSnapshot(resolvedForKind as any) : null;
+    const depositDueGhs = Number(snap?.depositDueGhs || 0);
+    const paymentPlan = !hasPre ? undefined : depositDueGhs > 0 ? (depositDueGhs >= totalGhs - 0.005 ? "FULL_NOW" : "DEPOSIT_NOW") : "ON_FULFILLMENT";
+    const expectedAt = hasPre ? snap?.etaEnd || null : null;
+    const requiredNowGhs = hasPre ? (paymentPlan === "FULL_NOW" ? totalGhs : depositDueGhs) : 0;
+    const balanceDueGhs = hasPre ? Math.max(0, totalGhs - (paymentPlan === "ON_FULFILLMENT" ? 0 : requiredNowGhs)) : 0;
+    if (hasPre && requiredNowGhs > 0 && paymentChoice === "ON_DELIVERY") {
+      // Preorders demanding a deposit cannot be pay-on-delivery; the customer
+      // must settle the deposit up front (the whole reason a pre-order exists).
+      return NextResponse.json(
+        { success: false, error: `This pre-order needs an up-front deposit of GH₵ ${requiredNowGhs.toFixed(2)} — choose MTN MoMo to continue.` },
+        { status: 400 },
+      );
+    }
+    const paymentStatusInitial = hasPre
+      ? paymentChoice === "MOMO_NOW"
+        ? "PENDING_CONFIRMATION"
+        : paymentPlan === "ON_FULFILLMENT"
+        ? "UNPAID"
+        : "PENDING_CONFIRMATION"
+      : paymentChoice === "MOMO_NOW"
+        ? "PENDING_CONFIRMATION"
+        : "UNPAID";
+
     const customerId = await linkCrmCustomer({
       name: customerName,
       phone: customerPhone,
@@ -261,10 +326,16 @@ export async function POST(request: NextRequest) {
         ],
         orderSource: "ONLINE",
         paymentChoice,
-        paymentStatus: paymentChoice === "MOMO_NOW" ? "PENDING_CONFIRMATION" : "UNPAID",
+        paymentStatus: paymentStatusInitial,
         paymentMethod: paymentChoice === "MOMO_NOW" ? "MTN_MOMO" : null,
         paymentRef: momoRef || null,
         customerNote: customerNote || null,
+        // Pre-order canon (additive columns — legacy rows stay null/STOCK):
+        orderKind,
+        paymentPlan: paymentPlan || null,
+        preorderExpectedAt: expectedAt,
+        preorderSnapshot: snap,
+        balanceDueGhs: hasPre ? (paymentPlan === "ON_FULFILLMENT" ? totalGhs : balanceDueGhs) : null,
         createdByUserId: null,
         createdByName: customerName,
         createdByRole: "CUSTOMER",
@@ -322,7 +393,22 @@ export async function POST(request: NextRequest) {
                 : null
             : null,
         status: "RECEIVED",
-        payment: paymentChoice === "MOMO_NOW" ? "PENDING_CONFIRMATION" : "UNPAID",
+        payment: paymentStatusInitial,
+        // Pre-order facts echoed to the customer (ETA window + deposit terms).
+        preorder: hasPre
+          ? {
+              orderKind,
+              expectedAt,
+              etaStart: snap?.etaStart || null,
+              etaEnd: snap?.etaEnd || null,
+              depositDueGhs,
+              requiredNowGhs,
+              balanceDueGhs: paymentPlan === "ON_FULFILLMENT" ? totalGhs : balanceDueGhs,
+              termsKey: snap?.termsKey || null,
+              methods: snap?.methods || [],
+              paymentPlan,
+            }
+          : null,
         // Customer help & MoMo payment numbers — shown straight after the
         // order lands (and again on the tracking page).
         help: biz.customerHelpPhone ? { phone: biz.customerHelpPhone } : null,

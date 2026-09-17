@@ -759,12 +759,142 @@ export const customerTrackings = pgTable("customer_trackings", {
   paymentMarkedAt: timestamp("payment_marked_at"),
   customerNote: text("customer_note"), // checkout note typed by the customer
   stockCommitted: boolean("stock_committed").notNull().default(false), // online order stock deducted at CONFIRM
+  // ── PRE-ORDER columns (additive; legacy rows stay STOCK with nulls) ──
+  orderKind: text("order_kind").notNull().default("STOCK"), // 'STOCK' | 'PREORDER' | 'MIXED'
+  paymentPlan: text("payment_plan"), // 'FULL_NOW' | 'DEPOSIT_NOW' | 'ON_FULFILLMENT'
+  preorderExpectedAt: text("preorder_expected_at"), // ISO date — the fulfillment window end promised at order time
+  preorderSnapshot: jsonb("preorder_snapshot"), // {depositDueGhs, requiredNowGhs, etaStart, etaEnd, balanceOnARRIVAL|FULFILLMENT}
+  supplierOrderId: integer("supplier_order_id"), // supplier_orders.id covering this order's pre-order lines
+  // Stock-commit discipline per order stage: preorder lines commit at
+  // RECEIVED_STOCK (never earlier); stock lines commit at CONFIRMED as before.
+  stockCommitStage: text("stock_commit_stage"), // last stage at which stock was deducted
+  balanceDueGhs: doublePrecision("balance_due_ghs"), // remaining balance owed (deposits reduce it)
   notes: text("notes"),
   createdByUserId: integer("created_by_user_id"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ═══ PRE-ORDER SYSTEM ════════════════════════════════════════════════════
+// One order system, enriched — pre-orders live inside customer_trackings.
+// Seller-configurable fulfilment CATALOGUE drives everything; nothing
+// hard-coded. Tenant scope: ownerId = organizations.id everywhere.
+//
+// 9d-1. Fulfilment methods (Air, Sea, Road, Local Delivery, Pickup, …)
+export const fulfillmentMethods = pgTable("fulfillment_methods", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope (organizations.id)
+  businessId: integer("business_id"), // null = available to every unit of the org
+  branchCode: text("branch_code"),
+  key: text("key").notNull(), // 'AIR' | 'SEA' | 'ROAD' | 'LOCAL' | 'PICKUP' | custom keys
+  label: text("label").notNull(), // seller-facing wording shown to customers
+  icon: text("icon").notNull().default("truck"),
+  defaultLeadMinDays: integer("default_lead_min_days").notNull().default(7),
+  defaultLeadMaxDays: integer("default_lead_max_days").notNull().default(14),
+  requiresAddress: boolean("requires_address").notNull().default(false),
+  requiresPin: boolean("requires_pin").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("fulfillment_methods_owner_key_biz_unique").on(t.ownerId, t.key, t.businessId),
+]);
+
+// 9d-2. Fulfilment options — a product's seller-defined pre-order offer per
+// method: its own price, lead-time window and payment terms. A product with
+// any ACTIVE option is sellable as a pre-order; stock determines whether it
+// is ALSO "In Stock".
+export const fulfillmentOptions = pgTable("fulfillment_options", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  inventoryId: integer("inventory_id").notNull(), // the product (inventory_items.id)
+  methodId: integer("method_id").notNull(), // fulfillment_methods.id
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  priceGhs: doublePrecision("price_ghs").notNull(), // pre-order price per unit
+  leadMinDays: integer("lead_min_days").notNull(),
+  leadMaxDays: integer("lead_max_days").notNull(),
+  // 'NONE' (full upfront) | 'PERCENT' (e.g. depositValue=30 → 30% deposit)
+  // | 'FIXED' (depositValue GHS per unit)
+  depositType: text("deposit_type").notNull().default("NONE"),
+  depositValue: doublePrecision("deposit_value").notNull().default(0),
+  // balance timing: 'ON_ARRIVAL' | 'ON_FULFILLMENT'
+  termsKey: text("terms_key").notNull().default("ON_FULFILLMENT"),
+  capacityPerPeriod: doublePrecision("capacity_per_period"), // optional cap
+  requiresAddress: boolean("requires_address"), // override method default
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// 9d-3. Order payments — every money event against an order (deposit /
+// balance / full / refund) as an append-only log + linked Finance
+// transaction per event (receipt pattern like credit_payments).
+export const orderPayments = pgTable("order_payments", {
+  id: serial("id").primaryKey(),
+  trackingId: integer("tracking_id").notNull(),
+  kind: text("kind").notNull(), // 'DEPOSIT' | 'BALANCE' | 'FULL' | 'REFUND'
+  amountGhs: doublePrecision("amount_ghs").notNull(),
+  method: text("method").notNull(), // 'CASH' | 'MTN_MOMO'
+  paymentRef: text("payment_ref"),
+  transactionId: integer("transaction_id"), // transactions.id for the income
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope
+  markedByUserId: integer("marked_by_user_id"),
+  markedByName: text("marked_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// 9d-4. Supplier orders — the shared procurement pipeline pre-orders demand.
+export const supplierOrders = pgTable("supplier_orders", {
+  id: serial("id").primaryKey(),
+  purchaseNumber: text("purchase_number").notNull().unique(), // 'PO-SO-2026-0007'
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  supplierId: integer("supplier_id"), // suppliers.id (nullable → ad-hoc name kept in supplierName)
+  supplierName: text("supplier_name").notNull(),
+  shippingMethodKey: text("shipping_method_key"), // AIR/SEA/ROAD… how the goods travel
+  trackingLineIds: jsonb("tracking_line_ids").notNull().default([]), // [itemRef] demand covered
+  status: text("status").notNull().default("RAISED"), // RAISED | SENT | SHIPPED | IN_TRANSIT | ARRIVED | RECEIVED | CANCELLED
+  expectedAt: text("expected_at"), // promised supplier ETA
+  currency: text("currency").notNull().default("GHS"),
+  items: jsonb("items").notNull().default([]), // [{inventoryId, description, qty, unitCostGhs, trackingId}]
+  totalGhs: doublePrecision("total_ghs").notNull().default(0),
+  statusHistory: jsonb("status_history").notNull().default([]),
+  expenseBooked: boolean("expense_booked").notNull().default(false),
+  notes: text("notes"),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// 9d-5. Goods receipts — the ONLY stock gate for pre-ordered goods: a posted
+// receipt increments inventory_items.quantity; nothing before it does.
+export const goodsReceipts = pgTable("goods_receipts", {
+  id: serial("id").primaryKey(),
+  receiptNumber: text("receipt_number").notNull().unique(), // 'GRN-2026-0005'
+  supplierOrderId: integer("supplier_order_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id").notNull(),
+  items: jsonb("items").notNull().default([]), // [{inventoryId, qty, newQty, note}]
+  notes: text("notes"),
+  receivedByUserId: integer("received_by_user_id"),
+  receivedByName: text("received_by_name"),
+  receivedAt: timestamp("received_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // 9d. Credit Sales — buy-now-pay-in-installments anchored to a secure

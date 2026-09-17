@@ -28,6 +28,7 @@ import {
   Mail,
   MessageCircle,
   Clock,
+  CalendarClock,
   Info,
 } from "lucide-react";
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
@@ -45,6 +46,8 @@ interface CartLine {
   biz: any;
   product: any;
   qty: number;
+  /** Chosen fulfilment option (pre-order) for this line, if any. */
+  option?: any | null;
 }
 
 /**
@@ -239,9 +242,23 @@ function OrderInner() {
     return out;
   }, [products]);
 
-  const cartTotal = cart.reduce((acc, l) => acc + l.product.price * l.qty, 0);
+  /** Unit price for a cart line: preorder = option's quoted price; stock = product price. */
+  const lineUnitPrice = (l: CartLine) => (l.option ? Number(l.option.priceGhs ?? l.product.price) : Number(l.product.price));
+  const cartTotal = cart.reduce((acc, l) => acc + lineUnitPrice(l) * l.qty, 0);
   const cartCount = cart.reduce((acc, l) => acc + l.qty, 0);
-  const inCart = (id: number) => cart.find((l) => l.product.id === id)?.qty || 0;
+  // Pre-order quick facts for the checkout strip.
+  const preorderLines = cart.filter((l) => l.option);
+  const hasPreorder = preorderLines.length > 0;
+  const depositDueTotal = preorderLines.reduce((acc, l) => {
+    const o = l.option;
+    const unit = lineUnitPrice(l);
+    const dep = o.depositType === "NONE" ? unit : o.depositType === "PERCENT" ? (unit * Number(o.depositValue || 0)) / 100 : Number(o.depositValue || 0);
+    return acc + dep * l.qty;
+  }, 0);
+  const inCart = (id: number) => cart.find((l) => l.product.id === id && !l.option)?.qty || 0;
+  /** Quantity for a specific (product, option) line — option lines keyed "id:optId". */
+  const cartQty = (key: string) =>
+    cart.find((l) => `${l.product.id}:${l.option?.id ?? "stock"}` === key)?.qty || 0;
 
   // ── "Serving my location" (Google Maps) ─────────────────────────────
   const useMyLocation = () => {
@@ -390,6 +407,12 @@ function OrderInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deliveryPin?.lat, deliveryPin?.lng]);
 
+  // Deposit required? The payment anchor must be MoMo NOW — pay-on-delivery
+  // cannot hold a reservation that needs a deposit first.
+  useEffect(() => {
+    if (depositDueTotal > 0) setPayChoice("MOMO_NOW");
+  }, [depositDueTotal]);
+
   // Esc closes the product-image lightbox and the HELP panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -400,52 +423,63 @@ function OrderInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightbox, helpOpen]);
 
-  const add = (p: any, delta: number, fromBiz?: any) => {
+  const add = (p: any, delta: number, fromBiz?: any, option?: any) => {
     const pBiz = fromBiz || biz;
+    // Cart lines differ per fulfilment option: product × option is the launch key.
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const inCartKey = () => cart.some((l) => lineKey(l) === myKey);
     // Cross-shop guard: adding a NEW line from a different business follows
     // the same confirm-then-switch rule as the branch chips (cart is
     // single-business: stock, tracking & payment are all per-branch).
-    if (delta > 0 && !inCart(p.id) && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
+    if (delta > 0 && !inCartKey() && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: 1 }]);
+      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
     // First item in an empty cart: checkout surfaces follow that product's
     // shop (pickup points, delivery switches, service areas).
-    if (delta > 0 && !inCart(p.id) && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (delta > 0 && !inCartKey() && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
-      const existing = c.find((l) => l.product.id === p.id);
-      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1 }];
+      const existing = c.find((l) => lineKey(l) === myKey);
+      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null }];
       if (!existing) return c;
-      const qty = Math.max(0, Math.min(p.available, existing.qty + delta));
-      if (qty === 0) return c.filter((l) => l.product.id !== p.id);
-      return c.map((l) => (l.product.id === p.id ? { ...l, qty } : l));
+      // Stock lines clamp to branch availability; pre-order lines are
+      // open-ended, just capped by the seller's per-period capacity (if any).
+      const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+      const qty = Math.max(0, Math.min(cap, existing.qty + delta));
+      if (qty === 0) return c.filter((l) => lineKey(l) !== myKey);
+      return c.map((l) => (lineKey(l) === myKey ? { ...l, qty } : l));
     });
   };
 
   // Direct (typed) quantity entry — same clamping rules as the −/+ stepper.
-  const setQty = (p: any, qty: number, fromBiz?: any) => {
+  const setQty = (p: any, qty: number, fromBiz?: any, option?: any) => {
     const pBiz = fromBiz || biz;
-    if (qty > 0 && !inCart(p.id) && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const inCartKey = () => cart.some((l) => lineKey(l) === myKey);
+    const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+    if (qty > 0 && !inCartKey() && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: Math.min(p.available, qty) }]);
+      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
-    if (qty > 0 && !inCart(p.id) && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (qty > 0 && !inCartKey() && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
-      const existing = c.find((l) => l.product.id === p.id);
-      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(p.available, qty) }] : c;
-      const q = Math.max(0, Math.min(p.available, qty));
-      if (q === 0) return c.filter((l) => l.product.id !== p.id);
-      return c.map((l) => (l.product.id === p.id ? { ...l, qty: q } : l));
+      const existing = c.find((l) => lineKey(l) === myKey);
+      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }] : c;
+      const q = Math.max(0, Math.min(cap, qty));
+      if (q === 0) return c.filter((l) => lineKey(l) !== myKey);
+      return c.map((l) => (lineKey(l) === myKey ? { ...l, qty: q } : l));
     });
   };
 
@@ -516,6 +550,10 @@ function OrderInner() {
           momoRef: momoRef.trim(),
           note: note.trim(),
           items: cart.map((l) => ({ inventoryId: l.product.id, quantity: l.qty })),
+          // Chosen fulfilment options — the server validates every entry.
+          fulfillmentPicker: Object.fromEntries(
+            cart.filter((l) => l.option).map((l) => [l.product.id, l.option.id]),
+          ),
         }),
       });
       const data = await res.json();
@@ -598,13 +636,18 @@ function OrderInner() {
         <div className="mt-1.5 flex items-end justify-between gap-1">
           <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
         </div>
-        <div className="mt-1" data-testid={`oo-avail-${p.id}`}>
+        <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
           {p.available >= 10 ? (
             <span className="text-[11px] font-bold text-emerald-600">In stock</span>
           ) : p.available > 0 ? (
             <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
+          ) : (p.preorderOptions || []).length > 0 ? (
+            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
           ) : (
             <span className="text-[11px] font-bold text-rose-600">Out of stock</span>
+          )}
+          {p.available > 0 && (p.preorderOptions || []).length > 0 && (
+            <span className="text-[10px] font-bold text-indigo-600/80">· pre-order also available</span>
           )}
         </div>
         {q === 0 ? (
@@ -627,6 +670,48 @@ function OrderInner() {
             </button>
           </div>
         )}
+
+        {/* Pre-order option cards — each one is an explicit customer fulfilment choice. */}
+        {(p.preorderOptions || []).map((opt: any) => {
+          const optQty = cartQty(`${p.id}:${opt.id}`);
+          const depUnit = opt.depositType === "NONE" ? Number(opt.priceGhs) : opt.depositType === "PERCENT" ? (Number(opt.priceGhs) * Number(opt.depositValue || 0)) / 100 : Number(opt.depositValue || 0);
+          const cap = opt.capacityPerPeriod != null ? Number(opt.capacityPerPeriod) : 9999;
+          return (
+            <div key={opt.id} className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1.5" data-testid={`oo-preorder-opt-${p.id}-${opt.id}`}>
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="font-extrabold text-indigo-800 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> {opt.methodLabel || "Pre-order"} · {opt.leadMinDays}–{opt.leadMaxDays}d
+                </span>
+                <span className="font-black text-indigo-900">{fmtMoney(opt.priceGhs)}</span>
+              </div>
+              <p className="text-[9px] text-indigo-700/80 mt-0.5">
+                {opt.depositType === "NONE"
+                  ? "Pay full now — reserved with supplier"
+                  : `Deposit ${fmtMoney(depUnit)}/unit · balance ${opt.termsKey === "ON_ARRIVAL" ? "on arrival" : opt.termsKey === "PREPAID" ? "prepaid" : "when ready"}`}
+                {opt.requiresAddress ? " · delivery only" : ""}
+              </p>
+              {optQty === 0 ? (
+                <button
+                  onClick={() => add(p, 1, fromBiz, opt)}
+                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+                  data-testid={`oo-preadd-${p.id}-${opt.id}`}
+                >
+                  <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
+                </button>
+              ) : (
+                <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
+                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
+                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -1175,19 +1260,45 @@ function OrderInner() {
                     </div>
                   )}
 
+                  {/* Pre-order deposit explainer + forced MoMo anchor. */}
+                  {hasPreorder && (
+                    <div className="mb-1.5 rounded-xl border border-indigo-300 bg-indigo-50/70 px-3 py-2.5" data-testid="oo-preorder-terms">
+                      <p className="text-[11px] font-extrabold text-indigo-900 flex items-center gap-1.5">
+                        <CalendarClock className="w-3.5 h-3.5" /> Pre-order in your cart
+                      </p>
+                      <ul className="mt-1 space-y-0.5 text-[10px] text-indigo-800/90" data-testid="oo-preorder-lines">
+                        {preorderLines.map((l) => (
+                          <li key={l.option.id}>
+                            <b>{l.qty}× {l.product.name}</b> via {l.option.methodLabel} ({l.option.leadMinDays}–{l.option.leadMaxDays} days)
+                            {l.option.depositType !== "NONE"
+                              ? ` — deposit ${fmtMoney(l.option.depositType === "PERCENT" ? (lineUnitPrice(l) * Number(l.option.depositValue || 0)) / 100 * l.qty : Number(l.option.depositValue || 0) * l.qty)}, balance when ${l.option.termsKey === "ON_ARRIVAL" ? "the stock arrives" : l.option.termsKey === "PREPAID" ? "now" : "your order is ready"}.`
+                              : " — paid in full now to lock your slot."}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1 text-[9px] text-indigo-700/80">
+                        Goods are sourced after your deposit — they never appear as branch stock until physically received. Cancel any time before shipment for a full refund.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="space-y-1.5" data-testid="oo-payment">
-                    <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition ${payChoice === "ON_DELIVERY" ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-ondelivery">
-                      <input type="radio" className="mt-0.5" checked={payChoice === "ON_DELIVERY"} onChange={() => setPayChoice("ON_DELIVERY")} />
+                    <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border transition ${depositDueTotal > 0 ? "opacity-50 cursor-not-allowed" : "cursor-pointer"} ${payChoice === "ON_DELIVERY" && depositDueTotal <= 0 ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-ondelivery">
+                      <input type="radio" className="mt-0.5" checked={payChoice === "ON_DELIVERY" && depositDueTotal <= 0} disabled={depositDueTotal > 0} onChange={() => setPayChoice("ON_DELIVERY")} />
                       <span>
                         <span className="flex items-center gap-1.5 text-[12px] font-extrabold text-slate-900"><Banknote className="w-3.5 h-3.5 text-emerald-600" /> Pay on {fulfillment === "DELIVERY" ? "delivery" : "pickup"}</span>
                         <span className="block text-[9px] text-slate-500">Cash or MoMo when the order reaches you.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition ${payChoice === "MOMO_NOW" ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-momo">
-                      <input type="radio" className="mt-0.5" checked={payChoice === "MOMO_NOW"} onChange={() => setPayChoice("MOMO_NOW")} />
+                      <input type="radio" className="mt-0.5" checked={payChoice === "MOMO_NOW" || depositDueTotal > 0} onChange={() => setPayChoice("MOMO_NOW")} />
                       <span className="flex-1">
                         <span className="flex items-center gap-1.5 text-[12px] font-extrabold text-slate-900"><Smartphone className="w-3.5 h-3.5 text-amber-500" /> Pay now with MTN MoMo</span>
-                        <span className="block text-[9px] text-slate-500">The branch shares the MoMo number and confirms your payment on your tracking page.</span>
+                        <span className="block text-[9px] text-slate-500">
+                          {depositDueTotal > 0
+                            ? `Pre-order deposit ${fmtMoney(depositDueTotal)} is confirmed here first — the branch shares the MoMo number on your tracking page.`
+                            : "The branch shares the MoMo number and confirms your payment on your tracking page."}
+                        </span>
                         {biz.momoNumber && (
                           <span className="block text-[10px] font-bold text-amber-700 mt-0.5" data-testid="oo-momo-dest">
                             Pay to: {biz.momoNumber}{biz.momoName ? ` — ${biz.momoName}` : ""}
@@ -1240,8 +1351,35 @@ function OrderInner() {
             <div className="text-[11px] text-slate-600">
               Total: <span className="font-black text-emerald-700">{fmtMoney(placed.totalGhs, placed.currency)}</span> ·{" "}
               {placed.fulfillmentType === "DELIVERY" ? "Delivery" : "Pickup"} ·{" "}
-              {placed.payment === "PENDING_CONFIRMATION" ? "MoMo payment being confirmed" : "Pay on pickup/delivery"}
+              {placed.paymentPlan === "DEPOSIT_NOW"
+                ? "Deposit now (MoMo) — balance on readiness"
+                : placed.payment === "PENDING_CONFIRMATION"
+                ? "MoMo payment being confirmed"
+                : "Pay on pickup/delivery"}
             </div>
+            {placed.preorder && (
+              <div className="rounded-xl border border-indigo-300 bg-indigo-50 px-4 py-3 text-left space-y-1.5" data-testid="oo-success-preorder">
+                <p className="text-[11px] font-extrabold text-indigo-900 flex items-center gap-1.5">
+                  <CalendarClock className="w-3.5 h-3.5" /> This is a pre-order — your goods are sourced with our supplier
+                </p>
+                <ul className="text-[10px] text-indigo-800/90 space-y-0.5">
+                  {(placed.preorder.methods || []).map((m: string) => (
+                    <li key={m}>Fulfilment: <b>{m}</b></li>
+                  ))}
+                  {placed.preorder.etaStart && (
+                    <li className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Expected between <b>{new Date(placed.preorder.etaStart).toLocaleDateString()}</b> and <b>{new Date(placed.preorder.etaEnd).toLocaleDateString()}</b>
+                    </li>
+                  )}
+                  {placed.preorder.depositDueGhs > 0 && (
+                    <li>Deposit required now: <b>{fmtMoney(placed.preorder.depositDueGhs)}</b> · balance: <b>{fmtMoney(placed.preorder.balanceDueGhs)}</b> ({placed.preorder.termsKey === "ON_ARRIVAL" ? "when stock arrives" : placed.preorder.termsKey === "PREPAID" ? "prepaid" : "when your order is ready"})</li>
+                  )}
+                </ul>
+                <p className="text-[9px] text-indigo-700/80">
+                  Track the journey live — Pre-order → Received → Procurement → Shipped → In transit → Arrived → Stock received → Ready.
+                </p>
+              </div>
+            )}
             {placed.deliveryLocation && (
               <div className="rounded-xl border border-slate-300 overflow-hidden text-left" data-testid="oo-success-map">
                 <p className="px-3 pt-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
@@ -1612,10 +1750,17 @@ function OrderInner() {
             {cartOpen && (
               <div className="max-h-56 overflow-y-auto mb-2 divide-y divide-slate-100" data-testid="oo-cart-lines">
                 {cart.map((l) => (
-                  <div key={l.product.id} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
-                    <span className="flex-1 min-w-0 truncate text-slate-700">{l.qty}× {l.product.name}</span>
-                    <span className="text-slate-500">{fmtMoney(l.product.price * l.qty)}</span>
-                    <button onClick={() => add(l.product, -l.qty)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
+                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
+                    <span className="flex-1 min-w-0 truncate text-slate-700">
+                      {l.qty}× {l.product.name}
+                      {l.option && (
+                        <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-[9px] font-bold text-indigo-700" data-testid={`oo-cart-line-pre-${l.product.id}`}>
+                          PRE-ORDER · {l.option.methodLabel}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-slate-500">{fmtMoney(lineUnitPrice(l) * l.qty)}</span>
+                    <button onClick={() => add(l.product, -l.qty, undefined, l.option ?? undefined)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
                       <Trash className="w-3.5 h-3.5" />
                     </button>
                   </div>

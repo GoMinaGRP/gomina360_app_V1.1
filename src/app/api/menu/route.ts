@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations } from "@/db/schema";
-import { asc, eq, gt, ne, and } from "drizzle-orm";
+import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
+import { asc, eq, gt, inArray, ne, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 
 /**
@@ -34,12 +34,42 @@ export async function GET() {
       db
         .select()
         .from(inventoryItems)
-        .where(and(gt(inventoryItems.quantity, 0), ne(inventoryItems.status, "OUT_OF_STOCK")))
+        .where(ne(inventoryItems.status, "OUT_OF_STOCK"))
         .orderBy(asc(inventoryItems.name)),
       db.select().from(serviceAreas).where(eq(serviceAreas.active, true)),
       db.select().from(pickupLocations).where(eq(pickupLocations.active, true)),
       db.select().from(organizations),
     ]);
+
+    const invHasStock = (i: any) => (i.quantity || 0) > 0 && i.status !== "OUT_OF_STOCK";
+    // Pre-order options for the whole catalog (ACTIVE only, method ACTIVE
+    // only) — the catalogue is org-scoped, so no other tenant's options leak.
+    const invIdsAll = itemRows.map((i) => i.id);
+    const optsRows = invIdsAll.length
+      ? await db.select().from(fulfillmentOptions).where(inArray(fulfillmentOptions.inventoryId, invIdsAll))
+      : [];
+    const activeOpts = optsRows.filter((o) => o.active);
+    const methodIds = [...new Set(activeOpts.map((o) => o.methodId))];
+    const methods = methodIds.length
+      ? await db.select().from(fulfillmentMethods).where(inArray(fulfillmentMethods.id, methodIds))
+      : [];
+    const methodById = new Map(methods.filter((m) => m.active).map((m) => [m.id, m]));
+    const optsByInventory = new Map<number, any[]>();
+    for (const o of activeOpts) {
+      const m = methodById.get(o.methodId);
+      if (!m) continue;
+      // exposure rule: option resolves only for the business it was written for.
+      if (!itemRows.some((i) => i.id === o.inventoryId)) continue;
+      const depositPerUnit =
+        o.depositType === "PERCENT"
+          ? Math.round((((o.priceGhs || 0) * (Number(o.depositValue) || 0)) / 100) * 100) / 100
+          : o.depositType === "FIXED"
+            ? Math.min(o.priceGhs || 0, Number(o.depositValue) || 0)
+            : 0;
+      const list = optsByInventory.get(o.inventoryId) || [];
+      list.push({ ...o, methodKey: m.key, methodLabel: m.label, icon: m.icon, requiresPin: m.requiresPin, depositPerUnit });
+      optsByInventory.set(o.inventoryId, list);
+    }
 
     // Shared centralized marketplace across ALL participating organizations.
     // A SUSPENDED organization never trades publicly — its branches vanish
@@ -70,6 +100,9 @@ export async function GET() {
           const allPhotos: string[] = [];
           if (typeof i.photo === "string" && i.photo.length > 0) allPhotos.push(i.photo);
           for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
+          const opts = optsByInventory.get(i.id) || [];
+          const sellable = invHasStock(i) || opts.length > 0;
+          if (!sellable) return null;
           return {
             id: i.id,
             sku: i.sku,
@@ -78,10 +111,31 @@ export async function GET() {
             unit: i.unit,
             price: i.sellingPriceGhs,
             available: Math.max(0, Math.floor(i.quantity)),
+            inStock: invHasStock(i),
             photo: i.photo || null,
             photos: allPhotos,
+            // Seller-configured pre-order fulfilment options (price / ETA /
+            // deposit shown next to the product on the storefront). Empty for
+            // stock-only products — the UI then renders nothing extra.
+            preorderOptions: opts.map((o: any) => ({
+              id: o.id,
+              methodKey: o.methodKey,
+              methodLabel: o.methodLabel,
+              icon: o.icon,
+              priceGhs: o.priceGhs,
+              leadMinDays: o.leadMinDays,
+              leadMaxDays: o.leadMaxDays,
+              depositType: o.depositType,
+              depositValue: o.depositValue,
+              depositGhsUnit: o.depositPerUnit,
+              termsKey: o.termsKey,
+              requiresAddress: o.requiresAddress,
+              requiresPin: o.requiresPin,
+              capacityPerPeriod: o.capacityPerPeriod,
+            })),
           };
-        });
+        })
+        .filter((p: any) => p != null);
       if (products.length === 0) continue;
       result.push({
         businessId: b.id,
