@@ -4,12 +4,31 @@ import React, { useRef, useState } from "react";
 import { Building2, FileUp, Plus, X } from "lucide-react";
 import LocationSelector, { LocationValue } from "./LocationSelector";
 
+/** Full catalogue of creatable business types — mirrored server-side in
+ *  src/lib/businessTypes.ts. The per-Owner "Allowed Business Types" list
+ *  (Super-Admin-managed) filters what the Owner may actually pick. */
+const ALL_CATEGORY_OPTIONS: { value: string; text: string; key: string }[] = [
+  { value: "Poultry Farm", text: "Poultry Farm", key: "POULTRY_FARM" },
+  { value: "Block Factory", text: "Block Factory", key: "BLOCK_FACTORY" },
+  { value: "Aquaculture", text: "Aquaculture", key: "AQUACULTURE" },
+  { value: "Livestock", text: "Livestock", key: "LIVESTOCK" },
+  { value: "Restaurant & Food", text: "Restaurant & Food", key: "RESTAURANT_FOOD" },
+  { value: "Electronic Shop", text: "Electronic Shop", key: "ELECTRONIC_SHOP" },
+  { value: "Car Wash", text: "Car Wash", key: "CAR_WASH" },
+  { value: "Hardware Store", text: "Hardware Store (Construction & Building Materials)", key: "HARDWARE_STORE" },
+  { value: "Telecom & Digital Services", text: "Telecom & Digital Services (MoMo, Airtime, Data, Wi-Fi)", key: "TELECOM_DIGITAL" },
+  { value: "Transportation", text: "Transportation / Fleet & Logistics", key: "TRANSPORTATION" },
+];
+
 interface NewBusinessModalProps {
   isOpen: boolean;
   onClose: () => void;
   onBusinessCreated: (business?: any) => void;
   /** DB id of the acting user — the server verifies this is really the OWNER. */
   actorUserId?: number | null;
+  /** Per-Owner Allowed Business Types from /api/init. null ⇒ catalogue not
+   *  yet loaded ⇒ show all (server still enforces); restricted=false ⇒ all. */
+  allowedTypes?: { restricted: boolean; types: { key: string; label: string }[] } | null;
 }
 
 export default function NewBusinessModal({
@@ -17,7 +36,16 @@ export default function NewBusinessModal({
   onClose,
   onBusinessCreated,
   actorUserId = null,
+  allowedTypes = null,
 }: NewBusinessModalProps) {
+  // The category picker: restricted orgs see ONLY their granted types
+  // (the server enforces the same gate, so no hidden-workaround path exists).
+  const categoryOptions =
+    allowedTypes && allowedTypes.restricted
+      ? ALL_CATEGORY_OPTIONS.filter((o) => allowedTypes.types.some((t) => t.key === o.key))
+      : ALL_CATEGORY_OPTIONS;
+  const noTypesGranted = !!allowedTypes && allowedTypes.restricted && categoryOptions.length === 0;
+
   const [name, setName] = useState("");
   const [category, setCategory] = useState("Block Factory");
   const [location, setLocation] = useState<LocationValue>({
@@ -76,6 +104,15 @@ export default function NewBusinessModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (noTypesGranted) {
+      setError("No business type has been granted to your organization yet — ask the platform Super Admin.");
+      return;
+    }
+    // When the Allowed-Business-Types filter removed the previously selected
+    // category, submit the first GRANTED one (matches what the picker shows).
+    const effectiveCategory = categoryOptions.some((o) => o.value === category)
+      ? category
+      : categoryOptions[0]?.value || category;
     setIsSubmitting(true);
     try {
       // No code is sent — the server assigns the next sequential code for the
@@ -88,7 +125,7 @@ export default function NewBusinessModal({
         body: JSON.stringify({
           actorUserId,
           name: name || "Mina Kumasi Block & Concrete",
-          category,
+          category: effectiveCategory,
           region: location.region,
           district: location.district,
           town: location.town,
@@ -252,21 +289,32 @@ export default function NewBusinessModal({
             <label className="block text-xs font-semibold text-slate-400 mb-1">
               Category
             </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
-            >
-              <option value="Poultry Farm">Poultry Farm</option>
-              <option value="Block Factory">Block Factory</option>
-              <option value="Aquaculture">Aquaculture</option>
-              <option value="Livestock">Livestock</option>
-              <option value="Restaurant & Food">Restaurant & Food</option>
-              <option value="Electronic Shop">Electronic Shop</option>
-              <option value="Car Wash">Car Wash</option>
-              <option value="Hardware Store">Hardware Store (Construction & Building Materials)</option>
-              <option value="Telecom & Digital Services">Telecom & Digital Services (MoMo, Airtime, Data, Wi-Fi)</option>
-            </select>
+            {noTypesGranted ? (
+              <div className="w-full px-3 py-2.5 bg-amber-500/10 border border-amber-500/40 rounded-lg text-amber-200 text-xs font-semibold">
+                Your organization has no business types granted yet — ask the
+                platform Super Admin to assign at least one type.
+              </div>
+            ) : (
+              <>
+                <select
+                  value={categoryOptions.some((o) => o.value === category) ? category : categoryOptions[0]?.value}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                >
+                  {categoryOptions.map((o) => (
+                    <option key={o.key} value={o.value}>
+                      {o.text}
+                    </option>
+                  ))}
+                </select>
+                {allowedTypes?.restricted && (
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    Granted by the Super Admin:{" "}
+                    {allowedTypes.types.map((t) => t.label).join(", ")}.
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
           <div className="pt-1 border-t border-slate-800">

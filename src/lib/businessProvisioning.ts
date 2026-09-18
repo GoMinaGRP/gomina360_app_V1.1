@@ -36,6 +36,7 @@ export const CATEGORY_PREFIX: Record<string, string> = {
   "Car Wash": "WASH",
   "Hardware Store": "HARDWARE",
   "Telecom & Digital Services": "TELECOM",
+  Transportation: "TRANSPORT",
 };
 
 export const CATEGORY_ICON: Record<string, string> = {
@@ -48,6 +49,7 @@ export const CATEGORY_ICON: Record<string, string> = {
   "Car Wash": "Droplets",
   "Hardware Store": "HardHat",
   "Telecom & Digital Services": "Wifi",
+  Transportation: "Truck",
 };
 
 export interface StarterItem {

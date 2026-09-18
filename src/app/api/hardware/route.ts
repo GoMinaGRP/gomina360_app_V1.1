@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   hardwareOrders,
@@ -10,7 +11,7 @@ import {
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 
 /**
@@ -106,6 +107,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: orders, purchases and yard dispatches stay inside the
+    // caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const [orders, purchases, deliveries] = await Promise.all([
       db.select().from(hardwareOrders).where(eq(hardwareOrders.businessId, businessId)),
       db.select().from(hardwarePurchases).where(eq(hardwarePurchases.businessId, businessId)),
@@ -132,6 +138,9 @@ export async function POST(request: NextRequest) {
     const businessId = Number(data?.businessId);
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     if (!biz) {
@@ -327,6 +336,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "ORDER") {
       const [before] = await db.select().from(hardwareOrders).where(eq(hardwareOrders.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(hardwareOrders)
         .set({
@@ -359,6 +371,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "PURCHASE") {
       const [before] = await db.select().from(hardwarePurchases).where(eq(hardwarePurchases.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Purchase not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(hardwarePurchases)
         .set({
@@ -391,6 +406,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "DELIVERY") {
       const [before] = await db.select().from(hardwareDeliveries).where(eq(hardwareDeliveries.id, Number(id)));
       if (!before) return NextResponse.json({ success: false, error: "Delivery not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, before.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(hardwareDeliveries)
         .set({

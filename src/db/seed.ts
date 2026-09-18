@@ -165,6 +165,7 @@ async function ensureHardwareFlagship() {
       initialCapitalGhs: 320000,
       monthlyTargetRevenueGhs: 180000,
       iconName: "HardHat",
+      ownerId: 1,
     })
     .returning();
   // Recovery/demo seed: zero-based metrics, the full daily-checklist template
@@ -197,6 +198,18 @@ async function ensureHardwareFlagship() {
 export async function seedDatabase() {
   console.log("Starting database seeding for GoMina 360 Command Center...");
 
+  // Serialize concurrent seeding (two racing requests on a fresh database
+  // used to interleave serial ids and leave the fixture ids off-by-one).
+  const { sql: seedSql } = await import("drizzle-orm");
+  await db.execute(seedSql`select pg_advisory_lock(731948)`);
+  try {
+    return await seedDatabaseInner();
+  } finally {
+    await db.execute(seedSql`select pg_advisory_unlock(731948)`).catch(() => {});
+  }
+}
+
+async function seedDatabaseInner() {
   // Check if businesses are already seeded
   const existingBusinesses = await db.select().from(businesses);
   if (existingBusinesses.length > 0) {
@@ -302,7 +315,7 @@ export async function seedDatabase() {
         monthlyTargetRevenueGhs: 60000,
         iconName: "Droplets",
       },
-    ])
+    ].map((b: any) => ({ ...b, ownerId: 1 })) as any)
     .returning();
 
   const businessMap: Record<string, number> = {};

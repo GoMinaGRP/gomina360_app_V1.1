@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   creditSales,
@@ -324,6 +325,7 @@ async function postInstallment({
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -408,6 +410,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
     const body = await request.json();

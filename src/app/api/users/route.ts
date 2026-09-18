@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { users, userSessions, userBusinessAccess, auditTrail } from "@/db/schema";
+import { users, userSessions, userBusinessAccess, auditTrail, organizationMembers } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
 import {
   getSessionInfo,
@@ -8,9 +9,14 @@ import {
   usersAccessMap,
   setUserPassword,
   replaceUserAccess,
+  sharesOrganization,
   FORBIDDEN,
   UNAUTHENTICATED,
 } from "@/lib/auth";
+
+/** May this caller see/pick `targetUserRow`? Super Admin ⇒ anyone; everyone
+ *  else ⇒ only users sharing an organization (users with NO membership are
+ *  legacy orphans — visible to executives only via business-scope checks). */
 import { backfillUserNotifications, businessIdsForUser } from "@/lib/notify";
 import crypto from "crypto";
 
@@ -39,12 +45,24 @@ const ROLE_LEVEL: Record<string, number> = {
 export async function GET(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
     const isExec = ["OWNER", "GENERAL_MANAGER"].includes(me.role);
     const allowed = await accessibleBusinessIds(me);
 
     let rows = await db.select().from(users).orderBy(desc(users.id));
+    if (isExec && !me.isSuperAdmin) {
+      // Executives see the full user directory of THEIR OWN organization(s)
+      // only — never another Owner's people.
+      const myOrgs = me.organizationIds?.length ? me.organizationIds : [-1];
+      const memberRows = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(inArray(organizationMembers.organizationId, myOrgs));
+      const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
+      rows = rows.filter((u) => u.id === me.id || memberIds.has(u.id));
+    }
     if (!isExec) {
       rows = rows.filter(
         (u) =>
@@ -69,6 +87,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -143,6 +162,22 @@ export async function POST(request: Request) {
         if (!assignedBusinessId || !(allowed ?? []).includes(Number(assignedBusinessId))) {
           return FORBIDDEN("You can only create workers for your own business.");
         }
+      }
+    }
+
+    // Org OWNER (not Super Admin): every business the new account touches —
+    // primary assignment, extra access grants, manage-grants — must live
+    // inside their OWN organization.
+    if (isOwner && !me.isSuperAdmin) {
+      const orgBiz = new Set(await accessibleBusinessIds(me));
+      if (assignedBusinessId && !orgBiz.has(Number(assignedBusinessId))) {
+        return FORBIDDEN("You can only assign businesses inside your own organization.");
+      }
+      if (Array.isArray(extraAccessIds) && extraAccessIds.some((id: any) => !orgBiz.has(Number(id)))) {
+        return FORBIDDEN("You can only grant access to businesses inside your own organization.");
+      }
+      if (Array.isArray(businessManageIds) && businessManageIds.some((id: any) => !orgBiz.has(Number(id)))) {
+        return FORBIDDEN("You can only delegate Manage Business / Unit powers inside your own organization.");
       }
     }
 
@@ -222,6 +257,8 @@ export async function POST(request: Request) {
         isActive: true,
         isWorkerEnabled: role === "WORKER" ? true : undefined,
         createdByUserId: me.id,
+        // Tenant: the new user joins the creator's organization.
+        primaryOrgId: session.orgId ?? null,
         canRecordSales: role === "WORKER" ? (canRecordSales ?? true) : undefined,
         canRecordExpenses: role === "WORKER" ? (canRecordExpenses ?? false) : undefined,
         canManageStock: role === "WORKER" ? (canManageStock ?? false) : undefined,
@@ -256,6 +293,14 @@ export async function POST(request: Request) {
       .returning();
 
     await setUserPassword(newUser.id, initialPassword);
+    if (session.orgId != null) {
+      await db.insert(organizationMembers).values({
+        organizationId: session.orgId,
+        userId: newUser.id,
+        roleInOrg: role === "OWNER" ? "OWNER" : "MEMBER",
+        isPrimary: true,
+      });
+    }
     if ((isOwner || isDelegatedMgr) && Array.isArray(extraAccessIds) && extraAccessIds.length) {
       // For delegated callers the pre-check above already proved every id is
       // inside their own branch scope.
@@ -272,6 +317,7 @@ export async function POST(request: Request) {
         action: "DELEGATE", targetType: "USER", targetLabel: newUser.name,
         businessId: newUser.assignedBusinessId ?? null, branchCode: null,
         reason: null, detail: `${newUser.name} (${newUser.role}) may manage Auditor access for their assigned branches`,
+        ownerId: session.orgId ?? null,
       });
     }
 
@@ -298,6 +344,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -342,11 +389,39 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
     }
 
+    // ── Tenant boundary ─────────────────────────────────────────────────
+    // A Super Admin account may only be touched by another Super Admin —
+    // and nobody may ever touch a user OUTSIDE their own organization(s).
+    if (!me.isSuperAdmin) {
+      if (targetUser.isSuperAdmin) {
+        return FORBIDDEN("The platform Super Admin account is outside your reach.");
+      }
+      if (!(await sharesOrganization(me, targetUser))) {
+        return FORBIDDEN("That user belongs to a different organization.");
+      }
+    }
+
     const isOwner = me.role === "OWNER";
     const isGM = me.role === "GENERAL_MANAGER";
     const isBM = me.role === "BRANCH_MANAGER";
     const isDelegatedMgr =
       !isOwner && !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
+
+    // Org OWNER (not Super Admin): business ids being granted must belong to
+    // their OWN organization — otherwise a user could be dragged across the
+    // tenant boundary through their assignment or grants.
+    if (isOwner && !me.isSuperAdmin) {
+      const orgBiz = new Set(await accessibleBusinessIds(me));
+      if (assignedBusinessId !== undefined && assignedBusinessId && !orgBiz.has(Number(assignedBusinessId))) {
+        return FORBIDDEN("You can only assign businesses inside your own organization.");
+      }
+      if (Array.isArray(extraAccessIds) && extraAccessIds.some((id: any) => !orgBiz.has(Number(id)))) {
+        return FORBIDDEN("You can only grant access to businesses inside your own organization.");
+      }
+      if (businessManageIds !== undefined && cleanIdList(businessManageIds).some((id) => !orgBiz.has(id))) {
+        return FORBIDDEN("You can only delegate Manage Business / Unit powers inside your own organization.");
+      }
+    }
 
     if (!isOwner) {
       // Nobody but the OWNER may touch OWNER accounts.
@@ -552,6 +627,7 @@ export async function PATCH(request: Request) {
         action: canManageAuditors ? "DELEGATE" : "REVOKE_DELEGATION",
         targetType: "USER", targetLabel: updatedUser.name,
         businessId: updatedUser.assignedBusinessId ?? null, branchCode: null,
+        ownerId: session.orgId ?? null,
         reason: null,
         detail: canManageAuditors
           ? `${updatedUser.name} (${updatedUser.role}) may manage Auditor access for their assigned branches`
@@ -600,6 +676,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -622,9 +699,19 @@ export async function DELETE(request: Request) {
     if (targetUser.id === me.id) {
       return FORBIDDEN("You cannot delete your own account.");
     }
+    // Tenant boundary: a Super Admin account and any cross-org user are untouchable.
+    if (!me.isSuperAdmin) {
+      if (targetUser.isSuperAdmin) {
+        return FORBIDDEN("The platform Super Admin account is outside your reach.");
+      }
+      if (!(await sharesOrganization(me, targetUser))) {
+        return FORBIDDEN("That user belongs to a different organization.");
+      }
+    }
 
     await db.delete(userSessions).where(eq(userSessions.userId, userId));
     await db.delete(userBusinessAccess).where(eq(userBusinessAccess.userId, userId));
+    await db.delete(organizationMembers).where(eq(organizationMembers.userId, userId));
     await db.delete(users).where(eq(users.id, userId));
     return NextResponse.json({ success: true, deleted: true });
   } catch (error: any) {

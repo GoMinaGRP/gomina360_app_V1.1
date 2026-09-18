@@ -193,6 +193,9 @@ const COMMON: Record<string, SectionGuide> = {
     ],
   },
 };
+// Modules whose FINANCE tab mounts the shared FinancialReportSection engine
+// (TECH / FOOD / HARDWARE …) use the same period-chip report guide.
+COMMON.FINANCE = COMMON.FINANCE_REPORT;
 
 /** Guide content for the SHARED “Finance & Reports” central module + the report inside it. */
 const CENTRAL_FINANCE_GUIDE: SectionGuide = {
@@ -306,6 +309,12 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
           match: ["score", "90", "performance"],
           answer:
             "The Poultry Health & Performance Score (out of 100) grades today's routine: mortality, feeding, water and production entries. Finishing the Daily Checklist and keeping alerts green keeps the score high.",
+        },
+        {
+          q: "Where do my eggs go after I log them?",
+          match: ["eggs logged", "after logging", "logged eggs", "where eggs go"],
+          answer:
+            "Each entry lands in the Eggs section — a dated production record batched per flock — and the dashboard's egg totals and charts update right away. Egg stock stays with the flock until you record a sale in Sales & Payments.",
         },
       ],
     },
@@ -1612,6 +1621,139 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
       tasks: COMMON.DEFAULT.tasks,
       faqs: COMMON.DEFAULT.faqs,
     },
+    MOMO: {
+      title: "MoMo & Float",
+      intro: "Mobile-money desk activity of {biz}: every deposit and withdrawal, commissions earned, per-line float/cash balances and failed transactions to chase.",
+      tasks: [
+        {
+          name: "Record a MoMo transaction",
+          steps: [
+            "Press the yellow \u201cMoMo Txn\u201d button (also \u201cNew MoMo Txn\u201d on this tab).",
+            "Choose Deposit or Withdrawal, the agent line, customer, amount and your commission.",
+            "Save \u2014 float and cash on the line move instantly and the commission posts to Finance as income.",
+          ],
+          tip: "Network down? Record it again with outcome \u201cFailed\u201d + a reason: no money moves and it is listed for follow-up.",
+        },
+        {
+          name: "Manage float and cash on a line",
+          steps: [
+            "Press \u201cTop-up\u201d on a line card (or register a new till once with the \uff0b Line action).",
+            "Pick Float or Cash, then Top up or Draw down with the amount.",
+            "Balances update immediately and the movement is logged in the activity feed \u2014 never booked as profit.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where does MoMo profit come from?",
+          match: ["commission", "profit", "earn", "margin"],
+          answer:
+            "The commission you enter per transaction posts as income to the shared Finance ledger; wholesale float costs never inflate it.",
+        },
+        {
+          q: "Deposits or withdrawals keep failing",
+          match: ["failed", "network", "declined", "error"],
+          answer:
+            "Record them as Failed with the reason \u2014 they move no float/cash, and the failed list on the dashboard is your chase queue.",
+        },
+      ],
+    },
+    AIRDATA: {
+      title: "Airtime & Data",
+      intro: "Airtime and data-bundle sales of {biz} \u2014 sold from float, with the margin preview before every sale.",
+      tasks: [
+        {
+          name: "Sell airtime or a data bundle",
+          steps: [
+            "Press the cyan \u201cSell Airtime / Data\u201d button.",
+            "Pick the line/network, bundle size, customer and amount \u2014 the margin preview shows what you earn before you commit.",
+            "Confirm: the wholesale cost moves out of the line's float and the margin posts as income.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "How is the airtime margin earned?",
+          match: ["margin", "profit", "earn"],
+          answer:
+            "Retail price minus the wholesale cost deducted from float \u2014 shown live in the form preview and booked as income on save.",
+        },
+      ],
+    },
+    WIFI: {
+      title: "Wi-Fi & Vouchers",
+      intro: "Wi-Fi packages and printed voucher cards of {biz}: stock counts, QR cards, sale & activation and expiry.",
+      tasks: [
+        {
+          name: "Sell and activate a voucher",
+          steps: [
+            "Find an AVAILABLE voucher card and press \u201cSell & Activate\u201d.",
+            "Enter the user's name and payment method \u2014 the voucher activates immediately and expiry starts counting.",
+            "Hand over the code and 6-digit PIN, or let the customer scan the QR card to connect.",
+          ],
+        },
+        {
+          name: "Top up voucher stock",
+          steps: [
+            "Open a package card and press \u201c\uff0b Vouchers\u201d.",
+            "Choose the quantity \u2014 a fresh batch is generated with codes, PINs and print-ready QR cards in one go.",
+            "Stock counters on each package update immediately.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "When does a voucher expire?",
+          match: ["expire", "expiry", "validity"],
+          answer:
+            "Its validity period starts at sale/activation \u2014 until then a voucher sits as AVAILABLE stock with no expiry pressure.",
+        },
+      ],
+    },
+    SALES: {
+      title: "Telecom Sales Register",
+      intro: "One searchable ledger of every sale of {biz} \u2014 MoMo, airtime/data, Wi-Fi and service fees, each with its earned commission.",
+      tasks: [
+        {
+          name: "Find any past sale",
+          steps: [
+            "Rows show Txn #, date, service type, network, customer, amount, fee, earned commission, status and reference.",
+            "Use sale references against MoMo/network statements when reconciling.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "What counts as \u201cEarned\u201d?",
+          match: ["earned", "fee", "commission"],
+          answer:
+            "Your take on that transaction \u2014 MoMo commissions, airtime/data margin and service fees. Earned figures feed the Finance income directly.",
+        },
+      ],
+    },
+    FINANCE: {
+      title: "Telecom Finance",
+      intro: "The telecom finance view of {biz}: ledger income vs expenses, per-line float/cash, plus the exact profit formula underneath.",
+      tasks: [
+        {
+          name: "Read income vs expenses",
+          steps: [
+            "Income = customer payments (airtime/data sales, Wi-Fi vouchers) + MoMo commissions + service fees.",
+            "Expenses = wholesale airtime/data costs (paid from float) + logged branch expenses.",
+            "Float top-ups/draw-downs just move money between business and tills \u2014 they are never double-counted as profit.",
+          ],
+          tip: "Log branch expenses with the \uff0b Expense action \u2014 they post once into the shared Finance ledger.",
+        },
+      ],
+      faqs: [
+        {
+          q: "Why don't float top-ups change profit?",
+          match: ["top up", "float", "double count", "profit"],
+          answer:
+            "Top-ups are movements of working capital, not income or expense \u2014 the line tables track them separately so profit stays clean.",
+        },
+      ],
+    },
   },
 
   HARDWARE: {
@@ -1796,7 +1938,7 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
       intro:
         "The complete operating workspace of {biz}: counter sales, contractor orders, supplier restocking, site deliveries and the goods-received ledger — all wired into stock and finance.",
       tasks: CHECKLIST_TASKS,
-      faqs: [],
+      faqs: CHECKLIST_FAQS,
     },
   },
   LIVESTOCK: {
@@ -1832,6 +1974,41 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
           match: ["sell", "sale", "meat", "beef"],
           answer:
             "Sell from your stock items (e.g. Fresh Beef per Kg) through the sale form — stock drops and revenue posts to finance with a receipt, just like any product.",
+        },
+      ],
+    },
+    DEFAULT: {
+      title: "Livestock Overview",
+      intro: "The front page of {biz}: live revenue, net profit, operations logged and stock on hand, with the latest herd activity feed and today's alerts.",
+      tasks: [
+        {
+          name: "Read the day and log what happened",
+          steps: [
+            "The tiles show live Revenue, Net Profit, Operations Logged and Stock Items \u2014 they recompute themselves as records land.",
+            "Latest Herd Activity lists the newest entries with recorder and time.",
+            "Press the bright action buttons to log a herd entry, or \u201cRecord Expense\u201d for cost records \u2014 they post straight into Finance.",
+          ],
+        },
+        {
+          name: "Open deeper views",
+          steps: [
+            "Herd & Grazing carries the animal register and grazing moves.",
+            "Finance opens the full written financial report; Daily Checklist keeps routine tasks on schedule.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "How do I record cost for feed or vet?",
+          match: ["expense", "cost", "feed", "vet", "record"],
+          answer:
+            "Use the \u201cRecord Expense\u201d action: pick the category, amount and method \u2014 it posts once into the shared Finance ledger; the tiles and reports update at once.",
+        },
+        {
+          q: "Does the dashboard include sales already?",
+          match: ["revenue", "profit", "income", "sales"],
+          answer:
+            "Yes \u2014 Revenue (live) and Net Profit read the same ledger as the Finance module; sales anywhere in the business reflect here immediately.",
         },
       ],
     },
@@ -2581,6 +2758,379 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
       ],
     },
   },
+  /* ═════════ TRANSPORTATION & FLEET (added Sept 2026 — reflects the live
+     module with Daily Revenue + the GPS Trackers hub) ═════════ */
+  TRANSPORT: {
+    DASHBOARD: {
+      title: "Transportation Dashboard",
+      intro:
+        "The live front page of {biz}: fleet counts, trips on the road, tracker health, open alerts, revenue, fuel, maintenance and net profit — it all updates by itself as trips complete, bookings settle, fuel is logged and trackers report.",
+      tasks: [
+        {
+          name: "Read the fleet picture at a glance",
+          steps: [
+            "The top tiles show Fleet (active/total), on-trip vehicles, trackers online and open alerts — anything amber or rose needs attention.",
+            "The second row covers money: Revenue (all transport income), Fuel spend, Maintenance cost and Net profit with 30-day utilisation.",
+            "Below: active trips with a one-tap Complete action, the latest tracker alerts, and today's fleet kilometres.",
+          ],
+          tip: "Tiles derive from the same records as Reports & AI and Finance — numbers always agree; there is nothing to re-enter.",
+        },
+        {
+          name: "Record daily revenue",
+          steps: [
+            "In the DAILY REVENUE card press the green “＋ Record Daily Revenue” button.",
+            "Pick an Income kind (Freight & Haulage, Passenger Fares, Charter, Vehicle Rental, Ad-hoc Delivery, Contract, Other Income) and type the amount.",
+            "Set the day (same-month back-dating is allowed; future dates are blocked), the payment method, and optionally link a vehicle or trip and type a payer name — a named payer is added to Customers & CRM automatically.",
+            "Press “Book income → Finance”. The entry appears as one INCOME posting (category “Transport Revenue — …”) in the finance ledger.",
+          ],
+          tip: "Booking income still books itself automatically as “Transport Booking” when you complete a booking — the two never double-post.",
+        },
+        {
+          name: "Monitor income over time",
+          steps: [
+            "The four small tiles track Today (amount + record count), Last 7 days, Lifetime revenue and Net profit.",
+            "The 14-day area chart beside the tiles shows every day's takings at a glance.",
+            "The recent income list shows the newest postings — amount, kind, day and recorder.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where does recorded revenue actually go?",
+          match: ["daily revenue", "revenue", "income", "money", "takings", "finance"],
+          answer:
+            "Straight into the shared finance ledger as one INCOME transaction (category “Transport Revenue — <kind>”). The same record feeds Finance & Reports, this module's Reports & AI tab, exports, and the audit trail gets a line for it — one posting, everywhere.",
+        },
+        {
+          q: "Can I record revenue for an earlier day?",
+          match: ["backdate", "back date", "yesterday", "date", "past", "earlier"],
+          answer:
+            "Yes — set the Date field to any day inside the current month and the posting lands on that day. Future dates are rejected so today's monitor stays truthful.",
+        },
+        {
+          q: "What changes net profit?",
+          match: ["net profit", "profit", "margin"],
+          answer:
+            "Net profit = all income (recorded revenue + completed bookings) minus all expenses (fuel, maintenance and other branch expenses) in the period. The 30-day utilisation beside it counts days each vehicle ran vs sat.",
+        },
+        {
+          q: "Why is an alert amber or rose?",
+          match: ["alert", "warning", "amber", "rose", "health"],
+          answer:
+            "Amber/rose tiles mean attention: trackers stale or offline, open violations, expiring compliance documents. Safety & Alerts holds the details and the acknowledge/resolve actions.",
+        },
+      ],
+    },
+    FLEET: {
+      title: "Vehicle Fleet",
+      intro: "Every vehicle of {biz} with its status, odometer, fuel economy, compliance dates and tracker state.",
+      tasks: [
+        {
+          name: "Register a new vehicle",
+          steps: [
+            "Press the blue “＋ Vehicle” button in the module header.",
+            "Fill name, plate, type and fuel; optional make/model, year, starting odometer, purchase cost and an assigned driver.",
+            "Set the insurance / roadworthy / license / fitness expiry dates — the Compliance alerts start timing from these.",
+            "Save. The vehicle appears as a card with one-tap actions.",
+          ],
+        },
+        {
+          name: "Work a vehicle card",
+          steps: [
+            "Each card shows plate, type, status, odometer, km/L economy and the GPS chip when a tracker is linked.",
+            "Quick actions: Log fuel, Maintenance, Link/Unlink tracker (the full registry lives under GPS Trackers), edit and deactivate.",
+          ],
+          tip: "Odometer and mileage write themselves from logged fuel, completed trips and GPS trackers — manual drift disappears.",
+        },
+      ],
+      faqs: [
+        {
+          q: "How does a vehicle get put out of service?",
+          match: ["out of service", "workshop", "breakdown", "maintenance status"],
+          answer:
+            "Starting a maintenance job marks the vehicle OUT_OF_SERVICE so it can't be dispatched; finishing the job puts it back ACTIVE automatically.",
+        },
+        {
+          q: "Can I edit or remove a vehicle?",
+          match: ["edit", "remove", "delete", "deactivate"],
+          answer:
+            "Yes, from the card actions: Edit changes details; Deactivate retires it (history stays — nothing destructive happens to past trips, bookings or cost records).",
+        },
+      ],
+    },
+    DRIVERS: {
+      title: "Drivers",
+      intro: "Drivers come from the business staff list and attach to trips and bookings.",
+      tasks: [
+        {
+          name: "Assign drivers to vehicles and trips",
+          steps: [
+            "Add the person once in Employees & Payroll — they appear in every driver dropdown here.",
+            "Pick a driver when you register a vehicle or create a trip/booking, or type a free name on the trip itself.",
+            "Driver performance flows into the Reports & AI tab.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where do drivers come from?",
+          match: ["driver", "staff", "employee", "add"],
+          answer:
+            "The branch employee list (Employees & Payroll). There is no separate driver database, so attendance, payroll and trips stay consistent.",
+        },
+      ],
+    },
+    TRIPS: {
+      title: "Trips & Routes",
+      intro: "Dispatches of {biz}: planned, en route and completed journeys with GPS-measured distance.",
+      tasks: [
+        {
+          name: "Create and complete a trip",
+          steps: [
+            "Press ＋ Trip: pick vehicle and driver, purpose, From → To, expected km and fare.",
+            "Dispatch immediately (EN_ROUTE) or plan it; live GPS distance accrues while en route.",
+            "Complete with the end odometer when the trip returns — the fare stays attached for reporting.",
+          ],
+          tip: "Odometer never lies: completion bumps the vehicle odometer and today's kilometres on the dashboard.",
+        },
+      ],
+      faqs: [
+        {
+          q: "A trip will not let me complete it",
+          match: ["complete", "finish", "end odometer", "stuck"],
+          answer:
+            "Trips with a booking en route must settle the booking first (complete the booking or cancel the trip first). Everything else complete with the measured end odometer.",
+        },
+      ],
+    },
+    BOOKINGS: {
+      title: "Bookings",
+      intro: "Customer transport orders: quoted fares, deposits, dispatch and settlement.",
+      tasks: [
+        {
+          name: "Take a booking and settle it",
+          steps: [
+            "New booking: customer name (+ phone, optional) — new payers are added to Customers & CRM automatically.",
+            "Enter From → To, cargo or passengers, quoted fare and a deposit if collected.",
+            "Dispatch by linking a trip; Complete when delivered — completion posts the fare as INCOME “Transport Booking” in Finance.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where does the booking money go?",
+          match: ["booking income", "fare", "payment", "deposit", "money"],
+          answer:
+            "Deposits show against the booking; on completion the full fare posts once as income to the shared ledger (receipts and customer loyalty update too). Nothing is double-counted.",
+        },
+        {
+          q: "Can I cancel a booking?",
+          match: ["cancel", "void", "refund"],
+          answer:
+            "Yes with a reason — as long as it is not Completed and not currently in transit; then complete or cancel the linked trip first.",
+        },
+      ],
+    },
+    FUEL: {
+      title: "Fuel Logs",
+      intro: "Every litre bought: quantity, price, odometer and fleet economy.",
+      tasks: [
+        {
+          name: "Log fuel",
+          steps: [
+            "Press ＋ Log fuel on a vehicle or the Fuel tab.",
+            "Enter liters, price per liter (the total computes itself), the odometer reading and station.",
+            "Save — the spend posts to Expenses (“Transport Fuel”) and the odometer updates from your reading.",
+          ],
+          tip: "Steady locks between two fills give the true km/L figure you see on the fleet cards and Reports.",
+        },
+      ],
+      faqs: [
+        {
+          q: "How is fuel economy calculated?",
+          match: ["economy", "km/l", "consumption", "litres", "liters"],
+          answer:
+            "Distance travelled between fills (odometer or GPS) divided by litres bought. The fleet figure on the dashboard is the average across vehicles with two or more fills.",
+        },
+      ],
+    },
+    MAINTENANCE: {
+      title: "Maintenance",
+      intro: "Workshop jobs, parts, vendors and the resulting costs of {biz}.",
+      tasks: [
+        {
+          name: "Run a maintenance job",
+          steps: [
+            "Create a job: vehicle, category (PREVENTIVE/REPAIR/…), title, estimated cost, vendor and due date or due-odometer.",
+            "Opening a job marks the vehicle OUT_OF_SERVICE — trips can't dispatch it while it's in the workshop.",
+            "Mark DONE with the actual cost: it posts an Expense “Transport Maintenance” and returns the vehicle to service.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Why can't I dispatch this vehicle?",
+          match: ["dispatch", "out of service", "blocked", "workshop"],
+          answer:
+            "It has an open maintenance job. Finish the job (DONE) to return it to service, or cancel the job if it was opened by mistake.",
+        },
+      ],
+    },
+    GPS: {
+      title: "Live GPS",
+      intro: "Live positions of every tracked vehicle of {biz} with the breadcrumb track.",
+      tasks: [
+        {
+          name: "Follow a vehicle live",
+          steps: [
+            "Pick the vehicle in the Tracked fleet list (plate, speed, today's km, last seen).",
+            "The map draws its latest breadcrumb track with live coordinates and speed.",
+            "Positions refresh automatically about every 30 seconds — no button needed.",
+          ],
+          tip: "Brand-new tracker? Use the GPS Trackers tab to link one — SIMULATED works out of the box for pilots and demos.",
+        },
+      ],
+      faqs: [
+        {
+          q: "Why does my vehicle say “awaiting first fix”?",
+          match: ["no position", "first fix", "not reporting", "offline", "stale"],
+          answer:
+            "The device has not reported yet: power it, confirm the SIM data plan, and point it to the ingest endpoint shown at registration (or press Simulate on a SIMULATED provider). Manual drone trackers need staff to push a position from the phone.",
+        },
+      ],
+    },
+    TRACKERS: {
+      title: "GPS Trackers",
+      intro:
+        "Link and manage every tracking device of {biz}: cheap GT06-family units, premium Teltonika/Queclink, vendor platforms like Traccar or BYO-webhook, phone-based manual tracking and the built-in simulator — one registry, no rebuild to add brands.",
+      tasks: [
+        {
+          name: "Link a GPS tracker to a vehicle",
+          steps: [
+            "Press “＋ Tracker” style button — in the Link / Add GPS Tracker form pick the Tracker brand / provider first; the blue guide explains that brand's connection way (HTTP push, edge relay, webhook, vendor API, phone GPS or simulator).",
+            "Choose the Vehicle it belongs to, then optionally fill the device IMEI, the data-SIM number and a nickname like “Box truck unit #2”.",
+            "Press “Link tracker”. The amber panel shows the device ID and the one-time device secret — copy it into the install sheet now; it never displays again.",
+            "The tracker appears under LINKED TRACKERS with its health badge (ONLINE / STALE / OFFLINE / UNKNOWN).",
+          ],
+          tip: "Point real devices to POST /api/transport/trackers with action=INGEST + deviceId + secret + lat/lng/speed (the Copy example payload button gives a ready JSON).",
+        },
+        {
+          name: "Manage linked trackers",
+          steps: [
+            "The grid shows every linked device: provider, IMEI, SIM, health, last-seen time, today's km and ping count.",
+            "Live map jumps to its Live GPS view; Simulate feeds a simulated unit realistic movement; Unlink detaches the device (history is kept).",
+            "Re-linking a vehicle rotates its secret — old device credentials stop working instantly.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Which tracker brands and connection methods are supported?",
+          match: ["brand", "brands", "provider", "providers", "supported", "tkstar", "jimi", "teltonika", "traccar", "connection"],
+          answer:
+            "The registry ships with: Manual (phone GPS), Simulated (pilot/demo), TKStar, JIMI, Coban GPS-303, SinoTrack, Queclink, Teltonika, CarSye and AFGPS (hardware, HTTP push), plus Traccar relay, a generic webhook and Custom. Adding a future brand means one new registry entry — the hub and dropdowns update without a rebuild.",
+        },
+        {
+          q: "I lost the device secret",
+          match: ["secret", "lost", "token", "credential"],
+          answer:
+            "Re-link the vehicle from the same form — a fresh secret is issued and shown once. The old secret is void immediately, which also protects you if a unit is stolen.",
+        },
+        {
+          q: "What do the health badges mean?",
+          match: ["health", "online", "stale", "offline", "unknown", "badge"],
+          answer:
+            "ONLINE = reported in the last 30 minutes · STALE = silent 30–120 min · OFFLINE = silent longer, needs attention · UNKNOWN = linked but no position yet. The tiles at the top count each state.",
+        },
+        {
+          q: "Who is the tracker attached to?",
+          match: ["which business", "attached", "scope", "vehicle", "branch"],
+          answer:
+            "Exactly one vehicle, in this exact business and branch — the linkage is stored with the vehicle record, so another organisation can never read or push into it.",
+        },
+      ],
+    },
+    COMPLIANCE: {
+      title: "Safety & Alerts",
+      intro: "Tracker-raised violations — speeding, geofence entries/exits, offline units — with acknowledge and resolve workflow.",
+      tasks: [
+        {
+          name: "Handle an alert",
+          steps: [
+            "Open violations list the kind, vehicle, severity and the captured evidence (speed vs limit, geofence name…).",
+            "Acknowledge to show it is being worked; Resolve with a reason when done.",
+            "Critical items also raise an AI risk alert for managers.",
+          ],
+        },
+        {
+          name: "Arm a geofence",
+          steps: [
+            "Create geofence: name, radius (m) and the centre coordinates (latitude/longitude).",
+            "Choose enter+exit alerts or exit-only. Vehicles crossing the boundary raise violations automatically.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "How are violations raised?",
+          match: ["violation", "speeding", "geofence", "offline", "raised"],
+          answer:
+            "From tracker telemetry: GPS speed over the limit, boundary crossings on your geofences, and trackers going silent. Checklist-critical failures raise HIGH alerts too.",
+        },
+      ],
+    },
+    CHECKLIST: {
+      title: "Daily Checklist",
+      intro: "A per-vehicle daily inspection for {biz}: tyres, lights, fluids, brakes and more.",
+      tasks: [
+        {
+          name: "Submit today's checklist",
+          steps: [
+            "Pick the vehicle and walk the item list — pass or fail each point (stars mark the critical ones).",
+            "Add the odometer and notes a mechanic would need.",
+            "Submit: a critical failure raises a HIGH AI risk alert immediately.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "What is a “critical” checklist item?",
+          match: ["critical", "fail", "star", "high"],
+          answer:
+            "Items marked with a star (brakes, tyres, steering, lights…) — failing any of them raises a HIGH-severity AI risk alert so the vehicle is checked before dispatch.",
+        },
+      ],
+    },
+    REPORTS: {
+      title: "Reports & AI",
+      intro: "The full analytics of {biz}: income, spend, profit, utilisation, per-vehicle economics and the AI risk radar.",
+      tasks: [
+        {
+          name: "Read the money report",
+          steps: [
+            "Income (recorded revenue + settled bookings), fuel spend, maintenance and net profit — same ledger as Finance.",
+            "Utilisation shows days each vehicle actually ran in the window.",
+            "Per-vehicle rows rank fleet economics (km, revenue, costs, km/L).",
+          ],
+        },
+        {
+          name: "Work the AI risk radar",
+          steps: [
+            "Insights cards flag expiring documents, overdue maintenance, silent trackers, cost outliers and route/time anomalies.",
+            "Severity badges sort what needs now vs later; resolve the underlying record to clear them.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Do these numbers match Finance & Reports?",
+          match: ["match", "finance", "same", "revenue", "export"],
+          answer:
+            "Exactly — both read the same transaction ledger. Export the data from the top-right Export / Audit button any time.",
+        },
+      ],
+    },
+  },
 };
 
 /** Resolve the guide for a module+section with graceful fallbacks. */
@@ -2605,23 +3155,341 @@ export function getGuide(
   };
 }
 
-/** Keyword-matched free-text answer scoped to the CURRENT section's guide. */
-export function answerQuestion(guide: SectionGuide, question: string): string {
-  const query = question.toLowerCase();
-  const words = query.replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+/* ════════════════════════════════════════════════════════════════════════
+ * Natural-language matching engine (v2).
+ *
+ * Understands wording variations, synonyms, small spelling slips and
+ * incomplete questions; infers the most likely intent; answers ONLY from
+ * curated, verified content — it never invents functionality. Works fully
+ * offline in the browser (no network, no external model).
+ * ════════════════════════════════════════════════════════════════════════ */
 
+const NL_STOPWORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "do", "does", "did", "doing", "how", "what", "where", "when", "why",
+  "who", "whom", "whose", "which", "can", "could", "should", "would",
+  "shall", "will", "may", "might", "must", "have", "has", "had", "having",
+  "i", "me", "my", "mine", "we", "our", "you", "your", "he", "she", "it",
+  "they", "them", "their", "this", "that", "these", "those", "there",
+  "here", "too", "very", "just", "also", "now", "then", "than", "so",
+  "of", "in", "on", "at", "to", "from", "by", "about", "into", "over",
+  "after", "before", "between", "under", "again", "once", "during",
+  "out", "off", "up", "down", "with", "without", "and", "or", "but",
+  "if", "because", "as", "until", "while", "please", "pls", "tell",
+  "show", "help", "hi", "hello", "hey", "ok", "gomina", "app", "use",
+  "used", "using", "like", "get", "gets", "got", "make", "makes", "made",
+  "let", "lets", "say", "says", "go", "goes", "cmon", "man", "guys",
+]);
+
+/** lowercase → strip accents & punctuation → single spaces */
+function normalizeNL(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokensNL(s: string): string[] {
+  const n = normalizeNL(s);
+  return n ? n.split(" ") : [];
+}
+
+/** Very light suffix stripping (no external stemmer, browser-safe). */
+function stemNL(w: string): string {
+  if (w.length > 5 && w.endsWith("ing")) return stemNL(w.slice(0, -3));
+  if (w.length > 4 && w.endsWith("ies")) return w.slice(0, -3) + "y";
+  if (w.length > 4 && (w.endsWith("es") || w.endsWith("ed"))) return w.slice(0, -2);
+  if (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") && !w.endsWith("us")) return w.slice(0, -1);
+  return w;
+}
+
+/** Banded Damerau–Levenshtein with early exit; -1 when it exceeds maxD. */
+function editDistanceNL(a: string, b: string, maxD: number): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > maxD) return -1;
+  const prev2: number[] = [];
+  let prev: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur: number[] = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, (prev2[j - 2] ?? v) + 1);
+      }
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > maxD) return -1;
+    prev2.splice(0, prev2.length, ...prev);
+    prev = cur;
+  }
+  const d = prev[b.length];
+  return d <= maxD ? d : -1;
+}
+
+/** Curated synonym families — app-domain vocabulary (Ghana terms incl.). */
+const SYNONYM_GROUPS: string[][] = [
+  ["money", "cash", "funds", "cedi", "cedis", "ghs"],
+  ["revenue", "income", "earnings", "takings", "turnover"],
+  ["expense", "cost", "costs", "spend", "spending"],
+  ["profit", "margin", "surplus"],
+  ["sale", "sold"],
+  ["gps", "tracker", "trackers", "tracking", "telematics", "locator", "device", "devices", "imei"],
+  ["vehicle", "truck", "trucks", "car", "cars", "van", "bus", "fleet"],
+  ["trip", "trips", "route", "routes", "journey", "dispatch"],
+  ["booking", "bookings", "order", "orders"],
+  ["customer", "customers", "client", "clients", "payer", "buyer"],
+  ["driver", "drivers", "operator"],
+  ["employee", "employees", "staff", "worker", "workers", "crew", "personnel"],
+  ["salary", "salaries", "wage", "wages", "payroll", "payslip", "payslips", "pay"],
+  ["attendance", "clock", "clocking", "timesheet", "timesheets", "punch"],
+  ["inventory", "stock", "item", "items", "goods", "material", "materials", "supplies"],
+  ["supplier", "suppliers", "vendor", "vendors"],
+  ["report", "reports", "analytics", "statement", "summary"],
+  ["export", "download", "csv", "pdf"],
+  ["receipt", "receipts", "invoice", "invoices", "document", "documents"],
+  ["credit", "debt", "owed", "loan", "receivable", "balance"],
+  ["settings", "configure", "configuration", "setup"],
+  ["alert", "alerts", "notification", "notifications", "warning", "warnings"],
+  ["password", "pin", "login", "credential", "credentials"],
+  ["permission", "permissions", "access", "role", "roles", "rights"],
+  ["checklist", "todo", "todos"],
+  ["branch", "branches", "location", "site", "shop", "registers", "register", "office"],
+  ["fuel", "diesel", "petrol", "litres", "liters", "consumption", "economy"],
+  ["maintenance", "service", "servicing", "repair", "repairs", "workshop", "fix"],
+  ["geofence", "zone", "fence"],
+  ["violation", "violations", "infringement", "infringements", "breach"],
+  ["egg", "eggs", "egs", "tray", "trays"],
+  ["flock", "flocks", "birds", "chicken", "chickens", "hens", "bird", "poultry"],
+  ["feed", "feeding", "ration", "maize", "concentrate"],
+  ["pond", "ponds", "tank", "tanks", "fingerlings"],
+  ["fish", "fishes", "tilapia", "catfish", "harvest"],
+  ["block", "blocks", "brick", "bricks", "cement", "pallets", "qc"],
+  ["voucher", "vouchers", "wifi", "wif" + "i", "packages", "package", "card", "cards"],
+  ["momo", "float", "till", "tills"],
+  ["commission", "fee", "fees", "charges", "charge"],
+  ["delivery", "deliveries", "deliver", "courier", "waybill", "drop"],
+  ["map", "maps", "track", "follow"],
+  ["today", "daily", "day"],
+  ["record", "recorded", "enter", "add", "create", "log", "capture", "register", "book"],
+  ["refund", "refunds", "return", "returns"],
+  ["waste", "wastage", "spoilage", "loss", "losses"],
+  ["menu", "dish", "dishes", "recipe", "recipes"],
+  ["airtime", "data", "bundle", "bundles"],
+  ["complete", "finish", "finished", "done", "close", "settle"],
+  ["expire", "expiry", "expiration", "validity", "deadline", "depleted", "exhausted"],
+  ["cancel", "cancelled", "void", "reverse"],
+  ["pay", "paid", "payment", "payments", "collect", "collection"],
+  ["photo", "photos", "image", "images", "picture", "scan", "qr"],
+  ["price", "prices", "pricing", "rate", "rates", "costing"],
+  ["kill", "mortality", "death", "deaths", "died"],
+  ["really", "real", "live", "automatic", "instant", "updates", "refresh"],
+];
+
+const SYN_MAP: Map<string, Set<string>> = (() => {
+  const m = new Map<string, Set<string>>();
+  for (const g of SYNONYM_GROUPS) {
+    for (const w of g) {
+      const set = m.get(w) || new Set<string>();
+      for (const o of g) if (o !== w) set.add(o);
+      m.set(w, set);
+    }
+  }
+  return m;
+})();
+
+/** Token equivalence: identity → stem → synonym → small typo distance. */
+function termEqualsNL(qTok: string, mTok: string): boolean {
+  if (qTok === mTok) return true;
+  if (stemNL(qTok) === stemNL(mTok)) return true;
+  if (SYN_MAP.get(qTok)?.has(mTok) || SYN_MAP.get(mTok)?.has(qTok)) return true;
+  const th = mTok.length >= 8 ? 2 : mTok.length >= 5 ? 1 : 0;
+  if (th === 0) return false;
+  const [sq, sm] = [stemNL(qTok), stemNL(mTok)];
+  // compare stems for both distance AND length-drift, so suffixes don't
+  // push a genuine typo outside its tolerance ("suport" vs "supported")
+  if (Math.abs(sq.length - sm.length) > th) return false;
+  return editDistanceNL(sq, sm, th) >= 0;
+}
+
+interface PhraseHit { hit: number; total: number; ordered: number; score: number }
+
+/** Satisfaction of one match keyword (possibly a phrase, e.g. "daily revenue"). */
+function phraseMatchNL(qTokens: string[], phrase: string): PhraseHit {
+  const pTokens = tokensNL(phrase).filter((t) => !NL_STOPWORDS.has(t));
+  if (pTokens.length === 0) return { hit: 0, total: 0, ordered: 0, score: 0 };
+  const qIdx = qTokens.map(() => false);
+  const chosen: number[][] = [];
+  let hit = 0;
+  for (const p of pTokens) {
+    const foundIdx: number[] = [];
+    qTokens.forEach((q, i) => {
+      if (!qIdx[i] && termEqualsNL(q, p)) foundIdx.push(i);
+    });
+    if (foundIdx.length > 0) {
+      hit++;
+      qIdx[foundIdx[0]] = true;
+      chosen.push(foundIdx);
+    }
+  }
+  // ordered-flow bonus: at least one arrangement keeps phrase order (gaps ok)
+  let ordered = 0;
+  if (chosen.length >= 2) {
+    const inc = (prev: number, rest: number[][]): boolean => {
+      if (!rest.length) return true;
+      for (const i of rest[0]) if (i > prev && inc(i, rest.slice(1))) return true;
+      return false;
+    };
+    for (const i of chosen[0]) if (inc(i, chosen.slice(1))) { ordered = 1; break; }
+  }
+  return { hit, total: pTokens.length, ordered, score: hit + 0.4 * ordered };
+}
+
+/** Score alternative phrasings (faq.match / intent triggers / task names)
+ *  against the question — alternatives take the BEST single phrase, never
+ *  a sum (summing near-duplicates would let weak single-hits crowd out the
+ *  intended thresholds). */
+function scoreMatchListNL(qTokens: string[], list: string[]): number {
+  let s = 0;
+  for (const item of list) {
+    const h = phraseMatchNL(qTokens, item);
+    if (h.total === 0) continue;
+    // partial phrases only count once at least half their words land
+    if (h.hit === h.total || (h.total >= 2 && h.hit / h.total >= 0.5)) s = Math.max(s, h.score);
+  }
+  return s;
+}
+
+/** Bonus for overlap with the question the assistant chip itself poses. */
+export /* internal for tests */ function titleOverlapNL(qTokens: string[], title: string, cap = 1.2): number {
+  const tTokens = tokensNL(title).filter((t) => !NL_STOPWORDS.has(t));
+  if (!tTokens.length) return 0;
+  let hit = 0;
+  for (const t of tTokens) if (qTokens.some((q) => termEqualsNL(q, t))) hit++;
+  return Math.min(cap, 0.4 * hit);
+}
+
+/* ── App-wide intent hints: where specific flows actually live.
+ * Every route below is a real, curated navigation — never generated. */
+const GLOBAL_INTENTS: { triggers: string[]; answer: string }[] = [
+  {
+    triggers: ["daily revenue", "record revenue", "record income", "revenue today", "income today"],
+    answer:
+      "That's the Daily Revenue section of a Transportation business: open your transport unit → Dashboard → green “Record Daily Revenue” button. Pick the income kind, amount, date and payment method (optionally link a vehicle/trip and payer), then “Book income → Finance”. The tiles, 14-day chart and recent list update instantly; Finance & Reports, Reports & AI and the audit trail all read the same posting.",
+  },
+  {
+    triggers: ["add tracker", "link tracker", "register tracker", "gps device", "imei", "link gps", "add gps",
+      "device secret", "lost secret", "replace secret", "secret lost"],
+    answer:
+      "Trackers are linked in the GPS Trackers tab of a Transportation business: open the transport unit → GPS Trackers → Link / Add GPS Tracker. Pick the brand/provider, the vehicle, and optionally the device IMEI, SIM number and a nickname, then press “Link tracker”. Office saves the one-time device secret — keep it for the installer. Linked devices report to the Live GPS tab.",
+  },
+  {
+    triggers: ["live map", "track vehicle now", "follow truck", "where is my car", "vehicle location"],
+    answer:
+      "Open the transportation unit → Live GPS tab → pick the vehicle in the Tracked fleet list. You'll see the live position, speed, today's kilometres and the breadcrumb track; the view refreshes itself every 30 seconds.",
+  },
+  {
+    triggers: ["clock in", "clock out", "clockin", "clockout", "attendance today"],
+    answer:
+      "Staff clock in/out with the ◷ Clock In button in the top bar — it supports break end / clock out with location. Use Attendance inside Employees & Payroll to review who is present per register.",
+  },
+  {
+    triggers: ["payslip", "payroll", "pay staff", "salary advance", "pay salaries"],
+    answer:
+      "Payroll lives in the Payroll Center (Employees & Payroll in the sidebar): monthly runs pull attendance, commissions and advances, and payslips print from each run.",
+  },
+  {
+    triggers: ["who owes me", "credit sale", "collect debt", "owed balance", "customer balance"],
+    answer:
+      "Open Sales & Payments (Shared Enterprise Modules) — every quote, invoice and credit sale lives there with balances; record a payment and the outstanding figure updates in Finance instantly.",
+  },
+  {
+    triggers: ["export report", "download report", "export csv", "download statement"],
+    answer:
+      "Use the green Export / Audit button at the very top of the business view — it exports the current data set. Finance reports also carry their own export chips.",
+  },
+  {
+    triggers: ["audit trail", "who changed", "who deleted", "activity log", "review records"],
+    answer:
+      "That is the Audit & Review module (QA chip in the sidebar) — every create, update and deletion is logged with the actor, timestamp and reason; auditors flag issues which workers resolve in My Audit Issues.",
+  },
+  {
+    triggers: ["new business", "add business", "create business", "register branch"],
+    answer:
+      "Business onboarding is owner-controlled: the Main Owner (Super Admin) opens it from the business/sidebar area (“+ Business” flow in the Command Center). It cannot be self-registered — the platform keeps emails globally unique across owners.",
+  },
+  {
+    triggers: ["change password", "forgot password", "update pin", "new login"],
+    answer:
+      "Open your profile avatar (top-right) → Change Password. Staff with no email change their PIN from the same menu; owners and supervisors who manage staff see the reset option under Enterprise Users.",
+  },
+  {
+    triggers: ["who can use", "user roles", "give access", "roles permission"],
+    answer:
+      "Roles are assigned in Enterprise Users (sidebar): Owner, General Manager, Office Manager, Supervisor, Auditor and Staff, with per-business access. Normal owners see only their organization; Main Owner (Super Admin) oversees all.",
+  },
+  {
+    triggers: ["notifications", "turn on alerts", "bell icon"],
+    answer:
+      "Tap the bell in the top bar for the notification stream; its ⚙ lets you choose which events ping (and optionally Telegram per the Integrations Hub).",
+  },
+  {
+    triggers: ["momo deposit", "mobile money", "float top up", "float"],
+    answer:
+      "Inside a Telecom & Digital Services business: Dashboard or MoMo tab → “MoMo Txn” records a deposit/withdrawal with commission; “Top-up” on a line moves float or cash between the business and the till. Movements are logged and never double-counted as profit.",
+  },
+  {
+    triggers: ["wifi voucher", "sell voucher", "voucher stock"],
+    answer:
+      "In a Telecom business → Wi-Fi & Vouchers: press “Sell & Activate” on an AVAILABLE voucher card (name + payment; expiry starts at sale), or “+ Vouchers” on a package to print a fresh batch with codes, PINs and QR cards.",
+  },
+  {
+    triggers: ["record expense", "log expense", "enter cost"],
+    answer:
+      "Every business dashboard carries an Expense button (e.g. F&B/“+ Expense”): choose the category, amount, method and save — it posts once into the Finance ledger and every report, dashboard card and the AI advisor update from it.",
+  },
+];
+
+export function debugGlobalNL(q: string) {
+  const qt = tokensNL(q);
+  return GLOBAL_INTENTS.map((g) => ({ t: g.triggers, s: g.triggers.map((tr) => ({ tr, ...phraseMatchNL(qt, tr) })), total: scoreMatchListNL(qt, g.triggers) })).filter((x) => x.total > 0);
+}
+
+/* Exported for the test harness — the pure scoring core. */
+export function scoreQuestionNL(question: string) {
+  const qTokens = tokensNL(question);
+  const informative = qTokens.filter((t) => !NL_STOPWORDS.has(t) || SYN_MAP.has(t));
+  return { qTokens, informative, threshold: informative.length <= 2 ? 1.0 : 1.45 };
+}
+
+/** Free-text answer scoped to the CURRENT section's guide (v2 engine). */
+export function answerQuestion(guide: SectionGuide, question: string): string {
+  const { qTokens, informative, threshold } = scoreQuestionNL(question);
+  if (informative.length === 0) {
+    return `Tell me a little more — for example "${guide.faqs[0]?.q ?? "how do I start?"}". In this section you can: ${guide.tasks.map((t) => t.name.toLowerCase()).join("; ")}.`;
+  }
+
+  // 1 — FAQ answers (exact feature facts for this section)
   let bestFaq: { score: number; answer: string } | null = null;
   for (const f of guide.faqs) {
-    const score = f.match.reduce((s, kw) => (query.includes(kw.toLowerCase()) ? s + kw.split(" ").length : s), 0);
+    const score = scoreMatchListNL(qTokens, f.match) + titleOverlapNL(qTokens, f.q);
     if (score > 0 && score > (bestFaq?.score ?? 0)) bestFaq = { score, answer: f.answer };
   }
-  if (bestFaq) return bestFaq.answer;
 
+  // 2 — Task walkthroughs of this section
   let bestTask: { score: number; text: string } | null = null;
   for (const t of guide.tasks) {
-    const nameWords = t.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-    const score = nameWords.filter((w) => words.includes(w)).length;
-    if (score > 0 && score > (bestTask?.score ?? 0)) {
+    const nameTokens = tokensNL(t.name).filter((x) => !NL_STOPWORDS.has(x));
+    const coverage = nameTokens.length
+      ? nameTokens.filter((n) => qTokens.some((q) => termEqualsNL(q, n))).length / nameTokens.length
+      : 0;
+    const score = scoreMatchListNL(qTokens, [t.name]) * (0.5 + coverage);
+    if (score > 0 && (coverage >= 0.5 || informative.length <= 2) && score > (bestTask?.score ?? 0)) {
       bestTask = {
         score,
         text:
@@ -2631,10 +3499,25 @@ export function answerQuestion(guide: SectionGuide, question: string): string {
       };
     }
   }
-  if (bestTask) return bestTask.text;
+  // prefer a task walkthrough when it is at least as plausible as the FAQ
+  if (bestTask && bestTask.score >= threshold && (!bestFaq || bestTask.score + 0.5 >= bestFaq.score)) return bestTask.text;
+  if (bestFaq && bestFaq.score >= threshold) return bestFaq.answer;
+  if (bestTask && bestTask.score >= threshold) return bestTask.text;
 
+  // 3 — App-wide intent routing (curated, verified flows)
+  let bestGlobal: { score: number; answer: string } | null = null;
+  for (const g of GLOBAL_INTENTS) {
+    const score = scoreMatchListNL(qTokens, g.triggers);
+    if (score > 0 && score > (bestGlobal?.score ?? 0)) bestGlobal = { score, answer: g.answer };
+  }
+  if (bestGlobal && bestGlobal.score >= threshold) {
+    return `I think you are looking somewhere else in GoMina 360 for this:\n\n${bestGlobal.answer}\n\n(Back in this section, you can also: ${guide.tasks.map((t) => t.name.toLowerCase()).join("; ")}.)`;
+  }
+
+  // 4 — Grounded fallback: admit the gap, list what THIS section does. No invention.
   return (
-    `In this section you can: ${guide.tasks.map((t) => t.name.toLowerCase()).join("; ")}. ` +
-    `Tap a task above for numbered steps, or try asking "${guide.faqs[0]?.q ?? "how do I start?"}".`
+    `I don't have a built-in answer for that in ${guide.title} — and I won't guess at features that may not exist. What this section does let you do:\n` +
+    guide.tasks.map((t, i) => `${i + 1}. ${t.name}`).join("\n") +
+    `\n\nTap a task above for numbered steps, or try "${guide.faqs[0]?.q ?? "how do I start?"}".`
   );
 }

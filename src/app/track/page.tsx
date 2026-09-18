@@ -3,27 +3,32 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  PackageSearch,
-  Search,
-  ClipboardList,
-  CheckCircle2,
-  Cog,
-  PackageCheck,
-  Truck,
-  MapPin,
+  Anchor,
+  Banknote,
   Bell,
   BellOff,
-  Copy,
+  CalendarClock,
+  CheckCircle2,
+  ClipboardList,
   Clock3,
-  XCircle,
-  Store,
-  RefreshCw,
-  User as UserIcon,
-  Banknote,
+  Cog,
+  Copy,
+  Factory,
   HandCoins,
+  MapPin,
   Navigation,
+  PackageCheck,
+  PackageSearch,
   Phone,
+  RefreshCw,
+  Route,
+  Search,
+  Ship,
   Smartphone,
+  Store,
+  Truck,
+  User as UserIcon,
+  XCircle,
 } from "lucide-react";
 import { googleMapsEmbed, googleMapsLink, googleMapsRouteLink } from "@/lib/tracking";
 import { qrDataUrl } from "@/lib/qrRegistry";
@@ -35,6 +40,24 @@ const STEP_DEFS = [
   { key: "READY", label: "Ready / Dispatched", icon: Truck },
   { key: "DONE", label: "Delivered / Completed", icon: PackageCheck },
 ];
+
+/** Icons for the full extended preorder journey (server supplies the list; this table skins it). */
+const STAGE_ICONS: Record<string, any> = {
+  RECEIVED: ClipboardList,
+  CONFIRMED: CheckCircle2,
+  PROCESSING: Cog,
+  PREORDER: CalendarClock,
+  PROCUREMENT: Factory,
+  SHIPPED: Ship,
+  IN_TRANSIT: Route,
+  ARRIVED: Anchor,
+  RECEIVED_STOCK: PackageCheck,
+  READY: Truck,
+  DONE: CheckCircle2,
+};
+
+/** Preorder-only stages get the indigo treatment, everything else the standard emerald. */
+const PREORDER_GLOW = "bg-indigo-500/15 border-indigo-400 text-indigo-300";
 
 function fmtMoney(amount: number | null | undefined, currency: string) {
   if (amount == null) return "—";
@@ -258,29 +281,32 @@ function TrackInner() {
                 </div>
               ) : (
                 <>
-                  {/* 5-step journey stepper */}
+                  {/* Journey stepper — stages come from the server per orderKind
+                      (stock: 5 steps · preorder: the full supply chain). */}
                   <div className="mt-5" data-testid="track-stepper">
-                    <ol className="flex items-start">
-                      {STEP_DEFS.map((s, i) => {
+                    <ol className="flex items-start overflow-x-auto pb-1">
+                      {(t.journeyStagesList || STEP_DEFS.map((d) => ({ key: d.key, preorderOnly: false, label: d.label }))).map((s: any, i: number) => {
                         const reached = (t.journeyStep ?? 0) >= i;
                         const current = (t.journeyStep ?? 0) === i && !t.isTerminal;
-                        const Icon = s.icon;
+                        const Icon = STAGE_ICONS[s.key] || PackageCheck;
                         return (
-                          <li key={s.key} className="flex-1 relative" data-testid={`track-step-${i}`}>
+                          <li key={s.key} className="flex-1 min-w-[64px] relative" data-testid={`track-step-${i}`}>
                             {i > 0 && (
-                              <span className={`absolute left-0 right-1/2 top-4 h-0.5 -translate-x-1/2 ${reached ? "bg-emerald-500" : "bg-slate-700"}`} style={{ left: "-50%", right: "50%" }} />
+                              <span className={`absolute left-0 right-1/2 top-4 h-0.5 -translate-x-1/2 ${reached ? (s.preorderOnly ? "bg-indigo-500" : "bg-emerald-500") : "bg-slate-700"}`} style={{ left: "-50%", right: "50%" }} />
                             )}
                             <div className="relative flex flex-col items-center text-center px-0.5">
                               <span
                                 className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition ${
                                   reached
-                                    ? "bg-emerald-500/20 border-emerald-400 text-emerald-300"
+                                    ? s.preorderOnly
+                                      ? PREORDER_GLOW
+                                      : "bg-emerald-500/20 border-emerald-400 text-emerald-300"
                                     : "bg-slate-800 border-slate-700 text-slate-500"
-                                } ${current ? "ring-2 ring-emerald-400/50 animate-pulse" : ""}`}
+                                } ${current ? (s.preorderOnly ? "ring-2 ring-indigo-400/50 animate-pulse" : "ring-2 ring-emerald-400/50 animate-pulse") : ""}`}
                               >
                                 <Icon className="w-4 h-4" />
                               </span>
-                              <span className={`mt-1.5 text-[9px] sm:text-[10px] font-bold leading-tight ${reached ? "text-emerald-300" : "text-slate-500"}`}>
+                              <span className={`mt-1.5 text-[9px] sm:text-[10px] font-bold leading-tight ${reached ? (s.preorderOnly ? "text-indigo-300" : "text-emerald-300") : "text-slate-500"}`}>
                                 {s.label}
                               </span>
                             </div>
@@ -502,6 +528,31 @@ function TrackInner() {
                 <Clock3 className="w-3 h-3" /> Placed {t.placedAt ? new Date(t.placedAt).toLocaleString() : "—"}
               </div>
             </div>
+
+            {/* Pre-order facts card: ETA window, deposit/balance ledger position. */}
+            {t.orderKind && t.orderKind !== "STOCK" && (
+              <div className="bg-gradient-to-br from-indigo-950/80 to-indigo-900/40 border border-indigo-500/40 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-preorder">
+                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
+                  <CalendarClock className="w-4 h-4 text-indigo-300" /> Pre-order booked
+                </h2>
+                <div className="text-[11px] text-indigo-100/80 space-y-1">
+                  {t.preorderSnapshot?.etaStart && (
+                    <p>
+                      Expected between <b>{new Date(t.preorderSnapshot.etaStart).toLocaleDateString()}</b> and{" "}
+                      <b>{new Date(t.preorderSnapshot.etaEnd).toLocaleDateString()}</b>
+                    </p>
+                  )}
+                  {t.preorderSnapshot?.methods && (
+                    <p>
+                      Fulfilment: <b>{(t.preorderSnapshot.methods as string[]).join(" + ")}</b>
+                    </p>
+                  )}
+                  <p className="text-indigo-200/70">
+                    Deposit confirmed at booking — your goods are sourced from our supplier and become yours the moment they land in branch stock.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Payment status & delivery progress for the customer */}
             {t.payment && (

@@ -27,6 +27,7 @@
     "qrcode": "^1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
+    "react-is": "^19.3.0",
     "react-leaflet": "^5.0.0",
     "recharts": "^3.10.1",
     "tailwind-merge": "^3.6.0",
@@ -34,6 +35,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@sparticuz/chromium": "^153.0.0",
     "@tailwindcss/postcss": "4.1.17",
     "@types/leaflet": "^1.9.22",
     "@types/node": "22.19.15",
@@ -43,6 +45,7 @@
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "playwright-core": "^1.63.0",
     "postcss": "8.5.8",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3"

@@ -11,6 +11,7 @@
 //          insights are rebuilt from the remaining notes so history stays true.
 
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { businessInsights, businesses, dailyNotes } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
@@ -62,6 +63,7 @@ async function upsertInsights(businessId: number, state: InsightsState) {
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const { searchParams } = new URL(request.url);
@@ -109,6 +111,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -176,6 +179,7 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const { searchParams } = new URL(request.url);

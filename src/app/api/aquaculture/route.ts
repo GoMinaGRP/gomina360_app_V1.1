@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   aquaculturePonds,
@@ -13,7 +14,7 @@ import {
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { stockIn, stockOut } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -35,6 +36,11 @@ export async function GET(request: NextRequest) {
     const businessId = Number(searchParams.get("businessId"));
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId is required" }, { status: 400 });
+    }
+    // Scope gate: ponds, batches, feed, water quality and harvest data stay
+    // inside the caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const scope = (table: any) =>
@@ -76,6 +82,9 @@ export async function POST(request: NextRequest) {
 
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId are required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
@@ -352,6 +361,9 @@ export async function PATCH(request: NextRequest) {
       const [existing] = await db.select().from(aquacultureChecklists).where(eq(aquacultureChecklists.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const [row] = await db
         .update(aquacultureChecklists)

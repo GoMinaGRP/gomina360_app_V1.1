@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -23,6 +24,7 @@ const MAX_PHOTO_CHARS = 700_000; // ~500KB base64 — far above the ~60KB client
 const PHOTO_RE = /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
 
 export async function PUT(request: NextRequest) {
+  ttlInvalidate("init");
   try {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();

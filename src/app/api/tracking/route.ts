@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { customerTrackings, businesses, notifications, transactions, salesDocuments, creditSales } from "@/db/schema";
+import { customerTrackings, businesses, notifications, orderPayments, transactions, salesDocuments, creditSales } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
 import {
   getSessionInfo,
@@ -10,6 +11,7 @@ import {
   UNAUTHENTICATED,
   FORBIDDEN,
 } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 import {
   buildTrackingCode,
   isValidTransition,
@@ -25,6 +27,7 @@ import {
   linkCrmCustomer,
   normalizeDeliveryPin,
 } from "@/lib/trackingServer";
+import { bookPaymentEvent } from "@/lib/preorder";
 import { validatePhone } from "@/lib/phone";
 import { pushAfterBell } from "@/lib/push";
 
@@ -53,6 +56,7 @@ import { pushAfterBell } from "@/lib/push";
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -121,6 +125,23 @@ export async function GET(request: NextRequest) {
       : [];
     const creditByTracking = new Map(creditRows.map((c) => [c.trackingId, c]));
 
+    // Order payment EVENTS (deposit/balance/full) — pre-order ledger.
+    const paymentEvents = trackingIds.length
+      ? await db.select().from(orderPayments).where(inArray(orderPayments.trackingId, trackingIds))
+      : [];
+    const eventsByTracking = new Map<number, any[]>();
+    for (const ev of paymentEvents) {
+      const list = eventsByTracking.get(ev.trackingId) || [];
+      list.push(ev);
+      eventsByTracking.set(ev.trackingId, list);
+    }
+    const paidByTracking = new Map(
+      [...eventsByTracking.entries()].map(([tid, list]) => [
+        tid,
+        list.reduce((a, ev) => a + (ev.kind === "REFUND" ? -Number(ev.amountGhs || 0) : Number(ev.amountGhs || 0)), 0),
+      ]),
+    );
+
     const now = Date.now();
     const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
     const counts = {
@@ -162,7 +183,14 @@ export async function GET(request: NextRequest) {
             : null,
           // Installment position when this order is a credit sale (null otherwise).
           credit: creditByTracking.get(r.id) || null,
-          allowedNext: nextStatuses(r.status, r.fulfillmentType).map((s) => ({
+          // Pre-order ledger events (additive shape; [] for stock orders).
+          paymentEvents: eventsByTracking.get(r.id) || [],
+          paidGhs: paidByTracking.get(r.id) || 0,
+          balanceRemainingGhs: (() => {
+            const paid = paidByTracking.get(r.id) || 0;
+            return Math.max(0, (Number(r.totalGhs) || 0) - paid);
+          })(),
+          allowedNext: nextStatuses(r.status, r.fulfillmentType, r.orderKind || "STOCK").map((s) => ({
             status: s,
             label: TRACK_STATUS_LABELS[s as TrackStatus],
           })),
@@ -179,6 +207,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -319,14 +348,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: "Tracking not found." }, { status: 404 });
       }
       if (!(await canAccessBusiness(me, row.businessId))) return FORBIDDEN();
-      if (!isValidTransition(row.status, target, row.fulfillmentType)) {
+      if (!isValidTransition(row.status, target, row.fulfillmentType, row.orderKind || "STOCK")) {
         return NextResponse.json(
           {
             success: false,
             error: `Cannot move from ${TRACK_STATUS_LABELS[row.status as TrackStatus] || row.status} to ${
               TRACK_STATUS_LABELS[target as TrackStatus] || target
             }. Allowed next: ${
-              nextStatuses(row.status, row.fulfillmentType)
+              nextStatuses(row.status, row.fulfillmentType, row.orderKind || "STOCK")
                 .map((s) => TRACK_STATUS_LABELS[s])
                 .join(", ") || "none — order is closed"
             }.`,
@@ -338,16 +367,19 @@ export async function POST(request: NextRequest) {
       const note = String(body.note || "").trim();
       const now = new Date();
 
-      // Online orders commit their reserved stock when staff CONFIRM them —
-      // and get it back automatically if the order is later cancelled.
+      // Stock-commit discipline:
+      //  · STOCK orders   → commit at CONFIRMED (existing behaviour).
+      //  · PREORDER/MIXED → STOCK lines commit at CONFIRMED; PREORDER lines
+      //    wait for RECEIVED_STOCK (goods physically landed via goods receipt).
+      //  · CANCELLED      → whatever was committed is restored.
+      const isPre = (row.orderKind || "STOCK") !== "STOCK";
+      const items = (row.items as any[]) || [];
+      const stockLines = items.filter((li: any) => li?.inventoryId && !li?.preorder);
+      const preorderLines = items.filter((li: any) => li?.inventoryId && li?.preorder);
       let stockCommitted: boolean | undefined;
-      if (
-        target === "CONFIRMED" &&
-        row.orderSource === "ONLINE" &&
-        !row.stockCommitted &&
-        ((row.items as any[]) || []).some((li: any) => li?.inventoryId)
-      ) {
-        const stock = await deductOrderStock(row.items as any[]);
+      let stockCommitStage: string | undefined;
+      if (target === "CONFIRMED" && row.orderSource === "ONLINE" && !row.stockCommitted && stockLines.length) {
+        const stock = await deductOrderStock(stockLines as any[]);
         if (!stock.ok) {
           return NextResponse.json(
             { success: false, error: `Cannot confirm — stock problem: ${stock.problems.join(" ")}` },
@@ -355,10 +387,23 @@ export async function POST(request: NextRequest) {
           );
         }
         stockCommitted = true;
+        stockCommitStage = "CONFIRMED";
+      }
+      if (target === "RECEIVED_STOCK" && preorderLines.length && row.stockCommitStage !== "RECEIVED_STOCK") {
+        const stock = await deductOrderStock(preorderLines as any[]);
+        if (!stock.ok) {
+          return NextResponse.json(
+            { success: false, error: `Cannot receive stock — ${stock.problems.join(" ")}` },
+            { status: 409 },
+          );
+        }
+        stockCommitted = true;
+        stockCommitStage = "RECEIVED_STOCK";
       }
       if (target === "CANCELLED" && row.stockCommitted) {
-        await restoreOrderStock(row.items as any[]);
+        await restoreOrderStock(row.stockCommitStage === "RECEIVED_STOCK" ? preorderLines as any[] : (isPre ? stockLines as any[] : items));
         stockCommitted = false;
+        stockCommitStage = undefined;
       }
 
       const history = [
@@ -372,6 +417,8 @@ export async function POST(request: NextRequest) {
             note ||
             (target === "CONFIRMED" && stockCommitted
               ? "Order confirmed — items reserved from branch stock."
+              : target === "RECEIVED_STOCK" && stockCommitted
+              ? "Goods received into branch stock — preorder items now committed."
               : target === "CANCELLED" && stockCommitted === false
               ? "Order cancelled — reserved stock returned to inventory."
               : null),
@@ -384,6 +431,7 @@ export async function POST(request: NextRequest) {
           statusHistory: history,
           updatedAt: now,
           ...(stockCommitted !== undefined ? { stockCommitted } : {}),
+          ...(stockCommitStage !== undefined ? { stockCommitStage } : {}),
         })
         .where(eq(customerTrackings.id, id))
         .returning();
@@ -406,6 +454,7 @@ export async function POST(request: NextRequest) {
             businessId: row.businessId,
             branchCode: row.branchCode,
             actorName: me.name || "Staff",
+            ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : null,
           });
           pushAfterBell([Number(row.createdByUserId)], {
             type: "ORDER_TRACKING_STATUS",
@@ -518,6 +567,104 @@ export async function POST(request: NextRequest) {
         .returning();
 
       return NextResponse.json({ success: true, tracking: updated });
+    }
+
+    // ── PRE-ORDER payment events — deposit / balance — each books exactly
+    // one INCOME transaction + one ledger event. Doubling a kind is refused;
+    // MARK_PAID on preorders is blocked (use DEPOSIT then BALANCE). ─────────
+    if (action === "MARK_DEPOSIT" || action === "MARK_BALANCE") {
+      const id = Number(body.id);
+      const method = body.method === "MTN_MOMO" ? "MTN_MOMO" : body.method === "CASH" ? "CASH" : null;
+      if (!id || !method) {
+        return NextResponse.json({ success: false, error: "id and method (CASH or MTN_MOMO) are required." }, { status: 400 });
+      }
+      const [row] = await db.select().from(customerTrackings).where(eq(customerTrackings.id, id));
+      if (!row) {
+        return NextResponse.json({ success: false, error: "Tracking not found." }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(me, row.businessId))) return FORBIDDEN();
+      const kind = action === "MARK_DEPOSIT" ? "DEPOSIT" : "BALANCE";
+      const isPre = (row.orderKind || "STOCK") !== "STOCK";
+      if (!isPre) {
+        return NextResponse.json({ success: false, error: "Deposit / balance events apply only to pre-orders — use MARK_PAID for stock orders." }, { status: 400 });
+      }
+      if (row.status === "CANCELLED") {
+        return NextResponse.json({ success: false, error: "A cancelled order cannot be paid." }, { status: 409 });
+      }
+      // Ledger state: sum events so far.
+      const events = await db.select().from(orderPayments).where(eq(orderPayments.trackingId, row.id));
+      const paidSoFar = events.reduce((a, ev) => a + (ev.kind === "REFUND" ? -Number(ev.amountGhs) : Number(ev.amountGhs)), 0);
+      const totalDue = Number(row.totalGhs || 0);
+      const depositDue = Number((row.preorderSnapshot as any)?.depositDueGhs || 0);
+      if (kind === "DEPOSIT" && events.some((ev) => ev.kind === "DEPOSIT" || ev.kind === "FULL")) {
+        return NextResponse.json({ success: false, error: "The deposit for this pre-order is already confirmed." }, { status: 409 });
+      }
+      if (kind === "BALANCE" && !events.some((ev) => ev.kind === "DEPOSIT") && (row.paymentPlan || "") === "DEPOSIT_NOW") {
+        return NextResponse.json({ success: false, error: "Record the deposit first — the balance event comes afterwards." }, { status: 409 });
+      }
+      if (kind === "BALANCE" && events.some((ev) => ev.kind === "BALANCE" || ev.kind === "FULL")) {
+        return NextResponse.json({ success: false, error: "The balance for this pre-order is already confirmed." }, { status: 409 });
+      }
+
+      const amountGhs = kind === "DEPOSIT"
+        ? Math.min(depositDue, Math.max(0, totalDue - paidSoFar))
+        : Math.max(0, totalDue - paidSoFar);
+      if (!(amountGhs > 0.005)) {
+        return NextResponse.json({ success: false, error: `Nothing owed for ${kind === "DEPOSIT" ? "the deposit" : "the balance"}.` }, { status: 409 });
+      }
+      if (kind === "DEPOSIT" && !(depositDue > 0.005)) {
+        return NextResponse.json({ success: false, error: "This pre-order does not require a deposit." }, { status: 400 });
+      }
+
+      const [biz] = await db.select().from(businesses).where(eq(businesses.id, row.businessId));
+      const booking = await bookPaymentEvent({
+        tracking: row,
+        kind,
+        amountGhs,
+        method,
+        paymentRef: String(body.ref || "").trim() || row.paymentRef || null,
+        staff: me,
+        biz,
+      });
+      // CRM spend grows when money lands (deposit counts as revenue).
+      await linkCrmCustomer({
+        name: row.customerName,
+        phone: row.customerPhone,
+        businessId: row.businessId,
+        spendGhs: amountGhs,
+      });
+
+      const remainingBefore = Math.max(0, totalDue - paidSoFar);
+      const remainingAfter = Math.max(0, remainingBefore - amountGhs);
+      const newStatus = remainingAfter <= 0.005 ? "PAID" : "DEPOSIT_PAID";
+      const now = new Date();
+      const history = [
+        ...(Array.isArray(row.statusHistory) ? (row.statusHistory as any[]) : []),
+        {
+          status: "PAYMENT",
+          at: now.toISOString(),
+          by: me.name || "Staff",
+          byRole: me.role || "WORKER",
+          note: `${kind === "DEPOSIT" ? "Deposit" : "Balance"} confirmed (${method === "MTN_MOMO" ? "MTN MoMo" : "Cash"}) — GH₵ ${amountGhs.toFixed(2)}${remainingAfter > 0.005 ? `; balance GH₵ ${remainingAfter.toFixed(2)} remaining` : " — order fully paid"}.`,
+        },
+      ];
+      const [updated] = await db
+        .update(customerTrackings)
+        .set({
+          paymentStatus: newStatus,
+          paymentMethod: method,
+          paymentRef: String(body.ref || "").trim() || row.paymentRef || null,
+          paymentMarkedBy: me.name || "Staff",
+          paymentMarkedAt: now,
+          balanceDueGhs: remainingAfter,
+          transactionId: row.transactionId || booking.transactionId,
+          statusHistory: history,
+          updatedAt: now,
+        })
+        .where(eq(customerTrackings.id, id))
+        .returning();
+
+      return NextResponse.json({ success: true, tracking: updated, payment: { kind, amountGhs, remainingAfterGhs: remainingAfter } });
     }
 
     return NextResponse.json({ success: false, error: "Unknown action." }, { status: 400 });

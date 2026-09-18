@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { businesses } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { exportBusinessBackup, BACKUP_CONTENT_TYPE } from "@/lib/businessBackup";
 
 // exportBusinessBackup uses Buffer/JSZip; make the supported server runtime
@@ -44,10 +44,11 @@ export async function GET(request: Request) {
     }
 
     const isOwner = user.role === "OWNER";
-    const allowed = isOwner
+    // Super Admin ⇒ unrestricted; everyone else (org OWNERs included) only
+    // exports businesses inside their own (org-scoped) access list.
+    const allowed = user.isSuperAdmin
       ? true
-      : (user.assignedBusinessId === businessId ||
-         (Array.isArray(user.businessManageIds) && user.businessManageIds.includes(businessId)));
+      : await canAccessBusiness(user, businessId);
     if (!allowed) {
       return FORBIDDEN("You do not have access to this business.");
     }

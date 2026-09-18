@@ -14,3 +14,8 @@ build/
 next-env.d.ts
 .DS_Store
 .env.local
+dev-tooling/.verify-out/
+dev-tooling/pgdata/
+
+.verify-out/
+.evidence/

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   blockFactoryLogs,
@@ -14,7 +15,7 @@ import {
 import { deriveDensityKgm3 } from "@/lib/blockQc";
 import { and, eq } from "drizzle-orm";
 import { computeStockStatus, ensureInventoryItem } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -132,6 +133,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: production, orders, deliveries and stock stay inside the
+    // caller's accessible businesses (OWNER ⇒ all; others ⇒ assignment+grants).
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
 
     const [production, orders, deliveries, inventory, checklists, existingTypes, qcChecks] = await Promise.all([
       db.select().from(blockFactoryLogs).where(eq(blockFactoryLogs.businessId, businessId)),
@@ -179,6 +185,9 @@ export async function POST(request: NextRequest) {
     const businessId = Number(data?.businessId);
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
@@ -579,6 +588,9 @@ export async function PATCH(request: NextRequest) {
         .where(eq(blockFactoryChecklists.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const nowCompleted = !existing.isCompleted;
       const [row] = await db

@@ -15,13 +15,18 @@ import {
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { stockOut, computeStockStatus } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ businessCode: string }> }
 ) {
   try {
+    // Operations logs are private business data: a signed-in session is
+    // required and the caller must actually have access to the resolved
+    // business (OWNER ⇒ everything; others ⇒ assignment + grants only).
+    const session = await getSessionInfo(request);
+    if (!session) return UNAUTHENTICATED();
     const { businessCode } = await params;
     const upperCode = businessCode.toUpperCase();
 
@@ -38,6 +43,10 @@ export async function GET(
         { success: false, error: `Unknown business code: ${upperCode}` },
         { status: 404 }
       );
+    }
+
+    if (!(await canAccessBusiness(session.user, biz.id))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     if (upperCode.startsWith("POULTRY")) {
@@ -90,6 +99,11 @@ export async function POST(
   { params }: { params: Promise<{ businessCode: string }> }
 ) {
   try {
+    // Write gate: log inserts cascade into Finance transactions and
+    // Inventory (WASH revenue, HARDWARE receipts), so an unauthenticated or
+    // out-of-scope caller could otherwise poison another unit's books.
+    const session = await getSessionInfo(request);
+    if (!session) return UNAUTHENTICATED();
     const { businessCode } = await params;
     const upperCode = businessCode.toUpperCase();
     const body = await request.json();
@@ -104,6 +118,10 @@ export async function POST(
         { success: false, error: "Business not found" },
         { status: 404 }
       );
+    }
+
+    if (!(await canAccessBusiness(session.user, biz.id))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const today = new Date().toISOString().split("T")[0];

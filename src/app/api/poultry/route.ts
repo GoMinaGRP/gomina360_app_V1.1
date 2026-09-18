@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   poultryFlocks,
@@ -18,7 +19,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
-export const POULTRY_PRODUCTS = {
+const POULTRY_PRODUCTS = {
   EGGS: {
     // matches the seeded product SKU so production tops up the existing item
     sku: "POUL-EGG-L01",
@@ -59,6 +60,7 @@ function slugify(name: string): string {
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { searchParams } = new URL(request.url);
     const businessIdParam = searchParams.get("businessId");
@@ -142,6 +144,7 @@ export async function POST(request: NextRequest) {
     }
 
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     if (!(await canAccessBusiness(session.user, businessId))) {
       return FORBIDDEN("You do not have access to that business.");
@@ -670,6 +673,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const body = await request.json();
     const { entity, id, data } = body;

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
-import { Loader2, MapPin, PencilLine, Search, X } from "lucide-react";
+import { Building2, Globe2, HelpCircle, Home, Landmark as LandmarkIcon, Loader2, MapPin, PencilLine, Route, Search, Store, X } from "lucide-react";
 
 /**
  * Top-most UI layer. The suggestion list is rendered in a portal on
@@ -23,9 +23,13 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
 
 export interface AddressSuggestion {
   place_id: number | string;
+  /** Formatted address (Google-style full string). */
   label: string;
   lat: number;
   lng: number;
+  /** Granularity class — HOUSE | STREET | POI | LANDMARK | NEIGHBOURHOOD |
+   *  CITY | AREA | OTHER (city-only suggestions are a thing of the past). */
+  type?: string;
   bbox?: [number, number, number, number]; // [s,w,n,e]
 }
 
@@ -70,6 +74,20 @@ interface Props {
  * be covered or clipped — and it is flipped above the field (and height
  * capped) when there isn't room below, so the options are always reachable.
  */
+/** Granularity affordance for one suggestion row. */
+function typeAffordance(type?: string): { icon: any; caption: string } {
+  switch ((type || "").toUpperCase()) {
+    case "HOUSE": return { icon: Home, caption: "Building / address" };
+    case "STREET": return { icon: Route, caption: "Street" };
+    case "POI": return { icon: Store, caption: "Business / place" };
+    case "LANDMARK": return { icon: LandmarkIcon, caption: "Landmark" };
+    case "NEIGHBOURHOOD": return { icon: Building2, caption: "Neighbourhood" };
+    case "CITY": return { icon: Globe2, caption: "City / town" };
+    case "AREA": return { icon: Globe2, caption: "Region / district" };
+    default: return { icon: HelpCircle, caption: "Place" };
+  }
+}
+
 export default function AddressAutocomplete({
   value,
   onChange,
@@ -231,6 +249,12 @@ export default function AddressAutocomplete({
 
   const choose = (s: AddressSuggestion) => {
     pickedLabelRef.current = s.label;
+    // Invalidate every in-flight geocode request — otherwise the response to
+    // the typing that preceded the pick lands AFTER the dropdown was closed
+    // and reopens the list the customer just dismissed.
+    reqIdRef.current += 1;
+    setLoading(false);
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     onChange(s.label);
     setOpen(false);
     setSuggestions([]);
@@ -349,8 +373,19 @@ export default function AddressAutocomplete({
                 className={`cursor-pointer px-3 py-2 flex items-start gap-2 ${i === active ? "bg-amber-50" : "hover:bg-slate-50"}`}
                 data-testid={`${prefix}-opt-${i}`}
               >
-                <MapPin className={`w-4 h-4 mt-0.5 shrink-0 ${i === 0 && bias ? "text-emerald-600" : "text-slate-400"}`} />
-                <span className="min-w-0 flex-1 break-words">{s.label}</span>
+                {(() => {
+                  const a = typeAffordance(s.type);
+                  const Icon = a.icon;
+                  return (
+                    <>
+                      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${i === 0 && bias ? "text-emerald-600" : "text-slate-400"}`} aria-hidden="true" />
+                      <span className="min-w-0 flex-1 break-words">
+                        <span className="block leading-snug">{s.label}</span>
+                        <span className="block text-[9px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">{a.caption}</span>
+                      </span>
+                    </>
+                  );
+                })()}
               </li>
             ))}
             <li className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-100">

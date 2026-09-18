@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { businesses, userBusinessAccess } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { businesses, userBusinessAccess, users, organizationMembers } from "@/db/schema";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   CATEGORY_ICON,
   nextBusinessCode,
@@ -9,6 +9,8 @@ import {
 } from "@/lib/businessProvisioning";
 import { resolveOwnerActor } from "@/lib/recordPermissions";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { businessTypeAllowed, businessTypeLabelOf } from "@/lib/businessTypes";
+import { ttlInvalidate } from "@/lib/ttlCache";
 
 export async function GET(request: Request) {
   try {
@@ -41,6 +43,8 @@ export async function GET(request: Request) {
  * for the unit they created so it appears in their sidebar at once.
  */
 export async function POST(request: Request) {
+  ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json();
     // Session-verified gate (credentials from the secure login cookie —
@@ -68,6 +72,18 @@ export async function POST(request: Request) {
     } = body;
 
     const resolvedCategory = category || "Other";
+
+    // Allowed Business Types gate (Super-Admin-managed per organization):
+    // a restricted org may create ONLY the granted types; the Super Admin and
+    // unrestricted orgs are unaffected. Back-compat: unknown/future types pass
+    // for unrestricted orgs, and every org defaults to unrestricted.
+    const typeVerdict = await businessTypeAllowed(session.orgId, resolvedCategory, !!actor.isSuperAdmin);
+    if (!typeVerdict.allowed) {
+      return FORBIDDEN(
+        `Your organization is not authorized to operate "${businessTypeLabelOf(resolvedCategory)}" businesses. Ask the platform Super Admin to grant this business type.`,
+      );
+    }
+
     const all = await db.select({ code: businesses.code }).from(businesses);
 
     // Pretty sequential code per category (BLOCK-02, WASH-02, …). If the caller
@@ -100,6 +116,8 @@ export async function POST(request: Request) {
         initialCapitalGhs: Number(initialCapitalGhs) || 100000,
         monthlyTargetRevenueGhs: Number(monthlyTargetRevenueGhs) || 50000,
         iconName: iconName || CATEGORY_ICON[resolvedCategory] || "Building2",
+        // Tenant: a new unit always belongs to its creator's organization.
+        ownerId: session.orgId ?? null,
       })
       .returning();
 
@@ -126,6 +144,44 @@ export async function POST(request: Request) {
           createdByUserId: actor.id,
         });
       }
+    }
+
+    // GENERAL_MANAGER is the enterprise-wide executive: their baseline is
+    // "every unit of the organization" (the seed grants them all existing
+    // units as revocable per-branch grants). Extend exactly that contract to
+    // the brand-new unit: every GM of the creating org receives a grant for
+    // it (revocable later in Users & Access). Other staff keep their explicit
+    // per-branch grants — no implicit escalation.
+    try {
+      const orgMemberships = session.orgId != null
+        ? await db
+            .select({ userId: organizationMembers.userId })
+            .from(organizationMembers)
+            .where(eq(organizationMembers.organizationId, session.orgId))
+        : [];
+      const memberIds = orgMemberships.map((m) => Number(m.userId));
+      if (memberIds.length) {
+        const gms = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(inArray(users.id, memberIds), eq(users.role, "GENERAL_MANAGER"), eq(users.isActive, true)));
+        for (const gm of gms) {
+          const [existing] = await db
+            .select({ id: userBusinessAccess.id })
+            .from(userBusinessAccess)
+            .where(and(eq(userBusinessAccess.userId, gm.id), eq(userBusinessAccess.businessId, newBiz.id)))
+            .limit(1);
+          if (!existing) {
+            await db.insert(userBusinessAccess).values({
+              userId: gm.id,
+              businessId: newBiz.id,
+              createdByUserId: actor.id,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error("GM auto-grant on new unit failed (unit still created):", e);
     }
 
     return NextResponse.json({ success: true, business: newBiz, provisioned });

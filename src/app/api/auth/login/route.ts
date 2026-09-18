@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, dbFailureMessage } from "@/db";
-import { users } from "@/db/schema";
+import { users, organizationMembers, organizations } from "@/db/schema";
 import {
   createSession,
   verifyPassword,
@@ -51,6 +51,34 @@ export async function POST(request: Request) {
         { success: false, error: "This account is deactivated. Contact the OWNER." },
         { status: 403 }
       );
+    }
+
+    // Platform-level suspension / removal: members of a SUSPENDED organization
+    // cannot authenticate (temporary, reversible). Members of a DELETED
+    // organization are locked out too — deletion permanently revokes platform
+    // access while preserving every row of their data (Super-Admin restorable).
+    // The Super Admin's primary org stays ACTIVE by construction.
+    {
+      const memberships = await db
+        .select({ status: organizations.status })
+        .from(organizationMembers)
+        .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
+        .where(eq(organizationMembers.userId, user.id));
+      const stat = (m: any) => (m.status || "ACTIVE").toUpperCase();
+      if (memberships.length > 0) {
+        if (memberships.every((m) => stat(m) === "DELETED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace was removed from the platform. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
+        if (memberships.every((m) => stat(m) === "SUSPENDED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace is suspended. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     // Brute-force lockout
