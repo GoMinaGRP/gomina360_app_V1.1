@@ -267,6 +267,17 @@ export const businesses = pgTable("businesses", {
   customerHelpPhone: text("customer_help_phone"), // "Need help? Call/WhatsApp …"
   momoNumber: text("momo_number"), // mobile-money number customers pay to
   momoName: text("momo_name"), // payee name shown beside the MoMo number
+  // Customer-storefront image watermark — display-time branding applied by
+  // the storefront UI as a faint overlay above product photos (cards,
+  // thumbnail strips, lightbox incl. full-screen/zoom). The original
+  // inventory photos are NEVER modified: the watermark composites purely on
+  // the client, so enabling/disabling is instant and lossless. Manageable
+  // from Manage Businesses → Online (canManageOnline scope).
+  watermarkEnabled: boolean("watermark_enabled").default(false),
+  /** 'AUTO' = logo when the unit has one, else the business name;
+   *  'LOGO' = logo only (name when no logo uploaded);
+   *  'NAME' = name text always. */
+  watermarkMode: text("watermark_mode").default("AUTO"),
   // Tenant scope: which organization (Owner) this business belongs to.
   ownerId: integer("owner_id").references(() => organizations.id),
   createdAt: timestamp("created_at").defaultNow(),

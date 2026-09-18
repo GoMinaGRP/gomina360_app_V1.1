@@ -11,6 +11,7 @@ import {
   FileUp,
   Globe,
   HardDriveDownload,
+  Layers,
   Image as ImageIcon,
   MapPin,
   Pencil,
@@ -43,6 +44,8 @@ import { businessManageIdsOf } from "@/lib/permissions";
 
 /** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
  *  the same convention used for employee photos and document uploads. */
+import WatermarkOverlay from "@/components/WatermarkOverlay";
+
 async function logoFileToDataUrl(file: File | Blob, max = 512): Promise<string> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
@@ -260,6 +263,10 @@ export default function ManageBusinessesModal({
   // ── Online ordering & service area (mode === "online") ──────────────────
   const [onlEnabled, setOnlEnabled] = useState(true);
   const [onlPreorder, setOnlPreorder] = useState(false);
+  // Storefront watermark (display-time overlay on customer-facing product
+  // images — originals never modified).
+  const [onlWm, setOnlWm] = useState(false);
+  const [onlWmMode, setOnlWmMode] = useState<"AUTO" | "LOGO" | "NAME">("AUTO");
   const [onlPickup, setOnlPickup] = useState(true);
   const [onlDelivery, setOnlDelivery] = useState(true);
   const [onlRadius, setOnlRadius] = useState(""); // "" = no geographic limit
@@ -288,6 +295,8 @@ export default function ManageBusinessesModal({
     setSelected(biz);
     setOnlEnabled(biz.onlineOrderingEnabled !== false);
     setOnlPreorder(biz.preOrderEnabled === true);
+    setOnlWm(biz.watermarkEnabled === true);
+    setOnlWmMode(biz.watermarkMode === "LOGO" || biz.watermarkMode === "NAME" ? biz.watermarkMode : "AUTO");
     setOnlPickup(biz.pickupEnabled !== false);
     setOnlDelivery(biz.deliveryEnabled !== false);
     setOnlRadius(biz.serviceRadiusKm != null ? String(biz.serviceRadiusKm) : "");
@@ -345,6 +354,8 @@ export default function ManageBusinessesModal({
           customerHelpPhone: onlHelp.trim() || null,
           momoNumber: onlMomo.trim() || null,
           momoName: onlMomoName.trim() || null,
+          watermarkEnabled: onlWm,
+          watermarkMode: onlWmMode,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -1351,6 +1362,71 @@ export default function ManageBusinessesModal({
                     tid="mb-onl-toggle-delivery"
                   />
                 </div>
+
+                {/* Storefront watermark — display-time branding overlay over
+                    customer-facing product images (cards, thumbs, lightbox,
+                    full-screen, zoom). The original uploaded photos are never
+                    modified, so toggling this is instant and lossless. */}
+                <section className="rounded-xl border border-slate-700 bg-slate-800/50 p-3.5 space-y-3" data-testid="mb-onl-wm">
+                  <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-sky-300" /> Product image watermark
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-start">
+                    <div className="space-y-2.5">
+                      <SwitchRow
+                        label="Watermark product photos"
+                        desc="Faint logo/name overlay on this unit's storefront images — protects your catalog without hiding the product"
+                        on={onlWm}
+                        onFlip={(v: boolean) => { setOnlWm(v); setOnlDirty(true); }}
+                        tid="mb-onl-wm-toggle"
+                      />
+                      {onlWm && (
+                        <div className="flex flex-wrap gap-1.5 pl-1" data-testid="mb-onl-wm-modes">
+                          {([
+                            ["AUTO", "Auto (logo → name)", selected?.logo ? "Uses your uploaded logo plus a faint name pattern" : "No logo uploaded yet — uses the business name (logo when uploaded)"],
+                            ["LOGO", "Logo only", "Corner logo chip + faint name pattern (falls back to name if no logo uploaded)"],
+                            ["NAME", "Name only", "Diagonally tiled business name — works even with no logo uploaded"],
+                          ] as const).map(([val, lbl, hint]) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => { setOnlWmMode(val); setOnlDirty(true); }}
+                              title={hint}
+                              className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition ${
+                                onlWmMode === val
+                                  ? "bg-sky-500/15 border-sky-400/60 text-sky-200"
+                                  : "bg-slate-900/50 border-slate-700 text-slate-400 hover:text-slate-200"
+                              }`}
+                              data-testid={`mb-onl-wm-mode-${val.toLowerCase()}`}
+                            >
+                              {lbl}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-500 leading-relaxed">
+                        Rendered above the image at display time only — ~14% greyscale corner chip plus a ≈6%
+                        diagonal name pattern. Your stored photos stay byte-identical, and galleries, full-screen
+                        viewing, pinch and zoom are unaffected.
+                      </p>
+                    </div>
+                    <div className="space-y-1.5" data-testid="mb-onl-wm-preview">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live preview</p>
+                      <div className="relative w-40 h-28 rounded-lg overflow-hidden bg-gradient-to-br from-amber-100 via-white to-slate-200 border border-slate-600">
+                        <div className="absolute inset-3 rounded-md bg-emerald-600/70" />
+                        <WatermarkOverlay
+                          spec={{
+                            enabled: onlWm,
+                            mode: onlWmMode,
+                            logo: selected?.logo || null,
+                            name: selected?.name || "Your Business",
+                          }}
+                        />
+                      </div>
+                      <p className="text-[9px] text-slate-500">How the customer's product card + gallery will look</p>
+                    </div>
+                  </div>
+                </section>
 
                 {/* Service area */}
                 <section className="rounded-xl border border-slate-700 bg-slate-800/50 p-3.5 space-y-3">

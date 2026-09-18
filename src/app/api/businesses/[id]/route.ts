@@ -91,6 +91,8 @@ const ONLINE_ORDERING_FIELDS = [
   "momoName",
   "gpsLat",
   "gpsLng",
+  "watermarkEnabled",
+  "watermarkMode",
 ] as const;
 
 const VALID_CATEGORIES = [
@@ -437,6 +439,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.momoName !== undefined) {
       const s = typeof body.momoName === "string" ? body.momoName.trim().slice(0, 60) : "";
       updates.momoName = s || null;
+    }
+    // Storefront watermarking — display-time overlay only; never touches
+    // stored product photos.
+    if (body.watermarkEnabled !== undefined) {
+      updates.watermarkEnabled = !!body.watermarkEnabled;
+    }
+    if (body.watermarkMode !== undefined) {
+      const mode = String(body.watermarkMode || "").toUpperCase();
+      if (!["AUTO", "LOGO", "NAME"].includes(mode)) {
+        return NextResponse.json(
+          { success: false, error: "Watermark mode must be AUTO, LOGO or NAME." },
+          { status: 400 },
+        );
+      }
+      updates.watermarkMode = mode;
     }
     if (body.gpsLat !== undefined || body.gpsLng !== undefined) {
       if (body.gpsLat === null && body.gpsLng === null) {

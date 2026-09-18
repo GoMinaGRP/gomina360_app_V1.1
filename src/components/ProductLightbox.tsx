@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import WatermarkOverlay from "./WatermarkOverlay";
+import type { WatermarkSpec } from "@/lib/watermark";
 import {
   ChevronLeft,
   ChevronRight,
@@ -36,6 +38,7 @@ export default function ProductLightbox({
   photos,
   idx,
   product,
+  wmSpec,
   fromBiz,
   canAdd,
   onClose,
@@ -46,6 +49,10 @@ export default function ProductLightbox({
   photos: string[];
   idx: number;
   product: any;
+  /** Owner-configured storefront watermark — rendered as display overlay
+   *  above the image (never baked in; pointer-events none so pinch/drag/
+   *  wheel gestures are never intercepted). */
+  wmSpec?: WatermarkSpec | null;
   fromBiz: any;
   canAdd: boolean;
   onClose: () => void;
@@ -329,6 +336,11 @@ export default function ProductLightbox({
             </div>
           )}
 
+          {/* Storefront watermark — viewport-anchored (NOT zoomed with the
+              image) so it covers the visible frame in every zoom/pinch
+              state; zero pointer interception. */}
+          {count > 0 && <WatermarkOverlay spec={wmSpec} />}
+
           {showNav && (
             <>
               <button
@@ -402,7 +414,7 @@ export default function ProductLightbox({
                 key={i}
                 type="button"
                 onClick={() => onNavigate(i)}
-                className={`shrink-0 w-12 h-12 rounded-md border-2 overflow-hidden bg-white transition ${
+                className={`relative shrink-0 w-12 h-12 rounded-md border-2 overflow-hidden bg-white transition ${
                   i === idx ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
                 }`}
                 data-testid={`oo-lightbox-thumb-${i}`}
@@ -410,6 +422,7 @@ export default function ProductLightbox({
                 aria-current={i === idx}
               >
                 <img src={ph} alt={`${product.name} ${i + 1}`} className="w-full h-full object-cover" />
+                <WatermarkOverlay spec={wmSpec} compact />
               </button>
             ))}
             <span className="ml-auto text-[10px] font-bold text-slate-400 whitespace-nowrap" data-testid="oo-lightbox-count">

@@ -147,6 +147,14 @@ export async function GET() {
         businessName: b.name,
         preOrderEnabled: b.preOrderEnabled === true,
         businessCode: b.code,
+        // Storefront watermark preferences — the store UI composites a faint
+        // logo/name overlay over product photos at display time (originals
+        // never modified). Logo ships ONLY when watermarking is enabled so
+        // disabled units keep the menu payload lean (a logo can be a large
+        // data-URL).
+        watermarkEnabled: b.watermarkEnabled === true,
+        watermarkMode: b.watermarkMode || "AUTO",
+        ...(b.watermarkEnabled === true ? { logo: b.logo || null } : {}),
         // D1 — centralized shared marketplace with seller attribution:
         // each listing is attributed to the Owner/Organization that runs the
         // branch (products/orders route to that Owner's org internally).

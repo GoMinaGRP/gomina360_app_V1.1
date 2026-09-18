@@ -34,6 +34,7 @@ import {
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import ProductLightbox from "@/components/ProductLightbox";
+import WatermarkOverlay from "@/components/WatermarkOverlay";
 import MiniLeafletMap from "@/components/MiniLeafletMap";
 import { businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
@@ -583,9 +584,27 @@ function OrderInner() {
     .some((k) => typeof support[k] === "string" && support[k].trim() !== "");
   const whatsappDigits = support?.whatsapp ? String(support.whatsapp).replace(/\D/g, "") : "";
 
+  // Resolve which menu business row a product belongs to — menu product
+  // objects carry no businessId field, so match by catalogue membership.
+  const bizOfProduct = (p: any) =>
+    (menu || []).find((b: any) => (b?.products || []).some((x: any) => x && x.id === p.id)) || null;
+
+  // Watermark spec for a menu business row — the faint overlay composites at
+  // display time; the stored product photo bytes are never modified.
+  const wmSpecOf = (b: any) =>
+    b
+      ? {
+          enabled: b.watermarkEnabled === true,
+          mode: b.watermarkMode || "AUTO",
+          logo: b.logo || null,
+          name: b.businessName || b.name || "GoMina 360",
+        }
+      : null;
+
   // One product card — Amazon-style: image, name, category, price,
   // availability and an always-one-tap Add / stepper.
   const renderProduct = (p: any, fromBiz?: any) => {
+    const wmBiz = fromBiz || bizOfProduct(p);
     const q = inCart(p.id);
     const photos = productPhotos(p);
     return (
@@ -604,6 +623,11 @@ function OrderInner() {
               data-testid={`oo-photo-${p.id}`}
             >
               <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              {/* Faint storefront watermark (Owner-toggleable) — overlay only,
+                  never baked into the stored image; keeps zoom-in affordance. */}
+              <span className="absolute inset-0 rounded-lg overflow-hidden">
+                <WatermarkOverlay spec={wmSpecOf(wmBiz)} />
+              </span>
               <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
                 <ZoomIn className="w-3 h-3" />
               </span>
@@ -619,13 +643,14 @@ function OrderInner() {
                     key={i}
                     type="button"
                     onClick={() => setLightbox({ p, fromBiz, idx: i })}
-                    className={`shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
+                    className={`relative shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
                       i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
                     }`}
                     data-testid={`oo-thumb-${p.id}-${i}`}
                     aria-label={`View photo ${i + 1} of ${photos.length}`}
                   >
                     <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
                   </button>
                 ))}
               </div>
@@ -1663,6 +1688,7 @@ function OrderInner() {
             photos={photos}
             idx={idx}
             product={lightbox.p}
+            wmSpec={wmSpecOf(lightbox.fromBiz || bizOfProduct(lightbox.p))}
             fromBiz={lightbox.fromBiz}
             canAdd={lightbox.p.available > 0}
             fmtMoney={fmtMoney}
