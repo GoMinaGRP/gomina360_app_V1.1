@@ -6,6 +6,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { MiniMapProps } from "./MiniLeafletMap";
 import { tileOfflineMessage, TILE_ERROR_THRESHOLD, useTileErrors } from "./tileHealth";
+import { STANDARD_LAYERS, useLayerFailover } from "@/lib/mapLayers";
 
 /** Recentre + re-measure whenever the coordinates change. */
 function Recenter({ lat, lng, zoom }: { lat: number; lng: number; zoom: number }) {
@@ -29,7 +30,16 @@ export default function MiniLeafletMapInner({
   prefix,
   "data-testid": testId,
 }: MiniMapProps) {
-  const { failed, bind } = useTileErrors();
+  const { failed, bind, reset } = useTileErrors();
+  // Standard road-map with automatic provider failover — same chain and
+  // diagnostics lane as the main pin maps (`minimap:<prefix-or-testid>`).
+  const std = useLayerFailover(`minimap:${testId || `${prefix}-minimap`}`, STANDARD_LAYERS);
+  // A fresh provider starts with a clean health slate.
+  useEffect(() => { reset(); }, [std.layer.key, reset]);
+  const stdHandlers = {
+    tileerror: () => { bind.tileerror(); std.handlers.tileerror(); },
+    tileload: () => { bind.tileload(); std.handlers.tileload(); },
+  } as const;
   const icon = useMemo(
     () =>
       L.divIcon({
@@ -62,10 +72,12 @@ export default function MiniLeafletMapInner({
         style={{ width: "100%", height: "100%", background: "#f1f5f9" }}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
-          eventHandlers={bind}
+          key={std.layer.key} // remount per provider on failover
+          attribution={std.layer.attribution}
+          url={std.layer.url}
+          maxZoom={std.layer.maxZoom}
+          subdomains={std.layer.subdomains ?? "abc"}
+          eventHandlers={stdHandlers}
         />
         <Marker position={[lat, lng]} icon={icon} interactive={false} />
         <Recenter lat={lat} lng={lng} zoom={zoom} />

@@ -30,7 +30,15 @@ export function useTileErrors() {
     }, []),
     tileload: useCallback(() => {
       loaded.current += 1;
-    }, []),
+      // Successful tiles after errors mean the map recovered (e.g. a provider
+      // failover) — clear the accumulated failure count so a stale burst can
+      // never leave the "offline" notice stuck on a working map.
+      if (loaded.current > 3 && failed > 0) setFailed(0);
+    }, [failed]),
   } as const;
-  return { failed, bind };
+  const reset = useCallback(() => {
+    setFailed(0);
+    loaded.current = 0;
+  }, []);
+  return { failed, bind, reset };
 }
