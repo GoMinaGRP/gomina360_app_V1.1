@@ -98,6 +98,28 @@ export async function POST(request: NextRequest) {
     // Optional at the API level — a phone-fallback address alone still works —
     // but the storefront strongly guides every delivery customer to pin.
     let pin: ReturnType<typeof normalizeDeliveryPin> = null;
+    // Google-Places-style reference of the address the customer picked from
+    // the autocomplete (formatted label, place_id, its own lat/lng) — kept
+    // separately from the pin so a manual pin nudge never loses which
+    // *address* was selected. Optional; purely additive to the order record.
+    let deliveryPlace: { placeId: string; label: string; lat: number; lng: number } | null = null;
+    if (fulfillmentType === "DELIVERY" && body.deliveryPlace && typeof body.deliveryPlace === "object") {
+      const dp = body.deliveryPlace;
+      const dpLat = Number(dp.lat), dpLng = Number(dp.lng);
+      if (
+        (dp.placeId != null && String(dp.placeId).trim() !== "") &&
+        typeof dp.label === "string" && dp.label.trim() !== "" &&
+        Number.isFinite(dpLat) && dpLat >= -90 && dpLat <= 90 &&
+        Number.isFinite(dpLng) && dpLng >= -180 && dpLng <= 180
+      ) {
+        deliveryPlace = {
+          placeId: String(dp.placeId).slice(0, 120),
+          label: dp.label.trim().slice(0, 500),
+          lat: dpLat,
+          lng: dpLng,
+        };
+      }
+    }
     if (fulfillmentType === "DELIVERY") {
       try {
         pin = normalizeDeliveryPin(body);
@@ -321,6 +343,14 @@ export async function POST(request: NextRequest) {
         fulfillmentType,
         destinationAddress: fulfillmentType === "DELIVERY" ? destinationAddress : null,
         ...(pin || {}), // deliveryLat/Lng/accuracyM + canonical mapLink + pinnedAt (DELIVERY only)
+        ...(deliveryPlace
+          ? {
+              deliveryPlaceId: deliveryPlace.placeId,
+              deliveryPlaceLabel: deliveryPlace.label,
+              deliveryPlaceLat: deliveryPlace.lat,
+              deliveryPlaceLng: deliveryPlace.lng,
+            }
+          : {}), // the autocomplete pick, preserved across manual pin nudges
         ...(pickupSnap || {}), // chosen pickup point snapshot (PICKUP only)
         status: "RECEIVED",
         statusHistory: [
@@ -384,6 +414,9 @@ export async function POST(request: NextRequest) {
         destinationAddress: fulfillmentType === "DELIVERY" ? destinationAddress : null,
         deliveryLocation: pin
           ? { lat: pin.deliveryLat, lng: pin.deliveryLng, accuracyM: pin.deliveryAccuracyM, mapLink: googleMapsLink(pin.deliveryLat, pin.deliveryLng) }
+          : null,
+        deliveryPlace: deliveryPlace
+          ? { ...deliveryPlace, mapLink: googleMapsLink(deliveryPlace.lat, deliveryPlace.lng) }
           : null,
         pickupLocation:
           fulfillmentType === "PICKUP"

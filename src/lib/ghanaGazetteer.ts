@@ -15,6 +15,21 @@ export interface GazetteerEntry {
   lat: number;
   lng: number;
   kind: "area" | "town" | "landmark" | "market";
+  /** Granularity class shared with the live upstreams (Nominatim/Photon):
+   *  HOUSE (building/address), STREET (road/way), POI (business/
+   *  establishment/mall/hospital), LANDMARK, NEIGHBOURHOOD, CITY, AREA. */
+  type?: "HOUSE" | "STREET" | "POI" | "LANDMARK" | "NEIGHBOURHOOD" | "CITY" | "AREA";
+}
+
+/** Legacy entries only carry `kind`; map it to the granularity class. */
+export function gazetteerType(e: GazetteerEntry): NonNullable<GazetteerEntry["type"]> {
+  if (e.type) return e.type;
+  switch (e.kind) {
+    case "town": return "CITY";
+    case "market": return "POI";
+    case "landmark": return "LANDMARK";
+    default: return "NEIGHBOURHOOD";
+  }
 }
 
 export const GHANA_GAZETTEER: GazetteerEntry[] = [
@@ -120,7 +135,100 @@ export const GHANA_GAZETTEER: GazetteerEntry[] = [
   { label: "Somanya, Eastern Region", lat: 6.0890, lng: -0.0230, kind: "town" },
   { label: "Keta, Volta Region", lat: 5.8958, lng: 0.9879, kind: "town" },
   { label: "Dzodze, Volta Region", lat: 6.2420, lng: 1.0340, kind: "town" },
-  ];
+  // ── Streets (major delivery roads) ─────────────────────────────────────
+  { label: "Liberation Road, Airport, Accra", lat: 5.5908, lng: -0.1715, kind: "area", type: "STREET" },
+  { label: "Ring Road Central, Accra", lat: 5.5602, lng: -0.1979, kind: "area", type: "STREET" },
+  { label: "Independence Avenue, Ridge, Accra", lat: 5.5639, lng: -0.2050, kind: "area", type: "STREET" },
+  { label: "Aviation Road, Airport, Accra", lat: 5.5988, lng: -0.1763, kind: "area", type: "STREET" },
+  { label: "Dzordzor Street, Osu, Accra", lat: 5.5556, lng: -0.1772, kind: "area", type: "STREET" },
+  { label: "28th February Road, Central Accra", lat: 5.5530, lng: -0.2031, kind: "area", type: "STREET" },
+  { label: "Barnes Road, Tudu, Accra", lat: 5.5490, lng: -0.2100, kind: "area", type: "STREET" },
+  { label: "Graphic Road, Korle Gonno, Accra", lat: 5.5368, lng: -0.2198, kind: "area", type: "STREET" },
+  { label: "Achimota Road (N1), Accra", lat: 5.6110, lng: -0.2230, kind: "area", type: "STREET" },
+  { label: "George Walker Bush Highway (N6), Accra", lat: 5.6175, lng: -0.2830, kind: "area", type: "STREET" },
+  { label: "Ridge Road, Ridge, Accra", lat: 5.5675, lng: -0.1964, kind: "area", type: "STREET" },
+  { label: "Castle Road, Christiansborg, Accra", lat: 5.5448, lng: -0.1825, kind: "area", type: "STREET" },
+  { label: "Temple Road, Kaneshie, Accra", lat: 5.5710, lng: -0.2360, kind: "area", type: "STREET" },
+  { label: "Farrar Avenue, Adabraka, Accra", lat: 5.5615, lng: -0.2155, kind: "area", type: "STREET" },
+  { label: "Nkrumah Avenue, Adum, Kumasi", lat: 6.6925, lng: -1.6245, kind: "area", type: "STREET" },
+  { label: "Harbour Road, Takoradi Port", lat: 4.8918, lng: -1.7435, kind: "area", type: "STREET" },
+  // ── Businesses / establishments (POI) ────────────────────────────────
+  { label: "Accra Mall, Tetteh Quarshie, Accra", lat: 5.6117, lng: -0.1716, kind: "landmark", type: "POI" },
+  { label: "Achimota Retail Centre, Achimota, Accra", lat: 5.6172, lng: -0.2335, kind: "market", type: "POI" },
+  { label: "West Hills Mall, Dukonah, Weija", lat: 5.5306, lng: -0.3644, kind: "market", type: "POI" },
+  { label: "Junction Mall, Nungua, Accra", lat: 5.6011, lng: -0.0728, kind: "market", type: "POI" },
+  { label: "Marina Mall, Tema South", lat: 5.6350, lng: 0.0048, kind: "market", type: "POI" },
+  { label: "Kumasi City Mall, Asokwa, Kumasi", lat: 6.6636, lng: -1.6002, kind: "market", type: "POI" },
+  { label: "Accra Brewery Ltd, Castle Road, Accra", lat: 5.5452, lng: -0.1852, kind: "area", type: "POI" },
+  { label: "Voltic House, Airport, Accra", lat: 5.5945, lng: -0.1768, kind: "area", type: "POI" },
+  { label: "Zenith Bank Head Office, Accra", lat: 5.5959, lng: -0.1710, kind: "area", type: "POI" },
+  { label: "Papaye Fast Food, Osu, Accra", lat: 5.5625, lng: -0.1825, kind: "area", type: "POI" },
+  // ── Hospitals / clinics (POI) ────────────────────────────────────────
+  { label: "Korle Bu Teaching Hospital, Accra", lat: 5.5382, lng: -0.2288, kind: "landmark", type: "POI" },
+  { label: "37 Military Hospital, Accra", lat: 5.5902, lng: -0.1822, kind: "landmark", type: "POI" },
+  { label: "Greater Accra Regional (Ridge) Hospital", lat: 5.5730, lng: -0.1938, kind: "landmark", type: "POI" },
+  { label: "Komfo Anokye Teaching Hospital, Kumasi", lat: 6.6950, lng: -1.6110, kind: "landmark", type: "POI" },
+  { label: "Tamale Teaching Hospital, Tamale", lat: 9.4122, lng: -0.8432, kind: "landmark", type: "POI" },
+  { label: "Cape Coast Teaching Hospital", lat: 5.1170, lng: -1.2490, kind: "landmark", type: "POI" },
+  { label: "Koforidua Regional Hospital", lat: 6.0932, lng: -0.2555, kind: "landmark", type: "POI" },
+  { label: "Ho Teaching Hospital, Ho", lat: 6.6120, lng: 0.4712, kind: "landmark", type: "POI" },
+  // ── Universities / schools (POI) ─────────────────────────────────────
+  { label: "University of Ghana (Legon), Main Gate, Accra", lat: 5.6508, lng: -0.1870, kind: "landmark", type: "POI" },
+  { label: "Kwame Nkrumah University of Science and Technology (KNUST), Kumasi", lat: 6.6706, lng: -1.5722, kind: "landmark", type: "POI" },
+  { label: "University of Cape Coast, Main Gate", lat: 5.1159, lng: -1.2925, kind: "landmark", type: "POI" },
+  { label: "University for Development Studies, Tamale Campus", lat: 9.4265, lng: -0.8510, kind: "landmark", type: "POI" },
+  { label: "Accra Technical University, Tudu, Accra", lat: 5.5490, lng: -0.2098, kind: "landmark", type: "POI" },
+  { label: "Achimota School, Accra", lat: 5.6128, lng: -0.2344, kind: "landmark", type: "POI" },
+  // ── Landmarks ─────────────────────────────────────────────────────────
+  { label: "Black Star Gate (Independence Arch), Accra", lat: 5.5488, lng: -0.1824, kind: "landmark", type: "LANDMARK" },
+  { label: "Independence Square, Accra", lat: 5.5494, lng: -0.1827, kind: "landmark", type: "LANDMARK" },
+  { label: "Kwame Nkrumah Memorial Park, Accra", lat: 5.5500, lng: -0.1990, kind: "landmark", type: "LANDMARK" },
+  { label: "Christiansborg Castle (Osu Castle), Accra", lat: 5.5466, lng: -0.1825, kind: "landmark", type: "LANDMARK" },
+  { label: "Accra International Conference Centre", lat: 5.5485, lng: -0.2009, kind: "landmark", type: "LANDMARK" },
+  { label: "National Theatre of Ghana, Accra", lat: 5.5518, lng: -0.1985, kind: "landmark", type: "LANDMARK" },
+  { label: "Cape Coast Castle, Cape Coast", lat: 5.1061, lng: -1.2450, kind: "landmark", type: "LANDMARK" },
+  { label: "Elmina Castle (St. George's Castle), Elmina", lat: 5.0845, lng: -1.3472, kind: "landmark", type: "LANDMARK" },
+  { label: "Aburi Botanical Gardens, Aburi", lat: 5.8440, lng: -0.1802, kind: "landmark", type: "LANDMARK" },
+  { label: "Kintampo Falls, Bono East", lat: 8.0858, lng: -1.6964, kind: "landmark", type: "LANDMARK" },
+  { label: "Mole National Park Main Entrance, Damongo", lat: 9.2470, lng: -1.8450, kind: "landmark", type: "LANDMARK" },
+  { label: "Lake Bosomtwe, Ashanti Region", lat: 6.5043, lng: -1.3973, kind: "landmark", type: "LANDMARK" },
+  { label: "Kakum National Park, Central Region", lat: 5.3522, lng: -1.3870, kind: "landmark", type: "LANDMARK" },
+  { label: "Fort Prinzenstein, Keta", lat: 5.8950, lng: 0.9860, kind: "landmark", type: "LANDMARK" },
+  { label: "Larabanga Mosque, Savannah Region", lat: 9.2220, lng: -1.8800, kind: "landmark", type: "LANDMARK" },
+  // ── Neighborhoods / suburbs ───────────────────────────────────────────
+  { label: "Osu Christianborg, Accra", lat: 5.5620, lng: -0.1850, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Osu Odumase, Accra", lat: 5.5580, lng: -0.1880, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Ringway Estates, Accra", lat: 5.5642, lng: -0.1929, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Abelenkpe, Accra", lat: 5.6040, lng: -0.2025, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Taifa, Accra", lat: 5.6325, lng: -0.2610, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Asylum Down, Accra", lat: 5.5703, lng: -0.2049, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Old Tafo, Ashanti Region", lat: 6.7040, lng: -1.6185, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Santasi, Kumasi", lat: 6.7033, lng: -1.6444, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Atonsu, Kumasi", lat: 6.6570, lng: -1.5907, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "New Adenta, Accra", lat: 5.7120, lng: -0.1580, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Spintex Community 16, Accra", lat: 5.6020, lng: -0.0720, kind: "area", type: "NEIGHBOURHOOD" },
+  { label: "Comet Estates, Legon Hills", lat: 5.7200, lng: -0.1820, kind: "area", type: "NEIGHBOURHOOD" },
+  // ── World cities (graceful degradation when upstreams unreachable) ────
+  { label: "Lagos Island, Lagos, Nigeria", lat: 6.4541, lng: 3.3947, kind: "town", type: "CITY" },
+  { label: "Abuja, Nigeria", lat: 9.0579, lng: 7.4951, kind: "town", type: "CITY" },
+  { label: "Abidjan, Côte d'Ivoire", lat: 5.3600, lng: -4.0083, kind: "town", type: "CITY" },
+  { label: "Dakar, Senegal", lat: 14.7167, lng: -17.4677, kind: "town", type: "CITY" },
+  { label: "London, United Kingdom", lat: 51.5072, lng: -0.1276, kind: "town", type: "CITY" },
+  { label: "New York City, United States", lat: 40.7128, lng: -74.0060, kind: "town", type: "CITY" },
+  { label: "Dubai, United Arab Emirates", lat: 25.2048, lng: 55.2708, kind: "town", type: "CITY" },
+  { label: "Toronto, Canada", lat: 43.6532, lng: -79.3832, kind: "town", type: "CITY" },
+  // ── World landmarks (best-effort degraded-mode coverage) ────────────────
+  { label: "Eiffel Tower, Paris, France", lat: 48.8584, lng: 2.2945, kind: "landmark", type: "LANDMARK" },
+  { label: "Statue of Liberty, New York City, United States", lat: 40.6892, lng: -74.0445, kind: "landmark", type: "LANDMARK" },
+  { label: "Big Ben, London, United Kingdom", lat: 51.5007, lng: -0.1246, kind: "landmark", type: "LANDMARK" },
+  { label: "Burj Khalifa, Dubai, United Arab Emirates", lat: 25.1972, lng: 55.2744, kind: "landmark", type: "LANDMARK" },
+  { label: "Sydney Opera House, Sydney, Australia", lat: -33.8568, lng: 151.2153, kind: "landmark", type: "LANDMARK" },
+  { label: "CN Tower, Toronto, Canada", lat: 43.6426, lng: -79.3871, kind: "landmark", type: "LANDMARK" },
+  { label: "Nairobi, Kenya", lat: -1.2921, lng: 36.8219, kind: "town", type: "CITY" },
+  { label: "Johannesburg, South Africa", lat: -26.2041, lng: 28.0473, kind: "town", type: "CITY" },
+  { label: "Kigali, Rwanda", lat: -1.9403, lng: 29.8739, kind: "town", type: "CITY" },
+  { label: "Paris, France", lat: 48.8566, lng: 2.3522, kind: "town", type: "CITY" },
+];
 
 /** Rank and return up to `limit` gazetteer matches for a free-text query. */
 export function gazetteerSearch(q: string, limit = 8): GazetteerEntry[] {

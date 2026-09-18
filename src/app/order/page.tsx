@@ -380,6 +380,16 @@ function OrderInner() {
   // auto-filled it (preserves manual edits).
   const lastReverseRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
   const autoFilledRef = useRef(false);
+  // The full Google-Places-style reference of the customer's pick — captured
+  // at selection time (formatted address, place_id, exact lat/lng) and kept
+  // even if the pin is then nudged manually, so the order records BOTH the
+  // chosen place and the final adjusted doorway pin.
+  const [deliveryPlace, setDeliveryPlace] = useState<{
+    placeId: string | number;
+    label: string;
+    lat: number;
+    lng: number;
+  } | null>(null);
   // Sticky "the customer has CHOSEN this address from the Places list" flag —
   // keeps their selection authoritative so the reverse-geocode of the same
   // pin can never clobber it (previously: pick → pin dropped → reverse-
@@ -553,6 +563,16 @@ function OrderInner() {
                 deliveryLat: deliveryPin.lat,
                 deliveryLng: deliveryPin.lng,
                 deliveryAccuracyM: deliveryPin.accuracyM ?? undefined,
+                ...(deliveryPlace
+                  ? {
+                      deliveryPlace: {
+                        placeId: deliveryPlace.placeId,
+                        label: deliveryPlace.label,
+                        lat: deliveryPlace.lat,
+                        lng: deliveryPlace.lng,
+                      },
+                    }
+                  : {}),
               }
             : {}),
           paymentChoice: payChoice,
@@ -569,6 +589,8 @@ function OrderInner() {
       if (data?.success) {
         setPlaced(data.order);
         setCart([]);
+        // Keep the captured place — the confirmation screen may show it;
+        // it resets when the customer starts a fresh DELIVERY form.
       } else {
         setOrderError(data?.error || "Could not place your order. Please try again.");
       }
@@ -1210,19 +1232,26 @@ function OrderInner() {
                           pickedPlacesRef.current = false;
                         }}
                         onPick={(s: AddressSuggestion) => {
-                          // Drop the pin at the chosen address (flew the
-                          // map there too) and remember this was an
-                          // auto-fill so reverse-geocode won't fight the
-                          // user later.
-                          const center = s.bbox
-                            ? { lat: (s.bbox[0] + s.bbox[2]) / 2, lng: (s.bbox[1] + s.bbox[3]) / 2 }
-                            : { lat: s.lat, lng: s.lng };
-                          setDeliveryPin({ lat: center.lat, lng: center.lng, accuracyM: null });
+                          // Drop the pin at the EXACT point of the chosen
+                          // place (never the bbox centre — a house address or
+                          // business has a single canonical coordinate). The
+                          // map flies there; the full place reference
+                          // (formatted address + place_id + lat/lng) is
+                          // captured for the order record and survives later
+                          // manual pin adjustments.
+                          setDeliveryPin({ lat: s.lat, lng: s.lng, accuracyM: null });
+                          setDeliveryPlace({
+                            placeId: s.place_id,
+                            label: s.label,
+                            lat: s.lat,
+                            lng: s.lng,
+                          });
                           autoFilledRef.current = true;
                           pickedPlacesRef.current = true;
                         }}
                         onClear={() => {
                           setDeliveryPin(null);
+                          setDeliveryPlace(null);
                           autoFilledRef.current = false;
                           pickedPlacesRef.current = false;
                         }}
