@@ -2299,7 +2299,7 @@ export default function SharedEnterpriseModule({
                         <img
                           src={inv.photo}
                           alt={inv.name}
-                          title={Array.isArray(inv.photos) && inv.photos.length > 1 ? `${inv.photos.length} photos` : inv.name}
+                          title={(inv.photoCount ?? (Array.isArray(inv.photos) ? inv.photos.length : 0)) > 1 ? `${inv.photoCount ?? inv.photos.length} photos` : inv.name}
                           data-testid={`inv-photo-${inv.id}`}
                           className="w-10 h-10 object-cover rounded-lg border border-slate-600 mx-auto"
                         />

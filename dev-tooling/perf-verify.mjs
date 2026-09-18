@@ -103,8 +103,18 @@ async function main() {
         'suppliers','integrations','organization_members','user_sessions','audit_trail')
          and indexdef like '%(business_id)%' or indexdef like '%(owner_id)%' or indexdef like '%(user_id)%' or indexdef like '%(organization_id)%'`,
     );
-    await c.end();
     check("scoping indexes present on hot tables", q.rows.length >= 10, `${q.rows.length} found`);
+    // Perf-audit hot-path indexes (dev-tooling/migrate-perf-indexes.mjs):
+    // the token-hash index backs EVERY authenticated request's session join;
+    // the others back per-branch boards, menu joins and storefront gates.
+    const want = await c.query(
+      `select indexname from pg_indexes where schemaname='public' and indexname in
+       ('user_sessions_token_hash_idx','customer_trackings_business_id_idx',
+        'fulfillment_options_inventory_id_idx','service_areas_business_id_active_idx',
+        'pickup_locations_business_id_active_idx','inventory_items_business_id_idx')`,
+    );
+    await c.end();
+    check("perf hot-path indexes present", want.rows.length === 6, `${want.rows.length}/6: ${want.rows.map((r) => r.indexname).join(",")}`);
   } catch (e) {
     check("scoping indexes present on hot tables", false, `${e.message}`);
   }
@@ -117,6 +127,35 @@ async function main() {
   check("init stays auth-gated", initAnon.status === 401);
   const menuJson = m1.body.businesses || [];
   check("marketplace excludes INACTIVE org units", !menuJson.some((b) => ["MAINTENANCE", "INACTIVE"].includes((b.status || "").toUpperCase())));
+
+  // ── 6. HTTP-level perf contracts (perf audit) ───────────────────────
+  // The public catalog must be browser-revalidatable: a Cache-Control that
+  // allows short freshness, an ETag, and a 304 (0-byte) response when the
+  // conditional request matches the cached snapshot.
+  const mHdr = await fetch(`${BASE}/api/menu`);
+  await mHdr.arrayBuffer();
+  const cc = mHdr.headers.get("cache-control") || "";
+  const etag = mHdr.headers.get("etag");
+  check("menu sends revalidatable Cache-Control", /max-age=[1-9]/.test(cc) && !/no-store/.test(cc), cc);
+  check("menu sends an ETag", typeof etag === "string" && etag.length > 4, String(etag));
+  if (etag) {
+    const c304 = await fetch(`${BASE}/api/menu`, { headers: { "If-None-Match": etag } });
+    const body304 = await c304.arrayBuffer();
+    check("menu conditional request yields 304/0 bytes", c304.status === 304 && body304.byteLength === 0, `${c304.status}/${body304.byteLength}b`);
+  } else {
+    check("menu conditional request yields 304/0 bytes", false, "no etag");
+  }
+  // Dashboard bootstrap must never ship the photos[] byte arrays (the
+  // heaviest column family); photoCount preserves the UI indicator.
+  const k3 = await login("kwame.owner@gomina360.com", "Owner@GoMina26");
+  const initSlim = await fetch(`${BASE}/api/init`, { headers: H(k3.token) });
+  const initSlimJson = await initSlim.json();
+  const anyRow = (initSlimJson.inventory || []).find((r) => r.photoCount > 0) || initSlimJson.inventory?.[0] || {};
+  check("init inventory rows carry no photos[] byte arrays", (initSlimJson.inventory || []).every((r) => r.photos === undefined));
+  check("init inventory rows expose photoCount", typeof anyRow.photoCount === "number");
+  // Server-side snapshot cache: an immediate repeat must be a cache hit.
+  const iC1 = await fetch(`${BASE}/api/init`, { headers: H(k3.token) });
+  check("init snapshot cache: repeat call within TTL is a hit", iC1.headers.get("x-init-cache") === "hit", iC1.headers.get("x-init-cache"));
 
   // ── Summary ──────────────────────────────────────────────────────────
   console.log("\n── timings ──");

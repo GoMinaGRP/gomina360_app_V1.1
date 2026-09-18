@@ -111,6 +111,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const actor = await requireSuperAdmin(request);
     if (!actor) return FORBIDDEN("Only the platform Super Admin can create organizations.");
@@ -224,6 +225,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const actor = await requireSuperAdmin(request);
     if (!actor) return FORBIDDEN("Only the platform Super Admin can manage organizations.");

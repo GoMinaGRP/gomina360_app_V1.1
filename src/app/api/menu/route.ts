@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { db } from "@/db";
 import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
 import { asc, eq, gt, inArray, and } from "drizzle-orm";
@@ -19,15 +20,39 @@ import { ttlGet, ttlSet } from "@/lib/ttlCache";
  */
 const MENU_CACHE_KEY = "menu:v1";
 const MENU_TTL_MS = 10_000;
+/** Browser/CDN freshness — the server TTL cache (10 s, invalidated on every
+ *  inventory/business write) is the source of truth; browsers may serve the
+ *  catalog up to 5 s stale and revalidate for another 30 s. Checkout always
+ *  re-validates stock server-side, so a short CDN window can never oversell. */
+const MENU_CLIENT_CACHE = "public, max-age=5, stale-while-revalidate=30";
 
-export async function GET() {
+type MenuSnapshot = { body: string; etag: string };
+
+function snapshotOf(catalog: unknown): MenuSnapshot {
+  const body = JSON.stringify({ success: true, businesses: catalog });
+  const etag = `"menu-${createHash("sha1").update(body).digest("base64url").slice(0, 20)}"`;
+  return { body, etag };
+}
+
+function menuResponse(snap: MenuSnapshot, cacheMark: "hit" | "miss", ifNoneMatch: string | null) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Cache-Control": MENU_CLIENT_CACHE,
+    ETag: snap.etag,
+    "X-Menu-Cache": cacheMark,
+  };
+  if (ifNoneMatch && ifNoneMatch === snap.etag) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(snap.body, { status: 200, headers });
+}
+
+export async function GET(request: Request) {
   try {
-    const cached = ttlGet<any>(MENU_CACHE_KEY);
+    const ifNoneMatch = request.headers.get("if-none-match");
+    const cached = ttlGet<MenuSnapshot>(MENU_CACHE_KEY);
     if (cached !== undefined) {
-      return NextResponse.json(
-        { success: true, businesses: cached },
-        { headers: { "Cache-Control": "no-store", "X-Menu-Cache": "hit" } },
-      );
+      return menuResponse(cached, "hit", ifNoneMatch);
     }
     const [bizRows, itemRows, areaRows, pickupRows, orgRows] = await Promise.all([
       db.select().from(businesses).orderBy(asc(businesses.id)),
@@ -217,11 +242,9 @@ export async function GET() {
       });
     }
 
-    ttlSet(MENU_CACHE_KEY, result, MENU_TTL_MS);
-    return NextResponse.json(
-      { success: true, businesses: result },
-      { headers: { "Cache-Control": "no-store", "X-Menu-Cache": "miss" } },
-    );
+    const snap = snapshotOf(result);
+    ttlSet(MENU_CACHE_KEY, snap, MENU_TTL_MS);
+    return menuResponse(snap, "miss", ifNoneMatch);
   } catch (error: any) {
     console.error("GET /api/menu error:", error);
     return NextResponse.json({ success: false, error: "Could not load the menu." }, { status: 500 });

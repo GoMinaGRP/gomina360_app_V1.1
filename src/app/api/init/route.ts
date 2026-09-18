@@ -28,14 +28,45 @@ import {
 } from "@/db/schema";
 import { seedDatabase } from "@/db/seed";
 import { eq, inArray, or } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { getSessionInfo, accessibleBusinessIds, filterByAccess } from "@/lib/auth";
 import { organizations, organizationMembers } from "@/db/schema";
 import { allowedBusinessTypesOfOrg } from "@/lib/businessTypes";
 
+/** The first request in each process runs the seed-if-empty check; after a
+ *  successful pass the DB is non-empty (seed only ADDS rows) so later
+ *  requests skip the extra SELECT + advisory lock entirely. A failed check
+ *  leaves the flag false so the next request retries. */
+let seedCheckedThisProcess = false;
+
+/** 2.5 s per-viewer snapshot of the fully-scoped bootstrap payload. Session
+ *  resolution ALWAYS runs fresh before this cache is consulted, and the key
+ *  embeds user id + role + org list + accessible business ids, so viewers can
+ *  never see another tenant's rows. Any mutation route that already
+ *  invalidates the menu also invalidates "init"; everything else goes stale
+ *  for at most 2.5 s (dashboard refreshes are user-driven and infrequent). */
+const INIT_TTL_MS = 2_500;
+
+function initCacheKey(session: any, allowed: number[] | null): string {
+  const me = session.user;
+  const scope = JSON.stringify({
+    u: me.id,
+    r: me.role,
+    o: me.organizationIds || [],
+    b: allowed === null ? "ALL" : [...allowed].sort((a, b) => a - b),
+  });
+  return `init:v1:${me.id}:${createHash("sha1").update(scope).digest("base64url").slice(0, 12)}`;
+}
+
 export async function GET(request: Request) {
   try {
-    // Run seed if database is empty
-    await seedDatabase();
+    // Run seed if database is empty (once per process — the check itself is a
+    // DB round trip that used to run on EVERY dashboard load).
+    if (!seedCheckedThisProcess) {
+      await seedDatabase();
+      seedCheckedThisProcess = true;
+    }
 
     // ── Secure login gate ───────────────────────────────────────────────
     // Every byte of data returned below is scoped to the signed-in user.
@@ -48,6 +79,15 @@ export async function GET(request: Request) {
     }
     const me = session.user;
     const allowed = await accessibleBusinessIds(me); // null ⇒ Super Admin (all)
+    const cacheKey = initCacheKey(session, allowed);
+    const cachedPayload = ttlGet<string>(cacheKey);
+    if (cachedPayload !== undefined) {
+      return new Response(cachedPayload, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "hit" },
+      });
+    }
+
     const isExecutive = me.role === "OWNER" || me.role === "GENERAL_MANAGER";
     const myOrgs: number[] = me.isSuperAdmin ? [] : (me.organizationIds || (session.orgId ? [session.orgId] : []));
     // Rows whose tenant is carried in .ownerId (shared/global tables):
@@ -227,7 +267,7 @@ export async function GET(request: Request) {
     // category pickers and the server-side creation gate). Super Admin ⇒ all.
     const allowedBizTypes = await allowedBusinessTypesOfOrg(me.isSuperAdmin ? null : orgIdForSettings);
 
-    return NextResponse.json({
+    const payload = {
       success: true,
       accessibleBusinessIds: allowed,
       isSuperAdmin: !!me.isSuperAdmin,
@@ -248,7 +288,15 @@ export async function GET(request: Request) {
       suppliers: allSuppliers.filter((s: any) => inMyOrg(s.ownerId)), // per-organization supplier directory
       employees: filterByAccess(allEmployees, allowed),
       assets: filterByAccess(allAssets, allowed),
-      inventory: filterByAccess(allInventory, allowed),
+      // Slim transport: the `photos[]` arrays (N× base64 data URLs per row —
+      // the single heaviest column family in this payload) never leave the
+      // server on dashboard bootstrap. `photo` (the one thumbnail the UI
+      // actually renders) stays, and `photoCount` preserves the "N photos"
+      // indicator. Full photos still ship in the dedicated detail endpoints.
+      inventory: filterByAccess(allInventory, allowed).map((item: any) => {
+        const { photos, ...rest } = item;
+        return { ...rest, photoCount: Array.isArray(photos) ? photos.length : 0 };
+      }),
       transactions: filterByAccess(allTransactions, allowed),
       aiInsights: (allowed === null ? allAiInsights : allAiInsights.filter(
         (i: any) => (i.businessId == null ? inMyOrg(i.ownerId) : allowed.includes(Number(i.businessId)))
@@ -269,6 +317,12 @@ export async function GET(request: Request) {
         carWash: filterByAccess(carWash, allowed),
         hardware: filterByAccess(hardware, allowed),
       },
+    };
+    const body = JSON.stringify(payload);
+    ttlSet(cacheKey, body, INIT_TTL_MS);
+    return new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "miss" },
     });
   } catch (error: any) {
     console.error("Error in /api/init:", error);

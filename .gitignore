@@ -17,3 +17,5 @@ next-env.d.ts
 dev-tooling/.verify-out/
 dev-tooling/pgdata/
 
+.verify-out/
+.evidence/

@@ -182,10 +182,19 @@ async function menu() {
     // (biz-9 NAME-demo still shows its own overlays by design here)
     await page.screenshot({ path: ".verify-out/wm-02-disabled.png" });
 
-    // NAME-mode on org-2 (biz 9 — no logo): text tile only, no logo chip
+    // NAME-mode on org-2 (biz 12 "Unrelated Biz 056394" — no logo): text
+    // tile only, no logo chip. Fixture prepared by
+    // dev-tooling/fixtures-watermarks-demo.mjs (idempotent, wm NAME-mode ON).
     await patchBiz(cookie, 1, { watermarkEnabled: false }); // keep org-1 off
-    await page.goto(`${BASE}/order?biz=9`, { waitUntil: "networkidle0", timeout: 90000 });
-    await sleep(2500);
+    await page.goto(`${BASE}/order?biz=12`, { waitUntil: "networkidle0", timeout: 90000 });
+    await page.waitForSelector("[data-testid^='oo-prod-']", { timeout: 30000 }).catch(() => {});
+    await sleep(1500);
+    const menuScope = await page.evaluate(async () => {
+      const r = await fetch("/api/menu", { cache: "no-store" });
+      const j = await r.json();
+      return (j.businesses || []).map((b) => `${b.businessId}:${b.watermarkEnabled ? b.watermarkMode || "ON" : "off"}`);
+    });
+    console.log("   [diag] browser menu scope:", JSON.stringify(menuScope));
     const biz9 = await page.evaluate(() => {
       const btn = [...document.querySelectorAll("[data-testid^='oo-photo-']")][0];
       if (!btn) return null;

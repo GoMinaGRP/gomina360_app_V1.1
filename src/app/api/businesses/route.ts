@@ -44,6 +44,7 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json();
     // Session-verified gate (credentials from the secure login cookie —

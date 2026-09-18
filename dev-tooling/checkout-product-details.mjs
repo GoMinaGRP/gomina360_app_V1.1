@@ -35,9 +35,21 @@ async function run(label, viewport) {
     args: ["--no-sandbox", "--disable-dev-shm-usage"], defaultViewport: viewport,
   });
   const page = await browser.newPage();
+  const bootErrors = [];
+  page.on("pageerror", (e) => bootErrors.push(String(e.message || e).slice(0, 160)));
   try {
     await page.goto(`${BASE}/order`, { waitUntil: "networkidle0", timeout: 90000 });
-    await page.waitForSelector(t("oo-prod-1"), { timeout: 60000 });
+    try {
+      await page.waitForSelector(t("oo-prod-1"), { timeout: 60000 });
+    } catch (e) {
+      const diag = await page.evaluate(() => ({
+        prods: document.querySelectorAll("[data-testid^='oo-prod-']").length,
+        bodyStart: document.body.innerText.slice(0, 300),
+      }));
+      await page.screenshot({ path: `${OUT}/cpd-${label}-0-bootfail.png` });
+      console.log(`[diag] ${label} grid absent:`, JSON.stringify(diag), "pageerrors:", bootErrors);
+      throw e;
+    }
 
     // ── A1. Product card carries brand + details hint from inventory ──
     ok(`cpd.${label}.card-brand-chip`, await vis(page, "oo-brand-1"));

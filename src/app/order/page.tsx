@@ -45,6 +45,33 @@ function fmtMoney(amount: number | null | undefined, currency = "GHS") {
   return `${currency} ${Number(amount).toFixed(2)}`;
 }
 
+/** All images registered for a product (primary photo + extras), as the
+ *  Amazon-style gallery source. Falls back to the legacy `photo` field. */
+function productPhotos(p: any): string[] {
+  const arr: string[] = [];
+  if (typeof p.photo === "string" && p.photo.length > 0) arr.push(p.photo);
+  if (Array.isArray(p.photos)) {
+    for (const ph of p.photos) {
+      if (typeof ph === "string" && ph.length > 0 && !arr.includes(ph)) arr.push(ph);
+    }
+  }
+  return arr;
+}
+
+/** Watermark spec for a menu business row — the faint overlay composites at
+ *  display time; the stored product photo bytes are never modified. */
+function wmSpecOf(b: any) {
+  return b
+    ? {
+        enabled: b.watermarkEnabled === true,
+        mode: b.watermarkMode || "AUTO",
+        logo: b.logo || null,
+        name: b.businessName || b.name || "GoMina 360",
+      }
+    : null;
+}
+
+
 interface CartLine {
   biz: any;
   product: any;
@@ -111,6 +138,218 @@ function QtyInput({
     />
   );
 }
+
+/**
+ * One product card — Amazon-style: image, name, category, price,
+ * availability and an always-one-tap Add / stepper.
+ *
+ * Module-level + React.memo with a field-wise comparator: the order page
+ * re-renders on every keystroke of the checkout name/phone/address fields,
+ * every pin drag and every cart mutation, and previously that re-rendered
+ * the entire product grid (every photo, thumbnail and lightbox button of
+ * every card). With the memoized card, only the card(s) whose OWN quantity
+ * changed re-render; `p`/`fromBiz`/`wmBiz` keep object identity because the
+ * menu payload is parsed once per fetch, and the callbacks are identity-
+ * stable useCallback hooks.
+ */
+type ProductCardProps = {
+  p: any;
+  fromBiz?: any;
+  wmBiz: any;
+  /** Quantity of the stock line (no fulfilment option) currently in the cart. */
+  stockQty: number;
+  /** Quantities of each pre-order option line, keyed by option id string. */
+  optionQtys: Record<string, number>;
+  add: (p: any, delta: number, fromBiz?: any, option?: any) => void;
+  setQty: (p: any, qty: number, fromBiz?: any, option?: any) => void;
+  onOpenLightbox: (p: any, fromBiz: any, idx: number) => void;
+};
+
+function optionQtysEqual(a: Record<string, number>, b: Record<string, number>) {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => a[k] === b[k]);
+}
+
+function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
+  return (
+    prev.p === next.p &&
+    prev.fromBiz === next.fromBiz &&
+    prev.wmBiz === next.wmBiz &&
+    prev.stockQty === next.stockQty &&
+    prev.add === next.add &&
+    prev.setQty === next.setQty &&
+    prev.onOpenLightbox === next.onOpenLightbox &&
+    optionQtysEqual(prev.optionQtys, next.optionQtys)
+  );
+}
+
+const ProductCard = React.memo(function ProductCard({
+  p,
+  fromBiz,
+  wmBiz,
+  stockQty: q,
+  optionQtys,
+  add,
+  setQty,
+  onOpenLightbox,
+}: ProductCardProps) {
+  const photos = productPhotos(p);
+  return (
+      <div
+        key={p.id}
+        className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
+        data-testid={`oo-prod-${p.id}`}
+      >
+        {photos.length > 0 ? (
+          <div className="mb-2.5">
+            <button
+              type="button"
+              onClick={() => onOpenLightbox(p, fromBiz, 0)}
+              className="relative w-full group cursor-zoom-in bg-white"
+              title="Tap for details & photos"
+              data-testid={`oo-photo-${p.id}`}
+            >
+              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              {/* Faint storefront watermark (Owner-toggleable) — overlay only,
+                  never baked into the stored image; keeps zoom-in affordance. */}
+              <span className="absolute inset-0 rounded-lg overflow-hidden">
+                <WatermarkOverlay spec={wmSpecOf(wmBiz)} />
+              </span>
+              <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
+                <ZoomIn className="w-3 h-3" />
+              </span>
+            </button>
+            {photos.length > 1 && (
+              <div
+                className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5"
+                data-testid={`oo-thumbs-${p.id}`}
+                aria-label={`${photos.length} photos of ${p.name}`}
+              >
+                {photos.map((ph, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onOpenLightbox(p, fromBiz, i)}
+                    className={`relative shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
+                      i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
+                    }`}
+                    data-testid={`oo-thumb-${p.id}-${i}`}
+                    aria-label={`View photo ${i + 1} of ${photos.length}`}
+                  >
+                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="w-full h-32 sm:h-36 rounded-lg mb-2.5 bg-slate-50 border border-slate-100 flex items-center justify-center">
+            <PackageCheck className="w-8 h-8 text-slate-300" />
+          </div>
+        )}
+        <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
+        <div className="text-[10px] text-slate-500 mt-1">
+          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
+          <span className="ml-1">per {p.unit}</span>
+          {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
+          {p.brand && (
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 font-bold text-sky-700" data-testid={`oo-brand-${p.id}`}>{p.brand}</span>
+          )}
+          {/* Details hint — the lightbox doubles as the product-details page. */}
+          {(p.description || (Array.isArray(p.specifications) && p.specifications.length > 0) || (Array.isArray(p.variants) && p.variants.length > 0)) && (
+            <button
+              type="button"
+              onClick={() => onOpenLightbox(p, fromBiz || wmBiz, 0)}
+              className="ml-1 inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 font-bold text-emerald-700 hover:bg-emerald-100"
+              data-testid={`oo-details-${p.id}`}
+            >ⓘ details</button>
+          )}
+        </div>
+        <div className="mt-1.5 flex items-end justify-between gap-1">
+          <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
+          {p.available >= 10 ? (
+            <span className="text-[11px] font-bold text-emerald-600">In stock</span>
+          ) : p.available > 0 ? (
+            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
+          ) : (p.preorderOptions || []).length > 0 ? (
+            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
+          ) : (
+            <span className="text-[11px] font-bold text-rose-600">Out of stock</span>
+          )}
+          {p.available > 0 && (p.preorderOptions || []).length > 0 && (
+            <span className="text-[10px] font-bold text-indigo-600/80">· pre-order also available</span>
+          )}
+        </div>
+        {q === 0 ? (
+          <button
+            onClick={() => add(p, 1, fromBiz)}
+            disabled={p.available <= 0}
+            className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+            data-testid={`oo-add-${p.id}`}
+          >
+            <Plus className="w-3.5 h-3.5" /> Add to Cart
+          </button>
+        ) : (
+          <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
+            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
+            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Pre-order option cards — each one is an explicit customer fulfilment choice. */}
+        {(p.preorderOptions || []).map((opt: any) => {
+          const optQty = Number(optionQtys[String(opt.id)] || 0);
+          const depUnit = opt.depositType === "NONE" ? Number(opt.priceGhs) : opt.depositType === "PERCENT" ? (Number(opt.priceGhs) * Number(opt.depositValue || 0)) / 100 : Number(opt.depositValue || 0);
+          const cap = opt.capacityPerPeriod != null ? Number(opt.capacityPerPeriod) : 9999;
+          return (
+            <div key={opt.id} className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1.5" data-testid={`oo-preorder-opt-${p.id}-${opt.id}`}>
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="font-extrabold text-indigo-800 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> {opt.methodLabel || "Pre-order"} · {opt.leadMinDays}–{opt.leadMaxDays}d
+                </span>
+                <span className="font-black text-indigo-900">{fmtMoney(opt.priceGhs)}</span>
+              </div>
+              <p className="text-[9px] text-indigo-700/80 mt-0.5">
+                {opt.depositType === "NONE"
+                  ? "Pay full now — reserved with supplier"
+                  : `Deposit ${fmtMoney(depUnit)}/unit · balance ${opt.termsKey === "ON_ARRIVAL" ? "on arrival" : opt.termsKey === "PREPAID" ? "prepaid" : "when ready"}`}
+                {opt.requiresAddress ? " · delivery only" : ""}
+              </p>
+              {optQty === 0 ? (
+                <button
+                  onClick={() => add(p, 1, fromBiz, opt)}
+                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+                  data-testid={`oo-preadd-${p.id}-${opt.id}`}
+                >
+                  <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
+                </button>
+              ) : (
+                <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
+                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
+                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+}, productCardPropsEqual);
 
 function OrderInner() {
   const params = useSearchParams();
@@ -187,19 +426,10 @@ function OrderInner() {
   // which of the product's photos the gallery is currently showing.
   const [lightbox, setLightbox] = useState<{ p: any; fromBiz?: any; idx: number } | null>(null);
 
+  const openLightbox = useCallback((lp: any, lb?: any, li = 0) => setLightbox({ p: lp, fromBiz: lb, idx: li }), []);
+
   // All images registered for a product (primary photo + extras), as the
   // Amazon-style gallery source. Falls back to the legacy `photo` field.
-  const productPhotos = (p: any): string[] => {
-    const arr: string[] = [];
-    if (typeof p.photo === "string" && p.photo.length > 0) arr.push(p.photo);
-    if (Array.isArray(p.photos)) {
-      for (const ph of p.photos) {
-        if (typeof ph === "string" && ph.length > 0 && !arr.includes(ph)) arr.push(ph);
-      }
-    }
-    return arr;
-  };
-
   useEffect(() => {
     (async () => {
       try {
@@ -233,6 +463,17 @@ function OrderInner() {
   }, []);
 
   const biz = useMemo(() => (menu || []).find((b) => b.businessId === bizId) || null, [menu, bizId]);
+
+  // Refs mirrored to live state — the memoized ProductCard callbacks (add /
+  // setQty, created with useCallback([])) read these instead of closures.
+  const cartRef = useRef<CartLine[]>(cart);
+  const bizRef = useRef<any>(biz);
+  const bizIdRef = useRef<number | null>(bizId);
+  useEffect(() => {
+    cartRef.current = cart;
+    bizRef.current = biz;
+    bizIdRef.current = bizId;
+  }, [cart, biz, bizId]);
   // Distance (metres) between the customer's delivery pin and the shop's own
   // GPS point — used narrowly to block "pin left exactly at the shop".
   const pinAtShopM =
@@ -464,17 +705,21 @@ function OrderInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightbox, helpOpen]);
 
-  const add = (p: any, delta: number, fromBiz?: any, option?: any) => {
-    const pBiz = fromBiz || biz;
+  // Identity-stable cart mutations for the memoized ProductCards: the guard
+  // dialogs below must read LIVE state (refs), never stale useCallback
+  // closures. setCart/setBizId are already referentially stable.
+  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any) => {
+    const cartNow = cartRef.current;
+    const pBiz = fromBiz || bizRef.current;
     // Cart lines differ per fulfilment option: product × option is the launch key.
     const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
     const myKey = `${p.id}:${option?.id ?? "stock"}`;
-    const inCartKey = () => cart.some((l) => lineKey(l) === myKey);
+    const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
     // Cross-shop guard: adding a NEW line from a different business follows
     // the same confirm-then-switch rule as the branch chips (cart is
     // single-business: stock, tracking & payment are all per-branch).
-    if (delta > 0 && !inCartKey() && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
-      const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
+    if (delta > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
+      const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
       setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
@@ -482,7 +727,7 @@ function OrderInner() {
     }
     // First item in an empty cart: checkout surfaces follow that product's
     // shop (pickup points, delivery switches, service areas).
-    if (delta > 0 && !inCartKey() && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (delta > 0 && !inCartKey() && cartNow.length === 0 && pBiz && pBiz.businessId !== bizIdRef.current) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
@@ -496,23 +741,24 @@ function OrderInner() {
       if (qty === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty } : l));
     });
-  };
+  }, []);
 
   // Direct (typed) quantity entry — same clamping rules as the −/+ stepper.
-  const setQty = (p: any, qty: number, fromBiz?: any, option?: any) => {
-    const pBiz = fromBiz || biz;
+  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any) => {
+    const cartNow = cartRef.current;
+    const pBiz = fromBiz || bizRef.current;
     const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
     const myKey = `${p.id}:${option?.id ?? "stock"}`;
-    const inCartKey = () => cart.some((l) => lineKey(l) === myKey);
+    const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
     const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
-    if (qty > 0 && !inCartKey() && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
-      const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
+    if (qty > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
+      const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
       setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
-    if (qty > 0 && !inCartKey() && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (qty > 0 && !inCartKey() && cartNow.length === 0 && pBiz && pBiz.businessId !== bizIdRef.current) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
@@ -522,7 +768,7 @@ function OrderInner() {
       if (q === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty: q } : l));
     });
-  };
+  }, []);
 
   const pickBiz = (id: number) => {
     if (id === bizId) { setAllMode(false); return; }
@@ -635,174 +881,27 @@ function OrderInner() {
 
   // Watermark spec for a menu business row — the faint overlay composites at
   // display time; the stored product photo bytes are never modified.
-  const wmSpecOf = (b: any) =>
-    b
-      ? {
-          enabled: b.watermarkEnabled === true,
-          mode: b.watermarkMode || "AUTO",
-          logo: b.logo || null,
-          name: b.businessName || b.name || "GoMina 360",
-        }
-      : null;
 
   // One product card — Amazon-style: image, name, category, price,
-  // availability and an always-one-tap Add / stepper.
+  // availability and an always-one-tap Add / stepper. The card itself is a
+  // memoized module-level <ProductCard/>; this wrapper only computes the
+  // per-card bits that depend on live cart state, so typing in the form or
+  // toggling UI chrome no longer re-renders the whole catalog.
   const renderProduct = (p: any, fromBiz?: any) => {
-    const wmBiz = fromBiz || bizOfProduct(p);
-    const q = inCart(p.id);
-    const photos = productPhotos(p);
+    const qtys: Record<string, number> = {};
+    for (const opt of p.preorderOptions || []) qtys[String(opt.id)] = cartQty(`${p.id}:${opt.id}`);
     return (
-      <div
+      <ProductCard
         key={p.id}
-        className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
-        data-testid={`oo-prod-${p.id}`}
-      >
-        {photos.length > 0 ? (
-          <div className="mb-2.5">
-            <button
-              type="button"
-              onClick={() => setLightbox({ p, fromBiz, idx: 0 })}
-              className="relative w-full group cursor-zoom-in bg-white"
-              title="Tap for details & photos"
-              data-testid={`oo-photo-${p.id}`}
-            >
-              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
-              {/* Faint storefront watermark (Owner-toggleable) — overlay only,
-                  never baked into the stored image; keeps zoom-in affordance. */}
-              <span className="absolute inset-0 rounded-lg overflow-hidden">
-                <WatermarkOverlay spec={wmSpecOf(wmBiz)} />
-              </span>
-              <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
-                <ZoomIn className="w-3 h-3" />
-              </span>
-            </button>
-            {photos.length > 1 && (
-              <div
-                className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5"
-                data-testid={`oo-thumbs-${p.id}`}
-                aria-label={`${photos.length} photos of ${p.name}`}
-              >
-                {photos.map((ph, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setLightbox({ p, fromBiz, idx: i })}
-                    className={`relative shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
-                      i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
-                    }`}
-                    data-testid={`oo-thumb-${p.id}-${i}`}
-                    aria-label={`View photo ${i + 1} of ${photos.length}`}
-                  >
-                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
-                    <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="w-full h-32 sm:h-36 rounded-lg mb-2.5 bg-slate-50 border border-slate-100 flex items-center justify-center">
-            <PackageCheck className="w-8 h-8 text-slate-300" />
-          </div>
-        )}
-        <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
-        <div className="text-[10px] text-slate-500 mt-1">
-          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
-          <span className="ml-1">per {p.unit}</span>
-          {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
-          {p.brand && (
-            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 font-bold text-sky-700" data-testid={`oo-brand-${p.id}`}>{p.brand}</span>
-          )}
-          {/* Details hint — the lightbox doubles as the product-details page. */}
-          {(p.description || (Array.isArray(p.specifications) && p.specifications.length > 0) || (Array.isArray(p.variants) && p.variants.length > 0)) && (
-            <button
-              type="button"
-              onClick={() => setLightbox({ p, fromBiz: fromBiz || bizOfProduct(p), idx: 0 })}
-              className="ml-1 inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 font-bold text-emerald-700 hover:bg-emerald-100"
-              data-testid={`oo-details-${p.id}`}
-            >ⓘ details</button>
-          )}
-        </div>
-        <div className="mt-1.5 flex items-end justify-between gap-1">
-          <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
-          {p.available >= 10 ? (
-            <span className="text-[11px] font-bold text-emerald-600">In stock</span>
-          ) : p.available > 0 ? (
-            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
-          ) : (p.preorderOptions || []).length > 0 ? (
-            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
-          ) : (
-            <span className="text-[11px] font-bold text-rose-600">Out of stock</span>
-          )}
-          {p.available > 0 && (p.preorderOptions || []).length > 0 && (
-            <span className="text-[10px] font-bold text-indigo-600/80">· pre-order also available</span>
-          )}
-        </div>
-        {q === 0 ? (
-          <button
-            onClick={() => add(p, 1, fromBiz)}
-            disabled={p.available <= 0}
-            className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
-            data-testid={`oo-add-${p.id}`}
-          >
-            <Plus className="w-3.5 h-3.5" /> Add to Cart
-          </button>
-        ) : (
-          <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
-            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
-            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Pre-order option cards — each one is an explicit customer fulfilment choice. */}
-        {(p.preorderOptions || []).map((opt: any) => {
-          const optQty = cartQty(`${p.id}:${opt.id}`);
-          const depUnit = opt.depositType === "NONE" ? Number(opt.priceGhs) : opt.depositType === "PERCENT" ? (Number(opt.priceGhs) * Number(opt.depositValue || 0)) / 100 : Number(opt.depositValue || 0);
-          const cap = opt.capacityPerPeriod != null ? Number(opt.capacityPerPeriod) : 9999;
-          return (
-            <div key={opt.id} className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1.5" data-testid={`oo-preorder-opt-${p.id}-${opt.id}`}>
-              <div className="flex items-center justify-between gap-2 text-[10px]">
-                <span className="font-extrabold text-indigo-800 flex items-center gap-1">
-                  <Clock className="w-3 h-3" /> {opt.methodLabel || "Pre-order"} · {opt.leadMinDays}–{opt.leadMaxDays}d
-                </span>
-                <span className="font-black text-indigo-900">{fmtMoney(opt.priceGhs)}</span>
-              </div>
-              <p className="text-[9px] text-indigo-700/80 mt-0.5">
-                {opt.depositType === "NONE"
-                  ? "Pay full now — reserved with supplier"
-                  : `Deposit ${fmtMoney(depUnit)}/unit · balance ${opt.termsKey === "ON_ARRIVAL" ? "on arrival" : opt.termsKey === "PREPAID" ? "prepaid" : "when ready"}`}
-                {opt.requiresAddress ? " · delivery only" : ""}
-              </p>
-              {optQty === 0 ? (
-                <button
-                  onClick={() => add(p, 1, fromBiz, opt)}
-                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
-                  data-testid={`oo-preadd-${p.id}-${opt.id}`}
-                >
-                  <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
-                </button>
-              ) : (
-                <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
-                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
-                    <Minus className="w-3.5 h-3.5" />
-                  </button>
-                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
-                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+        p={p}
+        fromBiz={fromBiz}
+        wmBiz={fromBiz || bizOfProduct(p)}
+        stockQty={inCart(p.id)}
+        optionQtys={qtys}
+        add={add}
+        setQty={setQty}
+        onOpenLightbox={openLightbox}
+      />
     );
   };
 

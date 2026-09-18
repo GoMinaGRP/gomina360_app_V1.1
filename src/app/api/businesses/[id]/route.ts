@@ -250,6 +250,7 @@ export async function GET(
  */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -512,6 +513,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);

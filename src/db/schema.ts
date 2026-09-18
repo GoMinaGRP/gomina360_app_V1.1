@@ -9,6 +9,7 @@ import {
   timestamp,
   jsonb,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 
 // 1. Users & Role-Based Access Control
@@ -135,7 +136,11 @@ export const userSessions = pgTable("user_sessions", {
   endedAt: timestamp("ended_at"),
   endReason: text("end_reason"),
   revokedAt: timestamp("revoked_at"),
-});
+},
+  (t) => [
+    index("user_sessions_token_hash_idx").on(t.tokenHash),
+  ]
+);
 
 // OWNER-granted business access (in addition to the user's primary
 // assigned_business_id). Effective access = assignment ∪ these grants;
@@ -305,7 +310,11 @@ export const serviceAreas = pgTable("service_areas", {
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("service_areas_business_id_active_idx").on(t.businessId, t.active),
+  ]
+);
 
 // Pickup locations a Business (branch unit) offers online customers. A unit
 // may run several (main shop, depot, partner point…); when at least one is
@@ -329,7 +338,11 @@ export const pickupLocations = pgTable("pickup_locations", {
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("pickup_locations_business_id_active_idx").on(t.businessId, t.active),
+  ]
+);
 
 /** Group-wide company settings (single live row, id=1) — the GoMina
  *  company logo used as the ultimate fallback on every generated document,
@@ -592,6 +605,7 @@ export const inventoryItems = pgTable("inventory_items", {
   uniqueIndex("inventory_items_business_sku_unique").on(t.businessId, t.sku),
   // Globally unique QR across the whole group — NULLs (legacy rows) may repeat.
   uniqueIndex("inventory_items_qr_code_unique").on(t.qrCode),
+  index("inventory_items_business_id_idx").on(t.businessId)
 ]);
 
 // 8b. Inventory Downloads audit trail
@@ -802,7 +816,11 @@ export const customerTrackings = pgTable("customer_trackings", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("customer_trackings_business_id_idx").on(t.businessId),
+  ]
+);
 
 // ═══ PRE-ORDER SYSTEM ════════════════════════════════════════════════════
 // One order system, enriched — pre-orders live inside customer_trackings.
@@ -863,7 +881,11 @@ export const fulfillmentOptions = pgTable("fulfillment_options", {
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("fulfillment_options_inventory_id_idx").on(t.inventoryId),
+  ]
+);
 
 // 9d-3. Order payments — every money event against an order (deposit /
 // balance / full / refund) as an append-only log + linked Finance

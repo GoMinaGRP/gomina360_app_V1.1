@@ -27,6 +27,7 @@ import { buildPreorderSnapshot, optionDepositPerUnit, orderKindFor, resolvePreor
 export async function POST(request: NextRequest) {
   // Orders decrement stock — refresh the short-lived public catalog cache.
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json();
     const businessId = Number(body.businessId);

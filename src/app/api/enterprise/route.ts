@@ -128,6 +128,7 @@ function sanitizeVariantList(v: any): { name: string; note?: string }[] | null {
 
 export async function PATCH(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json();
     const { entityType, id, data, actorUserId } = body || {};
@@ -319,6 +320,7 @@ export async function PATCH(request: Request) {
  */
 export async function DELETE(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json().catch(() => ({}));
     const { entityType, id, reason, actorUserId } = body || {};
@@ -436,6 +438,7 @@ export async function DELETE(request: Request) {
 
 export async function POST(request: Request) {
   ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const body = await request.json();
     const { entityType, data } = body;
