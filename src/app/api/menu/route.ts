@@ -119,6 +119,13 @@ export async function GET() {
             inStock: invHasStock(i),
             photo: i.photo || null,
             photos: allPhotos,
+            // Product catalogue details registered at stock-in — shown on the
+            // storefront product view verbatim (no duplicate entry anywhere).
+            description: i.description || null,
+            brand: i.brand || null,
+            model: i.model || null,
+            specifications: Array.isArray(i.specifications) ? i.specifications : [],
+            variants: Array.isArray(i.variants) ? i.variants : [],
             // Seller-configured pre-order fulfilment options (price / ETA /
             // deposit shown next to the product on the storefront). Empty for
             // stock-only products — the UI then renders nothing extra.

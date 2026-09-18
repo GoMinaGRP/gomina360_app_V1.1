@@ -98,6 +98,34 @@ export async function GET(request: Request) {
  * (canManageRecords for SUPPLIERS/EMPLOYEES, canDeleteInventory for
  * INVENTORY), resolved server-side from the database.
  */
+/**
+ * Sanitize the rich product-catalogue JSONB fields (specifications, variants)
+ * before they touch the database: bounded arrays of trimmed string pairs —
+ * junk entries are dropped, never allowed to break stock registration.
+ */
+function sanitizeSpecList(v: any): { key: string; value: string }[] | null {
+  if (v == null) return null;
+  const out: { key: string; value: string }[] = [];
+  for (const row of Array.isArray(v) ? v : []) {
+    const k = String(row?.key ?? "").trim().slice(0, 60);
+    const val = String(row?.value ?? "").trim().slice(0, 200);
+    if (k && val) out.push({ key: k, value: val });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+function sanitizeVariantList(v: any): { name: string; note?: string }[] | null {
+  if (v == null) return null;
+  const out: { name: string; note?: string }[] = [];
+  for (const row of Array.isArray(v) ? v : []) {
+    const n = String(row?.name ?? "").trim().slice(0, 80);
+    const note = String(row?.note ?? "").trim().slice(0, 200);
+    if (n) out.push(note ? { name: n, note } : { name: n });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
 export async function PATCH(request: Request) {
   ttlInvalidate("menu");
   try {
@@ -228,6 +256,13 @@ export async function PATCH(request: Request) {
       }
       if (d.businessId !== undefined) updates.businessId = Number(d.businessId) || existing.businessId;
       if (d.expiryDate !== undefined) updates.expiryDate = d.expiryDate || null;
+      // Product-catalogue detail fields (Phase 15 — same helper server-side:
+      // partial edits mean "leave untouched", only `null` clears).
+      if (d.description !== undefined) updates.description = d.description ? String(d.description).trim().slice(0, 4000) : null;
+      if (d.brand !== undefined) updates.brand = d.brand ? String(d.brand).trim().slice(0, 120) : null;
+      if (d.model !== undefined) updates.model = d.model ? String(d.model).trim().slice(0, 120) : null;
+      if (d.specifications !== undefined) updates.specifications = sanitizeSpecList(d.specifications);
+      if (d.variants !== undefined) updates.variants = sanitizeVariantList(d.variants);
       // Recompute stock status from the (possibly updated) quantity/threshold.
       const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
       const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
@@ -711,6 +746,11 @@ export async function POST(request: Request) {
           expiryDate: data.expiryDate || null,
           photo: typeof data.photo === "string" && data.photo ? data.photo : photosArr[0] || null,
           photos: photosArr,
+          description: data.description ? String(data.description).trim().slice(0, 4000) : null,
+          brand: data.brand ? String(data.brand).trim().slice(0, 120) : null,
+          model: data.model ? String(data.model).trim().slice(0, 120) : null,
+          specifications: sanitizeSpecList(data.specifications),
+          variants: sanitizeVariantList(data.variants),
           qrCode: invQr || null,
           registeredByName: data.registeredByName ? String(data.registeredByName).slice(0, 120) : null,
           registeredByUserId: data.registeredByUserId ? Number(data.registeredByUserId) : null,

@@ -126,6 +126,20 @@ export default function SharedEnterpriseModule({
   const [invPrice, setInvPrice] = useState<number>(35);
   const [invMin, setInvMin] = useState<number>(10);
   const [invPhotos, setInvPhotos] = useState<string[]>([]);
+  // Starter / draft state for the product-detail fields. On INVENTORY the
+  // owner additionally captures: description, brand, model, specs (with
+  // dedicated Size + Weight rows), variants. The editor (editingRecord
+  // payloads on INVENTORY) mirrors the same "details" JSONB buckets.
+  const [invDescUI, setInvDescUI] = useState("");
+  const [invBrandUI, setInvBrandUI] = useState("");
+  const [invModelUI, setInvModelUI] = useState("");
+  const [invSizeUI, setInvSizeUI] = useState("");
+  const [invWeightUI, setInvWeightUI] = useState("");
+  const [invSpecsUI, setInvSpecsUI] = useState<{ key: string; value: string }[]>([]);
+  const [invVariantsUI, setInvVariantsUI] = useState<{ name: string; note: string }[]>([]);
+  // details JSONB the form composes at submit — owned by the INVENTORY
+  // registration path only (POST) and mirrored by the PATCH editor.
+  const [detailsKeyState] = [{ key: "Size", value: "" }, { key: "Weight", value: "" }];
   const [invPhotoErr, setInvPhotoErr] = useState("");
 
   // ─── QR registry: camera scan → open existing record / guided registration ───
@@ -156,6 +170,13 @@ export default function SharedEnterpriseModule({
     setInvPrice(35);
     setInvMin(10);
     setInvPhotos([]);
+    setInvDescUI("");
+    setInvBrandUI("");
+    setInvModelUI("");
+    setInvSizeUI("");
+    setInvWeightUI("");
+    setInvSpecsUI([]);
+    setInvVariantsUI([]);
     setInvPhotoErr("");
     setInvQr("");
     setQrError("");
@@ -360,6 +381,11 @@ export default function SharedEnterpriseModule({
               minStockThreshold: editingRecord.minStockThreshold,
               expiryDate: editingRecord.expiryDate,
               businessId: editingRecord.businessId,
+              description: editingRecord.description,
+              brand: editingRecord.brand,
+              model: editingRecord.model,
+              specifications: editingRecord.specifications,
+              variants: editingRecord.variants,
             },
           }
         : {
@@ -1015,6 +1041,15 @@ export default function SharedEnterpriseModule({
         minStockThreshold: Number(invMin) || 10,
         photo: invPhotos[0] || null,
         photos: invPhotos,
+        description: invDescUI.trim() || null,
+        brand: invBrandUI.trim() || null,
+        model: invModelUI.trim() || null,
+        specifications: [
+          ...(invSizeUI.trim() ? [{ key: "Size", value: invSizeUI.trim() }] : []),
+          ...(invWeightUI.trim() ? [{ key: "Weight", value: invWeightUI.trim() }] : []),
+          ...invSpecsUI.filter((r) => r.key.trim() && r.value.trim()),
+        ],
+        variants: invVariantsUI.filter((v) => v.name.trim()),
       };
     }
 
@@ -2762,6 +2797,157 @@ export default function SharedEnterpriseModule({
                     </div>
                   </div>
 
+                  {/* ── Product catalogue details — registered ONCE here and
+                       shown verbatim in the customer storefront product view
+                       (storefront never asks for them again). ── */}
+                  <div className="space-y-2 rounded-xl border border-slate-700/70 bg-slate-800/40 p-3" data-testid="inv-details">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-300">Product details (shown to customers)</label>
+                      <span className="text-[9px] text-slate-500">no duplicate entry — storefront auto-uses these</span>
+                    </div>
+                    <textarea
+                      value={invDescUI}
+                      onChange={(e) => setInvDescUI(e.target.value)}
+                      rows={2}
+                      placeholder="Description — what it is, quality, uses… (customers read this on the product page)"
+                      data-testid="inv-description"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm resize-y"
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Brand (optional)</label>
+                        <input
+                          type="text"
+                          value={invBrandUI}
+                          onChange={(e) => setInvBrandUI(e.target.value)}
+                          placeholder="e.g. Ghacem, LG, Akufo Farms"
+                          data-testid="inv-brand"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Model / Product line (optional)</label>
+                        <input
+                          type="text"
+                          value={invModelUI}
+                          onChange={(e) => setInvModelUI(e.target.value)}
+                          placeholder="e.g. 42.5R, OLED55"
+                          data-testid="inv-model"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Size (optional)</label>
+                        <input
+                          type="text"
+                          value={invSizeUI}
+                          onChange={(e) => setInvSizeUI(e.target.value)}
+                          placeholder="e.g. 6-inch × 9-inch, 50 kg bag"
+                          data-testid="inv-size"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Weight (optional)</label>
+                        <input
+                          type="text"
+                          value={invWeightUI}
+                          onChange={(e) => setInvWeightUI(e.target.value)}
+                          placeholder="e.g. 25 kg, 800 g per piece"
+                          data-testid="inv-weight"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-400">Specifications (optional)</label>
+                        <button
+                          type="button"
+                          onClick={() => setInvSpecsUI((rows) => [...rows, { key: "", value: "" }])}
+                          data-testid="inv-spec-add"
+                          className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200"
+                        >＋ Add spec</button>
+                      </div>
+                      {invSpecsUI.length > 0 && (
+                        <div className="space-y-1.5" data-testid="inv-specs">
+                          {invSpecsUI.map((row, i) => (
+                            <div key={i} className="grid grid-cols-[1fr,1fr,auto] gap-1.5" data-testid={`inv-spec-row-${i}`}>
+                              <input
+                                type="text"
+                                value={row.key}
+                                onChange={(e) => setInvSpecsUI((rows) => rows.map((r, j) => j === i ? { ...r, key: e.target.value } : r))}
+                                placeholder="Spec — e.g. Voltage, Material"
+                                data-testid={`inv-spec-key-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={row.value}
+                                onChange={(e) => setInvSpecsUI((rows) => rows.map((r, j) => j === i ? { ...r, value: e.target.value } : r))}
+                                placeholder="Value — e.g. 220 V, Cement"
+                                data-testid={`inv-spec-value-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setInvSpecsUI((rows) => rows.filter((_, j) => j !== i))}
+                                data-testid={`inv-spec-rm-${i}`}
+                                className="px-2 text-slate-500 hover:text-rose-400 text-sm font-bold"
+                                title="Remove spec"
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-400">Variants / Options (optional)</label>
+                        <button
+                          type="button"
+                          onClick={() => setInvVariantsUI((rows) => [...rows, { name: "", note: "" }])}
+                          data-testid="inv-variant-add"
+                          className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200"
+                        >＋ Add variant</button>
+                      </div>
+                      {invVariantsUI.length > 0 && (
+                        <div className="space-y-1.5" data-testid="inv-variants">
+                          {invVariantsUI.map((row, i) => (
+                            <div key={i} className="grid grid-cols-[1fr,1fr,auto] gap-1.5" data-testid={`inv-variant-row-${i}`}>
+                              <input
+                                type="text"
+                                value={row.name}
+                                onChange={(e) => setInvVariantsUI((rows) => rows.map((r, j) => j === i ? { ...r, name: e.target.value } : r))}
+                                placeholder="Variant — e.g. Red, 10-pack"
+                                data-testid={`inv-variant-name-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={row.note}
+                                onChange={(e) => setInvVariantsUI((rows) => rows.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+                                placeholder="Note (optional)"
+                                data-testid={`inv-variant-note-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setInvVariantsUI((rows) => rows.filter((_, j) => j !== i))}
+                                data-testid={`inv-variant-rm-${i}`}
+                                className="px-2 text-slate-500 hover:text-rose-400 text-sm font-bold"
+                                title="Remove variant"
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[9px] text-slate-500 mt-1">Variants are display-only on the storefront — pricing stays on the selling price above.</p>
+                    </div>
+                  </div>
+
                   {/* Item photos — upload or camera */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -3057,6 +3243,129 @@ export default function SharedEnterpriseModule({
                       <input type="date" value={editingRecord.expiryDate || ""}
                         onChange={(e) => setEditingRecord({ ...editingRecord, expiryDate: e.target.value || null })}
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+
+                  {/* Product catalogue details (edit) — same fields the
+                      storefront renders, no duplicate entry. Registered at
+                      stock-in; the editor composes the SAME specifications /
+                      variants JSON — updates are wholesale for cleanliness. */}
+                  <div className="space-y-2 rounded-xl border border-slate-700/70 bg-slate-800/40 p-3" data-testid="edit-details">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-300">Product details (shown to customers)</label>
+                      <span className="text-[9px] text-slate-500">no duplicate entry — storefront auto-uses these</span>
+                    </div>
+                    <textarea
+                      value={editingRecord.description || ""}
+                      onChange={(e) => setEditingRecord({ ...editingRecord, description: e.target.value })}
+                      rows={2}
+                      placeholder="Description — what it is, quality, uses…"
+                      data-testid="edit-description"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm resize-y"
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Brand</label>
+                        <input
+                          type="text"
+                          value={editingRecord.brand || ""}
+                          onChange={(e) => setEditingRecord({ ...editingRecord, brand: e.target.value })}
+                          data-testid="edit-brand"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Model / Product line</label>
+                        <input
+                          type="text"
+                          value={editingRecord.model || ""}
+                          onChange={(e) => setEditingRecord({ ...editingRecord, model: e.target.value })}
+                          data-testid="edit-model"
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-400">Specifications</label>
+                        <button
+                          type="button"
+                          onClick={() => setEditingRecord({ ...editingRecord, specifications: [...(Array.isArray(editingRecord.specifications) ? editingRecord.specifications : []), { key: "", value: "" }] })}
+                          data-testid="edit-spec-add"
+                          className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200"
+                        >＋ Add spec</button>
+                      </div>
+                      {Array.isArray(editingRecord.specifications) && editingRecord.specifications.length > 0 && (
+                        <div className="space-y-1.5" data-testid="edit-specs">
+                          {editingRecord.specifications.map((row: any, i: number) => (
+                            <div key={i} className="grid grid-cols-[1fr,1fr,auto] gap-1.5" data-testid={`edit-spec-row-${i}`}>
+                              <input
+                                type="text"
+                                value={row.key || ""}
+                                onChange={(e) => setEditingRecord({ ...editingRecord, specifications: editingRecord.specifications.map((r: any, j: number) => j === i ? { ...r, key: e.target.value } : r) })}
+                                placeholder="Spec"
+                                data-testid={`edit-spec-key-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) => setEditingRecord({ ...editingRecord, specifications: editingRecord.specifications.map((r: any, j: number) => j === i ? { ...r, value: e.target.value } : r) })}
+                                placeholder="Value"
+                                data-testid={`edit-spec-value-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setEditingRecord({ ...editingRecord, specifications: editingRecord.specifications.filter((_: any, j: number) => j !== i) })}
+                                data-testid={`edit-spec-rm-${i}`}
+                                className="px-2 text-slate-500 hover:text-rose-400 text-sm font-bold"
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-400">Variants / Options</label>
+                        <button
+                          type="button"
+                          onClick={() => setEditingRecord({ ...editingRecord, variants: [...(Array.isArray(editingRecord.variants) ? editingRecord.variants : []), { name: "", note: "" }] })}
+                          data-testid="edit-variant-add"
+                          className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200"
+                        >＋ Add variant</button>
+                      </div>
+                      {Array.isArray(editingRecord.variants) && editingRecord.variants.length > 0 && (
+                        <div className="space-y-1.5" data-testid="edit-variants">
+                          {editingRecord.variants.map((row: any, i: number) => (
+                            <div key={i} className="grid grid-cols-[1fr,1fr,auto] gap-1.5" data-testid={`edit-variant-row-${i}`}>
+                              <input
+                                type="text"
+                                value={row.name || ""}
+                                onChange={(e) => setEditingRecord({ ...editingRecord, variants: editingRecord.variants.map((r: any, j: number) => j === i ? { ...r, name: e.target.value } : r) })}
+                                placeholder="Variant"
+                                data-testid={`edit-variant-name-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={row.note || ""}
+                                onChange={(e) => setEditingRecord({ ...editingRecord, variants: editingRecord.variants.map((r: any, j: number) => j === i ? { ...r, note: e.target.value } : r) })}
+                                placeholder="Note (optional)"
+                                data-testid={`edit-variant-note-${i}`}
+                                className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-white text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setEditingRecord({ ...editingRecord, variants: editingRecord.variants.filter((_: any, j: number) => j !== i) })}
+                                data-testid={`edit-variant-rm-${i}`}
+                                className="px-2 text-slate-500 hover:text-rose-400 text-sm font-bold"
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>

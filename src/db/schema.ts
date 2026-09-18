@@ -570,6 +570,17 @@ export const inventoryItems = pgTable("inventory_items", {
   /** Primary product photo (data URL) + full set — uploaded or camera-captured. */
   photo: text("photo"),
   photos: jsonb("photos"),
+  /** Rich product details registered ONCE at stock-in and served verbatim on
+   *  the customer storefront product view (no duplicate entry anywhere):
+   *  free description, brand/model, typed specifications (key/value rows —
+   *  e.g. Size: 6-inch, Weight: 2.4 kg, Voltage: 220 V) and display-only
+   *  variant names (Colour/Pack options that exist in this unit — pricing
+   *  stays on sellingPriceGhs so variants can never fork the price logic). */
+  description: text("description"),
+  brand: text("brand"),
+  model: text("model"),
+  specifications: jsonb("specifications"),
+  variants: jsonb("variants"),
   /** QR identity tag — globally unique when set; scanned with the camera or
    *  auto-generated at registration, printed on the stock label. */
   qrCode: text("qr_code"),

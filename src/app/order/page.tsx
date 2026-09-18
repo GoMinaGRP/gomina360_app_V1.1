@@ -127,6 +127,28 @@ function OrderInner() {
   const [cat, setCat] = useState("ALL");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  // Guided checkout: the sticky bar's primary CTA (“Proceed to Checkout ▼”)
+  // smooth-scrolls here and the panel greets with a soft pulse + live
+  // summary. The only real “Place order” lives at the END of the form.
+  const checkoutRef = useRef<HTMLElement | null>(null);
+  const [checkoutFlash, setCheckoutFlash] = useState(false);
+  const checkoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const goToCheckout = () => {
+    checkoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setCheckoutFlash(true);
+    if (checkoutTimer.current) clearTimeout(checkoutTimer.current);
+    checkoutTimer.current = setTimeout(() => setCheckoutFlash(false), 2600);
+  };
+  // Auto-open the compact cart summary ONCE after the first add — the
+  // customer instantly sees what they picked without tapping ▴.
+  const autoCartOpenedRef = useRef(false);
+  useEffect(() => {
+    if (cart.length > 0 && !autoCartOpenedRef.current) {
+      autoCartOpenedRef.current = true;
+      setCartOpen(true);
+    }
+    if (cart.length === 0) autoCartOpenedRef.current = false;
+  }, [cart.length]);
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -641,7 +663,7 @@ function OrderInner() {
               type="button"
               onClick={() => setLightbox({ p, fromBiz, idx: 0 })}
               className="relative w-full group cursor-zoom-in bg-white"
-              title="Tap to enlarge"
+              title="Tap for details & photos"
               data-testid={`oo-photo-${p.id}`}
             >
               <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
@@ -687,6 +709,19 @@ function OrderInner() {
         <div className="text-[10px] text-slate-500 mt-1">
           <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
           <span className="ml-1">per {p.unit}</span>
+          {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
+          {p.brand && (
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 font-bold text-sky-700" data-testid={`oo-brand-${p.id}`}>{p.brand}</span>
+          )}
+          {/* Details hint — the lightbox doubles as the product-details page. */}
+          {(p.description || (Array.isArray(p.specifications) && p.specifications.length > 0) || (Array.isArray(p.variants) && p.variants.length > 0)) && (
+            <button
+              type="button"
+              onClick={() => setLightbox({ p, fromBiz: fromBiz || bizOfProduct(p), idx: 0 })}
+              className="ml-1 inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 font-bold text-emerald-700 hover:bg-emerald-100"
+              data-testid={`oo-details-${p.id}`}
+            >ⓘ details</button>
+          )}
         </div>
         <div className="mt-1.5 flex items-end justify-between gap-1">
           <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
@@ -1146,9 +1181,18 @@ function OrderInner() {
                 )}
 
                 {/* Checkout */}
-                <section className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-sm" data-testid="oo-checkout">
-                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <section
+            ref={(el) => { checkoutRef.current = el; }}
+            className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-shadow ${checkoutFlash ? "border-emerald-300 ring-2 ring-emerald-400/70 ring-offset-2 ring-offset-slate-50" : "border-slate-200"}`}
+            data-testid="oo-checkout"
+          >
+                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2" data-testid="oo-checkout-title">
                     <ClipboardList className="w-4 h-4 text-emerald-600" /> Checkout — your details
+                    {cart.length > 0 && (
+                      <span className="ml-auto text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 whitespace-nowrap" data-testid="oo-checkout-summary">
+                        {cartCount} item{cartCount === 1 ? "" : "s"} · {fmtMoney(cartTotal)}
+                      </span>
+                    )}
                   </h2>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="relative">
@@ -1406,6 +1450,30 @@ function OrderInner() {
                       {orderError}
                     </div>
                   )}
+
+                  {/* The ONE real submit — at the END of the form, exactly
+                      where the customer finishes. The sticky cart bar above
+                      only GUIDES here (Proceed to Checkout ▼); it never
+                      submits. Cart is re-summarised inline for confidence. */}
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-2" data-testid="oo-submit-card">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
+                      <span data-testid="oo-submit-summary">
+                        {cartCount} item{cartCount === 1 ? "" : "s"} · {fulfillment === "DELIVERY" ? "Delivery" : "Pickup"}
+                      </span>
+                      <span className="text-base font-black text-slate-900" data-testid="oo-submit-total">{fmtMoney(cartTotal)}</span>
+                    </div>
+                    <button
+                      onClick={placeOrder}
+                      disabled={placing || cart.length === 0}
+                      className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[15px] font-black shadow-lg disabled:opacity-40 transition"
+                      data-testid="oo-place"
+                    >
+                      {placing ? "Placing…" : "Place order"}
+                    </button>
+                    <p className="text-[10px] text-slate-500 text-center">
+                      You instantly get a GM- tracking code to follow your order live.
+                    </p>
+                  </div>
                 </section>
               </>
             )}
@@ -1676,7 +1744,7 @@ function OrderInner() {
                   {([
                     ["Everything on one page", <>Every product from <span className="font-bold text-emerald-700">all our businesses</span> sits on this ONE page — grouped by business, then category. Tap a store card (or a group's <span className="font-bold">Focus →</span>) to zoom into one shop, or tap <span className="font-bold text-emerald-700">Use my location</span> to sort branches by who delivers to you.</>],
                     ["Browse products by category", <>Products are grouped under their <span className="font-bold text-cyan-700">category sections</span>. Tap a department chip in the bar under the header to filter — or type in the search box to search every shop at once.</>],
-                    ["Add to cart", <>Tap <span className="font-bold">Add to Cart</span>, then use <span className="font-bold">+ / −</span> or type the exact quantity into the number box. Your cart bar sits at the bottom of the screen — tap it any time to review or change items.</>],
+                    ["Add to cart", <>Tap <span className="font-bold">Add to Cart</span>, then use <span className="font-bold">+ / −</span> or type the exact quantity. The cart bar appears at the bottom — tap <span className="font-bold">Proceed to Checkout</span> to fill your details.</>],
                     ["Enter your details", <>Your name, and a phone number we can reach you on: <span className="font-bold text-cyan-700">exactly 10 digits</span>, like 0551234567 — no +233 country code.</>],
                     ["Pickup or delivery", <>Pickup: choose a pickup point. Delivery: describe your area, then <span className="font-bold text-rose-600">drag the map</span> so the red pin — it always stays at the centre of the map — sits exactly on your doorstep. Use +/− to zoom and the arrow pad for fine nudges, or tap <span className="font-bold text-cyan-700">Use my location</span> for GPS.</>],
                     ["Choose payment", <>Pay on delivery (cash/MoMo on arrival), or pay by MoMo now and paste the transaction reference. You can add a note for the branch too.</>],
@@ -1755,6 +1823,11 @@ function OrderInner() {
                 ))}
               </div>
             )}
+            {!cartOpen && (
+              <p className="text-[10px] font-bold text-emerald-700 mb-1" data-testid="oo-cart-hint">
+                ✓ Added — proceed to checkout below to fill name, phone, address & payment (your cart is kept in sync automatically).
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <button onClick={() => setCartOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700">
                 <ShoppingCart className="w-4 h-4 text-amber-500" />
@@ -1764,12 +1837,11 @@ function OrderInner() {
               <span className="flex-1" />
               <span className="text-sm font-black text-slate-900" data-testid="oo-cart-total">{fmtMoney(cartTotal)}</span>
               <button
-                onClick={placeOrder}
-                disabled={placing}
-                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-bold shadow-lg disabled:opacity-40"
-                data-testid="oo-place"
+                onClick={() => { setCartOpen(false); goToCheckout(); }}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-black shadow-lg"
+                data-testid="oo-proceed-checkout"
               >
-                {placing ? "Placing…" : "Place order"}
+                Proceed to Checkout ▼
               </button>
             </div>
           </div>

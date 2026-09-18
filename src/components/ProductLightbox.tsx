@@ -431,6 +431,53 @@ export default function ProductLightbox({
           </div>
         )}
 
+        {/* Product details — registered ONCE in Inventory/Stock Entry and
+            served verbatim via /api/menu. NO duplicate storefront entry:
+            description, brand/model, size/weight specs, variants appear here
+            automatically the moment the owner registers them. */}
+        {(() => {
+          const desc: string = (product.description || "").trim();
+          const specs: { key: string; value: string }[] = Array.isArray(product.specifications) ? product.specifications : [];
+          const variants: { name: string; note?: string }[] = Array.isArray(product.variants) ? product.variants : [];
+          const brand: string = (product.brand || "").trim();
+          const model: string = (product.model || "").trim();
+          if (!desc && !brand && !model && specs.length === 0 && variants.length === 0) return null;
+          return (
+            <div className="px-4 py-2.5 border-t border-slate-100 shrink-0 max-h-44 overflow-y-auto" data-testid="oo-lightbox-details">
+              {desc && (
+                <p className="text-[12px] leading-snug text-slate-700 mb-2" data-testid="oo-lightbox-desc">{desc}</p>
+              )}
+              {(brand || model) && (
+                <div className="flex flex-wrap gap-1.5 mb-2" data-testid="oo-lightbox-brand">
+                  {brand && <span className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700">{brand}</span>}
+                  {model && <span className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700">Model: {model}</span>}
+                </div>
+              )}
+              {specs.length > 0 && (
+                <dl className="mb-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5" data-testid="oo-lightbox-specs">
+                  {specs.map((sp, i) => (
+                    <div key={i} className="contents" data-testid={`oo-lightbox-spec-${i}`}>
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{sp.key}</dt>
+                      <dd className="text-[11px] font-semibold text-slate-800">{sp.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {variants.length > 0 && (
+                <div className="flex flex-wrap gap-1" data-testid="oo-lightbox-variants">
+                  {variants.map((v, i) => (
+                    <span key={i} data-testid={`oo-lightbox-variant-${i}`}
+                      title={v.note || v.name}
+                      className="px-1.5 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-[9.5px] font-bold text-indigo-700">
+                      {v.name}{v.note ? ` · ${v.note}` : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* footer */}
         <div className="px-4 py-3 flex items-center justify-between gap-3 border-t border-slate-100 shrink-0">
           <div className="text-lg font-black text-slate-900">{fmtMoney(product.price)}</div>
