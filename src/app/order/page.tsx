@@ -33,7 +33,9 @@ import {
 } from "lucide-react";
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
-import { googleMapsEmbed, businessServesLocation, haversineM } from "@/lib/tracking";
+import ProductLightbox from "@/components/ProductLightbox";
+import MiniLeafletMap from "@/components/MiniLeafletMap";
+import { businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
 function fmtMoney(amount: number | null | undefined, currency = "GHS") {
@@ -377,6 +379,12 @@ function OrderInner() {
   // auto-filled it (preserves manual edits).
   const lastReverseRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
   const autoFilledRef = useRef(false);
+  // Sticky "the customer has CHOSEN this address from the Places list" flag —
+  // keeps their selection authoritative so the reverse-geocode of the same
+  // pin can never clobber it (previously: pick → pin dropped → reverse-
+  // geocode overwrote the picked label, which re-armed the autocomplete and
+  // re-opened/swiped the dropdown the customer just dismissed).
+  const pickedPlacesRef = useRef(false);
   useEffect(() => {
     if (!deliveryPin) return;
     const { lat, lng } = deliveryPin;
@@ -384,7 +392,7 @@ function OrderInner() {
     if (lastReverseRef.current && lastReverseRef.current.label &&
         `${lastReverseRef.current.lat.toFixed(5)},${lastReverseRef.current.lng.toFixed(5)}` === rounded) {
       // Same place we already reverse-coded — reuse cached label.
-      if (!destination.trim() || autoFilledRef.current) {
+      if (!pickedPlacesRef.current && (!destination.trim() || autoFilledRef.current)) {
         setDestination(lastReverseRef.current.label);
         autoFilledRef.current = true;
       }
@@ -397,7 +405,7 @@ function OrderInner() {
         const data = await res.json() as { label?: string };
         const label = String(data.label || "").trim();
         lastReverseRef.current = { lat, lng, label };
-        if (label && (!destination.trim() || autoFilledRef.current)) {
+        if (label && !pickedPlacesRef.current && (!destination.trim() || autoFilledRef.current)) {
           setDestination(label);
           autoFilledRef.current = true;
         }
@@ -1174,6 +1182,7 @@ function OrderInner() {
                           // reverse-geocode results as non-authoritative so
                           // we don't overwrite what they just typed.
                           autoFilledRef.current = false;
+                          pickedPlacesRef.current = false;
                         }}
                         onPick={(s: AddressSuggestion) => {
                           // Drop the pin at the chosen address (flew the
@@ -1185,10 +1194,12 @@ function OrderInner() {
                             : { lat: s.lat, lng: s.lng };
                           setDeliveryPin({ lat: center.lat, lng: center.lng, accuracyM: null });
                           autoFilledRef.current = true;
+                          pickedPlacesRef.current = true;
                         }}
                         onClear={() => {
                           setDeliveryPin(null);
                           autoFilledRef.current = false;
+                          pickedPlacesRef.current = false;
                         }}
                         bias={
                           biz.gpsLat != null && biz.gpsLng != null
@@ -1232,14 +1243,18 @@ function OrderInner() {
                         </label>
                       ))}
                       {chosenPickPoint && chosenPickPoint.lat != null && chosenPickPoint.lng != null && (
-                        <div className="rounded-xl border border-slate-300 bg-slate-50 overflow-hidden" data-testid="oo-pickup-map">
-                          <iframe
+                        <div data-testid="oo-pickup-map">
+                          {/* Local tile map (OpenStreetMap) — Google's keyless
+                              iframe embed is region-blocked in some networks,
+                              which read as a dead grey box ("blocked map"). */}
+                          <MiniLeafletMap
                             key={`${chosenPickPoint.lat},${chosenPickPoint.lng}`}
-                            title={`Pickup point map — ${chosenPickPoint.name}`}
-                            src={googleMapsEmbed(chosenPickPoint.lat, chosenPickPoint.lng, 16)}
-                            className="w-full h-[180px] bg-slate-200"
-                            loading="lazy"
-                            referrerPolicy="no-referrer-when-downgrade"
+                            lat={chosenPickPoint.lat}
+                            lng={chosenPickPoint.lng}
+                            zoom={16}
+                            height={180}
+                            label={chosenPickPoint.name}
+                            prefix="oo-pickup"
                             data-testid="oo-pickup-map-frame"
                           />
                         </div>
@@ -1251,13 +1266,14 @@ function OrderInner() {
                       <p className="px-3 pt-2.5 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-emerald-600" /> Pickup point — {biz.branchName}
                       </p>
-                      <iframe
+                      <MiniLeafletMap
                         key={`${biz.gpsLat},${biz.gpsLng}`}
-                        title="Branch pickup point — Google Maps"
-                        src={googleMapsEmbed(biz.gpsLat, biz.gpsLng, 16)}
-                        className="w-full h-[200px] bg-slate-200"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
+                        lat={biz.gpsLat}
+                        lng={biz.gpsLng}
+                        zoom={16}
+                        height={200}
+                        label={biz.branchName}
+                        prefix="oo-pickup"
                         data-testid="oo-pickup-map-frame"
                       />
                       <p className="px-3 py-2 text-[10px] text-slate-500">
@@ -1391,13 +1407,14 @@ function OrderInner() {
                 <p className="px-3 pt-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-cyan-600" /> Your pinned delivery point
                 </p>
-                <iframe
+                <MiniLeafletMap
                   key={`${placed.deliveryLocation.lat},${placed.deliveryLocation.lng}`}
-                  title="Your pinned delivery point — Google Maps"
-                  src={googleMapsEmbed(placed.deliveryLocation.lat, placed.deliveryLocation.lng, 17)}
-                  className="w-full h-[180px] bg-slate-200"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  lat={placed.deliveryLocation.lat}
+                  lng={placed.deliveryLocation.lng}
+                  zoom={17}
+                  height={180}
+                  label="Delivery point"
+                  prefix="oo-success"
                   data-testid="oo-success-map-frame"
                 />
                 <p className="px-3 py-1.5 text-[10px] text-slate-500 font-mono">
@@ -1410,13 +1427,14 @@ function OrderInner() {
                 <p className="px-3 pt-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-emerald-600" /> Pickup point — {placed.branchName}
                 </p>
-                <iframe
+                <MiniLeafletMap
                   key={`${placed.pickupLocation.lat},${placed.pickupLocation.lng}`}
-                  title="Branch pickup point — Google Maps"
-                  src={googleMapsEmbed(placed.pickupLocation.lat, placed.pickupLocation.lng, 16)}
-                  className="w-full h-[180px] bg-slate-200"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  lat={placed.pickupLocation.lat}
+                  lng={placed.pickupLocation.lng}
+                  zoom={16}
+                  height={180}
+                  label={placed.branchName}
+                  prefix="oo-success-pickup"
                 />
               </div>
             )}
@@ -1632,120 +1650,29 @@ function OrderInner() {
         </div>
       )}
 
-      {/* Product image lightbox — tap a product photo to enlarge it.
-          Amazon-style gallery: main image, prev/next, thumbnails. */}
+      {/* Product image lightbox — Amazon-inspired gallery (main image,
+          thumbnails, prev/next, counter, add-to-cart) with a full zoom
+          engine: buttons, wheel, drag-pan, double-tap, pinch-to-zoom and a
+          true full-screen mode. Extracted into ProductLightbox. */}
       {lightbox && (() => {
         const photos = productPhotos(lightbox.p);
         const count = photos.length;
         const idx = count > 0 ? Math.min(Math.max(lightbox.idx || 0, 0), count - 1) : 0;
-        const showNav = count > 1;
-        const go = (d: number) => {
-          const next = (idx + d + count) % count;
-          setLightbox({ ...lightbox, idx: next });
-        };
         return (
-          <div
-            className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setLightbox(null)}
-            data-testid="oo-lightbox"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Enlarged photos of ${lightbox.p.name}`}
-          >
-            <div
-              className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
-                <div className="min-w-0">
-                  <div className="text-sm font-extrabold text-slate-900 truncate">{lightbox.p.name}</div>
-                  <div className="text-[10px] text-slate-500">
-                    {lightbox.p.category} · {fmtMoney(lightbox.p.price)} / {lightbox.p.unit} · {lightbox.p.available} {lightbox.p.unit} left
-                  </div>
-                </div>
-                <button
-                  onClick={() => setLightbox(null)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 shrink-0"
-                  data-testid="oo-lightbox-close"
-                  aria-label="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="relative bg-white">
-                {count > 0 ? (
-                  <img
-                    src={photos[idx]}
-                    alt={`${lightbox.p.name} — photo ${idx + 1} of ${count}`}
-                    className="w-full max-h-[52vh] object-contain bg-white"
-                    data-testid="oo-lightbox-img"
-                  />
-                ) : (
-                  <div className="w-full max-h-[52vh] aspect-square bg-slate-50 flex items-center justify-center">
-                    <PackageCheck className="w-12 h-12 text-slate-300" />
-                  </div>
-                )}
-                {showNav && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => go(-1)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
-                      data-testid="oo-lightbox-prev"
-                      aria-label="Previous photo"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => go(1)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
-                      data-testid="oo-lightbox-next"
-                      aria-label="Next photo"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </>
-                )}
-              </div>
-              {showNav && (
-                <div className="px-4 py-2 flex items-center gap-2 border-t border-slate-100 overflow-x-auto">
-                  {photos.map((ph, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setLightbox({ ...lightbox, idx: i })}
-                      className={`shrink-0 w-12 h-12 rounded-md border-2 overflow-hidden bg-white transition ${
-                        i === idx ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
-                      }`}
-                      data-testid={`oo-lightbox-thumb-${i}`}
-                      aria-label={`Photo ${i + 1} of ${count}`}
-                      aria-current={i === idx}
-                    >
-                      <img src={ph} alt={`${lightbox.p.name} ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
-                  ))}
-                  <span className="ml-auto text-[10px] font-bold text-slate-400 whitespace-nowrap" data-testid="oo-lightbox-count">
-                    {idx + 1} / {count}
-                  </span>
-                </div>
-              )}
-              <div className="px-4 py-3 flex items-center justify-between gap-3">
-                <div className="text-lg font-black text-slate-900">{fmtMoney(lightbox.p.price)}</div>
-                <button
-                  onClick={() => {
-                    add(lightbox.p, 1, lightbox.fromBiz);
-                    setLightbox(null);
-                  }}
-                  disabled={lightbox.p.available <= 0}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
-                  data-testid="oo-lightbox-add"
-                >
-                  <Plus className="w-4 h-4" /> Add to Cart
-                </button>
-              </div>
-            </div>
-          </div>
+          <ProductLightbox
+            photos={photos}
+            idx={idx}
+            product={lightbox.p}
+            fromBiz={lightbox.fromBiz}
+            canAdd={lightbox.p.available > 0}
+            fmtMoney={fmtMoney}
+            onClose={() => setLightbox(null)}
+            onNavigate={(i) => setLightbox({ ...lightbox, idx: i })}
+            onAdd={() => {
+              add(lightbox.p, 1, lightbox.fromBiz);
+              setLightbox(null);
+            }}
+          />
         );
       })()}
 

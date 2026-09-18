@@ -231,6 +231,12 @@ export default function AddressAutocomplete({
 
   const choose = (s: AddressSuggestion) => {
     pickedLabelRef.current = s.label;
+    // Invalidate every in-flight geocode request — otherwise the response to
+    // the typing that preceded the pick lands AFTER the dropdown was closed
+    // and reopens the list the customer just dismissed.
+    reqIdRef.current += 1;
+    setLoading(false);
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     onChange(s.label);
     setOpen(false);
     setSuggestions([]);

@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { tileOfflineMessage, TILE_ERROR_THRESHOLD, useTileErrors } from "./tileHealth";
 import type { PinValue, TileStyle } from "./LocationPinPicker";
 
 export default function LeafletPinMap({
@@ -26,6 +27,7 @@ export default function LeafletPinMap({
   style: TileStyle;
   prefix: string;
 }) {
+  const { failed, bind } = useTileErrors();
   const initialCenter: [number, number] = useMemo(
     () => [pin?.lat ?? center.lat, pin?.lng ?? center.lng],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -49,13 +51,13 @@ export default function LeafletPinMap({
   );
 
   return (
+    <div className="relative w-full h-full" data-testid={`${prefix}-map`}>
     <MapContainer
       center={initialCenter}
       zoom={zoom}
       zoomControl={false}
       scrollWheelZoom
       style={{ width: "100%", height: "100%", background: "#0f172a" }}
-      data-testid={`${prefix}-map`}
     >
       <MapInternals
         pin={pin}
@@ -70,6 +72,7 @@ export default function LeafletPinMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           maxZoom={19}
+          eventHandlers={bind}
         />
       ) : (
         <>
@@ -78,6 +81,7 @@ export default function LeafletPinMap({
             attribution="Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics"
             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
             maxZoom={19}
+            eventHandlers={bind}
           />
           {/* Hybrid place/boundary labels so the satellite view isn't just
               an unlabelled photograph (fixes the old "Satellite doesn't work"
@@ -85,12 +89,22 @@ export default function LeafletPinMap({
           <TileLayer
             url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
             maxZoom={19}
+            eventHandlers={bind}
           />
         </>
       )}
 
       <CentreMarker icon={pinIcon} />
     </MapContainer>
+    {failed >= TILE_ERROR_THRESHOLD && (
+      <div
+        className="absolute left-1/2 -translate-x-1/2 bottom-2 z-[500] w-[92%] max-w-md bg-amber-50/95 border border-amber-300 rounded-lg px-3 py-1.5 text-[10px] font-bold text-amber-900 pointer-events-none text-center"
+        data-testid={`${prefix}-map-offline`}
+      >
+        {tileOfflineMessage()}
+      </div>
+    )}
+    </div>
   );
 }
 

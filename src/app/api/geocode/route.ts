@@ -13,6 +13,8 @@
 
 import { NextResponse } from "next/server";
 
+import { gazetteerSearch } from "@/lib/ghanaGazetteer";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -166,55 +168,26 @@ export async function GET(req: Request) {
 
   clearTimeout(timer);
 
-  // Sandbox / offline fallback — when neither Nominatim nor Photon is
-  // reachable (common in dev/CI environments without outbound network),
-  // still return deterministic matches against a small curated gazetteer so
-  // the UI dropdown works for demo/testing. This matches by substring on
-  // the query and biases towards the provided ll like the live upstream
-  // does. Production deployments with real outbound network will hit the
-  // real APIs before this fallback fires.
-  if (!upstreamOk || results.length === 0) {
-    const lowerQ = q.toLowerCase();
-    const llParts = (ll || "").split(",").map(Number);
-    const blat = llParts[0];
-    const blng = llParts[1];
-    const biasLat = Number.isFinite(blat) ? blat : 5.6037;
-    const biasLng = Number.isFinite(blng) ? blng : -0.187;
-    const fallback: (Suggestion & { keys?: string[] })[] = [
-      { place_id: "fb-1", label: "Makola Market, Accra, Greater Accra, Ghana", lat: 5.5489, lng: -0.2094, keys: ["makola", "market", "accra", "central"] },
-      { place_id: "fb-2", label: "Accra Central, Accra, Greater Accra, Ghana", lat: 5.556, lng: -0.203, keys: ["accra", "central"] },
-      { place_id: "fb-3", label: "Osu Oxford Street, Osu, Accra, Ghana", lat: 5.565, lng: -0.182, keys: ["osu", "oxford"] },
-      { place_id: "fb-4", label: "East Legon, Accra, Greater Accra, Ghana", lat: 5.638, lng: -0.163, keys: ["east legon", "legon"] },
-      { place_id: "fb-5", label: "Airport Residential Area, Accra, Ghana", lat: 5.596, lng: -0.176, keys: ["airport", "residential"] },
-      { place_id: "fb-6", label: "Spintex Road, Accra, Greater Accra, Ghana", lat: 5.632, lng: -0.095, keys: ["spintex"] },
-      { place_id: "fb-7", label: "Tema Community 1, Tema, Greater Accra, Ghana", lat: 5.670, lng: -0.020, keys: ["tema", "community"] },
-      { place_id: "fb-8", label: "Adum, Kumasi, Ashanti, Ghana", lat: 6.692, lng: -1.622, keys: ["adum", "kumasi"] },
-      { place_id: "fb-9", label: "Kumasi Central Market, Kumasi, Ghana", lat: 6.69, lng: -1.618, keys: ["kumasi", "market"] },
-      { place_id: "fb-10", label: "Tamale Central, Tamale, Northern, Ghana", lat: 9.400, lng: -0.839, keys: ["tamale"] },
-      { place_id: "fb-11", label: "Takoradi Market Circle, Takoradi, Ghana", lat: 4.900, lng: -1.775, keys: ["takoradi", "circle"] },
-      { place_id: "fb-12", label: "Cape Coast Castle, Cape Coast, Ghana", lat: 5.106, lng: -1.246, keys: ["cape coast"] },
-      { place_id: "fb-13", label: "Dansoman, Accra, Ghana", lat: 5.550, lng: -0.250, keys: ["dansoman"] },
-      { place_id: "fb-14", label: "Kaneshie Market, Accra, Ghana", lat: 5.582, lng: -0.235, keys: ["kaneshie"] },
-      { place_id: "fb-15", label: "Accra Mall, Accra, Ghana", lat: 5.622, lng: -0.173, keys: ["mall", "accra mall"] },
-      { place_id: "fb-16", label: "Achimota, Accra, Ghana", lat: 5.622, lng: -0.228, keys: ["achimota"] },
-      { place_id: "fb-17", label: "Lapaz, Accra, Ghana", lat: 5.605, lng: -0.243, keys: ["lapaz"] },
-      { place_id: "fb-18", label: "Circle (Kwame Nkrumah Interchange), Accra, Ghana", lat: 5.575, lng: -0.212, keys: ["circle", "nkrumah", "interchange"] },
-    ];
-    // Tokenize the query so a phrase like "accra makola" matches any entry
-    // whose keys/label contain ANY of the tokens (AND: must match all
-    // non-trivial tokens, but single-word queries match immediately).
-    const tokens = lowerQ.split(/[\s,]+/).filter((t) => t.length >= 3);
-    const scored = fallback
-      .map((s) => {
-        const hay = `${s.label.toLowerCase()} ${(s.keys || []).join(" ")}`;
-        const hits = tokens.filter((t) => hay.includes(t)).length;
-        if (hits < tokens.length) return null;
-        return { ...s, _d: Math.hypot(s.lat - biasLat, s.lng - biasLng), _h: hits };
-      })
-      .filter((x): x is NonNullable<typeof x> => !!x);
-    scored.sort((a, b) => (b._h - a._h) || (a._d - b._d));
-    const matches = scored.slice(0, 8).map(({ _d, _h, keys, ...rest }) => rest);
-    if (matches.length > 0) results = matches;
+  // Offline / unreachable-upstream fallback — the curated Ghana gazetteer
+  // (src/lib/ghanaGazetteer.ts: ~90 delivery areas, markets, landmarks and
+  // every regional capital with town-centre coordinates). Without this the
+  // Places selector silently returns {degraded:true, results:[]} whenever
+  // the hosting network can't reach Nominatim/Photon, which customers read
+  // as a broken address field. Gazetteer hits still drop the pin within
+  // ~1 km of the chosen town/area, and the customer drags it to their
+  // doorstep afterwards.
+  let source: "upstream" | "gazetteer" = "upstream";
+  if (results.length === 0) {
+    const matches = gazetteerSearch(q, 8).map((g, i) => ({
+      place_id: `gh-gaz-${i}-${g.lat.toFixed(4)},${g.lng.toFixed(4)}`,
+      label: `${g.label}, Ghana`,
+      lat: g.lat,
+      lng: g.lng,
+    }));
+    if (matches.length > 0) {
+      results = matches;
+      source = "gazetteer";
+    }
   }
 
   cache.set(cacheKey, { at: Date.now(), results });
@@ -224,5 +197,11 @@ export async function GET(req: Request) {
     if (oldestKey) cache.delete(oldestKey);
   }
 
-  return NextResponse.json({ results, degraded: !upstreamOk });
+  return NextResponse.json({
+    results,
+    // degraded = no upstream AND no local matches — the only genuinely dead
+    // state; UI uses this to show a "geocoder unavailable" hint.
+    degraded: !upstreamOk && results.length === 0,
+    source: upstreamOk ? "upstream" : source,
+  });
 }

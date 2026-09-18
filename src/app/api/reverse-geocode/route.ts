@@ -4,6 +4,7 @@
  * the customer drops a pin.
  */
 import { NextResponse } from "next/server";
+import { GHANA_GAZETTEER } from "@/lib/ghanaGazetteer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,34 +74,19 @@ export async function GET(req: Request) {
 
   clearTimeout(timer);
 
-  // Offline/sandbox fallback — when neither reverse-geocode upstream is
-  // reachable, fall back to a nearest-neighbour lookup against the same
-  // curated gazetteer. Distance is haversine-ish (degrees, fine enough for a
-  // demo label).
+  // Offline fallback — nearest-neighbour over the curated Ghana gazetteer
+  // (src/lib/ghanaGazetteer.ts). Degrees² is fine at this zoom (~1 km scale).
   if (!label) {
-    const places: { label: string; lat: number; lng: number }[] = [
-      { label: "Makola Market, Accra, Ghana", lat: 5.5489, lng: -0.2094 },
-      { label: "Accra Central, Greater Accra, Ghana", lat: 5.556, lng: -0.203 },
-      { label: "Osu Oxford Street, Osu, Accra, Ghana", lat: 5.565, lng: -0.182 },
-      { label: "East Legon, Accra, Ghana", lat: 5.638, lng: -0.163 },
-      { label: "Airport Residential Area, Accra, Ghana", lat: 5.596, lng: -0.176 },
-      { label: "Spintex Road, Accra, Ghana", lat: 5.632, lng: -0.095 },
-      { label: "Tema Community 1, Tema, Ghana", lat: 5.670, lng: -0.020 },
-      { label: "Adum, Kumasi, Ashanti, Ghana", lat: 6.692, lng: -1.622 },
-      { label: "Kumasi Central Market, Kumasi, Ghana", lat: 6.69, lng: -1.618 },
-      { label: "Tamale Central, Northern, Ghana", lat: 9.400, lng: -0.839 },
-      { label: "Takoradi Market Circle, Takoradi, Ghana", lat: 4.900, lng: -1.775 },
-      { label: "Cape Coast, Ghana", lat: 5.106, lng: -1.246 },
-    ];
-    let best: (typeof places)[number] | null = null;
+    let best: (typeof GHANA_GAZETTEER)[number] | null = null;
     let bestD = Infinity;
-    for (const p of places) {
-      const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2;
-      if (d < bestD) { bestD = d; best = p; }
+    for (const g of GHANA_GAZETTEER) {
+      const d = (g.lat - lat) ** 2 + (g.lng - lng) ** 2;
+      if (d < bestD) { bestD = d; best = g; }
     }
-    if (best && bestD < 2.0) {
-      const suffix = `${lat.toFixed(5)}, ${lng.toFixed(6)}`;
-      label = `${best.label} (near ${suffix})`;
+    if (best && bestD < 0.04 /* ~4 km */) {
+      label = `${best.label}, Ghana (near ${lat.toFixed(5)}, ${lng.toFixed(6)})`;
+    } else if (best && bestD < 0.5 /* ~25 km */) {
+      label = `Near ${best.label}, Ghana (${lat.toFixed(5)}, ${lng.toFixed(6)})`;
     } else {
       label = `Custom pin ${lat.toFixed(5)}, ${lng.toFixed(6)}`;
     }
