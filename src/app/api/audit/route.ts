@@ -35,6 +35,12 @@ import {
   electronicsLogs,
   carWashLogs,
   hardwareLogs,
+  poultryFeedLogs,
+  poultryProduction,
+  poultryHealthRecords,
+  poultryFeedFormulations,
+  poultryFeedBatches,
+  poultryFeedQcChecks,
   checklistEntries,
   transportVehicles,
   transportTrips,
@@ -378,6 +384,21 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     opsPush("car_wash_logs", l.id, l.businessId, `SHIFT-${l.shiftDate}-${l.id}`, `Car wash shift ${l.shiftDate} — ${l.vehiclesWashed} vehicles`, `Revenue GH₵ ${l.totalRevenueGhs} · chemicals ${l.chemicalUsedLiters}L`, null, l.recordedDate || l.shiftDate);
   for (const l of await db.select().from(hardwareLogs).orderBy(desc(hardwareLogs.id)).limit(120))
     opsPush("hardware_logs", l.id, l.businessId, l.receiveNoteNumber, `${l.itemName} × ${l.quantityReceived} ${l.unit}`, `Supplier ${l.supplierName} · condition ${l.condition}`, l.receivedBy, l.recordedDate);
+  // POULTRY — closes the "poultry records flagged ✅" hole: feeding,
+  // production, health, and the full feed-mill chain (formulas → batches →
+  // QC) are auditable records like every other operations log.
+  for (const l of await db.select().from(poultryFeedLogs).orderBy(desc(poultryFeedLogs.id)).limit(120))
+    opsPush("poultry_feed_logs", l.id, l.businessId, `FDL-${l.id}`, `Poultry feeding — ${l.feedType} × ${l.quantityKg} kg`, `Source ${l.sourceType || "PURCHASED"}${l.batchNumber ? ` · from batch ${l.batchNumber}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const l of await db.select().from(poultryProduction).orderBy(desc(poultryProduction.id)).limit(120))
+    opsPush("poultry_production", l.id, l.businessId, `PP-${l.id}`, `Poultry production — ${l.productionType}${l.eggsCollected ? ` · ${l.eggsCollected} eggs` : ""}${l.birdsHarvested ? ` · ${l.birdsHarvested} birds` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.layPercentage ? ` · lay ${l.layPercentage}%` : ""}${l.fcr ? ` · FCR ${l.fcr}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const l of await db.select().from(poultryHealthRecords).orderBy(desc(poultryHealthRecords.id)).limit(120))
+    opsPush("poultry_health_records", l.id, l.businessId, `PHR-${l.id}`, `Poultry health — ${l.recordType}${l.diseaseOrCondition ? ` · ${l.diseaseOrCondition}` : ""}${l.mortalityCount ? ` · ${l.mortalityCount} dead` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.vaccineOrDrug ? ` · ${l.vaccineOrDrug}` : ""}${l.nextDueDate ? ` · next due ${l.nextDueDate}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const f of await db.select().from(poultryFeedFormulations).orderBy(desc(poultryFeedFormulations.id)).limit(80))
+    opsPush("poultry_feed_formulations", f.id, f.businessId, f.formulationNo, `Feed formula — ${f.name} (${f.feedType}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(poultryFeedBatches).orderBy(desc(poultryFeedBatches.id)).limit(120))
+    opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+  for (const q of await db.select().from(poultryFeedQcChecks).orderBy(desc(poultryFeedQcChecks.id)).limit(120))
+    opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
 
   // OPERATIONS — daily checklist tasks: one auditable row per dated task
   // completion (or pending/incomplete task), linked to the assigned worker's
@@ -737,6 +758,23 @@ export async function GET(request: Request) {
 /** Resolves the record the review targets DIRECTLY from the source table —
  *  business, branch, module, ref, title and worker are derived server-side so
  *  review records always stay linked to the real worker record. */
+/** Operations-log source registry — shared by the summary resolver and the
+ * full-record drawer so every module's daily logs (incl. the poultry feed
+ * mill chain) open identically in the Audit & Review UI. */
+const OP_LOG_SOURCES: Record<string, { table: any; ref: (r: any) => string; worker: (r: any) => string }> = {
+  livestock_logs: { table: livestockLogs, ref: (r) => r.tagNumber, worker: (r) => r.receivedBy || "" },
+  restaurant_logs: { table: restaurantLogs, ref: (r) => `SHIFT-${r.shiftDate}-${r.id}`, worker: (r) => r.receivedBy || "" },
+  electronics_logs: { table: electronicsLogs, ref: (r) => r.serialNumber, worker: (r) => r.receivedBy || "" },
+  car_wash_logs: { table: carWashLogs, ref: (r) => `SHIFT-${r.shiftDate}-${r.id}`, worker: (r) => r.receivedBy || "" },
+  hardware_logs: { table: hardwareLogs, ref: (r) => r.receiveNoteNumber, worker: (r) => r.receivedBy || "" },
+  poultry_feed_logs: { table: poultryFeedLogs, ref: (r) => `FDL-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_production: { table: poultryProduction, ref: (r) => `PP-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_health_records: { table: poultryHealthRecords, ref: (r) => `PHR-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_feed_formulations: { table: poultryFeedFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  poultry_feed_batches: { table: poultryFeedBatches, ref: (r) => r.batchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
+  poultry_feed_qc_checks: { table: poultryFeedQcChecks, ref: (r) => r.batchNumber || `QC-${r.id}`, worker: (r) => r.testerName || r.recordedByName || "" },
+};
+
 async function resolveRecord(recordType: string, recordSource: string | null, recordId: number) {
   const first = async (rows: any[]) => rows[0] || null;
   switch (recordType) {
@@ -769,12 +807,12 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
       return r && { businessId: r.businessId, branchCode: r.branchCode, module: "CCTV", ref: `CAM-${r.id}`, title: `${r.name} — ${r.brand} · ${cFriendly(r)}`, workerName: r.createdByName };
     }
     case "OPERATION_LOG": {
-      const table: any = { livestock_logs: livestockLogs, restaurant_logs: restaurantLogs, electronics_logs: electronicsLogs, car_wash_logs: carWashLogs, hardware_logs: hardwareLogs }[recordSource || ""];
-      if (!table) return null;
-      const r = await first(await db.select().from(table).where(eq(table.id, recordId)));
+      const meta = OP_LOG_SOURCES[recordSource || ""];
+      if (!meta) return null;
+      const r = await first(await db.select().from(meta.table).where(eq(meta.table.id, recordId)));
       if (!r) return null;
-      const ref = r.tagNumber || r.serialNumber || r.receiveNoteNumber || `SHIFT-${r.shiftDate}-${r.id}`;
-      return { businessId: r.businessId, branchCode: null, module: "OPERATIONS", ref, title: `Operations log ${ref}`, workerName: r.receivedBy || null };
+      const ref = meta.ref(r) || `${recordSource}-${r.id}`;
+      return { businessId: r.businessId, branchCode: null, module: "OPERATIONS", ref, title: `Operations log ${ref}`, workerName: meta.worker(r) || null };
     }
     case "CHECKLIST": {
       const r = await first(await db.select().from(checklistEntries).where(eq(checklistEntries.id, recordId)));
@@ -1054,6 +1092,26 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
         if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate})`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
       }
       return { record: r, photos: [], related: related(rel) };
+    }
+    case "OPERATION_LOG": {
+      // Daily operations / production logs — incl. the poultry feed-mill
+      // chain (formulations, batches, QC checks, feed logs) added under the
+      // same registry as the summary resolver.
+      const meta = OP_LOG_SOURCES[recordSource || ""];
+      if (!meta) return null;
+      const r = await first(await db.select().from(meta.table).where(eq(meta.table.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      // Feed-mill chain links: batch ← its QC checks; QC check → its batch.
+      if (recordSource === "poultry_feed_batches") {
+        const qcs = await db.select().from(poultryFeedQcChecks).where(eq(poultryFeedQcChecks.batchId, r.id)).limit(10);
+        for (const x of qcs) rel.push({ key: `OPERATION_LOG:poultry_feed_qc_checks:${x.id}`, recordType: "OPERATION_LOG", recordSource: "poultry_feed_qc_checks", recordId: x.id, ref: x.batchNumber || `QC-${x.id}`, title: `QC — ${x.testName} → ${x.passFail}`, detail: `${x.stage} · ${x.testResult || "—"}`, module: "OPERATIONS", businessId: x.businessId, branchCode: null, date: tsDay(x.testedAt), amountGhs: null, status: x.passFail, imageCount: 0 });
+      }
+      if (recordSource === "poultry_feed_qc_checks" && r.batchId) {
+        const b = await first(await db.select().from(poultryFeedBatches).where(eq(poultryFeedBatches.id, Number(r.batchId))));
+        if (b) rel.push({ key: `OPERATION_LOG:poultry_feed_batches:${b.id}`, recordType: "OPERATION_LOG", recordSource: "poultry_feed_batches", recordId: b.id, ref: b.batchNumber, title: `${b.formulationName} — ${b.actualOutputKg} kg`, detail: `Status ${b.status}`, module: "OPERATIONS", businessId: b.businessId, branchCode: null, date: tsDay(b.createdAt), amountGhs: null, status: b.status, imageCount: 0 });
+      }
+      return { record: r, photos: (r as any).photo ? [String((r as any).photo)] : [], related: related(rel) };
     }
     default:
       return null;

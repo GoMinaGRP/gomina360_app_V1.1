@@ -1074,6 +1074,10 @@ export const poultryFeedLogs = pgTable("poultry_feed_logs", {
   costPerKgGhs: doublePrecision("cost_per_kg_ghs").default(0),
   totalCostGhs: doublePrecision("total_cost_ghs").default(0),
   entryType: text("entry_type").notNull().default("CONSUMPTION"), // PURCHASE or CONSUMPTION
+  // ── Feed-Mill linkage (additive; legacy rows stay PURCHASED/null) ──────
+  sourceType: text("source_type").default("PURCHASED"), // PURCHASED | OWN_MILL
+  feedBatchId: integer("feed_batch_id"), // poultry_feed_batches.id when OWN_MILL
+  inventoryId: integer("inventory_id"), // finished-feed inventory item drawn
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
@@ -1197,9 +1201,145 @@ export const poultryWeightLogs = pgTable("poultry_weight_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// P6. Daily Activity Checklist
-export const poultryChecklists = pgTable("poultry_checklists", {
+// ═══ P-FEED-MILL. Feed Production & Milling (sub-module of the Poultry farm) ═══
+// Raw materials → formulations (recipes) → production batches → QC release →
+// finished feed inventory → own-mill consumption (poultry_feed_logs) → FCR.
+// Finance discipline: ingredients are EXPENSED ONCE at purchase intake; batch
+// costs are DERIVED (never re-booked); own-mill consumption writes NO
+// transaction (internal transfer). Mill labour/overhead DOES post one real
+// POULTRY_FEED_MILL_OPS expense per batch (single-booked by construction).
+// Unit convention: KG canonical everywhere; BAG25/BAG50/TONNE are input
+// conveniences converted server-side (src/lib/feedUnits.ts).
+
+// FM1. Feed formulations — the mill's recipe master (versioned, deactivatable).
+export const poultryFeedFormulations = pgTable("poultry_feed_formulations", {
   id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  formulationNo: text("formulation_no").notNull().unique(), // FRM-2026-0007
+  name: text("name").notNull(), // e.g. "Layer Mash 17% CP (Nsawam Mill)"
+  feedType: text("feed_type").notNull(), // SAME vocabulary as poultry_feed_logs (STARTER/GROWER/FINISHER/LAYER_MASH/CONCENTRATE)
+  birdType: text("bird_type").notNull().default("BOTH"), // LAYERS | BROILERS | BOTH
+  ageFromWks: integer("age_from_wks"),
+  ageToWks: integer("age_to_wks"),
+  batchSizeKg: doublePrecision("batch_size_kg").notNull().default(500), // standard mix volume
+  cpPctTarget: doublePrecision("cp_pct_target"), // crude-protein target % for QC
+  meKcalKgTarget: doublePrecision("me_kcal_kg_target"), // metabolisable energy target
+  // Configurable commercial-feed comparison baseline (GH₵/kg). Null = fall
+  // back to this business's recent commercial purchase average.
+  commercialRefPriceGhs: doublePrecision("commercial_ref_price_ghs"),
+  notes: text("notes"),
+  active: boolean("active").notNull().default(true),
+  version: integer("version").notNull().default(1),
+  lastCostPerKgGhs: doublePrecision("last_cost_per_kg_ghs"), // rolling cache
+  lastProducedAt: timestamp("last_produced_at"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// FM2. Formulation BOM lines — ingredients with share % of the batch volume.
+export const poultryFeedFormulationItems = pgTable("poultry_feed_formulation_items", {
+  id: serial("id").primaryKey(),
+  formulationId: integer("formulation_id").notNull().references(() => poultryFeedFormulations.id),
+  // Inventory link: raw material inventory_items row (auto-created on save).
+  inventoryId: integer("inventory_id"),
+  ingredientName: text("ingredient_name").notNull(), // e.g. "Maize grain (yellow)"
+  sku: text("sku"), // snapshot of the linked inventory SKU
+  sharePct: doublePrecision("share_pct").notNull(), // % of batch — items must sum to 100
+  sequence: integer("sequence").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FM3. Production batches — the mix run (batch-tracking head + cost engine).
+export const poultryFeedBatches = pgTable("poultry_feed_batches", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope
+  batchNumber: text("batch_number").notNull().unique(), // FDB-2026-0043
+  formulationId: integer("formulation_id").notNull(),
+  formulationName: text("formulation_name").notNull(), // snapshot for reports/forensics
+  formulationSnapshot: jsonb("formulation_snapshot"), // immutable copy of header+BOM used at mix time
+  feedType: text("feed_type").notNull(), // snapshot (drives consumption typing)
+  productionDate: text("production_date").notNull(),
+  // QC gate: every batch lands QC_HOLD and may only be consumed after an
+  // explicit RELEASE (requires a PASS FINISHED_FEED check; OWNER /
+  // canManageRecords may override with a recorded note). REJECTED reverses
+  // the remaining finished-feed stock-in and is terminal.
+  status: text("status").notNull().default("QC_HOLD"), // MIXING | QC_HOLD | RELEASED | REJECTED
+  plannedInputKg: doublePrecision("planned_input_kg").notNull(),
+  actualInputKg: doublePrecision("actual_input_kg").notNull(),
+  actualOutputKg: doublePrecision("actual_output_kg").notNull(),
+  yieldPct: doublePrecision("yield_pct"), // output/input (milling loss visible)
+  ingredientCostGhs: doublePrecision("ingredient_cost_ghs").notNull().default(0), // DERIVED from stock draw — never an expense txn
+  labourCostGhs: doublePrecision("labour_cost_ghs").notNull().default(0), // posts POULTRY_FEED_MILL_OPS (once)
+  overheadCostGhs: doublePrecision("overhead_cost_ghs").notNull().default(0), // included in the same MILL_OPS txn
+  totalCostGhs: doublePrecision("total_cost_ghs").notNull().default(0),
+  costPerKgGhs: doublePrecision("cost_per_kg_ghs").notNull().default(0),
+  finishedInventoryId: integer("finished_inventory_id"), // inventory_items row of the finished feed
+  finishedSku: text("finished_sku"),
+  finishedName: text("finished_name"),
+  stockedQtyKg: doublePrecision("stocked_qty_kg").notNull().default(0),
+  stockedAt: timestamp("stocked_at"),
+  releasedByName: text("released_by_name"),
+  releasedAt: timestamp("released_at"),
+  releaseNote: text("release_note"), // QC-verified basis or override justification
+  operatorName: text("operator_name"),
+  notes: text("notes"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  recordedByUserId: integer("recorded_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FM4. Batch ingredient-draw lines — the traceability half-ledger.
+export const poultryFeedBatchInputs = pgTable("poultry_feed_batch_inputs", {
+  id: serial("id").primaryKey(),
+  batchId: integer("batch_id").notNull().references(() => poultryFeedBatches.id),
+  inventoryId: integer("inventory_id").notNull(), // raw material item drawn
+  ingredientName: text("ingredient_name").notNull(),
+  sku: text("sku"),
+  plannedKg: doublePrecision("planned_kg").notNull(),
+  actualKg: doublePrecision("actual_kg").notNull(),
+  unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0), // costPriceGhs snapshot at draw
+  lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FM5. Feed QC checks — cloned (poultry-flavoured) from block_qc_checks:
+// one row per check at any mill stage, result vs standard, PASS/FAIL, photo.
+export const poultryFeedQcChecks = pgTable("poultry_feed_qc_checks", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  batchId: integer("batch_id"), // poultry_feed_batches.id (null for raw-material checks)
+  batchNumber: text("batch_number"), // snapshot for purge/forensics stability
+  stage: text("stage").notNull(), // RAW_MATERIAL | GRINDING | MIXING | FINISHED_FEED | STORAGE
+  sampleRef: text("sample_ref"), // e.g. "Sample 2 — top of bin 3"
+  testName: text("test_name").notNull(), // e.g. "Moisture content", "Grind texture"
+  requiredStandard: text("required_standard"), // e.g. "≤ 13% moisture (GS 1261)"
+  testResult: text("test_result"), // human-readable result
+  resultValue: doublePrecision("result_value"), // numeric for trend charts
+  resultUnit: text("result_unit"), // % | mm | g | count | text
+  passFail: text("pass_fail").notNull().default("PASS"), // PASS | FAIL
+  moisturePct: doublePrecision("moisture_pct"),
+  textureGrade: text("texture_grade"), // FINE | MEDIUM | COARSE
+  contaminantsNote: text("contaminants_note"),
+  notes: text("notes"),
+  photo: text("photo"), // photo evidence (data URL), like block QC
+  testedAt: timestamp("tested_at").notNull().defaultNow(),
+  testerName: text("tester_name"),
+  testerRole: text("tester_role"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// P6. Daily Activity Checklist
+export const poultryChecklists = pgTable("poultry_checklists", {  id: serial("id").primaryKey(),
   businessId: integer("business_id").notNull(),
   branchCode: text("branch_code"),
   checklistDate: text("checklist_date").notNull(),

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
-  LayoutDashboard, Egg, Wheat, Droplets, HeartPulse, Boxes,
+  LayoutDashboard, Egg, Wheat, Droplets, HeartPulse, Boxes, Factory,
   Wallet, ClipboardCheck, BookOpen, Plus, X, CheckCircle, Circle,
   Search, TrendingUp, TrendingDown, AlertTriangle, Bird, Activity,
   Building2, Loader2, Filter, Package,
@@ -16,6 +16,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzePoultry } from "@/lib/poultryAnalytics";
 import PoultryAnalyticsAlerts from "./PoultryAnalyticsAlerts";
 import PoultryGrowthAnalytics from "./PoultryGrowthAnalytics";
+import PoultryFeedMill from "./PoultryFeedMill";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
@@ -37,13 +38,14 @@ interface Props {
 }
 
 type Tab =
-  | "DASHBOARD" | "FLOCKS" | "FEED" | "WATER" | "HEALTH"
+  | "DASHBOARD" | "FLOCKS" | "FEED" | "FEED_MILL" | "WATER" | "HEALTH"
   | "PRODUCTION" | "INVENTORY" | "FINANCE" | "CHECKLIST" | "AI_KNOWLEDGE";
 
 const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
   { key: "FLOCKS", label: "Flock & Batch", icon: Bird },
   { key: "FEED", label: "Feed", icon: Wheat },
+  { key: "FEED_MILL", label: "Feed Mill", icon: Factory },
   { key: "WATER", label: "Water", icon: Droplets },
   { key: "HEALTH", label: "Health & Vaccination", icon: HeartPulse },
   { key: "PRODUCTION", label: "Production", icon: Egg },
@@ -792,6 +794,9 @@ export default function PoultryFarmModule({
                           f.entryType === "PURCHASE" ? "bg-cyan-500/20 text-cyan-300" : "bg-emerald-500/20 text-emerald-300"}`}>
                           {f.entryType}
                         </span>
+                        {f.sourceType === "OWN_MILL" && (
+                          <span className="ml-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/20 text-amber-300" title="Produced by your feed mill">OWN MILL</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-[10px] text-slate-400">{f.recordedByName}</td>
                     </tr>
@@ -802,6 +807,16 @@ export default function PoultryFarmModule({
             </div>
           </Card>
         </div>
+      )}
+
+      {/* ══════════ FEED MILL ══════════ */}
+      {tab === "FEED_MILL" && (
+        <PoultryFeedMill
+          currentUser={currentUser}
+          businessInfo={businessInfo}
+          currentCurrency={currentCurrency}
+          onChanged={() => { refresh(); onRefreshData(); }}
+        />
       )}
 
       {/* ══════════ WATER ══════════ */}
