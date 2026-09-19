@@ -217,9 +217,20 @@ async function generateExcel(records: any[], meta: UniversalExportMeta, qrData: 
   return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
+/** CSV formula-injection guard: spreadsheet apps execute cells whose value
+ *  starts with = + - @ (or a leading tab/CR) as formulas. Staff-typed data
+ *  (customer names, product names, notes) can contain anything, so prefix a
+ *  single quote — Excel/Sheets then treat the cell as literal text.
+ *  Returns the fully quoted cell. Shared by every CSV writer in the app. */
+export function csvSafeCell(v: any): string {
+  let s = String(v ?? "");
+  if (/^[\s]*[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 async function generateCsv(records: any[], meta: UniversalExportMeta, qrData: string, qrSvg: string, qrPayload: any) {
   const { headers, rows } = normalizedRows(records);
-  const quote = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const quote = csvSafeCell;
   const lines: string[] = [];
   lines.push(quote("GOMINA 360 EXPORT METADATA") + "," + quote("VALUE"));
   metaRows(meta).forEach(([k, v]) => lines.push(`${quote(k)},${quote(v)}`));

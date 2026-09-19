@@ -92,6 +92,10 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
     businessId: n.businessId ?? null,
     branchCode: n.branchCode ?? null,
     actorName: n.actorName ?? null,
+    // Severity travels with the row so the bell can colour-code it and the
+    // recipient can triage HIGH/CRITICAL first (schema contract; fixes the
+    // "priority column carried to the bell" audit failure).
+    priority: n.priority ? String(n.priority).toUpperCase() : null,
     ownerId: nOwnerId,
   });
   pushAfterBell([Number(userId)], {

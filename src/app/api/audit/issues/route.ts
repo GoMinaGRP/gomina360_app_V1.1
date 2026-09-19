@@ -157,6 +157,9 @@ export async function POST(request: Request) {
       body: `${note.slice(0, 520)}\nRequired action: open the Audit Command Center and verify to close (or request another correction).`,
       issueId: row.id, recordType: row.recordType, recordId: row.recordId, recordRef: row.recordRef,
       businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+      // Carry the issue's severity onto the bell row (colour-coded chip,
+      // HIGH/CRITICAL triage) — same contract as the flag path.
+      priority: prio,
       ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : (user.orgId ?? null),
     });
     pushAfterBell([Number(row.reviewerUserId)], {

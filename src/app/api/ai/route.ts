@@ -9,8 +9,8 @@ import { computeScenarioBaseline } from "@/lib/scenarioEngine";
 
 export async function GET(request: Request) {
   // Session required: insights reference enterprise financials.
+  // NOTE: never ttlInvalidate in a GET — reads must not wipe shared caches.
   const session = await getSessionInfo(request);
-  ttlInvalidate("init");
   if (!session) return UNAUTHENTICATED();
   try {
     let rows = await db.select().from(aiInsights).orderBy(desc(aiInsights.id));
@@ -137,6 +137,7 @@ export async function POST(request: Request) {
         status: "NEW",
       })
       .returning();
+    ttlInvalidate("init"); // new insight must surface on dashboards now
 
     return NextResponse.json({ success: true, insight: newInsight });
   } catch (error: any) {
