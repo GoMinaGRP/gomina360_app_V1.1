@@ -23,6 +23,7 @@ import {
   PieChart, Pie, Cell, LineChart, Line,
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
+import { csvSafeCell } from "@/lib/universalExport";
 
 const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
 const MODULE_LABEL: Record<string, string> = {
@@ -379,7 +380,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
   const downloadCsv = () => {
     const head = ["Date", "Time", "Reviewer", "Reviewer Role", "Action", "Status", "Issue Title", "Assigned To", "Module", "Record", "Record Ref", "Business", "Branch", "Worker", "Reason", "Comment", "Evidence", "Response", "Response By", "Response At", "Resolution", "Verified By", "Verified At"];
-    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const esc = csvSafeCell; // quoting + formula-injection guard (shared)
     const lines = reviews.map((r: Rev) => [dayOnly(r.createdAt), fmtTs(r.createdAt).split(", ").pop(), r.reviewerName, r.reviewerRole, r.action, STEP_LABEL[r.status] || r.status, r.issueTitle || "", r.assignedUserName || "", r.module, r.recordTitle, r.recordRef, bizName(r.businessId), r.branchCode || "", r.workerName || "", r.reason || "", r.comment || "", r.evidence || (r.evidencePhoto ? "[photo attached]" : ""), r.responseNote || "", r.responseByName || "", r.responseAt ? fmtTs(r.responseAt) : "", r.resolutionNote || "", r.resolvedByName || "", r.resolvedAt ? fmtTs(r.resolvedAt) : ""].map(esc).join(","));
     const blob = new Blob(["\uFEFF" + [head.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
