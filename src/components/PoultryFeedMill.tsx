@@ -149,6 +149,7 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
   useEffect(() => { refresh(); }, [refresh]);
 
   const { formulations, formulationItems, batches, qcChecks, rawMaterials, finishedFeeds, consumption, flocks } = mill;
+  const production: any[] = mill.production || [];
 
   const { kpis, alerts } = useMemo(() => computeFeedMillAnalytics({
     formulations, formulationItems, batches, batchInputs: mill.batchInputs, qcChecks,
@@ -166,6 +167,24 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
 
   const bomOf = useCallback((formId: number) =>
     formulationItems.filter((i: any) => i.formulationId === formId), [formulationItems]);
+
+  /* Feed-conversion insight (last 30 days): own-mill kg fed vs flock output.
+   * Layers: feed per 100 eggs & FCR-egg (kg feed per kg egg mass @58 g).
+   * Broilers: feed per kg live weight harvested. Derived, never re-books. */
+  const flockInsights = useMemo(() => {
+    const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    return (flocks || []).map((fl: any) => {
+      const fed = (consumption || []).filter((c: any) => Number(c.flockId) === fl.id && (c.recordedDate || "") >= since)
+        .reduce((s: number, c: any) => s + (c.quantityKg || 0), 0);
+      const prod = production.filter((p: any) => (p.flockId ? Number(p.flockId) === fl.id : p.batchNumber === fl.batchNumber) && (p.recordedDate || "") >= since);
+      const eggs = prod.reduce((s: number, p: any) => s + (p.eggsCollected || 0), 0);
+      const weightOut = prod.reduce((s: number, p: any) => s + (p.totalWeightKg || 0), 0);
+      const fcrEgg = eggs > 0 && fed > 0 ? fed / (eggs * 0.058) : null;
+      const feedPer100 = eggs > 0 && fed > 0 ? (fed / eggs) * 100 : null;
+      const broiler = fl.birdType && String(fl.birdType).includes("BROILER");
+      return { flock: fl, fed, eggs, weightOut, fcrEgg, feedPer100, broiler };
+    }).filter((x: any) => x.fed > 0 || x.eggs > 0 || x.weightOut > 0);
+  }, [flocks, consumption, production]);
 
   const stockLeft = useCallback((inventoryId: number | null) => {
     const hit = rawMaterials.find((r: any) => r.id === inventoryId);
@@ -583,6 +602,35 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
             </button>
           </div>
           <p className="text-[11px] text-slate-400 -mt-1">Draws feed from a <b>released</b> batch into the flock's daily feed record. Cost was already booked at intake — feeding never re-books money (single-booking), but your cost-per-egg / FCR maths keep the derived value.</p>
+
+          {/* derived feed-conversion insight (last 30 days, own-mill feed) */}
+          {flockInsights.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3" data-testid="fm-flock-insights">
+              {flockInsights.map((x: any) => (
+                <div key={x.flock.id} className="bg-slate-800/90 border border-slate-700/80 rounded-xl p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white truncate">{x.flock.flockName || x.flock.batchNumber}</span>
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/20 text-emerald-300">30d</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mt-2 text-center">
+                    <div><div className="text-[9px] text-slate-500">Own-mill fed</div><div className="text-xs font-bold text-amber-300">{x.fed.toFixed(1)} kg</div></div>
+                    {x.broiler && x.weightOut > 0 ? (
+                      <><div><div className="text-[9px] text-slate-500">Weight out</div><div className="text-xs font-bold text-white">{x.weightOut.toFixed(1)} kg</div></div>
+                      <div><div className="text-[9px] text-slate-500">Feed/kg gain</div><div className="text-xs font-black text-emerald-400">{(x.fed / x.weightOut).toFixed(2)}</div></div></>
+                    ) : x.eggs > 0 ? (
+                      <><div><div className="text-[9px] text-slate-500">Eggs</div><div className="text-xs font-bold text-white">{x.eggs.toLocaleString()}</div></div>
+                      <div><div className="text-[9px] text-slate-500">FCR-egg</div><div className="text-xs font-black text-emerald-400">{x.fcrEgg == null ? "—" : x.fcrEgg.toFixed(2)}</div></div></>
+                    ) : (
+                      <div className="col-span-2 text-left text-[10px] text-slate-500 self-center">Awaiting production logs for conversion maths — feed intake is tracked.</div>
+                    )}
+                  </div>
+                  {x.broiler && x.weightOut === 0 && x.eggs === 0 && (
+                    <p className="text-[9px] text-slate-500 mt-1">No output in 30d — insight fills once harvest logs land.</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="overflow-x-auto bg-slate-800/90 border border-slate-700/80 rounded-2xl">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-900/90 text-slate-400 uppercase font-semibold text-[10px]">

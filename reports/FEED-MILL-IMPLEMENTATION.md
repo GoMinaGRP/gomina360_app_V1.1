@@ -110,4 +110,30 @@ The preview database is shared with real interactive testing, so the suite is **
 - Feed-mill expense categories (`POULTRY_FEED_MILL_OPS`, etc.) are additive; existing finance reports accept them via the shared expense-category registry.
 - A standalone Feed-Mill business-line shell remains a future option — API/lib boundaries were designed for it but no separate module was created (per "within Poultry for now").
 
-**Git:** milestone committed as `af81e27` on `arena/01a0a375-gomina360-app-v1-1`. At report time the sandbox's GitHub token was expired, so the commit is local; pushing requires the GitHub connection to be re-established (reconnect GitHub in Arena).
+## 7. Integration hardening round (2026-09-19, post-review)
+
+Two integrations found partial in the production review were completed additively (no rebuilds):
+
+1. **Suppliers** — intake's vendor name now drives a real Suppliers ledger: new vendors are auto-registered (category `Poultry Feed`, owner-scoped) and `totalSuppliedGhs` accrues on every intake, expense-booked or not. Verified live: 6 DEMO vendors with correct accrued values (Olam GH₵ 5,040 · Yedent GH₵ 5,520 · Trouw GH₵ 3,000 · Irani GH₵ 910 · Seaside GH₵ 360 · Dangote GH₵ 30).
+2. **Feed usage ↔ production (FCR)** — FEEDOUT now shows per-flock 30-day conversion insights: own-mill kg fed vs eggs/lives weight out, computing FCR-egg (kg feed per kg egg mass @58 g), feed per 100 eggs, and feed-per-kg-gain for broilers. Derived from the same `poultry_feed_logs` + `poultry_production` rows the farm dashboards use (additive GET field `production`).
+
+## 8. DEMO data for live walkthrough (finance-insulated)
+
+`dev-tooling/seed-feed-mill-demo.mjs` seeds clearly-marked (`DEMO ·`) realistic data through the production API:
+8 raw-material intakes with vendors (stock-only — **zero expense bookings**), 2 formulations (`FRM-2026-976622` layer mash 7-line BOM · `FRM-2026-976643` broiler finisher 6-line BOM), 2 batches (`FDB-2026-976679` 500→492 kg, 4-stage QC PASS → RELEASED → 2 feed-outs 185+190 kg to the layer flock, 117 kg remaining; `FDB-2026-976714` left on QC_HOLD with a 14.8 %-moisture FINISHED_FEED FAIL that fans the critical bell). Idempotent; self-guarding:
+- **finance guard** — transactions count/sum byte-identical before/after (n=16, Σ GH₵ 140,220.72);
+- **inventory guard** — every pre-existing item untouched; only DEMO rows added.
+
+Post-seed suite: **100/100 PASS** (two consecutive runs).
+
+## 9. Access & use
+
+1. Open the app → login (OWNER: `kwame.owner@gomina360.com` / `Owner@GoMina26`).
+2. Unit switcher → **Mina Akuafo Poultry Farm (POULTRY-01)**.
+3. Module tabs → **Feed Mill** (between *Feed* and *Water*).
+4. Sub-views: **Mill Overview** (KPIs, savings, alerts) · **Formulations** (create/edit recipes) · **Batches & QC** (run batch, log QC, release/override/reject/consume) · **Raw Stock & Intake** (vendor intakes w/ unit costs) · **Feed Out** (log feeding w/ remaining calc + conversion insight cards).
+5. Bell (top bar) shows the demo QC-FAIL and release events; **Audit & Review → OPERATIONS** resolves every mill record with related QC links; Suppliers (org scope) shows accrued vendor totals; Finance breakdown includes `POULTRY_FEED_RAW_MATERIAL`/`POULTRY_FEED_MILL_OPS` categories (no DEMO money booked).
+
+**Cleanup:** delete the `DEMO ·` formulations (their batches/QC/logs cascade via the mill's own tables), or ask the agent to run a DEMO-scoped purge — TFM/DEMO marks keep real and demo data strictly separable.
+
+**Git:** milestone commits `af81e27` (implementation) → …(integration + demo round). Sandbox GitHub token expired during the session — local commits safe; push requires reconnecting GitHub in Arena.

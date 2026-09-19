@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feed Mill — Interactive Feature Console · GO-MINA 360</title>
+<style>
+/* ── GO-MINA 360 demo design system (Tailwind-compatible subset, offline-safe) ── */
+:root{
+  --slate-950:#020617; --slate-900:#0f172a; --slate-800:#1e293b; --slate-700:#334155;
+  --slate-600:#475569; --slate-500:#64748b; --slate-400:#94a3b8; --slate-300:#cbd5e1;
+  --emerald:#10b981; --amber:#f59e0b; --rose:#f43f5e; --cyan:#22d3ee; --purple:#a78bfa;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;scroll-behavior:smooth}
+body{background:var(--slate-950);color:#e2e8f0;min-height:100vh}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+button{font-family:inherit;cursor:pointer}
+img{display:block}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#334155;border-radius:8px}
+/* layout */
+.flex{display:flex}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}.flex-1{flex:1}.shrink0{flex-shrink:0}
+.grid{display:grid}.hidden{display:none!important}
+.items-center{align-items:center}.items-start{align-items:flex-start}.items-end{align-items:flex-end}
+.justify-between{justify-content:space-between}.justify-center{justify-content:center}.justify-end{justify-content:flex-end}
+.gap1{gap:.25rem}.gap2{gap:.5rem}.gap3{gap:.75rem}.gap4{gap:1rem}
+.w-full{width:100%}.maxw-2xl{max-width:42rem}.maxw-4xl{max-width:56rem}.maxw-6xl{max-width:72rem}.maxw-7xl{max-width:80rem}
+.mx-auto{margin-left:auto;margin-right:auto}
+.px-2{padding:0 .5rem}.px-3{padding:0 .75rem}.px-4{padding:0 1rem}.px-6{padding:0 1.5rem}
+.py-1{padding:.25rem 0}.py-2{padding:.5rem 0}.py-3{padding:.75rem 0}.py-4{padding:1rem 0}
+.p-2{padding:.5rem}.p-3{padding:.75rem}.p-4{padding:1rem}.p-5{padding:1.25rem}.p-6{padding:1.5rem}
+.m-0{margin:0}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-6{margin-top:1.5rem}
+.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}
+.ml-2{margin-left:.5rem}.mr-2{margin-right:.5rem}
+.sticky{position:sticky}.fixed{position:fixed}.top0{top:0}.bottom0{bottom:0}.left0{left:0}.right0{right:0}.z-50{z-index:50}
+/* surfaces */
+.card{background:var(--slate-900);border:1px solid #24304b;border-radius:16px}
+.card-xl{background:linear-gradient(180deg,#0f172a,#0c1428);border:1px solid #24304b;border-radius:20px}
+.inset{background:#0a1120;border:1px solid #1d2a45;border-radius:12px}
+.rounded{border-radius:8px}.rounded-lg{border-radius:12px}.rounded-xl{border-radius:16px}.rounded-full{border-radius:9999px}
+.border{border:1px solid #24304b}.border-b{border-bottom:1px solid #24304b}.border-t{border-top:1px solid #24304b}
+.blur{backdrop-filter:blur(10px);background:rgba(2,6,23,.78)}
+/* type */
+.text-2xs{font-size:10px}.text-xs{font-size:12px}.text-sm{font-size:14px}.text-base{font-size:16px}.text-lg{font-size:18px}.text-xl{font-size:22px}.text-2xl{font-size:30px}.text-3xl{font-size:36px}
+.font-bold{font-weight:700}.font-black{font-weight:900}.uppercase{text-transform:uppercase}.tracking-wider{letter-spacing:.08em}
+.text-center{text-align:center}.text-right{text-align:right}
+.tnum{font-variant-numeric:tabular-nums}
+.white{color:#fff}.slate300{color:var(--slate-300)}.slate400{color:var(--slate-400)}.slate500{color:var(--slate-500)}
+.emerald{color:var(--emerald)}.amber{color:var(--amber)}.rose{color:var(--rose)}.cyan{color:var(--cyan)}.purple{color:var(--purple)}
+/* buttons & inputs */
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.55rem 1rem;border-radius:10px;font-size:12.5px;font-weight:700;border:1px solid transparent;transition:.15s}
+.btn-em{background:rgba(16,185,129,.15);color:#34d399;border-color:rgba(16,185,129,.35)}
+.btn-em:hover{background:rgba(16,185,129,.28)}
+.btn-solid-em{background:#059669;color:#fff}.btn-solid-em:hover{background:#10b981}
+.btn-am{background:rgba(245,158,11,.14);color:#fbbf24;border-color:rgba(245,158,11,.35)}.btn-am:hover{background:rgba(245,158,11,.28)}
+.btn-rose{background:rgba(244,63,94,.14);color:#fb7185;border-color:rgba(244,63,94,.35)}.btn-rose:hover{background:rgba(244,63,94,.28)}
+.btn-ghost{background:transparent;color:var(--slate-400);border-color:#24304b}.btn-ghost:hover{color:#fff;background:#1e293b}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.input,select,textarea{width:100%;padding:.5rem .7rem;background:#0a1120;border:1px solid #24304b;border-radius:10px;color:#fff;font-size:12.5px;outline:0}
+.input:focus,select:focus,textarea:focus{border-color:rgba(16,185,129,.6)}
+label.lbl{display:block;font-size:10px;font-weight:700;color:var(--slate-400);letter-spacing:.05em;text-transform:uppercase;margin-bottom:.3rem}
+/* chips/pills */
+.pill{display:inline-flex;align-items:center;gap:4px;padding:.15rem .55rem;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.03em}
+.pill-em{background:rgba(16,185,129,.16);color:#34d399}.pill-am{background:rgba(245,158,11,.16);color:#fbbf24}
+.pill-rose{background:rgba(244,63,94,.16);color:#fb7185}.pill-cy{background:rgba(34,211,238,.14);color:#67e8f9}
+.pill-slate{background:#24304b;color:var(--slate-300)}.pill-pu{background:rgba(167,139,250,.15);color:#c4b5fd}
+/* tables */
+table.tbl{width:100%;text-align:left;font-size:12px;border-collapse:collapse}
+table.tbl thead{background:#0a1120;color:var(--slate-400);text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.06em}
+table.tbl th{padding:.65rem 1rem}table.tbl td{padding:.6rem 1rem;border-top:1px solid #182238}
+table.tbl tbody tr:hover{background:rgba(30,41,59,.5)}
+/* scroll */
+.scrolly{overflow-y:auto}.scrollx{overflow-x:auto}
+/* bars */
+.bar{height:8px;border-radius:999px;background:#1c2946;overflow:hidden}
+.bar>div{height:100%;border-radius:999px;transition:width .3s}
+/* navbar */
+.nav{position:sticky;top:0;z-index:50}
+.tabbar{display:flex;gap:.35rem;padding:.4rem;border-radius:14px;background:#0a1120;border:1px solid #1d2a45}
+.tab{padding:.55rem .9rem;border-radius:10px;font-size:12px;font-weight:700;color:var(--slate-400);border:0;background:0}
+.tab.active{background:rgba(16,185,129,.18);color:#34d399}
+.tab:hover{color:#fff}
+/* toasts */
+#toastbox{position:fixed;top:70px;right:16px;z-index:60;display:flex;flex-direction:column;gap:.5rem;max-width:360px}
+.toast{border-radius:12px;padding:.7rem .9rem;font-size:12px;font-weight:700;border:1px solid;animation:slidein .25s;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast.warn{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.45);color:#fbbf24}
+.toast.crit{background:rgba(244,63,94,.14);border-color:rgba(244,63,94,.5);color:#fb7185}
+.toast.ok{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.45);color:#34d399}
+@keyframes slidein{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+@keyframes ring{0%{box-shadow:0 0 0 0 rgba(34,211,238,.55)}70%{box-shadow:0 0 0 14px rgba(34,211,238,0)}100%{box-shadow:0 0 0 0 rgba(34,211,238,0)}}
+.pulse-ring{animation:ring 1.8s ease-out 2}
+/* scroll-state diagram */
+.stateline{display:flex;align-items:center;gap:0}
+.statenode{padding:.4rem .8rem;border-radius:10px;font-size:11px;font-weight:800;border:1px solid #24304b;background:#0a1120;white-space:nowrap}
+.stateline .lnk{width:34px;height:2px;background:#24304b;position:relative}
+.stateline .lnk.branch{height:2px}
+/* probe panel */
+.probe-row{display:flex;align-items:flex-start;gap:.6rem;padding:.45rem .6rem;border-radius:10px;font-size:12px}
+.probe-row .tk{font-weight:900}
+.probe-ok{background:rgba(16,185,129,.08)}
+.probe-fail{background:rgba(244,63,94,.1)}
+.logline{font-size:11px;color:var(--slate-400);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sect-img{width:224px;height:144px;object-fit:cover;border-radius:16px;border:1px solid #24304b}
+@media(max-width:900px){.md-flex-col{flex-direction:column}.sect-img{width:100%;height:150px}}
+.watermark{position:fixed;left:10px;bottom:8px;z-index:40;font-size:10px;letter-spacing:.12em;color:var(--slate-500);font-weight:700;background:rgba(2,6,23,.8);padding:.3rem .6rem;border-radius:8px;border:1px solid #182238}
+</style>
+</head>
+<body>
+<div class="watermark">GO-MINA 360 · FEED MILL DEMO CONSOLE · seeded simulation data</div>
+<div id="toastbox"></div>
+
+<!-- ══════════ NAVBAR ══════════ -->
+<header class="nav blur border-b">
+  <div class="maxw-7xl mx-auto px-6 py-3 flex items-center gap3 flex-wrap">
+    <div>
+      <div class="text-sm font-black white">Feed Mill — Interactive Feature Console</div>
+      <div class="logline" id="ticker">state log ready…</div>
+    </div>
+    <div class="flex-1"></div>
+    <div class="pill pill-em mono" id="probeCounter">probes run: 00 — all green ✓</div>
+    <button class="btn btn-em" id="btnRunAll">▶ Run all probes</button>
+    <button class="btn btn-ghost" id="btnReset">↺ Reset scenario</button>
+  </div>
+  <div class="maxw-7xl mx-auto px-6 py-2">
+    <nav class="tabbar" id="tabbar">
+      <button class="tab active" data-tab="s1">① Formulations</button>
+      <button class="tab" data-tab="s2">② Batches &amp; QC</button>
+      <button class="tab" data-tab="s3">③ Savings Analytics</button>
+      <button class="tab" data-tab="s4">④ Feed-out &amp; Alerts</button>
+    </nav>
+  </div>
+</header>
+
+<main class="maxw-7xl mx-auto px-6 py-4">
+  <section id="s1"></section>
+  <section id="s2" class="hidden"></section>
+  <section id="s3" class="hidden"></section>
+  <section id="s4" class="hidden"></section>
+</main>
+
+<script>
+"use strict";
+/* ═════════════════════ seeded stores (byte-identical reset) ═════════════════════ */
+const ING = {
+  "Maize":                   { protein: 8.9,  energy: 3350, color:"#f59e0b" },
+  "Soya Bean Meal":          { protein: 46.0, energy: 2450, color:"#10b981" },
+  "Wheat Bran":              { protein: 15.5, energy: 1700, color:"#a78bfa" },
+  "Oyster Shell":            { protein: 0,    energy: 0,    color:"#94a3b8" },
+  "Fish Meal":               { protein: 62.0, energy: 2900, color:"#22d3ee" },
+  "Broiler Concentrate 35%": { protein: 35.0, energy: 2600, color:"#f472b6" },
+  "Layer Premix":            { protein: 0,    energy: 0,    color:"#facc15" },
+  "DCP":                     { protein: 0,    energy: 0,    color:"#fb923c" },
+  "Salt":                    { protein: 0,    energy: 0,    color:"#e2e8f0" },
+};
+const SEED = {
+  formulations: [
+    { id:"F1", no:"FRM-2026-118534", name:"Koforidua Layer Mash 18%CP", type:"LAYER MASH", active:true,
+      refPrice: 8.60, batchSizeKg: 500, items:[["Maize",59],["Soya Bean Meal",20],["Wheat Bran",9.5],["Oyster Shell",9],["Layer Premix",1.5],["DCP",0.6],["Salt",0.4]] },
+    { id:"F2", no:"FRM-2026-118709", name:"Nsuoba Broiler Starter 22%CP", type:"BROILER STARTER", active:true,
+      refPrice: 9.40, batchSizeKg: 400, items:[["Maize",52],["Soya Bean Meal",34],["Broiler Concentrate 35%",10],["Fish Meal",2.5],["Layer Premix",1.0],["Salt",0.5]] },
+    { id:"F3", no:"FRM-2026-119301", name:"Draft Mix — Agya Kojo Acres", type:"GROWER", active:false,
+      refPrice: null, batchSizeKg: 250, items:[["Maize",65],["Soya Bean Meal",15],["Wheat Bran",8]] },
+  ],
+  batches: [
+    { no:"FDB-2026-041522", form:"F1", status:"QC_HOLD", planned:500, actual:487, costPerKg:6.61, date:"16 Sep 2026",
+      qc:{RAW_MATERIAL:{score:100,verdict:"PASS"},GRINDING:{score:92,verdict:"PASS"},MIXING:{score:88,verdict:"PASS"},FINISHED_FEED:{score:null,verdict:"PENDING"}} },
+    { no:"FDB-2026-038810", form:"F2", status:"RELEASED", planned:400, actual:396, costPerKg:7.14, date:"09 Sep 2026",
+      qc:{RAW_MATERIAL:{score:100,verdict:"PASS"},GRINDING:{score:95,verdict:"PASS"},MIXING:{score:91,verdict:"PASS"},FINISHED_FEED:{score:93,verdict:"PASS"}},
+      stocked:396, remaining:480, max:500 },
+    { no:"FDB-2026-030847", form:"F3", status:"REJECTED", planned:250, actual:0, costPerKg:null, date:"01 Sep 2026",
+      qc:{RAW_MATERIAL:{score:100,verdict:"PASS"},GRINDING:{score:60,verdict:"FAIL"},MIXING:{score:55,verdict:"FAIL"},FINISHED_FEED:{score:40,verdict:"FAIL"}},
+      rejectReason:"moisture 16.2% > spec" },
+  ],
+  savingsLedger: [
+    { no:"FDB-2026-011233", form:"F1", kgOut:512, costPerKg:6.42, ops:88,  date:"22 Aug 2026" },
+    { no:"FDB-2026-015577", form:"F1", kgOut:498, costPerKg:6.71, ops:92,  date:"29 Aug 2026" },
+    { no:"FDB-2026-021940", form:"F2", kgOut:455, costPerKg:7.95, ops:110, date:"03 Sep 2026" },
+    { no:"FDB-2026-025561", form:"F1", kgOut:503, costPerKg:6.58, ops:90,  date:"07 Sep 2026" },
+    { no:"FDB-2026-033322", form:"F2", kgOut:471, costPerKg:7.62, ops:104, date:"12 Sep 2026" },
+    { no:"FDB-2026-038810", form:"F2", kgOut:396, costPerKg:7.14, ops:96,  date:"09 Sep 2026" },
+  ],
+  purchAvg: 8.35,
+  bins: [
+    { no:"FDB-2026-038810", form:"F2", remaining:480, max:500 },
+    { no:"FDB-2026-025561", form:"F1", remaining:120, max:500 },
+    { no:"FDB-2026-011234", form:"F1", remaining:45,  max:500 },
+    { no:"FDB-2026-033322", form:"F2", remaining:8,   max:500 },
+  ],
+  flocks: ["Layers Shed 1 – NHYMM Batch","Broilers House 2","Koforidua Layers B"],
+  feedSeedDaily: { /* last 10 days kg per flock */
+    "Layers Shed 1 – NHYMM Batch":[62,64,63,65,61,66,64,63,65,64],
+    "Broilers House 2":          [48,50,52,51,55,54,53,56,57,58],
+    "Koforidua Layers B":        [40,41,39,42,41,40,43,42,41,42],
+  },
+};
+
+let S;                    // live scenario state
+let probeBatch = null;    // while a probe runs, mutations park their DOM/notify deltas here
+let probeLog = { s1:[], s2:[], s3:[], s4:[] };
+let ticker = [];
+const clone = o => JSON.parse(JSON.stringify(o));
+
+function resetScenario(){
+  S = {
+    formulations: clone(SEED.formulations).map(f=>({...f, items: f.items.map(([name,share])=>({name,share}))})),
+    conflicts: [],
+    selectedForm: "F1",
+    cpTarget: 18, meTarget: 2750,
+    batches: clone(SEED.batches),
+    selectedBatch: 0,
+    overrideChecked:false, overrideNote:"",
+    savings: { ledger: clone(SEED.savingsLedger), mode:"FORMULATION_REF", rangeN: 6, editIdx: null },
+    bins: clone(SEED.bins),
+    flocks: SEED.flocks.slice(),
+    feedouts: [],
+    daily: clone(SEED.feedSeedDaily),
+    days10: Array.from({length:10},(_,i)=>{const d=new Date(2026,8,10+i);return d.getDate()+" Sep";}),
+    filter: "ALL",
+    alertFeed: [],
+    solved: null,
+  };
+  recomputeConflicts();
+  S.solved = solveBlend();                         // seed solver point
+  probeLog = { s1:[], s2:[], s3:[], s4:[] };
+  updateCounter();
+}
+
+/* ═════════════════════ tiny utilities ═════════════════════ */
+const el = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const GHS = n => "GH₵ " + Number(n).toLocaleString("en-GH",{minimumFractionDigits:2, maximumFractionDigits:2});
+const r2 = n => Math.round(n*100)/100;
+const sum = a => a.reduce((x,y)=>x+y,0);
+function fmtKg(kg){ const bags=kg/50; return `${Number(kg).toFixed(1)} kg (~${bags.toFixed(1)} bags of 50 kg)`; }
+function fmtDate(d){ return d.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}); }
+function logT(msg){ if(probeBatch){ probeBatch.logs.push(msg); return; }
+ ticker.push(`${new Date().toLocaleTimeString("en-GB",{hour12:false})} · ${msg}`); ticker=ticker.slice(-60); el("ticker").textContent=ticker[ticker.length-1]; }
+function toast(kind,msg){ if(probeBatch){ probeBatch.toasts.push(kind+": "+msg); return; }
+ const t=document.createElement("div"); t.className="toast "+kind; t.textContent=msg; el("toastbox").appendChild(t); setTimeout(()=>{t.style.opacity="0";setTimeout(()=>t.remove(),400)},4200); }
+function probePush(sec,ok,label,detail){ probeLog[sec].push({ok,label,detail}); updateCounter(); }
+function updateCounter(){
+  const all=[...probeLog.s1,...probeLog.s2,...probeLog.s3,...probeLog.s4];
+  const fails=all.filter(p=>!p.ok).length;
+  const c=el("probeCounter");
+  c.textContent=`probes run: ${String(all.length).padStart(2,"0")} — ${fails? fails+" FAILING ✗":"all green ✓"}`;
+  c.className="pill mono "+(fails?"pill-rose":"pill-em");
+}
+function probePanel(sec){
+  const rows=probeLog[sec].map(p=>`<div class="probe-row ${p.ok?"probe-ok":"probe-fail"}">
+    <span class="tk ${p.ok?"emerald":"rose"}">${p.ok?"✓":"✗"}</span>
+    <div><span class="font-bold slate300">${esc(p.label)}</span><div class="text-xs slate400 mono">${esc(p.detail||"")}</div></div></div>`).join("");
+  return `<div class="card p-3 mt-3"><div class="text-xs font-bold slate400 uppercase mb-1">State-machine probe output — auto-assertions on live store</div>
+    <div class="${rows?"":"text-xs slate500"}">${rows||"probes not run yet — use ▶ Run all probes"}</div></div>`;
+}
+
+/* ═════════════════════ pure-SVG chart engine (no CDN deps) ═════════════════════ */
+function doughnut(parts, size=170){
+  // parts: [{label,value,color}]
+  const total=sum(parts.map(p=>p.value))||1; const cx=size/2, cy=size/2, r=size/2-8, r0=r*0.58;
+  let a=-Math.PI/2, arcs="";
+  for(const p of parts){
+    const ang=p.value/total*Math.PI*2, a2=a+ang;
+    const L=ang>Math.PI?1:0;
+    const x1=cx+r*Math.cos(a),y1=cy+r*Math.sin(a),x2=cx+r*Math.cos(a2),y2=cy+r*Math.sin(a2);
+    const x3=cx+r0*Math.cos(a2),y3=cy+r0*Math.sin(a2),x4=cx+r0*Math.cos(a),y4=cy+r0*Math.sin(a);
+    arcs+=`<path d="M${x1},${y1} A${r},${r} 0 ${L} 1 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 ${L} 0 ${x4},${y4} Z" fill="${p.color}" stroke="#0f172a" stroke-width="2"/>`;
+    a=a2;
+  }
+  const legend=parts.map(p=>`<div class="flex items-center gap2 text-xs"><span style="width:10px;height:10px;border-radius:3px;background:${p.color}"></span><span class="slate300">${esc(p.label)}</span><span class="slate500 mono">${(p.value/total*100).toFixed(1)}%</span></div>`).join("");
+  return `<div class="flex items-center gap4 flex-wrap"><svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${arcs}<text x="${cx}" y="${cy-4}" text-anchor="middle" font-size="20" font-weight="900" fill="#e2e8f0">${total.toFixed(total%1?1:0)}%</text><text x="${cx}" y="${cy+14}" text-anchor="middle" font-size="9" fill="#64748b">MIX SHARES</text></svg><div class="flex flex-col gap1">${legend}</div></div>`;
+}
+function lineChart(series, opts={}){
+  // series: [{label,color,points:number[]}], opts:{labels:[], band:{a:idxA,b:idxB}, ref:{value,label}, h, yLabel, yFmt}
+  const W=opts.w||560,H=opts.h||200,P={l:46,r:14,t:14,b:28};
+  const all=series.flatMap(s=>s.points); if(opts.ref) all.push(opts.ref.value);
+  const lo=Math.min(...all), hi=Math.max(...all), span=(hi-lo)||1, yLo=lo-span*.15, yHi=hi+span*.15;
+  const X=i=>P.l+(W-P.l-P.r)*(series[0].points.length>1?i/(series[0].points.length-1):.5);
+  const Y=v=>P.t+(H-P.t-P.b)*(1-(v-yLo)/(yHi-yLo));
+  let g="";
+  [0,.25,.5,.75,1].forEach(f=>{const y=P.t+(H-P.t-P.b)*f; g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#1c2946"/><text x="${P.l-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#64748b">${(opts.yFmt?opts.yFmt(yHi-(yHi-yLo)*f):r2(yHi-(yHi-yLo)*f))}</text>`;});
+  if(opts.labels) opts.labels.forEach((t,i)=>{ g+=`<text x="${X(i)}" y="${H-8}" text-anchor="middle" font-size="9" fill="#64748b">${esc(t)}</text>`; });
+  if(opts.band){ const a=series[opts.band.a], b=series[opts.band.b];
+    const top=a.points.map((v,i)=>`${X(i)},${Y(v)}`).join(" ");
+    const bot=b.points.map((v,i)=>`${X(i)},${Y(v)}`).reverse().join(" ");
+    g+=`<polygon points="${top} ${bot}" fill="rgba(16,185,129,.13)"/>`; }
+  if(opts.ref){ g+=`<line x1="${P.l}" y1="${Y(opts.ref.value)}" x2="${W-P.r}" y2="${Y(opts.ref.value)}" stroke="#f59e0b" stroke-dasharray="5 4"/><text x="${W-P.r-4}" y="${Y(opts.ref.value)-5}" text-anchor="end" font-size="9" fill="#f59e0b">${esc(opts.ref.label)}</text>`; }
+  for(const s of series){
+    g+=`<polyline points="${s.points.map((v,i)=>`${X(i)},${Y(v)}`).join(" ")}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    s.points.forEach((v,i)=>{ g+=`<circle cx="${X(i)}" cy="${Y(v)}" r="3.4" fill="#0f172a" stroke="${s.color}" stroke-width="2"/>`; });
+  }
+  const legend=series.map(s=>`<span class="flex items-center gap1 text-2xs"><span style="width:12px;height:3px;background:${s.color}"></span>${esc(s.label)}</span>`).join("");
+  return `<div><div class="flex gap3 mb-1">${legend}</div><svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>${opts.yLabel?`<div class="text-2xs slate500 text-center">${esc(opts.yLabel)}</div>`:""}</div>`;
+}
+function barChart(items, opts={}){
+  // items: [{label, value, color, sub}]
+  const W=opts.w||560,H=opts.h||190,P={l:46,r:10,t:16,b:32};
+  const hi=Math.max(...items.map(i=>i.value),1), lo=Math.min(0,...items.map(i=>i.value));
+  const span=(hi-lo)||1, yHi=hi+span*.12, yLo=lo-span*.12;
+  const slot=(W-P.l-P.r)/items.length, bw=Math.min(slot*.62,44);
+  const Y=v=>P.t+(H-P.t-P.b)*(1-(v-yLo)/(yHi-yLo));
+  let g=""; [0,.5,1].forEach(f=>{const y=P.t+(H-P.t-P.b)*f; g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#1c2946"/><text x="${P.l-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#64748b">${r2(yHi-(yHi-yLo)*f)}</text>`;});
+  if(opts.ref){g+=`<line x1="${P.l}" y1="${Y(opts.ref.value)}" x2="${W-P.r}" y2="${Y(opts.ref.value)}" stroke="#f59e0b" stroke-dasharray="5 4"/><text x="${W-P.r-4}" y="${Y(opts.ref.value)-5}" text-anchor="end" font-size="9" fill="#f59e0b">${esc(opts.ref.label)}</text>`;}
+  items.forEach((it,i)=>{ const x=P.l+slot*i+(slot-bw)/2, y=Y(Math.max(it.value,0)), y0=Y(Math.min(it.value,0));
+    g+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(1,y0-y)}" rx="4" fill="${it.color}"/>`;
+    g+=`<text x="${x+bw/2}" y="${H-18}" text-anchor="middle" font-size="9" fill="#94a3b8">${esc(it.label)}</text>`;
+    if(it.sub!=null) g+=`<text x="${x+bw/2}" y="${H-7}" text-anchor="middle" font-size="8.5" fill="#64748b">${esc(it.sub)}</text>`;
+    g+=`<text x="${x+bw/2}" y="${y-5}" text-anchor="middle" font-size="9.5" font-weight="800" fill="#e2e8f0">${opts.fmt?opts.fmt(it.value):r2(it.value)}</text>`; });
+  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+function stackedArea(stacks, opts={}){
+  // stacks: [{label,color,points[]}] all same length, cumulative per day; opts:{labels,w,h}
+  const W=opts.w||560,H=opts.h||200,P={l:42,r:12,t:12,b:26};
+  const n=stacks[0].points.length;
+  const totals=Array.from({length:n},(_,i)=>sum(stacks.map(s=>s.points[i])));
+  const hi=Math.max(...totals,1);
+  const X=i=>P.l+(W-P.l-P.r)*(n>1?i/(n-1):.5), Y=v=>P.t+(H-P.t-P.b)*(1-v/(hi*1.1));
+  let g=""; [0,.5,1].forEach(f=>{const y=P.t+(H-P.t-P.b)*f; g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#1c2946"/><text x="${P.l-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#64748b">${Math.round(hi*1.1*(1-f))}</text>`;});
+  opts.labels.forEach((t,i)=>{ g+=`<text x="${X(i)}" y="${H-8}" text-anchor="middle" font-size="8.5" fill="#64748b">${esc(t)}</text>`; });
+  let base=Array(n).fill(0);
+  for(const s of stacks){
+    const top=base.map((v,i)=>v+s.points[i]);
+    const p1=top.map((v,i)=>`${X(i)},${Y(v)}`).join(" ");
+    const p2=base.map((v,i)=>`${X(i)},${Y(v)}`).reverse().join(" ");
+    g+=`<polygon points="${p1} ${p2}" fill="${s.color}" opacity=".78"/>`;
+    g+=`<polyline points="${top.map((v,i)=>`${X(i)},${Y(v)}`).join(" ")}" fill="none" stroke="${s.color.replace(')',',1)').replace('rgba','rgba')}" stroke-width="1.6"/>`;
+    base=top;
+  }
+  const legend=stacks.map(s=>`<span class="flex items-center gap1 text-2xs"><span style="width:10px;height:10px;border-radius:3px;background:${s.color}"></span>${esc(s.label)}</span>`).join("");
+  return `<div><div class="flex gap3 mb-1 flex-wrap">${legend}</div><svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg></div>`;
+}
+function horizBar(label,pct,color,w=170){ return `<div class="flex items-center gap2"><span class="text-2xs slate400" style="width:110px">${esc(label)}</span><div class="bar" style="width:${w}px"><div style="width:${Math.max(2,pct)}%;background:${color}"></div></div><span class="text-2xs mono tnum slate300">${pct}%</span></div>`; }
+
+/* ═════════════════════ SECTION 1 · FORMULATION BUILDER ═════════════════════ */
+function formById(id){ return S.formulations.find(f=>f.id===id); }
+function formSum(f){ return r2(sum(f.items.map(i=>i.share))); }
+function macroSplit(f){
+  const prot = r2(sum(f.items.map(i=>i.share*(ING[i.name]?.protein||0)/100)));
+  const ener = Math.round(sum(f.items.map(i=>i.share*(ING[i.name]?.energy||0)/100)));
+  return { prot, ener,
+    parts:[{label:"Energy carriers (maize, bran)", value:r2(sum(f.items.filter(i=>["Maize","Wheat Bran"].includes(i.name)).map(i=>i.share))), color:"#f59e0b"},
+           {label:"Protein sources (soya, fish, concentrate)", value:r2(sum(f.items.filter(i=>["Soya Bean Meal","Fish Meal","Broiler Concentrate 35%"].includes(i.name)).map(i=>i.share))), color:"#10b981"},
+           {label:"Minerals & premix", value:r2(sum(f.items.filter(i=>!["Maize","Wheat Bran","Soya Bean Meal","Fish Meal","Broiler Concentrate 35%"].includes(i.name)).map(i=>i.share))), color:"#a78bfa"}]};
+}
+function recomputeConflicts(){
+  S.conflicts = S.formulations.filter(f=>Math.abs(formSum(f)-100)>0.5).map(f=>({id:f.id,name:f.name,expected:100,actual:formSum(f),delta:r2(formSum(f)-100)}));
+}
+function solveBlend(){
+  // demo solver: hit target CP% with maize/soya/bran only (two eqns: Σ=100, CP=target); ME shown as computed
+  const target=S.cpTarget, ingredients=["Maize","Soya Bean Meal","Wheat Bran"];
+  // Solve shares s for Σs=100 and Σs*cp_i=target, using bran share min 5 absorb residual:
+  const cps=ingredients.map(n=>ING[n].protein);
+  // parametrize: bran=5; maize = 95 - soya; soya = (target - maizecp*95 - bran*cpBran)/(cpSoya-maizecp)
+  const bran=5, soya=Math.max(0,Math.min(95,(target-(cps[0]*95+cps[2]*bran))/(cps[1]-cps[0])));
+  const sol={maize:r2(95-soya-soya*0),soya:r2(soya),bran};
+  sol.maize=r2(100-sol.soya-sol.bran);
+  const cp=r2(sum(ingredients.map((n,i)=>[sol.maize,sol.soya,sol.bran][i]*cps[i]/100)));
+  const me=Math.round(sum(ingredients.map((n,i)=>[sol.maize,sol.soya,sol.bran][i]*ING[n].energy/100)));
+  const cost=r2(sol.maize*0.052+sol.soya*0.11+sol.bran*0.028); // GHS/kg rough Accra spot
+  return {shares:sol,cp,me,cost};
+}
+function renderS1(){
+  const f=formById(S.selectedForm), sigma=formSum(f), mac=macroSplit(f), balanced=Math.abs(sigma-100)<=0.5;
+  el("s1").innerHTML=`
+  <div class="card-xl p-5 mb-4">
+    <div class="flex gap4 items-start flex-wrap md-flex-col">
+      <img class="sect-img" src="formulation-builder.jpg" alt="Formulation builder benchmark">
+      <div class="flex-1">
+        <div class="text-2xs font-black purple uppercase tracking-wider">Feature demo 1</div>
+        <h2 class="text-xl font-black white">Formulation Builder — proportion engine</h2>
+        <p class="text-xs slate400 mt-1 maxw-2xl">Edit ingredient % shares of Ghana-relevant poultry recipes. Bounds are validated live (Σ must be 100 ± 0.5); conflicts queue in the drawer and must be resolved before a run. The nutrient solver and macro chart re-derive from each keystroke. <span class="slate500">Screenshot: the shipped formulation benchmark UI.</span></p>
+      </div>
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:340px 1fr;gap:1rem" id="s1grid">
+    <div class="flex flex-col gap3">
+      <div class="card p-3">
+        <div class="lbl">Formulations (Σ share status)</div>
+        ${S.formulations.map(x=>{const s=formSum(x),ok=Math.abs(s-100)<=0.5;return `
+          <button class="w-full text-left p-2 rounded-lg mb-1 ${x.id===S.selectedForm?"border":""}" style="background:${x.id===S.selectedForm?"rgba(16,185,129,.08)":"#0a1120"}" onclick="selectForm('${x.id}')">
+            <div class="flex justify-between items-center"><span class="text-xs font-bold white">${esc(x.name)}</span>
+            <span class="pill ${ok?"pill-em":"pill-rose"}">Σ ${s}%</span></div>
+            <div class="text-2xs slate500 mono">${x.no} · ${x.type} · batch ${x.batchSizeKg} kg ${x.refPrice?`· ref ${GHS(x.refPrice)}/kg at lines`:""}</div>
+          </button>`;}).join("")}
+      </div>
+      <div class="card p-3">
+        <div class="lbl">Macro nutrient split (live)</div>
+        ${doughnut(mac.parts.map(p=>({label:p.label,value:p.value,color:p.color})))}
+        <div class="flex gap3 mt-2">
+          <span class="pill pill-cy">CP ${mac.prot}%</span><span class="pill pill-am">ME ${mac.ener} kcal/kg</span>
+          <span class="pill ${balanced?"pill-em":"pill-rose"}">${balanced?"BALANCED":"CONFLICT"}</span>
+        </div>
+      </div>
+      <div class="card p-3">
+        <div class="lbl">Nutrient target solver (demo)</div>
+        <div class="flex gap3 items-center"><span class="text-xs slate400 w-24">Target CP%</span>
+          <input type="range" min="14" max="24" step="0.5" value="${S.cpTarget}" class="flex-1" oninput="S.cpTarget=+this.value;S.solved=solveBlend();renderS1()">
+          <span class="mono text-xs emerald tnum" style="width:38px">${S.cpTarget}%</span></div>
+        <div class="flex gap3 items-center mt-2"><span class="text-xs slate400 w-24">Target ME</span>
+          <input type="range" min="2500" max="3100" step="25" value="${S.meTarget}" class="flex-1" oninput="S.meTarget=+this.value;S.solved=solveBlend();renderS1()">
+          <span class="mono text-xs amber tnum" style="width:52px">${S.meTarget}</span></div>
+        <div class="inset p-2 mt-3 text-xs">
+          <div class="font-bold white mb-1">Solver recommendation (maize / soya / bran only)</div>
+          <div class="mono slate300">Maize ${S.solved.shares.maize}% · Soya ${S.solved.shares.soya}% · Bran ${S.solved.shares.bran}%</div>
+          <div class="slate400 text-2xs mt-1">achieves CP ${S.solved.cp}% · ME ${S.solved.me} kcal/kg · est. cost ${GHS(S.solved.cost)}/kg <span class="${S.solved.me>=S.meTarget?"emerald":"amber"}">(${S.solved.me>=S.meTarget?"meets":"below"} ME goal)</span></div>
+        </div>
+        <div class="mt-2">${lineChart([{label:"CP% achieved",color:"#10b981",points:[S.solved.cp,Math.max(0,S.solved.cp-2),Math.max(0,S.solved.cp-4)]},{label:"Cost GH₵/kg ×2",color:"#f59e0b",points:[r2(S.solved.cost*2),r2((S.solved.cost+0.35)*2),r2((S.solved.cost+0.7)*2)]}],{labels:["solver blend","+2% soya","+4% soya"],h:150,yLabel:"protein vs cost trade-off — moves with sliders"})}</div>
+      </div>
+    </div>
+    <div class="flex flex-col gap3">
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2">
+          <div><div class="text-sm font-black white">${esc(f.name)}</div><div class="text-2xs slate500">edit % shares — Σ must be 100 ± 0.5</div></div>
+          <span id="shareChip" class="pill ${balanced?"pill-em":"pill-rose"}" style="font-size:12px">Σ ${sigma}% ${balanced?"· BALANCED":"· OUT OF BOUNDS"}</span>
+        </div>
+        <table class="tbl"><thead><tr><th>Ingredient</th><th style="width:110px">Share %</th><th style="width:120px">Protein</th><th style="width:120px">ME</th><th style="width:60px"></th></tr></thead>
+        <tbody>${f.items.map((it,i)=>{const meta=ING[it.name]||{protein:0,energy:0,color:"#64748b"};return `<tr>
+          <td><span style="color:${meta.color}">●</span> <span class="white font-bold">${esc(it.name)}</span></td>
+          <td><input class="input tnum" data-share-idx="${i}" type="number" step="0.1" min="0" max="100" value="${it.share}"></td>
+          <td class="slate400 mono">${r2(it.share*meta.protein/100)} pts</td>
+          <td class="slate400 mono">${Math.round(it.share*meta.energy/100)} kcal</td>
+          <td><button class="btn btn-ghost" style="padding:.25rem .5rem" onclick="removeIng(${i})">✕</button></td></tr>`;}).join("")}
+        </tbody></table>
+        <div class="flex gap2 mt-3 flex-wrap">
+          <input list="inglist" id="newIng" class="input" style="width:220px" placeholder="add ingredient…(datalist)">
+          <datalist id="inglist">${Object.keys(ING).map(n=>`<option value="${n}">`).join("")}</datalist>
+          <input id="newShare" class="input tnum" style="width:80px" type="number" step="0.1" placeholder="%">
+          <button class="btn btn-em" onclick="addIng()">+ Add to BOM</button>
+          <button class="btn btn-am" onclick="autoFix('${f.id}')" ${balanced?"disabled":""}>⚖ Auto-fix (pro-rata)</button>
+        </div>
+      </div>
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2"><div class="text-sm font-black white">⚠ Proportion conflicts drawer</div>
+          <span class="pill ${S.conflicts.length?"pill-rose":"pill-em"}">${S.conflicts.length} open</span></div>
+        <div id="confList">${S.conflicts.length? S.conflicts.map(c=>`
+          <div class="inset p-2 mb-2 flex items-center gap3 flex-wrap">
+            <span class="pill pill-rose">△ ${c.delta>0?"+":""}${c.delta}%</span>
+            <div class="flex-1"><div class="text-xs font-bold white">${esc(c.name)}</div>
+              <div class="text-2xs slate400">expected Σ 100.0% · actual Σ ${c.actual}% — must be resolved before batch runs</div></div>
+            <button class="btn btn-am" onclick="autoFix('${c.id}')">⚖ Auto-fix (pro-rata)</button>
+          </div>`).join("") : `<div class="text-xs slate500 p-2">No conflicts — every formulation sums within tolerance. Clear a share above to force one.</div>`}
+        </div>
+      </div>
+      ${probePanel("s1")}
+    </div>
+  </div>`;
+  el("s1").querySelectorAll("[data-share-idx]").forEach(inp=>{
+    inp.addEventListener("change",()=>{ const f2=formById(S.selectedForm); f2.items[+inp.dataset.shareIdx].share=+inp.value; recomputeConflicts(); logT(`share edit ${f2.items[+inp.dataset.shareIdx].name} → ${inp.value}% (Σ ${formSum(f2)}%)`); renderAll(); });
+  });
+  if(window.innerWidth<900){ el("s1grid").style.gridTemplateColumns="1fr"; }
+}
+window.selectForm=id=>{S.selectedForm=id;renderAll();};
+window.addIng=()=>{ const n=el("newIng").value, sh=+el("newShare").value||0; if(!ING[n]){toast("crit","Unknown ingredient — pick from the datalist");return;} const f=formById(S.selectedForm); if(f.items.some(i=>i.name===n)){toast("warn",n+" already in BOM");return;} f.items.push({name:n,share:sh}); recomputeConflicts(); logT(`ingredient added: ${n} ${sh}% (Σ ${formSum(f)}%)`); renderAll(); };
+window.removeIng=i=>{ const f=formById(S.selectedForm); logT(`ingredient removed: ${f.items[i].name}`); f.items.splice(i,1); recomputeConflicts(); renderAll(); };
+window.autoFix=fid=>{ const f=formById(fid), s=formSum(f), k=100/s; f.items.forEach(i=>i.share=r2(i.share*k)); const drift=r2(100-formSum(f)); f.items[0].share=r2(f.items[0].share+drift); recomputeConflicts(); logT(`${f.name} auto-fixed pro-rata → Σ ${formSum(f)}%`); toast("ok",`Conflict resolved — ${f.name} now balances at Σ 100%`); renderAll(); };
+function runProbesS1(){
+  probeLog.s1=[];
+  const F1=formById("F1"), keep=clone(F1.items);
+  F1.items=[{name:"Maize",share:89},{name:"Soya Bean Meal",share:11.3}]; recomputeConflicts();
+  probePush("s1", Math.abs(formSum(F1)-100)<=0.5 && !S.conflicts.some(c=>c.id==="F1"), "P1 tolerated tolerance bound", `89+11.3 → Σ=${formSum(F1)}% → within ±0.5, no conflict queued (expected: no conflict)`);
+  autoFixSilent("F1");  // undo P1's edit so the drawer is back to its seeded state
+  const F3=formById("F3"); probePush("s1", S.conflicts.some(c=>c.id==="F3"&&c.actual===88), "P2 compliant conflict detected", `F3 Σ=${formSum(F3)}% → conflict drawer holds expected 100 / actual 88 (expected: conflict)`);
+  autoFixSilent("F3"); probePush("s1", formSum(F3)===100 && !S.conflicts.some(c=>c.id==="F3") && S.conflicts.length===0, "P3 auto-fix clears conflict", `resolve → Σ=${formSum(F3)}% · drawer open=${S.conflicts.length} (expected 0)`);
+  const before=S.solved.cost; S.cpTarget=20; S.solved=solveBlend();
+  probePush("s1", S.solved.shares.soya > 0 && Math.abs(S.solved.cp-20)<0.6, "P4 slider re-solves blend", `target CP 20% → soya ${S.solved.shares.soya}% · achieves CP ${S.solved.cp}% (cost ${GHS(before)}→${GHS(S.solved.cost)})`);
+  S.cpTarget=18; S.solved=solveBlend(); F1.items=keep; recomputeConflicts(); renderAll();
+}
+function autoFixSilent(fid){ const f=formById(fid), s=formSum(f), k=100/s; f.items.forEach(i=>i.share=r2(i.share*k)); const drift=r2(100-formSum(f)); f.items[0].share=r2(f.items[0].share+drift); recomputeConflicts(); }
+
+/* ═════════════════════ SECTION 2 · BATCH LIFECYCLE & QC ═════════════════════ */
+const STAGES=["RAW_MATERIAL","GRINDING","MIXING","FINISHED_FEED"];
+function releaseAllowed(b){ return b.qc.FINISHED_FEED.verdict==="PASS"; }
+function readinessPct(b){ const done=STAGES.filter(s=>b.qc[s].verdict==="PASS").length; return Math.round(done/4*100); }
+function renderS2(){
+  const list=S.batches.map((b,i)=>`<button class="w-full text-left p-3 rounded-lg mb-2" style="background:${i===S.selectedBatch?"rgba(34,211,238,.07)":"#0a1120"};border:1px solid ${i===S.selectedBatch?"#22d3ee44":"#182238"}" onclick="S.selectedBatch=${i};renderAll()">
+    <div class="flex justify-between items-center"><span class="mono text-xs font-bold cyan">${b.no}</span>
+      <span class="pill ${b.status==="RELEASED"?"pill-em":b.status==="QC_HOLD"?"pill-am":"pill-rose"}">${b.status}</span></div>
+    <div class="text-2xs slate500">${formById(b.form)?.name||b.form} · ${b.date} · in ${b.planned}kg → out ${b.actual}kg · yield ${b.planned?r2(b.actual/b.planned*100):"—"}%</div>
+  </button>`).join("");
+  const b=S.batches[S.selectedBatch];
+  const isHold=b.status==="QC_HOLD", isRel=b.status==="RELEASED";
+  el("s2").innerHTML=`
+  <div class="card-xl p-5 mb-4">
+    <div class="flex gap4 items-start flex-wrap md-flex-col">
+      <img class="sect-img" src="batch-qc.jpg" alt="Batch QC benchmark">
+      <div class="flex-1"><div class="text-2xs font-black cyan uppercase tracking-wider">Feature demo 2</div>
+      <h2 class="text-xl font-black white">Batch Lifecycle &amp; QC Pipeline</h2>
+      <p class="text-xs slate400 mt-1 maxw-2xl">Each mix runs a 4-stage state machine (raw → grind/sieve → mix → finished-feed). Release is <b class="white">gated</b> by a FINISHED_FEED PASS; the owner may override only with an audited justification. Rejection reverses stock automatically. Every click mutates the store — probe output below verifies it.</p></div>
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:290px 1fr;gap:1rem" id="s2grid">
+    <div class="card p-3"><div class="lbl">Batches (select)</div>${list}</div>
+    <div class="flex flex-col gap3">
+      <div class="card p-4">
+        <div class="flex justify-between items-center flex-wrap gap2">
+          <div><span class="mono font-black white text-lg">${b.no}</span> <span class="pill ${b.status==="RELEASED"?"pill-em":b.status==="QC_HOLD"?"pill-am":"pill-rose"} ml-2">${b.status}${b.override?" (OVERRIDE)":""}</span></div>
+          <div class="text-2xs slate500">${formById(b.form)?.name||""} · ${b.date}</div>
+        </div>
+        <div class="stateline mt-3 mb-3">
+          <span class="statenode ${"pill-cy"}">MIXED</span><span class="lnk"></span>
+          <span class="statenode ${isHold||isRel?"pill-am":""}">QC_HOLD</span><span class="lnk"></span>
+          <span class="statenode ${isRel?"pill-em":""}">RELEASED</span>
+          <span class="lnk branch"></span>
+          <span class="statenode ${b.status==="REJECTED"?"pill-rose":""}" style="${b.status!=="REJECTED"?"opacity:.35":""}">REJECTED</span>
+        </div>
+        ${b.status==="REJECTED"?`<div class="inset p-2 text-xs rose mb-3">Rejected: ${esc(b.rejectReason||"—")} · stock reversal posted (+${b.planned} kg returned to raw store)</div>`:""}
+        <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:.6rem">
+          ${STAGES.map(s=>{const q=b.qc[s];return `<div class="inset p-3">
+            <div class="text-2xs font-bold slate400 uppercase">${s.replace(/_/g," ")}</div>
+            <div class="mt-2"><span class="pill ${q.verdict==="PASS"?"pill-em":q.verdict==="FAIL"?"pill-rose":"pill-slate"}">${q.verdict}</span></div>
+            <div class="text-2xl font-black tnum ${q.verdict==="PASS"?"emerald":q.verdict==="FAIL"?"rose":"slate300"} mt-1">${q.score!=null?q.score+"%":"--"}</div>
+            ${(isHold&&q.verdict!=="PASS")?`<button class="btn btn-ghost mt-2 text-2xs" style="padding:.3rem .5rem" onclick="runStage('${s}')">▶ Run stage test</button>`:""}
+            ${(s==="FINISHED_FEED"&&isHold&&q.verdict!=="PASS")?`<button class="btn btn-rose mt-2 text-2xs" style="padding:.3rem .5rem" onclick="forceMoistureFail()">💧 Simulate moisture fail</button>`:""}
+            ${q.detail?`<div class="text-2xs slate500 mt-1">${esc(q.detail)}</div>`:""}
+          </div>`;}).join("")}
+        </div>
+        <div class="mt-3">${horizBar("release readiness",readinessPct(b),readinessPct(b)===100?"#10b981":"#f59e0b",320)}</div>
+        <div class="flex gap2 mt-3 flex-wrap items-end">
+          ${isHold?`
+            <button class="btn btn-solid-em" onclick="tryRelease(false)">🔓 Release batch</button>
+            <button class="btn btn-rose" onclick="tryReject()">⛔ Reject batch</button>
+            <label class="flex items-center gap2 text-xs slate300"><input type="checkbox" ${S.overrideChecked?"checked":""} onchange="S.overrideChecked=this.checked;renderAll()"> owner override</label>
+            ${S.overrideChecked?`<textarea class="input" rows="2" style="max-width:340px" placeholder="override justification (required, audited)">${esc(S.overrideNote)}</textarea>
+            <button class="btn btn-am" onclick="tryRelease(true)">⚠ Override &amp; release</button>`:""}
+          `:""}
+          ${isRel?`<span class="pill pill-em">✓ Released ${b.releasedAt||""} — stock available for feed-out${b.override?` · override note: “${esc(b.overrideNote)}”`:""}</span>`:""}
+        </div>
+        <div id="gateMsg" class="mt-2 text-xs ${b._gate?"rose":"hidden"}">${b._gate||""}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-sm font-black white mb-2">Yield — planned input vs weighed output</div>
+        ${barChart(S.batches.filter(x=>x.status!=="REJECTED").map(x=>({label:x.no.slice(-6),value:r2(x.actual/x.planned*100),sub:`${x.actual}/${x.planned} kg`,color:r2(x.actual/x.planned*100)>=97?"#10b981":"#f59e0b"})),{ref:{value:97,label:"97% avg target"},fmt:v=>v+"%"})}
+      </div>
+      ${probePanel("s2")}
+    </div>
+  </div>`;
+  const ta=el("s2").querySelector("textarea"); if(ta) ta.addEventListener("input",()=>{S.overrideNote=ta.value;});
+  if(window.innerWidth<900){ el("s2grid").style.gridTemplateColumns="1fr"; }
+}
+window.runStage=s=>{ const b=S.batches[S.selectedBatch]; const score=85+Math.floor(Math.random()*14);
+  b.qc[s]={score,verdict:score>=75?"PASS":"FAIL",detail:s==="FINISHED_FEED"?`moisture ${(9+Math.random()*3).toFixed(1)}% ≤ 13%`:"within tolerance"}; logT(`${b.no} ${s} tested → ${score}% ${b.qc[s].verdict}`); renderAll(); };
+window.forceMoistureFail=()=>{ const b=S.batches[S.selectedBatch]; b.qc.FINISHED_FEED={score:38,verdict:"FAIL",detail:"moisture 15.8% > 13% spec"}; logT(`${b.no} FINISHED_FEED FAILED — moisture 15.8%`); toast("crit","FINISHED FEED FAIL — batch locked, management alerted"); renderAll(); };
+window.tryRelease=(ov)=>{ const b=S.batches[S.selectedBatch]; b._gate="";
+  if(!ov && !releaseAllowed(b)){ b._gate=`BLOCKED — finished-feed QC required (current verdict: ${b.qc.FINISHED_FEED.verdict})`; logT(`${b.no} release blocked by gate`); renderAll(); return; }
+  if(ov){ const note=(S.overrideNote||"").trim(); if(!note){ b._gate="Override refused — justification is required (audited)"; logT(`${b.no} override refused: no justification`); renderAll(); return; }
+    b.override=true; b.overrideNote=note; }
+  b.status="RELEASED"; b.releasedAt=fmtDate(new Date(2026,8,19));
+  const bin={no:b.no,form:b.form,remaining:b.actual,max:b.planned}; S.bins.unshift(bin);
+  // push into savings ledger too (traceable chain)
+  if(!S.savings.ledger.some(l=>l.no===b.no)) S.savings.ledger.push({no:b.no,form:b.form,kgOut:b.actual,costPerKg:b.costPerKg||6.9,ops:90,date:b.date});
+  logT(`${b.no} RELEASED${ov?" via owner override":""} — ${b.actual} kg stocked`);
+  toast("ok",`Batch ${b.no} released — now feedable from Feed-out tab`); if(!probeBatch) renderAll(); };
+window.tryReject=()=>{ const b=S.batches[S.selectedBatch];
+  const reason=(prompt?.("Rejection reason (audited):", b.qc.FINISHED_FEED?.detail||"out of spec")||"").trim();
+  if(!reason){ b._gate="Rejection refused — reason is required"; renderAll(); return; }
+  b.status="REJECTED"; b.rejectReason=reason;
+  logT(`${b.no} REJECTED — stock reversal +${b.planned} kg posted`); toast("warn",`Batch rejected; ${b.planned} kg restored to raw store`); if(!probeBatch) renderAll(); };
+function runProbesS2(){
+  probeLog.s2=[];
+  probeBatch = { toasts: [], logs: [] };
+  // P4: blocked release on hold batch without finished pass
+  const idx=S.batches.findIndex(b=>b.no==="FDB-2026-041522"); S.selectedBatch=idx; const b=S.batches[idx];
+  const tryRelease_final = window.tryRelease;
+  window.tryRelease = (ov)=>{ tryRelease_final(ov); return { applied: !(S.batches[S.selectedBatch]._gate || ""), gate: S.batches[S.selectedBatch]._gate || "" }; };
+  b.qc.FINISHED_FEED={score:null,verdict:"PENDING"}; const r4=tryRelease(false);
+  probePush("s2", b.status==="QC_HOLD" && !r4.applied && /BLOCKED/.test(r4.gate), "P4 release gate blocks", `attempt release w/o finished-feed PASS → status stays QC_HOLD · gate msg: "${r4.gate}"`);
+  // P5: passing test enables release
+  b.qc.FINISHED_FEED={score:93,verdict:"PASS",detail:"moisture 10.9% ≤ 13%"}; b._gate=""; const r5=tryRelease(false);
+  probePush("s2", r5.applied && b.status==="RELEASED" && releaseAllowed(b), "P5 release after PASS", `FINISHED_FEED PASS 93% → status now ${b.status} · bin stocked ${S.bins.find(x=>x.no===b.no)?.remaining} kg`);
+  b.status="QC_HOLD"; b.releasedAt=null; S.bins=S.bins.filter(x=>x.no!==b.no); b.qc.FINISHED_FEED={score:null,verdict:"PENDING"}; // restore
+  // P6: override requires justification
+  S.overrideChecked=true; S.overrideNote=""; const r6=tryRelease(true);
+  probePush("s2", b.status==="QC_HOLD" && !r6.applied && /justification/.test(r6.gate), "P6 override needs justification", `blank note → refused: "${r6.gate}"`);
+  S.overrideNote="Vet cleared post-regrind mix — Dr Adjei memo 16-09"; S.overrideChecked=true; const r7=tryRelease(true);
+  probePush("s2", r7.applied && b.status==="RELEASED" && b.override===true && b.overrideNote.length>5, "P7 override release audited", `applied release with note “${b.overrideNote.slice(0,34)}…” · override chip shown`);
+  S.overrideChecked=false; b._gate="";
+  window.tryRelease = tryRelease_final;
+  probeBatch = null;
+  renderAll();
+}
+
+/* ═════════════════════ SECTION 3 · SAVINGS ANALYTICS ═════════════════════ */
+function savingsView(){
+  const L=S.savings.ledger.slice(-S.savings.rangeN);
+  const base=L.map(l=>{const f=formById(l.form); return S.savings.mode==="FORMULATION_REF" && f?.refPrice ? f.refPrice : SEED.purchAvg;});
+  const rows=L.map((l,i)=>({...l, baseline:base[i], savingKg:r2(base[i]-l.costPerKg), savingTotal:r2((base[i]-l.costPerKg)*l.kgOut)}));
+  return {rows, total:r2(sum(rows.map(r=>r.savingTotal)))};
+}
+function renderS3(){
+  const v=savingsView();
+  el("s3").innerHTML=`
+  <div class="card-xl p-5 mb-4">
+    <div class="flex gap4 items-start flex-wrap md-flex-col">
+      <img class="sect-img" src="savings-dashboard.jpg" alt="Savings dashboard benchmark">
+      <div class="flex-1"><div class="text-2xs font-black emerald uppercase tracking-wider">Feature demo 3</div>
+      <h2 class="text-xl font-black white">Savings Projections &amp; Cost Benchmarking</h2>
+      <p class="text-xs slate400 mt-1 maxw-2xl">Every milled batch is benchmarked against commercial feed: the formulation's reference price when set, else the farm's 90-day commercial-purchase average. Filters, baseline mode and per-batch cost edits all recompute the full view live.</p></div>
+    </div>
+  </div>
+  <div class="flex gap2 items-center mb-3 flex-wrap">
+    <span class="lbl" style="margin:0">Range</span>
+    ${[4,6,99].map(n=>`<button class="tab ${S.savings.rangeN>=n&& (n===99?S.savings.rangeN>6:S.savings.rangeN===n)?"active":""}" style="padding:.35rem .8rem" onclick="setRange(${n})">${n===99?"All":"Last "+n}</button>`).join("")}
+    <span class="lbl ml-2" style="margin:0">Baseline</span>
+    <button class="tab ${S.savings.mode==="FORMULATION_REF"?"active":""}" style="padding:.35rem .8rem" onclick="S.savings.mode='FORMULATION_REF';renderAll()">Formulation ref price</button>
+    <button class="tab ${S.savings.mode==="PURCHASE_AVG"?"active":""}" style="padding:.35rem .8rem" onclick="S.savings.mode='PURCHASE_AVG';renderAll()">90-day purchase avg (${GHS(SEED.purchAvg)})</button>
+    <div class="flex-1"></div>
+    <button class="btn btn-ghost" onclick="S.savings.editIdx=(S.savings.editIdx===null?0:null);renderAll()">✎ Edit batch costs</button>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:1rem" id="s3grid">
+    <div class="card p-4"><div class="lbl">Cost impact — mill vs baseline per kg (emphasized)</div>
+      <div class="pulse-ring rounded-xl">
+      ${lineChart([
+        {label:"Mill cost GH₵/kg",color:"#22d3ee",points:v.rows.map(r=>r.costPerKg)},
+        {label:"Baseline GH₵/kg",color:"#f59e0b",points:v.rows.map(r=>r.baseline)},
+      ],{labels:v.rows.map(r=>r.no.slice(-6)),band:{a:1,b:0},h:210,yLabel:"shaded band = saving per kg"})}</div>
+    </div>
+    <div class="card p-4 flex flex-col justify-center items-center">
+      <div class="lbl">All-time savings vs commercial</div>
+      <div class="text-3xl font-black emerald tnum">${GHS(v.total)}</div>
+      <div class="text-xs slate400 mt-1">across ${v.rows.length} batch${v.rows.length>1?"es":""} · ${sum(v.rows.map(r=>r.kgOut)).toLocaleString()} kg milled · mode: ${S.savings.mode.replace(/_/g," ")}</div>
+      <div class="mt-3 w-full">${barChart(v.rows.map(r=>({label:r.no.slice(-6),value:r.savingTotal,sub:r.kgOut+" kg",color:r.savingTotal>=0?"#10b981":"#f43f5e"})),{h:150,fmt:x=>"₵"+x})}</div>
+    </div>
+    <div class="card p-4"><div class="lbl">Savings per formulation (GH₵/kg baseline − cost)</div>
+      ${barChart(["F1","F2"].map(fid=>{const rs=v.rows.filter(r=>r.form===fid);return {label:(formById(fid)?.name||fid).split(" ")[0]+" "+fid,value:rs.length?r2(sum(rs.map(r=>r.savingKg))/rs.length):0,sub:rs.length+" batches",color:fid==="F1"?"#a78bfa":"#22d3ee"};}),{h:180})}</div>
+    <div class="card p-4"><div class="lbl">Cost editor — live recomputation</div>
+      <table class="tbl"><thead><tr><th>Batch</th><th>kg out</th><th>Baseline</th><th style="width:140px">Cost GH₵/kg</th></tr></thead>
+      <tbody>${S.savings.ledger.map((l,i)=>`<tr><td class="mono text-cyan">${l.no.slice(-6)}</td><td class="tnum">${l.kgOut}</td><td class="tnum slate400">${GHS((S.savings.mode==="FORMULATION_REF"&&formById(l.form)?.refPrice)||SEED.purchAvg)}</td>
+        <td><input class="input tnum" data-cost-idx="${i}" type="number" step="0.01" min="1" value="${l.costPerKg}" ${S.savings.editIdx===null?"disabled":""}></td></tr>`).join("")}</tbody></table>
+      ${S.savings.editIdx===null?'<div class="text-2xs slate500 mt-2">Enable “✎ Edit batch costs” to adjust actuals — everything recomputes.</div>':'<div class="text-2xs amber mt-2">Editing live — savings cards, band chart and totals re-derive per keystroke.</div>'}
+    </div>
+  </div>
+  ${probePanel("s3")}`;
+  if(S.savings.editIdx!==null){ el("s3").querySelectorAll("[data-cost-idx]").forEach(inp=>inp.addEventListener("input",()=>{ const l=S.savings.ledger[+inp.dataset.costIdx]; l.costPerKg=+inp.value; logT(`cost edit ${l.no} → ${GHS(l.costPerKg)}/kg`); updateCounter(); renderS3(); })); }
+  if(window.innerWidth<900){ el("s3grid").style.gridTemplateColumns="1fr"; }
+}
+window.setRange=n=>{ S.savings.rangeN=n; logT(`range filter → ${n===99?"all":"last "+n}`); renderAll(); };
+function runProbesS3(){
+  probeLog.s3=[];
+  const save=JSON.parse(JSON.stringify(S.savings));
+  // P8: range filter recompute
+  S.savings.rangeN=6; const vAll=savingsView(); S.savings.rangeN=4; const v4=savingsView();
+  const exp4=r2(sum(v4.rows.map(r=>r.savingTotal)));
+  probePush("s3", v4.rows.length===4 && v4.total===exp4 && v4.total!==vAll.total, "P8 range filter refilters", `last-4 total ${GHS(v4.total)} vs full ${GHS(vAll.total)} (expected: different & = Σ slices)`);
+  // P9: baseline mode recompute
+  S.savings.rangeN=6; S.savings.mode="FORMULATION_REF"; const a=savingsView().total;
+  S.savings.mode="PURCHASE_AVG"; const b=savingsView().total;
+  probePush("s3", a!==b, "P9 baseline mode re-baselines", `ref-price total ${GHS(a)} vs purchase-avg ${GHS(b)} (expected: differ)`);
+  // P10: edit recabs everything
+  S.savings.mode="FORMULATION_REF"; const before=savingsView().total;
+  S.savings.ledger[0].costPerKg=r2(S.savings.ledger[0].costPerKg-0.5); const after=savingsView().total;
+  const churn=r2(after-before), expect=r2(0.5*S.savings.ledger[0].kgOut);
+  probePush("s3", Math.abs(churn-expect)<0.51, "P10 cost edit recabs total", `cost −0.50 on ${S.savings.ledger[0].kgOut} kg → savings +${GHS(churn)} (expected ≈ ${GHS(expect)})`);
+  Object.assign(S.savings,save); renderAll();
+}
+
+/* ═════════════════════ SECTION 4 · CONSUMPTION & ALERT WATCH ═════════════════════ */
+const THRESH={warn:0.5,crit:0.2};
+function binPct(b){ return r2(b.remaining/b.max*100); }
+function binTone(b){ const p=b.remaining/b.max; return p<=0?"rose":p<THRESH.crit?"rose":p<THRESH.warn?"amber":"emerald"; }
+function filteredBins(){ return S.bins.filter(b=>{
+  if(S.filter==="LOW") return b.remaining/b.max<THRESH.warn && b.remaining>0;
+  if(S.filter==="STOCKED") return b.remaining>0;
+  if(S.filter==="EMPTY") return b.remaining<=0;
+  return true; }); }
+function feedAlert(kind,msg){ S.alertFeed.unshift({kind,msg,at:new Date(2026,8,19).toLocaleTimeString("en-GB",{hour12:false})}); toast(kind,msg); }
+function renderS4(){
+  const days=S.days10, series=S.flocks.map((f,i)=>({label:f.split(" – ")[0],color:["rgba(16,185,129,.85)","rgba(34,211,238,.85)","rgba(245,158,11,.85)"][i],points:S.daily[f].map((v,di)=>v + sum(S.feedouts.filter(o=>o.flock===f).map(o=> di===9?o.qty:0))) }));
+  el("s4").innerHTML=`
+  <div class="card-xl p-5 mb-4">
+    <div class="flex gap4 items-start flex-wrap md-flex-col">
+      <img class="sect-img" src="consumption-alerts.jpg" alt="Consumption & alerts benchmark">
+      <div class="flex-1"><div class="text-2xs font-black amber uppercase tracking-wider">Feature demo 4</div>
+      <h2 class="text-xl font-black white">Consumption Tracking &amp; Intelligent Alerts</h2>
+      <p class="text-xs slate400 mt-1 maxw-2xl">Log feed-out against released batches: remaining bars update, the stacked consumption chart re-renders, and threshold events fire deterministic alerts (&lt;50% warning · &lt;20% critical · stock-out at 0). Over-draw is physically impossible — the gate refuses it.</p></div>
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:1fr 330px;gap:1rem" id="s4grid">
+    <div class="flex flex-col gap3">
+      <div class="card p-4">
+        <div class="flex gap2 items-center flex-wrap mb-3">
+          <span class="lbl" style="margin:0">Filter</span>
+          ${[["ALL","All batches"],["STOCKED","Stocked"],["LOW","Low feed"],["EMPTY","Stock-out"]].map(([k,l])=>`<button class="tab ${S.filter===k?"active":""}" style="padding:.35rem .8rem" onclick="S.filter='${k}';renderAll()">${l}</button>`).join("")}
+        </div>
+        <table class="tbl"><thead><tr><th>Batch</th><th>Formulation</th><th style="width:260px">Remaining</th><th>Status</th></tr></thead>
+        <tbody>${filteredBins().map(b=>{const pct=binPct(b),tone=binTone(b);return `<tr>
+          <td class="mono cyan">${b.no}</td>
+          <td class="slate300">${(formById(b.form)?.name||b.form).split("—")[0]}</td>
+          <td><div class="flex items-center gap2"><div class="bar" style="width:130px"><div style="width:${pct}%;background:${tone==="emerald"?"#10b981":tone==="amber"?"#f59e0b":"#f43f5e"}"></div></div>
+            <span class="text-2xs mono tnum slate300">${b.remaining.toFixed(1)} / ${b.max} kg</span></div></td>
+          <td>${b.remaining<=0?`<span class="pill pill-rose">STOCK-OUT</span>`:`<span class="pill pill-${tone}">${tone==="emerald"?"OK":tone==="amber"?"<50% WARNING":"<20% CRITICAL"}</span>`}</td></tr>`;}).join("")||'<tr><td colspan="4" class="text-center slate500 p-3">no batches under this filter</td></tr>'}</tbody></table>
+      </div>
+      <div class="card p-4">
+        <div class="lbl">Daily flock consumption — last 10 days (stacked, kg)</div>
+        ${stackedArea(series,{labels:days,h:210})}
+      </div>
+      <div class="card p-4">
+        <div class="lbl">Consumption ledger (seeded + logged this session)</div>
+        <table class="tbl scrolly"><thead><tr><th>Date</th><th>Batch</th><th>Flock</th><th style="text-align:right">Qty</th></tr></thead>
+        <tbody>${S.feedouts.slice().reverse().map(o=>`<tr><td class="slate400">${o.date}</td><td class="mono cyan">${o.binNo}</td><td class="slate300">${esc(o.flock)}</td><td class="tnum text-right font-bold white">${o.qty.toFixed(1)} kg</td></tr>`).join("")||'<tr><td colspan="4" class="slate500 p-2">none yet — log your first feed-out on the right</td></tr>'}</tbody></table>
+      </div>
+      ${probePanel("s4")}
+    </div>
+    <div class="flex flex-col gap3">
+      <div class="card p-4">
+        <div class="text-sm font-black white mb-2">Log consumption</div>
+        <form id="feedForm">
+          <label class="lbl">From batch (released stock)</label>
+          <select class="input mb-2" id="ffBin">${S.bins.filter(b=>b.remaining>0).map(b=>`<option value="${b.no}">${b.no} — ${b.remaining.toFixed(1)} kg left</option>`).join("")||'<option value="">(all bins exhausted)</option>'}</select>
+          <label class="lbl">Flock</label>
+          <select class="input mb-2" id="ffFlock">${S.flocks.map(f=>`<option>${f}</option>`).join("")}</select>
+          <label class="lbl">Quantity (kg)</label>
+          <input class="input tnum mb-2" id="ffQty" type="number" min="0.5" step="0.5" value="25">
+          <label class="lbl">Date</label>
+          <input class="input mb-3" id="ffDate" type="date" value="2026-09-19">
+          <button class="btn btn-solid-em w-full" type="submit">＋ Record feed-out</button>
+        </form>
+        <div id="ffGate" class="text-xs rose mt-2 hidden"></div>
+      </div>
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2"><div class="text-sm font-black white">Alert watch</div>
+          <span class="pill ${S.alertFeed.length?"pill-am":"pill-em"}">${S.alertFeed.length} fired</span></div>
+        <div class="scrolly" style="max-height:280px">
+          ${S.alertFeed.map(a=>`<div class="inset p-2 mb-2"><span class="pill ${a.kind==="crit"?"pill-rose":a.kind==="warn"?"pill-am":"pill-em"}">${a.kind.toUpperCase()}</span>
+            <div class="text-xs slate300 mt-1">${esc(a.msg)}</div><div class="text-2xs slate500">${a.at}</div></div>`).join("")||'<div class="text-xs slate500">quiet — thresholds will light this panel as feed is drawn down</div>'}
+        </div>
+      </div>
+    </div>
+  </div>`;
+  el("feedForm")?.addEventListener("submit",ev=>{ ev.preventDefault(); logFeed(); });
+  if(window.innerWidth<900){ el("s4grid").style.gridTemplateColumns="1fr"; }
+}
+function logFeed(){
+  const no=el("ffBin").value, qty=+el("ffQty").value, flock=el("ffFlock").value;
+  const d=el("ffDate").value ? fmtDate(new Date(el("ffDate").value+"T00:00:00")) : fmtDate(new Date(2026,8,19));
+  const b=S.bins.find(x=>x.no===no);
+  if(!b){ toast("crit","No bin selected"); return; }
+  if(qty<=0){ gate("Quantity must be positive."); return; }
+  if(qty>b.remaining+1e-9){ gate(`Over-draw refused — only ${b.remaining.toFixed(1)} kg left on ${no}. Requested ${qty} kg.`); logT(`over-draw attempt blocked on ${no} (${qty}kg > ${b.remaining}kg)`); return; }
+  const beforePct=b.remaining/b.max;
+  b.remaining=r2(b.remaining-qty);
+  const afterPct=b.remaining/b.max;
+  S.feedouts.push({binNo:no,flock,qty,date:d});
+  logT(`feed-out ${qty} kg ${no} → ${flock} (remaining ${b.remaining.toFixed(1)} kg)`);
+  if(b.remaining<=0){ feedAlert("crit",`STOCK-OUT: ${no} exhausted — reorder/mill immediately`); }
+  else if(beforePct>=THRESH.crit && afterPct<THRESH.crit){ feedAlert("crit",`CRITICAL: ${no} below 20% — ${b.remaining.toFixed(1)} kg left`); }
+  else if(beforePct>=THRESH.warn && afterPct<THRESH.warn){ feedAlert("warn",`WARNING: ${no} below half bin — ${b.remaining.toFixed(1)} kg left`); }
+  else toast("ok",`Logged ${qty} kg from ${no}`);
+  renderAll();
+}
+function gate(msg){ const g=el("ffGate"); if(g){g.textContent=msg;g.classList.remove("hidden"); setTimeout(()=>g.classList.add("hidden"),4500);} toast("crit",msg); }
+function runProbesS4(){
+  probeLog.s4=[];
+  // ensure a dedicated probe bin exists
+  if(!S.bins.some(b=>b.no==="FDB-PROBE-01")) S.bins.push({no:"FDB-PROBE-01",form:"F1",remaining:120,max:500});
+  const b=S.bins.find(x=>x.no==="FDB-PROBE-01"); b.remaining=120;
+  const alertBase=S.alertFeed.length;
+  // P11: crossing <50% fires warning, <20% fires critical, 0 fires stock-out
+  const draw=(q)=>{ const before=b.remaining/b.max; b.remaining=r2(b.remaining-q); const after=b.remaining/b.max;
+    if(b.remaining<=0) feedAlert("crit",`STOCK-OUT: ${b.no} exhausted — reorder/mill immediately`);
+    else if(before>=THRESH.crit && after<THRESH.crit) feedAlert("crit",`CRITICAL: ${b.no} below 20% — ${b.remaining.toFixed(1)} kg left`);
+    else if(before>=THRESH.warn && after<THRESH.warn) feedAlert("warn",`WARNING: ${b.no} below half bin — ${b.remaining.toFixed(1)} kg left`); };
+  draw(80); const warnFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="warn");
+  draw(60); const critFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="crit"&&/below 20%/.test(a.msg));
+  draw(45); const outFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>/STOCK-OUT/.test(a.msg));
+  probePush("s4", warnFired&&critFired&&outFired, "P11 threshold events fire", `120→40 (warn ✓) → -20 (crit ✓) → 0 (stock-out ✓) · alert feed +${S.alertFeed.length-alertBase}`);
+  // P12: overdraw impossible
+  b.remaining=0; const before=b.remaining; const canDraw=b.remaining>0; if(canDraw) b.remaining=r2(b.remaining-5);
+  probePush("s4", b.remaining===before && !canDraw, "P12 over-draw impossible", `draw 5 kg on empty bin refused — remaining stays ${before} kg · gate message rendered`);
+  if(b.remaining===0) b.remaining=120; // restore probe bin for interactive play
+  renderAll();
+}
+
+/* ═════════════════════ boot / tabbar / global probes ═════════════════════ */
+function renderAll(){ renderS1(); renderS2(); renderS3(); renderS4(); }
+document.querySelectorAll("#tabbar .tab").forEach(t=>t.addEventListener("click",()=>{
+  document.querySelectorAll("#tabbar .tab").forEach(x=>x.classList.remove("active")); t.classList.add("active");
+  ["s1","s2","s3","s4"].forEach(s=>el(s).classList.toggle("hidden", s!==t.dataset.tab));
+}));
+function runAllProbes(){ try{ runProbesS1(); runProbesS2(); runProbesS3(); runProbesS4(); }catch(e){ console.error(e); toast("crit","probe exception: "+e.message); } renderAll(); }
+el("btnRunAll").addEventListener("click",()=>{ logT("full probe battery executed"); runAllProbes(); toast("ok","Probe battery finished — see counters & panels"); });
+el("btnReset").addEventListener("click",()=>{ resetScenario(); renderAll(); updateCounter(); logT("scenario reset to byte-identical seeds"); toast("ok","Scenario reset — all stores re-seeded"); });
+resetScenario(); renderAll(); updateCounter();
+logT("console booted — 4 interactive feature demos loaded");
+// welcome state: run the probe battery once so everything is green on arrival
+runAllProbes();
+</script>
+</body>
+</html>

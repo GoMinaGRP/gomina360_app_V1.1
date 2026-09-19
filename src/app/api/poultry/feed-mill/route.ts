@@ -9,11 +9,13 @@ import {
   poultryFeedQcChecks,
   poultryFeedLogs,
   poultryFlocks,
+  poultryProduction,
   businesses,
   transactions,
   inventoryItems,
   checklistTemplates,
   notifications,
+  suppliers,
 } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { ensureInventoryItem, stockIn, stockOut, computeStockStatus } from "@/lib/stock";
@@ -159,7 +161,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: "You do not have access to that business." }, { status: 403 });
     }
 
-    const [forms, formItems, batches, inputs, qc, feedRows, invRows, flocks] = await Promise.all([
+    const [forms, formItems, batches, inputs, qc, feedRows, invRows, flocks, prodRows] = await Promise.all([
       db.select().from(poultryFeedFormulations).where(eq(poultryFeedFormulations.businessId, bizId)),
       db.select().from(poultryFeedFormulationItems),
       db.select().from(poultryFeedBatches).where(eq(poultryFeedBatches.businessId, bizId)).orderBy(desc(poultryFeedBatches.id)),
@@ -168,6 +170,9 @@ export async function GET(request: NextRequest) {
       db.select().from(poultryFeedLogs).where(eq(poultryFeedLogs.businessId, bizId)).orderBy(desc(poultryFeedLogs.id)),
       db.select().from(inventoryItems).where(eq(inventoryItems.businessId, bizId)),
       db.select().from(poultryFlocks).where(eq(poultryFlocks.businessId, bizId)),
+      // last-90-day production rows so Feed-out can derive feed-per-egg/FCR
+      // against each flock's output (client-side, additive payload field).
+      db.select().from(poultryProduction).where(eq(poultryProduction.businessId, bizId)).orderBy(desc(poultryProduction.id)),
     ]);
 
     const batchIds = new Set(batches.map((b) => b.id));
@@ -193,6 +198,7 @@ export async function GET(request: NextRequest) {
       consumption,
       feedLogs: feedRows, // analytics (burn + purchase average) need purchases too
       flocks: flocks.filter((f) => f.status === "ACTIVE"),
+      production: prodRows.slice(0, 400), // FEEDOUT insight (90d window computed client-side)
     });
   } catch (error: any) {
     console.error("GET /api/poultry/feed-mill error:", error);
@@ -331,12 +337,39 @@ export async function POST(request: NextRequest) {
           date: data.date || today,
         });
       }
+      // Supplier ledger integration: the intake vendor becomes/updates a
+      // Suppliers record for this unit (value of goods supplied accrues
+      // whether or not the cash side is expensed here). Never blocks intake.
+      let supplier: any = null;
+      const supName = String(data.supplierName || "").trim().slice(0, 120);
+      if (supName) {
+        try {
+          const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
+          const ownerId = orgId ?? (biz as any)?.ownerId ?? null;
+          if (ownerId == null) throw new Error("no owner scope");
+          const existing = await db.select().from(suppliers).where(eq(suppliers.ownerId, ownerId));
+          const found = existing.find((s: any) => (s.name || "").toLowerCase() === supName.toLowerCase());
+          if (found) {
+            const [upd] = await db.update(suppliers)
+              .set({ totalSuppliedGhs: Math.round(((found.totalSuppliedGhs || 0) + totalCost) * 100) / 100 })
+              .where(eq(suppliers.id, found.id)).returning();
+            supplier = upd || found;
+          } else {
+            [supplier] = await db.insert(suppliers).values({
+              name: supName, category: "Poultry Feed", contactPerson: "—", phone: "—",
+              paymentTerms: data.paymentMethod === "CREDIT" ? "NET_14" : "CASH_ON_DELIVERY",
+              ownerId,
+              totalSuppliedGhs: Math.round(totalCost * 100) / 100,
+            }).returning();
+          }
+        } catch (e) { console.error("[feed-mill] supplier link failed:", e); }
+      }
       await auditLog(me, "FEED_RAW_INTAKE", "RECORD", `Raw intake ${item.name} × ${qtyKg} kg`, "OPERATION_LOG", updated?.id ?? item.id,
         businessId, branchCode,
-        `Stocked ${qtyKg} kg of ${item.name} at GH₵ ${unitCost.toFixed(2)}/kg${expense ? ` · expensed once as ${EXP_CAT_INTAKE} GH₵ ${totalCost.toFixed(2)}` : " · stock-only (no expense booking)"}.`,
+        `Stocked ${qtyKg} kg of ${item.name} at GH₵ ${unitCost.toFixed(2)}/kg${expense ? ` · expensed once as ${EXP_CAT_INTAKE} GH₵ ${totalCost.toFixed(2)}` : " · stock-only (no expense booking)"}${supplier ? ` · supplier ledger: ${supName}` : ""}.`,
         orgId);
       return NextResponse.json({
-        success: true, item: updated, expense, qtyKg,
+        success: true, item: updated, expense, qtyKg, supplier,
         stockStatus: computeStockStatus(updated?.quantity || 0, updated?.minStockThreshold || 0),
       });
     }
