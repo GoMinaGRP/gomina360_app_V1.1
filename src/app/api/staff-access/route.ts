@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { users, userSessions, businesses, userBusinessAccess, organizationMembers } from "@/db/schema";
+import { users, userSessions, businesses, userBusinessAccess, organizationMembers, organizations } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
-import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, resolveUserOrgIds, UNAUTHENTICATED } from "@/lib/auth";
+import { auditLog } from "@/lib/audit";
 
 /**
  * Signed-In Staff console — who is signed in right now, from where, since
@@ -98,10 +99,44 @@ export async function GET(request: NextRequest) {
       return true; // legacy (org-less) viewer — unrestricted, as pre-multi-owner
     };
 
+    // ── Org → Business grouping (Signed-In Staff, Phase A) ────────────────
+    // Per-user org resolution (one query): member rows for every user we may
+    // show; grouping assigns each row to the user's PRIMARY org (first by id)
+    // while the flat list remains authoritative visibility.
+    const allMembers = me.isSuperAdmin
+      ? await db.select().from(organizationMembers)
+      : (memberIds
+          ? await db.select().from(organizationMembers).where(inArray(organizationMembers.organizationId, myOrgs.map(Number)))
+          : []);
+    const orgIdsPerUser = new Map<number, number[]>();
+    for (const m of allMembers) {
+      const uid = Number(m.userId);
+      (orgIdsPerUser.get(uid) || orgIdsPerUser.set(uid, []).get(uid)!).push(Number(m.organizationId));
+    }
+    for (const v of orgIdsPerUser.values()) v.sort((a, b) => a - b);
+    const orgRows = me.isSuperAdmin
+      ? await db.select().from(organizations)
+      : await db.select().from(organizations).where(inArray(organizations.id, myOrgs.length ? myOrgs.map(Number) : [-1]));
+    const orgNameOf = (id: number | null) => {
+      if (id === null) return null;
+      const o = orgRows.find((x) => Number(x.id) === id);
+      return o ? { id, name: o.name, status: String(o.status || "ACTIVE").toUpperCase() } : { id, name: `Organization #${id}`, status: "ACTIVE" };
+    };
+    const bizById = new Map(bizRows.map((b: any) => [Number(b.id), b]));
+    // Optional Super-Admin drill-down: ?organizationId=N narrows the board.
+    const drillOrg = (() => {
+      const p = Number(new URL(request.url).searchParams.get("organizationId") || 0) || null;
+      return me.isSuperAdmin ? p : null;
+    })();
+
     const staff = userRows
       .filter((u) => {
         if (!visibleUser(u)) return false;
-        if (isOwner) return true;
+        if (drillOrg !== null) {
+          const ids = orgIdsPerUser.get(Number(u.id)) || [];
+          if (!ids.includes(drillOrg)) return false;
+        }
+        if (isOwner || me.isSuperAdmin) return true;
         // delegated manager: only staff whose primary branch is in-scope
         return u.assignedBusinessId != null && (allowed ?? []).includes(Number(u.assignedBusinessId));
       })
@@ -126,6 +161,13 @@ export async function GET(request: NextRequest) {
           now - new Date(lastSeenAt).getTime() <= ONLINE_WINDOW_MS;
         const accessStatus = u.isActive === false ? (u.accessRevokedAt ? "REVOKED" : "DISABLED") : "ACTIVE";
         const biz = bizName(u.assignedBusinessId ?? null);
+        // Provenance (Phase C): from the newest LIVE session that carried it.
+        const prov = [...live]
+          .sort((a, b) => Number(b.id) - Number(a.id))
+          .find((s) => s.deviceLabel || s.initialBusinessId != null) || null;
+        const idb = prov?.initialBusinessId != null ? bizById.get(Number(prov.initialBusinessId)) : null;
+        // Multi-org membership shows on SA rows as "+N orgs" context.
+        const memberOrgIds = orgIdsPerUser.get(Number(u.id)) || [];
         return {
           id: u.id,
           name: u.name,
@@ -138,6 +180,23 @@ export async function GET(request: NextRequest) {
           businessCode: biz.code,
           branch: biz.branch,
           grantedBusinessIds: grantsByUser[u.id] || [],
+          // Phase A: explicit organization identity — Super Admin ONLY (F-6).
+          ...(me.isSuperAdmin
+            ? {
+                organizationId: memberOrgIds[0] ?? u.primaryOrgId ?? null,
+                organizationName: orgNameOf(memberOrgIds[0] ?? u.primaryOrgId ?? null)?.name || null,
+                organizationStatus: orgNameOf(memberOrgIds[0] ?? u.primaryOrgId ?? null)?.status || null,
+                extraOrgCount: Math.max(0, memberOrgIds.length - 1),
+              }
+            : {}),
+          // Phase C: sign-in provenance of the newest lived session.
+          deviceLabel: prov?.deviceLabel || null,
+          ipHash: prov?.ipHash || null,
+          initialBusiness: idb ? { id: idb.id, name: idb.name, code: idb.code } : null,
+          grantedBranches: (grantsByUser[u.id] || [])
+            .map((id) => bizById.get(Number(id)))
+            .filter(Boolean)
+            .map((b: any) => ({ id: b.id, name: b.name, code: b.code })),
           permissions: {
             canRecordSales: !!u.canRecordSales,
             canRecordExpenses: !!u.canRecordExpenses,
@@ -170,16 +229,95 @@ export async function GET(request: NextRequest) {
         return a.name.localeCompare(b.name);
       });
 
+    // Group assemblies (display-only grouping; the flat list above is the
+    // authorization contract):
+    //  · SUPER_ADMIN      — one group per org (incl. legacy org group "—"),
+    //    business buckets inside, ordered by live headcount.
+    //  · OWNER_ORG        — their org as the single group header; business
+    //    buckets = their org's units (staff-holding only) + an HQ bucket.
+    //  · MANAGER_BRANCHES — branches inside their granted scope, no org data.
+    const metaScopeType = me.isSuperAdmin ? "SUPER_ADMIN" : isOwner ? "OWNER_ORG" : "MANAGER_BRANCHES";
+    // Non-SA viewers get a SINGLE group: the Owner's own org (they know it,
+    // no cross-org signal) — or a neutral "Your scope" for branch managers.
+    const ownGroupId = me.isSuperAdmin ? null : myOrgs[0] != null && isOwner ? Number(myOrgs[0]) : 0;
+    const groupOf = (s: any): number | null => {
+      if (me.isSuperAdmin) return s.organizationId ?? 0; // 0 = platform users w/o org (legacy)
+      return ownGroupId;
+    };
+    const orgGroups: any[] = [];
+    const orgBucketOf = (oid: number | null) => {
+      let g = orgGroups.find((x) => x.orgId === oid);
+      if (!g) {
+        const info = oid !== null && oid !== 0 ? orgNameOf(oid) : null;
+        const ownInfo = !me.isSuperAdmin && oid !== null && oid !== 0 ? orgNameOf(oid) : null;
+        g = {
+          orgId: oid ?? 0,
+          orgName: info?.name || ownInfo?.name
+            || (me.isSuperAdmin && oid === 0 ? "Platform accounts (no organization)" : (oid ?? 0) === 0 ? (isOwner ? "Your organization" : "Your branches") : `Organization #${oid}`),
+          orgStatus: info?.status || ownInfo?.status || "ACTIVE",
+          businesses: new Map<number, any>(),
+          staffIds: [] as number[],
+        };
+        orgGroups.push(g);
+      }
+      return g;
+    };
+    for (const s of staff) {
+      const g = orgBucketOf(groupOf(s));
+      g.staffIds.push(s.id);
+      const bid = s.businessId ?? 0; // 0 = HQ bucket
+      if (!g.businesses.has(bid)) {
+        g.businesses.set(bid, {
+          businessId: bid === 0 ? 0 : bid,
+          businessName: bid === 0 ? "— Shared / HQ (no primary branch) —" : s.businessName,
+          businessCode: bid === 0 ? "HQ" : s.businessCode,
+          staffIds: [] as number[],
+        });
+      }
+      g.businesses.get(bid)!.staffIds.push(s.id);
+    }
+    const selectStaff = (ids: number[]) => staff.filter((s) => ids.includes(s.id));
+    const groups = orgGroups.map((g) => {
+      const gs = selectStaff(g.staffIds);
+      return {
+        orgId: g.orgId,
+        orgName: g.orgName,
+        orgStatus: g.orgStatus,
+        counts: {
+          total: gs.length,
+          signedIn: gs.filter((s) => s.signedInNow).length,
+          online: gs.filter((s) => s.onlineNow).length,
+        },
+        businesses: [...g.businesses.values()]
+          .map((b: any) => {
+            const bs = selectStaff(b.staffIds);
+            return {
+              ...b,
+              counts: {
+                total: bs.length,
+                signedIn: bs.filter((s) => s.signedInNow).length,
+                online: bs.filter((s) => s.onlineNow).length,
+              },
+            };
+          })
+          .sort((a: any, b: any) => b.counts.online - a.counts.online || b.counts.signedIn - a.counts.signedIn || a.businessName.localeCompare(b.businessName)),
+      };
+    }).sort((a: any, b: any) => b.counts.online - a.counts.online || a.orgName.localeCompare(b.orgName));
+
     return NextResponse.json({
       success: true,
       meta: {
         canView: true,
         canManage: true,
-        scope: isOwner ? "ALL" : (allowed ?? []),
+        scope: isOwner || me.isSuperAdmin ? "ALL" : (allowed ?? []),
+        scopeType: metaScopeType,
+        organizationCount: me.isSuperAdmin ? orgGroups.length : undefined,
+        drillOrg,
         onlineCount: staff.filter((s) => s.onlineNow).length,
         signedInCount: staff.filter((s) => s.signedInNow).length,
         disabledCount: staff.filter((s) => s.accessStatus === "DISABLED").length,
         revokedCount: staff.filter((s) => s.accessStatus === "REVOKED").length,
+        groups,
       },
       staff,
     });
@@ -203,6 +341,9 @@ export async function POST(request: NextRequest) {
     const userId = Number(body.userId) || 0;
     if (!userId) return NextResponse.json({ success: false, error: "userId is required" }, { status: 400 });
 
+    // Phase D1: audit-trail context — resolved once, used by every action.
+    const actorOrgId = (Array.isArray(me.organizationIds) ? me.organizationIds[0] : me.primaryOrgId) ?? null;
+
     const isOwner = me.role === "OWNER";
     const isDelegatedMgr =
       !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
@@ -212,14 +353,20 @@ export async function POST(request: NextRequest) {
 
     const [target] = await db.select().from(users).where(eq(users.id, userId));
     if (!target) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    const targetBizCode = target.assignedBusinessId != null
+      ? ((await db.select({ code: businesses.code }).from(businesses).where(eq(businesses.id, target.assignedBusinessId)))[0]?.code ?? null)
+      : null;
     if (target.id === me.id) return FORBID("You cannot change your own access from this console.");
     if (target.role === "OWNER") return FORBID("The OWNER account can never be disabled or revoked.");
     // Tenant boundary: never act outside your own organization, and never on
-    // the platform Super Admin account.
+    // the platform Super Admin account. Refusal wording is scope-blind (no
+    // org-existence signal to an id-probing caller); details stay server-side.
     if (!me.isSuperAdmin) {
-      if (target.isSuperAdmin) return FORBID("The platform Super Admin account is outside your reach.");
+      if (target.isSuperAdmin) return FORBID("That account is outside your scope.");
       if (!(await sharesOrganization(me, target))) {
-        return FORBID("That user belongs to a different organization.");
+        const targetOrgs = await resolveUserOrgIds(target).catch(() => [] as number[]);
+        console.warn(`[staff-access] cross-org action refused: actor=${me.id} orgs=${JSON.stringify(me.organizationIds || [])} target=${target.id} orgs=${JSON.stringify(targetOrgs)}`);
+        return FORBID("That account is outside your scope.");
       }
     }
 
@@ -258,6 +405,23 @@ export async function POST(request: NextRequest) {
           .where(eq(users.id, target.id));
         await endAllSessionsForUser(target.id, "REVOKED");
       }
+      // Governance evidence (Phase D1): every access mutation is a trail row.
+      await auditLog(
+        me,
+        status === "ACTIVE" ? "STAFF_ENABLE" : status === "DISABLED" ? "STAFF_DISABLE" : "STAFF_REVOKE",
+        "USER",
+        target.name,
+        null,
+        target.id,
+        target.assignedBusinessId ?? null,
+        targetBizCode,
+        status === "ACTIVE"
+          ? "Access re-enabled from Signed-In Staff console."
+          : status === "DISABLED"
+            ? "Access disabled from Signed-In Staff console — sessions ended DISABLED, sign-in blocked."
+            : "Access revoked from Signed-In Staff console — sessions ended REVOKED, credentials cleared.",
+        actorOrgId != null ? Number(actorOrgId) : null,
+      );
       return NextResponse.json({
         success: true,
         status,
@@ -272,6 +436,13 @@ export async function POST(request: NextRequest) {
 
     if (action === "END_SESSION") {
       await endAllSessionsForUser(target.id, "FORCE_LOGOUT");
+      await auditLog(
+        me, "STAFF_FORCE_LOGOUT", "USER", target.name, null, target.id,
+        target.assignedBusinessId ?? null,
+        targetBizCode,
+        "Force sign-out of every device from Signed-In Staff console (access unchanged).",
+        actorOrgId != null ? Number(actorOrgId) : null,
+      );
       return NextResponse.json({ success: true, message: `${target.name} was signed out of all devices.` });
     }
 

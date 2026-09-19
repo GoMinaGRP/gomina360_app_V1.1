@@ -37,6 +37,8 @@ else
   echo "✔ database already seeded ($USERS users)"
   node dev-tooling/migrate-multiowner.mjs | tail -1
 fi
+# Signed-In Staff Phase D3: enroll any org-less user into their branch-owner's org.
+node dev-tooling/backfill-org-members.mjs | tail -1
 
 echo "══ 5) build"
 if [ ! -f .next/BUILD_ID ]; then

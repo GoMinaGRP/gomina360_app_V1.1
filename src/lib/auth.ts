@@ -47,13 +47,47 @@ export function verifyPassword(password: string, stored: string | null | undefin
 
 const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
-export async function createSession(userId: number) {
+/** Sign-in provenance for the Signed-In Staff console (Phase C).
+ *  Raw IPs are never persisted — only a salted hash for security review. */
+export function hashClientIp(request: Request): string | null {
+  const xff = request.headers.get("x-forwarded-for");
+  const ip = (xff ? xff.split(",")[0].trim() : "") || request.headers.get("x-real-ip") || "";
+  if (!ip) return null;
+  return sha256(`${process.env.IP_HASH_SALT || "gomina360-local"}:${ip}`);
+}
+
+/** Compact, human-friendly UA summary ("Chrome · Android"), falsy-safe. */
+export function deviceLabel(request: Request): { label: string | null; raw: string | null } {
+  const raw = (request.headers.get("user-agent") || "").slice(0, 220) || null;
+  if (!raw) return { label: null, raw: null };
+  const lenient = raw.toLowerCase();
+  const os = lenient.includes("windows") ? "Windows"
+    : lenient.includes("android") ? "Android"
+    : lenient.includes("iphone") || lenient.includes("ipad") || /mac os x/.test(lenient) && /mobile/.test(lenient) ? "iOS"
+    : lenient.includes("mac os x") ? "macOS"
+    : lenient.includes("linux") ? "Linux" : "Unknown OS";
+  const browser = /edg\//.test(lenient) ? "Edge"
+    : /opr\/|opera/.test(lenient) ? "Opera"
+    : /chrome\/|crios\//.test(lenient) ? "Chrome"
+    : /firefox\//.test(lenient) ? "Firefox"
+    : /safari\//.test(lenient) ? "Safari" : "Browser";
+  return { label: `${browser} · ${os}`, raw };
+}
+
+export async function createSession(
+  userId: number,
+  provenance?: { deviceLabel?: string | null; userAgent?: string | null; ipHash?: string | null; initialBusinessId?: number | null },
+) {
   const token = crypto.randomBytes(32).toString("hex");
   const tokenHash = sha256(token);
   await db.insert(userSessions).values({
     userId,
     tokenHash,
     expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+    deviceLabel: provenance?.deviceLabel ?? null,
+    userAgent: provenance?.userAgent ?? null,
+    ipHash: provenance?.ipHash ?? null,
+    initialBusinessId: provenance?.initialBusinessId ?? null,
   });
   return { token, expires: new Date(Date.now() + SESSION_TTL_MS) };
 }

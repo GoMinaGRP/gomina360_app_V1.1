@@ -136,6 +136,12 @@ export const userSessions = pgTable("user_sessions", {
   endedAt: timestamp("ended_at"),
   endReason: text("end_reason"),
   revokedAt: timestamp("revoked_at"),
+  // Sign-in provenance (Signed-In Staff, Phase C) — additive, NULL on legacy
+  // rows; the heartbeat never overwrites these (only login writes them):
+  deviceLabel: text("device_label"), // parsed UA summary, e.g. "Chrome · Android"
+  userAgent: text("user_agent"),     // raw UA, truncated at 220 chars
+  ipHash: text("ip_hash"),           // sha256(ip + local salt) — never a raw IP
+  initialBusinessId: integer("initial_business_id"), // the branch scope chosen at sign-in
 },
   (t) => [
     index("user_sessions_token_hash_idx").on(t.tokenHash),

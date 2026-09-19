@@ -10,6 +10,8 @@ import {
   MAX_FAILED_LOGINS,
   LOCK_MINUTES,
   accessibleBusinessIds,
+  deviceLabel,
+  hashClientIp,
 } from "@/lib/auth";
 
 // Session cookie tuned for the EMBEDDED preview (the app runs inside an
@@ -133,7 +135,13 @@ export async function POST(request: Request) {
       .where(eq(users.id, user.id));
 
     operation = "session creation";
-    const { token, expires } = await createSession(user.id);
+    const { label: sessLabel, raw: sessAgent } = deviceLabel(request);
+    const { token, expires } = await createSession(user.id, {
+      deviceLabel: sessLabel,
+      userAgent: sessAgent,
+      ipHash: hashClientIp(request),
+      initialBusinessId: user.assignedBusinessId ?? null,
+    });
     operation = "business-access lookup";
     const access = await accessibleBusinessIds(user);
 
