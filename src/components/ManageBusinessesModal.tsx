@@ -11,6 +11,7 @@ import {
   FileUp,
   Globe,
   HardDriveDownload,
+  Layers,
   Image as ImageIcon,
   MapPin,
   Pencil,
@@ -43,6 +44,8 @@ import { businessManageIdsOf } from "@/lib/permissions";
 
 /** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
  *  the same convention used for employee photos and document uploads. */
+import WatermarkOverlay from "@/components/WatermarkOverlay";
+
 async function logoFileToDataUrl(file: File | Blob, max = 512): Promise<string> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
@@ -88,6 +91,19 @@ const STATUS_STYLE: Record<string, string> = {
   INACTIVE: "bg-rose-500/15 text-rose-300 border-rose-500/40",
 };
 
+/** Category label → canonical business-type key (mirrors src/lib/businessTypes.ts). */
+const CATEGORY_KEY: Record<string, string> = {
+  "Poultry Farm": "POULTRY_FARM",
+  "Block Factory": "BLOCK_FACTORY",
+  Aquaculture: "AQUACULTURE",
+  Livestock: "LIVESTOCK",
+  "Restaurant & Food": "RESTAURANT_FOOD",
+  "Electronic Shop": "ELECTRONIC_SHOP",
+  "Car Wash": "CAR_WASH",
+  "Hardware Store": "HARDWARE_STORE",
+  "Telecom & Digital Services": "TELECOM_DIGITAL",
+};
+
 interface ManageBusinessesModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -98,6 +114,12 @@ interface ManageBusinessesModalProps {
   onDeleted?: (code: string) => void;
   /** Deep-link straight into a unit's Online Ordering panel (navbar entry). */
   initialOnlineBizId?: number | null;
+  /** Per-Owner Allowed Business Types from /api/init — drives the allowed
+   *  set offered when re-typing a unit. null / restricted=false ⇒ all. */
+  allowedTypes?: { restricted: boolean; types: { key: string; label: string }[] } | null;
+  /** Super Admin only: organization directory from /api/init — powers the
+   *  per-branch Owner/Org identity chip plus the org filter in this view. */
+  organizations?: { id: number; name: string; slug: string; status: string }[];
 }
 
 type Mode = "list" | "edit" | "delete" | "reset" | "logos" | "online";
@@ -111,8 +133,11 @@ export default function ManageBusinessesModal({
   onAddNew,
   onDeleted,
   initialOnlineBizId = null,
+  allowedTypes = null,
+  organizations = [],
 }: ManageBusinessesModalProps) {
   const isOwner = currentUser?.role === "OWNER";
+  const isSuperAdmin = !!currentUser?.isSuperAdmin;
   // OWNER-delegated "Manage Unit" grants: owner-equivalent management controls
   // (Edit, Business Type, service/ordering settings, Reset) — strictly for the
   // granted units. Deactivate & Delete stay OWNER-only.
@@ -159,6 +184,39 @@ export default function ManageBusinessesModal({
   const [deleteCounts, setDeleteCounts] = useState<any | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
+  // ── Super Admin cross-owner view: Owner/Org identity + filters ──────────
+  const orgNameOf = (orgId: any) =>
+    organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
+    (orgId ? `Organization #${orgId}` : "Unassigned");
+  const [orgFilter, setOrgFilter] = useState<string>("ALL");
+  const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const scopedBusinesses = useMemo(() => {
+    let list = businesses;
+    if (isSuperAdmin && orgFilter !== "ALL") {
+      list = list.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+    }
+    if (isSuperAdmin && typeFilter !== "ALL") {
+      list = list.filter((b: any) => (b.category || "Other") === typeFilter);
+    }
+    return list;
+  }, [businesses, isSuperAdmin, orgFilter, typeFilter]);
+  // Distinct business types present — drives the Super Admin type filter.
+  const typeOptions = useMemo(
+    () => Array.from(new Set(businesses.map((b: any) => b.category || "Other"))).sort(),
+    [businesses]
+  );
+
+  // Category re-type options: restricted orgs are offered ONLY their granted
+  // types (the current category always stays selectable — it's what the unit
+  // already is). The server refuses anything else, so nothing is bypassable.
+  const categoryOptionsForEdit = (currentCat: string) => {
+    const allowedKeys = new Set((allowedTypes?.types || []).map((t) => t.key));
+    if (!allowedTypes || !allowedTypes.restricted) return CATEGORIES;
+    return CATEGORIES.filter(
+      (c) => allowedKeys.has(CATEGORY_KEY[c] || "") || c === currentCat
+    );
+  };
+
   // Reset-confirmation state
   const [resetCounts, setResetCounts] = useState<any | null>(null);
   const [resetMasters, setResetMasters] = useState(false);
@@ -171,8 +229,20 @@ export default function ManageBusinessesModal({
   const [branchLogoFile, setBranchLogoFile] = useState<string | null>(null);
 
   const sorted = useMemo(
-    () => [...businesses].sort((a, b) => a.id - b.id),
-    [businesses]
+    () =>
+      [...scopedBusinesses].sort((a, b) => {
+        // Super Admin "all" view is grouped: the MAIN OWNER's own workspace
+        // (org 1) first, then every other Owner's organization, then by id.
+        if (isSuperAdmin && orgFilter === "ALL") {
+          const ga = Number(a.ownerId) === 1 ? 0 : 1;
+          const gb = Number(b.ownerId) === 1 ? 0 : 1;
+          if (ga !== gb) return ga - gb;
+          const oa = Number(a.ownerId ?? 0), ob = Number(b.ownerId ?? 0);
+          if (oa !== ob) return oa - ob;
+        }
+        return a.id - b.id;
+      }),
+    [scopedBusinesses, isSuperAdmin, orgFilter]
   );
 
   useEffect(() => {
@@ -192,6 +262,11 @@ export default function ManageBusinessesModal({
 
   // ── Online ordering & service area (mode === "online") ──────────────────
   const [onlEnabled, setOnlEnabled] = useState(true);
+  const [onlPreorder, setOnlPreorder] = useState(false);
+  // Storefront watermark (display-time overlay on customer-facing product
+  // images — originals never modified).
+  const [onlWm, setOnlWm] = useState(false);
+  const [onlWmMode, setOnlWmMode] = useState<"AUTO" | "LOGO" | "NAME">("AUTO");
   const [onlPickup, setOnlPickup] = useState(true);
   const [onlDelivery, setOnlDelivery] = useState(true);
   const [onlRadius, setOnlRadius] = useState(""); // "" = no geographic limit
@@ -219,6 +294,9 @@ export default function ManageBusinessesModal({
   const openOnline = (biz: any) => {
     setSelected(biz);
     setOnlEnabled(biz.onlineOrderingEnabled !== false);
+    setOnlPreorder(biz.preOrderEnabled === true);
+    setOnlWm(biz.watermarkEnabled === true);
+    setOnlWmMode(biz.watermarkMode === "LOGO" || biz.watermarkMode === "NAME" ? biz.watermarkMode : "AUTO");
     setOnlPickup(biz.pickupEnabled !== false);
     setOnlDelivery(biz.deliveryEnabled !== false);
     setOnlRadius(biz.serviceRadiusKm != null ? String(biz.serviceRadiusKm) : "");
@@ -267,6 +345,7 @@ export default function ManageBusinessesModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actorUserId: currentUser?.id ?? null,
+          ...(canFullyManage(selected) ? { preOrderEnabled: onlPreorder } : {}),
           onlineOrderingEnabled: onlEnabled,
           pickupEnabled: onlPickup,
           deliveryEnabled: onlDelivery,
@@ -275,6 +354,8 @@ export default function ManageBusinessesModal({
           customerHelpPhone: onlHelp.trim() || null,
           momoNumber: onlMomo.trim() || null,
           momoName: onlMomoName.trim() || null,
+          watermarkEnabled: onlWm,
+          watermarkMode: onlWmMode,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -285,7 +366,7 @@ export default function ManageBusinessesModal({
         setNotice(
           d.business.onlineOrderingEnabled === false
             ? `"${d.business.name}" switched OFF the customer storefront — hidden from /order and blocked at checkout until you switch it back on.`
-            : `"${d.business.name}" online-ordering settings saved — the customer storefront reflects them immediately.`,
+            : `"${d.business.name}" online-ordering settings saved — the customer storefront reflects them immediately.${d.business.preOrderEnabled === true ? " Pre-Orders stay ENABLED for this unit." : ""}`,
         );
       } else {
         setError(d?.error || "Failed to save online-ordering settings.");
@@ -875,10 +956,49 @@ export default function ManageBusinessesModal({
           {/* ============ LIST MODE ============ */}
           {mode === "list" && (
             <>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="text-xs text-slate-400">
                   <span className="font-black text-white">{sorted.length}</span> enterprise units
                   under management
+                  {isSuperAdmin && organizations.length > 0 && (
+                    <span className="ml-1.5 text-slate-500">
+                      · every owner's scope
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                {isSuperAdmin && organizations.length > 0 && (
+                  <select
+                    data-testid="org-filter-select"
+                    value={orgFilter}
+                    onChange={(e) => setOrgFilter(e.target.value)}
+                    title="Filter branches by owning Owner / Organization"
+                    className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
+                  >
+                    <option value="ALL">All Owners / Orgs</option>
+                    {organizations.map((o) => (
+                      <option key={o.id} value={String(o.id)}>
+                        {Number(o.id) === 1 ? `${o.name} — main (you)` : o.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {isSuperAdmin && typeOptions.length > 1 && (
+                  <select
+                    data-testid="type-filter-select"
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    title="Filter branches by business type"
+                    className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
+                  >
+                    <option value="ALL">All business types</option>
+                    {typeOptions.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 </div>
                 {isOwner && (
                   <button
@@ -895,12 +1015,35 @@ export default function ManageBusinessesModal({
               </div>
 
               <div className="space-y-2">
-                {sorted.map((biz) => {
+                {sorted.map((biz, idx) => {
                   const inactive = (biz.status || "").toUpperCase() === "INACTIVE";
                   const armed = armedCode === biz.code;
+                  // Super Admin "all" view: an ownership group header whenever
+                  // the owning organization changes — the main Owner's own
+                  // units are visually separated from every other Owner's.
+                  const showGroupHead =
+                    isSuperAdmin &&
+                    orgFilter === "ALL" &&
+                    (idx === 0 || Number(sorted[idx - 1].ownerId ?? 0) !== Number(biz.ownerId ?? 0));
+                  const mine = Number(biz.ownerId) === 1;
                   return (
+                    <React.Fragment key={biz.code}>
+                    {showGroupHead && (
+                      <div
+                        data-testid={`manage-biz-group-${biz.ownerId ?? 0}`}
+                        className={`flex items-center gap-2 pt-2 pb-1 text-[11px] font-black tracking-wide ${
+                          mine ? "text-violet-300" : "text-sky-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block w-2 h-2 rounded-full ${mine ? "bg-violet-400" : "bg-sky-400"}`}
+                        />
+                        {mine
+                          ? "YOUR BUSINESSES — GoMina Group (Main Owner)"
+                          : `OWNED BY ${orgNameOf(biz.ownerId).toUpperCase()}`}
+                      </div>
+                    )}
                     <div
-                      key={biz.code}
                       data-testid={`manage-biz-row-${biz.code}`}
                       className={`rounded-xl border p-3.5 transition ${
                         inactive
@@ -910,6 +1053,13 @@ export default function ManageBusinessesModal({
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start space-x-3 min-w-0">
+                          {biz.logo ? (
+                            <img
+                              src={biz.logo}
+                              alt={`${biz.name} crest`}
+                              data-testid={`manage-biz-logo-${biz.code}`}
+                              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
+                          ) : (
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                               inactive
@@ -919,6 +1069,7 @@ export default function ManageBusinessesModal({
                           >
                             <Building2 className="w-5 h-5" />
                           </div>
+                          )}
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span
@@ -931,6 +1082,19 @@ export default function ManageBusinessesModal({
                               <span className="text-[10px] font-black bg-slate-700/70 text-slate-300 px-1.5 py-0.5 rounded border border-slate-600">
                                 {biz.code}
                               </span>
+                              {isSuperAdmin && (
+                                <span
+                                  data-testid={`manage-biz-org-${biz.code}`}
+                                  title="Owning Owner / Organization"
+                                  className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                                    Number(biz.ownerId) === 1
+                                      ? "bg-violet-500/15 text-violet-300 border-violet-500/40"
+                                      : "bg-sky-500/15 text-sky-300 border-sky-500/40"
+                                  }`}
+                                >
+                                  {orgNameOf(biz.ownerId)}
+                                </span>
+                              )}
                               <span
                                 data-testid={`manage-status-${biz.code}`}
                                 className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
@@ -1101,6 +1265,7 @@ export default function ManageBusinessesModal({
                         )}
                       </div>
                     </div>
+                    </React.Fragment>
                   );
                 })}
               </div>
@@ -1160,7 +1325,7 @@ export default function ManageBusinessesModal({
                 )}
 
                 {/* Storefront switches */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                   <SwitchRow
                     label="Online ordering"
                     desc="Show on the public customer storefront"
@@ -1168,6 +1333,20 @@ export default function ManageBusinessesModal({
                     onFlip={setOnlEnabled}
                     tid="mb-onl-toggle-enabled"
                   />
+                  {canFullyManage(selected) ? (
+                    <SwitchRow
+                      label="Pre-Orders"
+                      desc="Sell goods before they reach branch stock (indigo offers on the storefront)"
+                      on={onlPreorder}
+                      onFlip={(v: boolean) => { setOnlPreorder(v); setOnlDirty(true); }}
+                      tid="mb-onl-toggle-preorder"
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 opacity-60" data-testid="mb-onl-preorder-locked">
+                      <p className="text-[11px] font-bold text-slate-300">Pre-Orders {selected?.preOrderEnabled === true ? "· ON" : "· OFF"}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Only the Owner or a "Manage Unit" grantee can flip this.</p>
+                    </div>
+                  )}
                   <SwitchRow
                     label="Pickup"
                     desc="Customers collect at this branch"
@@ -1183,6 +1362,71 @@ export default function ManageBusinessesModal({
                     tid="mb-onl-toggle-delivery"
                   />
                 </div>
+
+                {/* Storefront watermark — display-time branding overlay over
+                    customer-facing product images (cards, thumbs, lightbox,
+                    full-screen, zoom). The original uploaded photos are never
+                    modified, so toggling this is instant and lossless. */}
+                <section className="rounded-xl border border-slate-700 bg-slate-800/50 p-3.5 space-y-3" data-testid="mb-onl-wm">
+                  <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-sky-300" /> Product image watermark
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-start">
+                    <div className="space-y-2.5">
+                      <SwitchRow
+                        label="Watermark product photos"
+                        desc="Faint logo/name overlay on this unit's storefront images — protects your catalog without hiding the product"
+                        on={onlWm}
+                        onFlip={(v: boolean) => { setOnlWm(v); setOnlDirty(true); }}
+                        tid="mb-onl-wm-toggle"
+                      />
+                      {onlWm && (
+                        <div className="flex flex-wrap gap-1.5 pl-1" data-testid="mb-onl-wm-modes">
+                          {([
+                            ["AUTO", "Auto (logo → name)", selected?.logo ? "Uses your uploaded logo plus a faint name pattern" : "No logo uploaded yet — uses the business name (logo when uploaded)"],
+                            ["LOGO", "Logo only", "Corner logo chip + faint name pattern (falls back to name if no logo uploaded)"],
+                            ["NAME", "Name only", "Diagonally tiled business name — works even with no logo uploaded"],
+                          ] as const).map(([val, lbl, hint]) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => { setOnlWmMode(val); setOnlDirty(true); }}
+                              title={hint}
+                              className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition ${
+                                onlWmMode === val
+                                  ? "bg-sky-500/15 border-sky-400/60 text-sky-200"
+                                  : "bg-slate-900/50 border-slate-700 text-slate-400 hover:text-slate-200"
+                              }`}
+                              data-testid={`mb-onl-wm-mode-${val.toLowerCase()}`}
+                            >
+                              {lbl}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-500 leading-relaxed">
+                        Rendered above the image at display time only — ~14% greyscale corner chip plus a ≈6%
+                        diagonal name pattern. Your stored photos stay byte-identical, and galleries, full-screen
+                        viewing, pinch and zoom are unaffected.
+                      </p>
+                    </div>
+                    <div className="space-y-1.5" data-testid="mb-onl-wm-preview">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live preview</p>
+                      <div className="relative w-40 h-28 rounded-lg overflow-hidden bg-gradient-to-br from-amber-100 via-white to-slate-200 border border-slate-600">
+                        <div className="absolute inset-3 rounded-md bg-emerald-600/70" />
+                        <WatermarkOverlay
+                          spec={{
+                            enabled: onlWm,
+                            mode: onlWmMode,
+                            logo: selected?.logo || null,
+                            name: selected?.name || "Your Business",
+                          }}
+                        />
+                      </div>
+                      <p className="text-[9px] text-slate-500">How the customer's product card + gallery will look</p>
+                    </div>
+                  </div>
+                </section>
 
                 {/* Service area */}
                 <section className="rounded-xl border border-slate-700 bg-slate-800/50 p-3.5 space-y-3">
@@ -1473,8 +1717,7 @@ export default function ManageBusinessesModal({
                             width={104}
                             height={104}
                             className="rounded-lg border border-slate-600 bg-white p-1.5"
-                            data-testid="mb-onl-qr-order"
-                          />
+                            data-testid="mb-onl-qr-order" loading="lazy" decoding="async" />
                         ) : (
                           <div className="w-[104px] h-[104px] rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[9px] text-slate-500" data-testid="mb-onl-qr-order-loading">
                             Building QR…
@@ -1520,8 +1763,7 @@ export default function ManageBusinessesModal({
                             width={104}
                             height={104}
                             className="rounded-lg border border-slate-600 bg-white p-1.5"
-                            data-testid="mb-onl-qr-track"
-                          />
+                            data-testid="mb-onl-qr-track" loading="lazy" decoding="async" />
                         ) : (
                           <div className="w-[104px] h-[104px] rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[9px] text-slate-500" data-testid="mb-onl-qr-track-loading">
                             Building QR…
@@ -1574,7 +1816,7 @@ export default function ManageBusinessesModal({
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
                         {companyLogo ? (
-                          <img src={companyLogo} alt="GoMina company logo" className="max-h-12 max-w-12 object-contain" data-testid="bizlogo-company-preview" />
+                          <img src={companyLogo} alt="GoMina company logo" className="max-h-12 max-w-12 object-contain" data-testid="bizlogo-company-preview" loading="lazy" decoding="async" />
                         ) : (
                           <Building2 className="w-6 h-6 text-slate-400" />
                         )}
@@ -1622,7 +1864,7 @@ export default function ManageBusinessesModal({
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center shrink-0 overflow-hidden">
                         {bizRow.logo ? (
-                          <img src={bizRow.logo} alt={`${bizRow.name} logo`} className="max-h-12 max-w-12 object-contain" data-testid={`bizlogo-preview-${bizRow.id}`} />
+                          <img src={bizRow.logo} alt={`${bizRow.name} logo`} className="max-h-12 max-w-12 object-contain" data-testid={`bizlogo-preview-${bizRow.id}`} loading="lazy" decoding="async" />
                         ) : (
                           <Building2 className="w-6 h-6 text-slate-400" />
                         )}
@@ -1696,7 +1938,7 @@ export default function ManageBusinessesModal({
                       />
                     </label>
                     {branchLogoFile && (
-                      <img src={branchLogoFile} alt="pending branch logo" className="h-8 w-8 rounded-lg object-contain bg-white p-0.5" data-testid={`bizlogo-branch-pending-${bizRow.id}`} />
+                      <img src={branchLogoFile} alt="pending branch logo" className="h-8 w-8 rounded-lg object-contain bg-white p-0.5" data-testid={`bizlogo-branch-pending-${bizRow.id}`} loading="lazy" decoding="async" />
                     )}
                     <button
                       onClick={saveBranchLogo}
@@ -1714,7 +1956,7 @@ export default function ManageBusinessesModal({
                     {branchEntries.map((code) => (
                       <div key={code} className="flex items-center justify-between gap-3 rounded-lg bg-slate-900/60 border border-slate-700 px-2.5 py-1.5">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <img src={branchMap[code]} alt={`Branch ${code} logo`} className="h-8 w-8 rounded-lg object-contain bg-white p-0.5 shrink-0" />
+                          <img src={branchMap[code]} alt={`Branch ${code} logo`} className="h-8 w-8 rounded-lg object-contain bg-white p-0.5 shrink-0" loading="lazy" decoding="async" />
                           <span className="text-xs font-mono font-bold text-white">{code}</span>
                           <span className="text-[10px] text-slate-500">documents for this branch use this logo automatically</span>
                         </div>
@@ -1782,12 +2024,18 @@ export default function ManageBusinessesModal({
                     data-testid="manage-biz-category"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                   >
-                    {CATEGORIES.map((c) => (
+                    {categoryOptionsForEdit(selected.category).map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
                     ))}
                   </select>
+                  {allowedTypes?.restricted && (
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Your Super-Admin-granted types only. To convert this unit to another
+                      type, ask the platform Super Admin to grant it.
+                    </p>
+                  )}
                   {category !== selected.category && (
                     <p className="text-[10px] text-amber-300 mt-1">
                       Type change: this unit will mount the {category} module; new-type starter

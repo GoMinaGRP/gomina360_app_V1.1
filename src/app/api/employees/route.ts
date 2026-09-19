@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   employees,
@@ -72,7 +73,7 @@ async function nextEmployeeNo(): Promise<string> {
 }
 
 async function assertEmployeeAccess(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
+  if (user.isSuperAdmin) return null;
   if (!canManageSharedRecords(user)) {
     return FORBIDDEN("Only the OWNER (or a manager the OWNER has granted record-management permission) can manage employee records.");
   }
@@ -109,6 +110,7 @@ async function hist(
 export async function GET(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const url = new URL(request.url);
@@ -216,6 +218,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -341,6 +344,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -411,6 +415,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();

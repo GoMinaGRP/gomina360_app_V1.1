@@ -8,7 +8,7 @@ import {
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { buildTrackingCode, googleMapsLink } from "@/lib/tracking";
-import { orderNotificationRecipients } from "@/lib/notify";
+import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { pushAfterBell } from "@/lib/push";
 
 /** Server-side helpers for Customer Ordering & Tracking (used by the public
@@ -133,15 +133,20 @@ export async function linkCrmCustomer({
 }): Promise<number | null> {
   try {
     const all = await db.select().from(customers);
+    // The selling unit's organization — EVERY new customer row is stamped to
+    // it, and org-scoped matching never crosses organization boundaries.
+    const ownerOrg = businessId != null ? await ownerOrgOfBusiness(Number(businessId)) : null;
+    const sameOrg = (c: any) => (c.ownerId == null && ownerOrg == null) || Number(c.ownerId) === Number(ownerOrg);
     const norm = (s: any) => String(s || "").trim().toLowerCase();
     // Business isolation: the selling business's OWN customer wins first; a
-    // legacy group-shared (NULL business) row still matches as a fallback so
-    // history flows to it, but new rows are always stamped to the seller.
+    // legacy group-shared (NULL business) row matches only inside the SAME
+    // organization, so history flows to it, but new rows are always stamped
+    // to the seller's unit and organization.
     const match =
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === businessId)) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === businessId)) ||
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === null)) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === null)) ||
+      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === businessId && sameOrg(c))) ||
+      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === businessId && sameOrg(c))) ||
+      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === null && sameOrg(c))) ||
+      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === null && sameOrg(c))) ||
       null;
     if (match) {
       await db
@@ -163,8 +168,10 @@ export async function linkCrmCustomer({
           totalSpentGhs: spendGhs,
           loyaltyPoints: Math.floor(spendGhs / 100),
           // Isolation: storefront & staff-tracked orders stamp the SELLING
-          // business so the buyer appears in that unit's CRM scope.
+          // business so the buyer appears in that unit's CRM scope, and the
+          // OWNING organization so per-owner directories stay private.
           businessId: businessId || null,
+          ownerId: ownerOrg,
         })
         .returning();
       return created?.id ?? null;
@@ -260,6 +267,7 @@ export async function notifyOnlineOrder({
         recordRef: code,
         businessId,
         actorName: customerName,
+        ownerId: await ownerOrgOfBusiness(Number(businessId)),
       });
       pushedIds.push(Number(u.id));
     }

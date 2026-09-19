@@ -13,12 +13,12 @@ import {
   LineChart, Line, PieChart, Pie, Cell,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
-import { addToOfflineQueue } from "@/lib/offlineSync";
 import { analyzePoultry } from "@/lib/poultryAnalytics";
 import PoultryAnalyticsAlerts from "./PoultryAnalyticsAlerts";
 import PoultryGrowthAnalytics from "./PoultryGrowthAnalytics";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -73,87 +73,12 @@ export default function PoultryFarmModule({
   const [dashProductFilter, setDashProductFilter] = useState<string>("ALL"); // "ALL", "EGGS", "BROILERS"
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState<null | Tab | "SALE">(null);
+  // Daily Expenses are recorded through the shared ExpenseEntryForm —
+  // surfaced from the module tab bar (every tab incl. Dashboard) and from the
+  // FINANCE tab's "Record Daily Expense" button; both open this same dialog.
   const [showExpenseForm, setShowExpenseForm] = useState(false);
-  const [expenseBusy, setExpenseBusy] = useState(false);
-  const [expenseError, setExpenseError] = useState("");
-  const [expenseForm, setExpenseForm] = useState({
-    category: "FEED_PURCHASE",
-    customCategory: "",
-    amountGhs: "",
-    paymentMethod: "CASH",
-    vendor: "",
-    description: "",
-    date: new Date().toISOString().split("T")[0],
-  });
-  const [receiptImages, setReceiptImages] = useState<string[]>([]);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryIcon, setNewCategoryIcon] = useState("📋");
-  const [expCategories, setExpCategories] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
-
-  const loadExpenseCategories = async () => {
-    try {
-      const res = await fetch(`/api/expense-categories?businessId=${bizId}&branchCode=${businessInfo?.code}`);
-      const data = await res.json();
-      if (data.success) setExpCategories(data.categories || []);
-    } catch (e) {
-      console.error("Failed to load expense categories", e);
-    }
-  };
-
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    Array.from(files).forEach((file) => {
-      if (file.size > 5 * 1024 * 1024) {
-        setExpenseError("Image must be under 5MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setReceiptImages((prev) => [...prev, ev.target!.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
-  };
-
-  const removeReceiptImage = (index: number) => {
-    setReceiptImages((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleAddCategory = async () => {
-    if (!newCategoryName.trim()) return;
-    try {
-      const res = await fetch("/api/expense-categories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId: bizId,
-          branchCode: businessInfo?.code,
-          name: newCategoryName.trim(),
-          icon: newCategoryIcon,
-          createdBy: currentUser?.name,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setExpCategories((prev) => [...prev, data.category]);
-        setExpenseForm({ ...expenseForm, category: data.category.name });
-        setNewCategoryName("");
-        setShowAddCategory(false);
-      } else {
-        setExpenseError(data.error || "Failed to create category.");
-      }
-    } catch (e: any) {
-      setExpenseError(e.message || "Failed to create category.");
-    }
-  };
   const [err, setErr] = useState("");
 
   // Poultry datasets
@@ -203,16 +128,6 @@ export default function PoultryFarmModule({
   }, [bizId]);
 
   useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => {
-    loadExpenseCategories();
-  }, [bizId]);
-  useEffect(() => {
-    if (showExpenseForm) {
-      loadExpenseCategories();
-      setReceiptImages([]);
-      setExpenseError("");
-    }
-  }, [showExpenseForm]);
 
   const searchKB = useCallback(async () => {
     setKbLoading(true);
@@ -454,108 +369,6 @@ export default function PoultryFarmModule({
     finally { setBusy(false); }
   };
 
-  const recordDailyExpense = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setExpenseError("");
-    const amount = Number(expenseForm.amountGhs);
-    let category = expenseForm.category;
-
-    // Handle "---NEW---" inline category creation
-    if (category === "---NEW---") {
-      const customName = expenseForm.customCategory.trim();
-      if (!customName) {
-        setExpenseError("Enter a category name or select an existing category.");
-        return;
-      }
-      // Try to create the category
-      try {
-        const catRes = await fetch("/api/expense-categories", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            businessId: bizId, branchCode: businessInfo?.code,
-            name: customName, icon: "📋", createdBy: currentUser?.name,
-          }),
-        });
-        const catData = await catRes.json();
-        if (catData.success) {
-          category = catData.category.name;
-          setExpCategories((prev) => [...prev, catData.category]);
-        } else if (catData.error && catData.error.includes("already exists")) {
-          category = customName;
-        } else {
-          setExpenseError(catData.error || "Failed to create category.");
-          return;
-        }
-      } catch (err: any) {
-        setExpenseError(err.message || "Failed to create category.");
-        return;
-      }
-    } else if (category === "OTHER") {
-      const customName = expenseForm.customCategory.trim();
-      if (!customName) {
-        setExpenseError("Enter a custom category name.");
-        return;
-      }
-      category = customName;
-    }
-
-    if (!amount || amount <= 0) {
-      setExpenseError("Enter a valid expense amount.");
-      return;
-    }
-    if (currentUser?.role === "WORKER" && currentUser?.canRecordExpenses !== true) {
-      setExpenseError("Your Worker account is not permitted to record expenses. Ask your Branch Manager.");
-      return;
-    }
-
-    setExpenseBusy(true);
-    const vendorText = expenseForm.vendor.trim() ? ` | Vendor: ${expenseForm.vendor.trim()}` : "";
-    const description = `${expenseForm.description.trim() || category.replace(/_/g, " ")}${vendorText} | Poultry branch: ${businessInfo?.code || "POULTRY-01"}`;
-    const payload = {
-      businessId: bizId,
-      branchCode: businessInfo?.code,
-      branchName: businessInfo?.name,
-      type: "EXPENSE",
-      category,
-      amountGhs: amount,
-      paymentMethod: expenseForm.paymentMethod,
-      description,
-      date: expenseForm.date,
-      recordedBy: currentUser?.name || "Poultry Farm User",
-      recordedByRole: currentUser?.role || "STAFF",
-      recordedByUserId: currentUser?.id || null,
-      status: "COMPLETED",
-      receiptImages: receiptImages.length > 0 ? receiptImages : null,
-    };
-
-    try {
-      if (!navigator.onLine) {
-        addToOfflineQueue("TRANSACTION", payload);
-      } else {
-        const res = await fetch("/api/transactions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || "Failed to record expense.");
-      }
-      setExpenseForm({
-        category: "FEED_PURCHASE", customCategory: "", amountGhs: "",
-        paymentMethod: "CASH", vendor: "", description: "",
-        date: new Date().toISOString().split("T")[0],
-      });
-      setReceiptImages([]);
-      setShowExpenseForm(false);
-      await refresh();
-      onRefreshData();
-    } catch (error: any) {
-      setExpenseError(error.message || "Failed to record expense.");
-    } finally {
-      setExpenseBusy(false);
-    }
-  };
 
   const toggleTask = async (id: number) => {
     await fetch("/api/poultry", {
@@ -668,6 +481,13 @@ export default function PoultryFarmModule({
             <span className="text-[10px] leading-none lg:leading-normal lg:text-xs">{t.label}</span>
           </button>
         ))}
+        <button
+          data-testid="poultry-open-expense"
+          onClick={() => setShowExpenseForm(true)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+        >
+          <Wallet className="w-4 h-4" /><span className="text-[10px] leading-none lg:leading-normal lg:text-xs">Record Expense</span>
+        </button>
         <AiSectionGuide moduleKey="POULTRY" section={tab} businessInfo={businessInfo} />
       </div>
 
@@ -1315,7 +1135,7 @@ export default function PoultryFarmModule({
                 icon={Wallet}
                 action={
                   <button
-                    onClick={() => { setExpenseError(""); setShowExpenseForm(true); }}
+                    onClick={() => setShowExpenseForm(true)}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow"
                   >
                     <Plus className="w-3.5 h-3.5" /> Record Daily Expense
@@ -1442,232 +1262,45 @@ export default function PoultryFarmModule({
         </div>
       )}
 
-      {/* ══════════ DAILY EXPENSE FORM ══════════ */}
-      {showExpenseForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl max-h-[92vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-800 p-5 shrink-0">
-              <div>
-                <h3 className="text-lg font-bold text-white">Record Daily Poultry Expense</h3>
-                <p className="text-[11px] text-slate-400">
-                  Linked to {businessInfo?.name} ({businessInfo?.code}) • Categories are shared with GoMina finance
-                </p>
-              </div>
-              <button onClick={() => { setShowExpenseForm(false); setReceiptImages([]); setExpenseError(""); }} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={recordDailyExpense} className="overflow-y-auto p-5 space-y-4 flex-1">
-              {expenseError && (
-                <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg text-xs">
-                  {expenseError}
-                </div>
-              )}
+      {/* ══════════ DAILY EXPENSE FORM (shared) ══════════ — the platform's
+          unified "Record Expense Information" dialog. Opened from the module
+          tab bar (every tab incl. Dashboard) and from the FINANCE tab's
+          "Record Daily Expense" button, both bound to the same instance:
+          one POST /api/transactions (type=EXPENSE), one categories API —
+          no duplicate workflow. */}
+      <ExpenseEntryForm
+        isOpen={showExpenseForm}
+        onClose={() => setShowExpenseForm(false)}
+        onSaved={() => { setShowExpenseForm(false); refresh(); onRefreshData(); }}
+        businessId={bizId}
+        branchCode={businessInfo?.code}
+        branchName={businessInfo?.name}
+        businessName={businessInfo?.name}
+        currentUser={currentUser}
+        title="Record Daily Poultry Expense"
+        subtitle={`Linked to ${businessInfo?.name || "Poultry Farm"} (${businessInfo?.code || "POULTRY-01"}) • Categories are shared with GoMina finance`}
+        contextLabel="Poultry"
+        vendorPlaceholder="e.g. feed supplier, veterinarian, utility provider"
+        defaultCategory="FEED_PURCHASE"
+        defaultCategories={[
+          { value: "FEED_PURCHASE", label: "🌾 Feed Purchase" },
+          { value: "VACCINATION", label: "💉 Vaccination" },
+          { value: "VETERINARY", label: "🏥 Veterinary" },
+          { value: "WATER", label: "💧 Water & Treatment" },
+          { value: "ELECTRICITY", label: "⚡ Electricity" },
+          { value: "FUEL", label: "⛽ Fuel & Generator" },
+          { value: "LABOR", label: "👷 Labor" },
+          { value: "TRANSPORT", label: "🚛 Transport" },
+          { value: "LITTER", label: "🌿 Litter & Bedding" },
+          { value: "REPAIRS", label: "🔧 Repairs" },
+          { value: "BIOSECURITY", label: "🛡️ Biosecurity & PPE" },
+          { value: "PACKAGING", label: "📦 Packaging" },
+          { value: "MARKETING", label: "📢 Marketing" },
+          { value: "OTHER", label: "📋 Other (custom)" },
+        ]}
+        testid="poultry-expense"
+      />
 
-              {/* Category select with add new */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] font-semibold text-slate-400">Expense Category *</label>
-                  <button type="button" onClick={() => setShowAddCategory(true)} className="text-[10px] text-emerald-400 font-semibold hover:text-emerald-300">+ Add New</button>
-                </div>
-                <select
-                  value={expenseForm.category}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-                >
-                  {expCategories.length > 0 ? (
-                    <>
-                      {expCategories.map((c: any) => (
-                        <option key={c.id} value={c.name}>{c.icon || "📋"} {c.name}</option>
-                      ))}
-                      <option value="---NEW---">+ Create new category…</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="FEED_PURCHASE">🌾 Feed Purchase</option>
-                      <option value="VACCINATION">💉 Vaccination</option>
-                      <option value="VETERINARY">🏥 Veterinary</option>
-                      <option value="WATER">💧 Water & Treatment</option>
-                      <option value="ELECTRICITY">⚡ Electricity</option>
-                      <option value="FUEL">⛽ Fuel & Generator</option>
-                      <option value="LABOR">👷 Labor</option>
-                      <option value="TRANSPORT">🚛 Transport</option>
-                      <option value="LITTER">🌿 Litter & Bedding</option>
-                      <option value="REPAIRS">🔧 Repairs</option>
-                      <option value="BIOSECURITY">🛡️ Biosecurity & PPE</option>
-                      <option value="PACKAGING">📦 Packaging</option>
-                      <option value="MARKETING">📢 Marketing</option>
-                      <option value="OTHER">📋 Other (custom)</option>
-                    </>
-                  )}
-                </select>
-                {expenseForm.category === "---NEW---" && (
-                  <div className="mt-2 p-3 bg-slate-800/80 border border-slate-700 rounded-lg space-y-2">
-                    <input
-                      type="text" required
-                      value={expenseForm.customCategory}
-                      onChange={(e) => setExpenseForm({ ...expenseForm, customCategory: e.target.value })}
-                      placeholder="New category name"
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
-                    />
-                    <p className="text-[10px] text-slate-500">This category will be saved for future use.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Amount */}
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Amount (GH₵) *</label>
-                <input
-                  type="number" min="0.01" step="0.01" required
-                  value={expenseForm.amountGhs}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, amountGhs: e.target.value })}
-                  placeholder="0.00"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs font-bold"
-                />
-              </div>
-
-              {/* Payment + Date */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">Payment Method</label>
-                  <select
-                    value={expenseForm.paymentMethod}
-                    onChange={(e) => setExpenseForm({ ...expenseForm, paymentMethod: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-                  >
-                    <option value="CASH">Cash</option>
-                    <option value="MTN_MOMO">MTN MoMo</option>
-                    <option value="TELECEL_CASH">Telecel Cash</option>
-                    <option value="BANK_TRANSFER">Bank Transfer</option>
-                    <option value="POS_CARD">POS Card</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">Date</label>
-                  <input
-                    type="date"
-                    value={expenseForm.date}
-                    onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* Vendor */}
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Vendor / Payee</label>
-                <input
-                  type="text"
-                  value={expenseForm.vendor}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, vendor: e.target.value })}
-                  placeholder="e.g. Ghafeed Poultry Mills Ltd"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-                />
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Description</label>
-                <textarea
-                  rows={2}
-                  value={expenseForm.description}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
-                  placeholder="What was purchased? Add receipt details."
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs resize-none"
-                />
-              </div>
-
-              {/* Receipt Photos */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] font-semibold text-slate-400">Receipt Photos (optional)</label>
-                  <span className="text-[10px] text-slate-500">{receiptImages.length} attached</span>
-                </div>
-                {/* Preview thumbnails */}
-                {receiptImages.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {receiptImages.map((img, idx) => (
-                      <div key={idx} className="relative group w-20 h-20">
-                        <img src={img} alt={`Receipt ${idx + 1}`} className="w-full h-full object-cover rounded-lg border border-slate-700" />
-                        <button type="button" onClick={() => removeReceiptImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-600 text-white rounded-full text-xs flex items-center justify-center opacity-80 hover:opacity-100">×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {/* Upload buttons */}
-                <div className="flex gap-2">
-                  <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-800 border border-slate-700 border-dashed rounded-lg text-xs text-slate-400 hover:text-emerald-400 hover:border-emerald-500/50 cursor-pointer transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Upload Receipt
-                    <input type="file" accept="image/*" multiple onChange={handleReceiptUpload} className="hidden" />
-                  </label>
-                  <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-800 border border-slate-700 border-dashed rounded-lg text-xs text-slate-400 hover:text-emerald-400 hover:border-emerald-500/50 cursor-pointer transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><circle cx="12" cy="13" r="3"/></svg>
-                    Take Photo
-                    <input type="file" accept="image/*" capture="environment" onChange={handleReceiptUpload} className="hidden" />
-                  </label>
-                </div>
-              </div>
-
-              {/* Auto-tracking info */}
-              <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 text-[10px] text-slate-400">
-                <div className="font-bold text-slate-300 mb-1">Automatic tracking</div>
-                <div>Business: <span className="text-slate-200">{businessInfo?.name}</span></div>
-                <div>Branch: <span className="text-slate-200">{businessInfo?.code}</span></div>
-                <div>Recorded by: <span className="text-slate-200">{currentUser?.name}</span> ({currentUser?.role})</div>
-                <div>Server timestamp: generated on submit</div>
-                {receiptImages.length > 0 && <div className="mt-1 text-emerald-400">📷 {receiptImages.length} receipt photo(s) attached</div>}
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-                <button type="button" onClick={() => { setShowExpenseForm(false); setReceiptImages([]); setExpenseError(""); }} className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
-                <button type="submit" disabled={expenseBusy} className="px-5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50">
-                  {expenseBusy ? "Recording…" : "Record Expense"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ─── Add Category Modal ─── */}
-      {showAddCategory && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">Add New Expense Category</h3>
-              <button onClick={() => setShowAddCategory(false)} className="p-1 rounded hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Category Name</label>
-                <input
-                  type="text" required
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  placeholder="e.g. Generator Servicing"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">Icon</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {["📋","🔧","⛽","💡","📞","🧪","🪵","🚚","🧹","📦","🛡️","📢","💊","🧑‍🌾","🏗️","📊","🧯","💰"].map(icon => (
-                    <button key={icon} type="button" onClick={() => setNewCategoryIcon(icon)} className={`w-8 h-8 rounded-lg text-lg flex items-center justify-center border transition ${newCategoryIcon === icon ? "bg-emerald-500/20 border-emerald-500/50" : "bg-slate-800 border-slate-700 hover:border-slate-500"}`}>
-                      {icon}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowAddCategory(false)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
-                <button type="button" onClick={handleAddCategory} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">Save Category</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ══════════ FORMS ══════════ */}
       {showForm && (

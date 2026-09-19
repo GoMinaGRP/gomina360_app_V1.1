@@ -60,8 +60,10 @@ const inj2 = await call(`/api/track?code=${encodeURIComponent("<script>alert(1)<
 ok("S4b XSS tracking code → 404, literal-only payload", inj2.status === 404 || inj2.status === 400, `${inj2.status}`);
 const inj3 = await call("/api/order", "POST", { businessId: "1; DROP TABLE businesses;--", customerName: "TEST SQLi", fulfillmentType: "PICKUP", items: [] });
 ok("S4c SQLi businessId → 400, no execution", inj3.status === 400 || inj3.status === 404 || inj3.status === 401, `${inj3.status}`);
-const businessesStillThere = (await pg.query(`SELECT count(*)::int c FROM businesses`)).rows[0].c === 8;
-ok("S4d database intact after injection attempts (8 businesses)", businessesStillThere);
+// Injection damage check: the table must survive with at least the 8 known
+// flagship units (additional live units, e.g. Owner-created ones, are fine).
+const businessesStillThere = (await pg.query(`SELECT count(*)::int c FROM businesses`)).rows[0].c >= 8;
+ok("S4d database intact after injection attempts (≥8 businesses)", businessesStillThere);
 
 // 5. XSS-shaped customer text rides as inert literal data (React-escaped on render)
 const menu = (await call("/api/menu")).json;
@@ -69,7 +71,10 @@ const prod = (menu.businesses || []).find((b) => b.businessId === 1)?.products?.
 const qty = prod ? Number((await pg.query(`SELECT quantity FROM inventory_items WHERE id=${Number(prod.id)}`)).rows[0].quantity) : 0;
 let xssCode = null;
 if (prod) {
-  const order = await call("/api/order", "POST", { businessId: 1, customerName: "TEST XSS <img src=x onerror=alert(1)>", customerPhone: "+233555111222", fulfillmentType: "PICKUP", items: [{ inventoryId: prod.id, quantity: 1 }] });
+  // The unit runs named pickup points — the API (correctly) requires the
+  // customer to choose one, so resolve it first (mirrors the real flow).
+  const pt = (await pg.query(`SELECT id FROM pickup_locations WHERE business_id = 1 AND active = true ORDER BY sort_order, id LIMIT 1`)).rows[0]?.id;
+  const order = await call("/api/order", "POST", { businessId: 1, customerName: "TEST XSS <img src=x onerror=alert(1)>", customerPhone: "0551234567", fulfillmentType: "PICKUP", ...(pt ? { pickupLocationId: pt } : {}), items: [{ inventoryId: prod.id, quantity: 1 }] });
   xssCode = order.json?.trackingCode || null;
   ok("S5 order with markup-shaped name handled (no crash)", order.status === 200 && !!xssCode, `${order.status}`);
   if (xssCode) {

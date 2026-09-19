@@ -10,7 +10,7 @@ import { getSessionInfo, setUserPassword, verifyPassword } from "@/lib/auth";
 // "userId" input, so this route can never be used to touch somebody else's
 // account. Resetting OTHER users' passwords stays in /api/users behind the
 // OWNER permission (spoof-protected, returns 403 for everyone else).
-export const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 8;
 
 export async function POST(request: Request) {
   try {

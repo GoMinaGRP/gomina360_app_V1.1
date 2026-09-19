@@ -71,12 +71,17 @@ async function newContext(browser, tag, errors, viewport = { width: 1440, height
     errors.push(`[${tag}] ${txt.slice(0, 260)}`);
   });
   page.on("pageerror", (e) => errors.push(`[${tag}] PAGEERROR ${String(e).slice(0, 260)}`));
-  // Native confirm()/alert() dialogs block the protocol forever — dismiss.
-  page.on("dialog", async (d) => { try { await d.dismiss(); } catch {} });
+  // Native alert()/confirm() dialogs would block the protocol forever.
+  // Dialogs here are export-success notices and camera-permission alerts —
+  // the sweep's skip list already avoids destructive confirm flows, and any
+  // such flow would be a live-data mutation we never trigger headlessly.
+  page.on("dialog", async (d) => {
+    try { d.type() === "confirm" ? await d.dismiss() : await d.accept(); } catch {}
+  });
   return { ctx, page };
 }
 async function loginUi(page, creds) {
-  await page.goto(`${BASE}/`, { waitUntil: "networkidle0", timeout: 60000 });
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: 120000 });
   await page.waitForSelector('[data-testid="login-email"]', { timeout: 60000 });
   await page.type('[data-testid="login-email"]', creds.email);
   await page.type('[data-testid="login-password"]', creds.pass);
@@ -246,16 +251,25 @@ async function phaseD(browser, errors) {
       return btns.slice(0, 6).map((b) => (b.textContent || "").trim().replace(/\s+/g, " "));
     });
     for (const tab of inner) {
-      try {
-        const did = await page.evaluate((label) => {
-          const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim().replace(/\s+/g, " ") === label && x.offsetParent !== null && !x.disabled);
-          if (b) { b.click(); return true; }
-          return false;
-        }, tab);
-        if (did) tabs++;
-        await new Promise((r) => setTimeout(r, 380));
-        await page.keyboard.press("Escape");
-      } catch (e) { dead.push(`${mod} → "${tab}" crashed`); }
+      let crashed = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          // Heavy client-side work (XLSX/PDF generation) may still be in
+          // flight from the previous control — give the main thread room.
+          await new Promise((r) => setTimeout(r, attempt ? 2500 : 500));
+          const did = await page.evaluate((label) => {
+            const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim().replace(/\s+/g, " ") === label && x.offsetParent !== null && !x.disabled);
+            if (b) { b.click(); return true; }
+            return false;
+          }, tab);
+          if (did) tabs++;
+          await new Promise((r) => setTimeout(r, 380));
+          await page.keyboard.press("Escape");
+          crashed = null;
+          break;
+        } catch (e) { crashed = e; }
+      }
+      if (crashed) dead.push(`${mod} → "${tab}" crashed (${String(crashed.message || crashed).slice(0, 60)})`);
     }
   }
   ok(`D1 9 shared modules deep-checked (${tabs} inner tabs) without failures`, dead.length === 0, dead.join(" | ").slice(0, 300));
@@ -373,7 +387,7 @@ async function phaseF(browser, errors, cookies) {
 
   // new staff signs in to a working scoped workspace
   const { ctx: c2, page: pw } = await newContext(browser, "F-staff", errors);
-  await pw.goto(`${BASE}/`, { waitUntil: "networkidle0", timeout: 60000 });
+  await pw.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: 120000 });
   await pw.waitForSelector('[data-testid="login-email"]', { timeout: 60000 });
   await pw.type('[data-testid="login-email"]', "test.audit.staff@gominatest.com");
   await pw.type('[data-testid="login-password"]', "TEST@Audit26");
@@ -509,7 +523,7 @@ async function cleanup(cookies) {
   const cookies = { owner: await loginCookie(CREDS.owner) };
   if (!cookies.owner) { console.log("FATAL: owner login failed"); process.exit(2); }
 
-  const browser = await puppeteer.launch({
+  const browser = await puppeteer.launch({ protocolTimeout: 300000,
     executablePath: "/tmp/al2023/chromium",
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],

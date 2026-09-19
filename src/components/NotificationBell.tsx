@@ -51,10 +51,27 @@ export default function NotificationBell({
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000);
+    // Visibility-aware polling: a hidden tab gets ZERO polling requests
+    // (previous behaviour: one /api/notifications call every 20 s even while
+    // backgrounded — a fleet of forgotten tabs is a constant server load).
+    // The 30 s cadence runs only whilst visible; returning to the tab always
+    // fetches immediately, so no notification is ever missed.
+    let t: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!t) t = setInterval(load, 30_000); };
+    const stop = () => { if (t) { clearInterval(t); t = null; } };
+    const syncVisibility = () => {
+      if (document.hidden) stop();
+      else { load(); start(); } // became visible: refresh at once, then resume cadence
+    };
+    syncVisibility();
     const onFocus = () => load();
     window.addEventListener("focus", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => {
+      stop();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", syncVisibility);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -146,6 +163,19 @@ export default function NotificationBell({
                     <div className="text-[11px] font-bold text-slate-100 flex items-center gap-1.5">
                       {String(n.type).includes("CORRECTION") ? <Flag className="w-3 h-3 text-amber-400 shrink-0" /> : null}
                       <span className="truncate">{n.title}</span>
+                      {n.priority && (
+                        <span
+                          className={`shrink-0 text-[8px] font-black px-1 py-px rounded border leading-[1.3] ${
+                            String(n.priority).toUpperCase() === "CRITICAL" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" :
+                            String(n.priority).toUpperCase() === "HIGH" ? "bg-orange-500/15 text-orange-300 border-orange-500/40" :
+                            String(n.priority).toUpperCase() === "MEDIUM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40" :
+                            "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                          }`}
+                          data-testid={`notif-priority-${n.id}`}
+                        >
+                          {String(n.priority).toUpperCase()}
+                        </span>
+                      )}
                     </div>
                     {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
                     <div className="text-[9px] text-slate-500 mt-1">
