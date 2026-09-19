@@ -11,6 +11,7 @@
 //          insights are rebuilt from the remaining notes so history stays true.
 
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { businessInsights, businesses, dailyNotes } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
@@ -25,6 +26,7 @@ import {
   type InsightsState,
   type NoteAnalysis,
 } from "@/lib/dailyNotesAi";
+import { apiError } from "@/lib/apiError";
 
 const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
 const MAX_LEN = 2000;
@@ -62,6 +64,7 @@ async function upsertInsights(businessId: number, state: InsightsState) {
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const { searchParams } = new URL(request.url);
@@ -102,13 +105,14 @@ export async function GET(request: NextRequest) {
       noteDates: Array.from(new Set(rows.map((r) => r.noteDate))).sort().reverse().slice(0, 30),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -169,13 +173,14 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, note, analysis, insights: next });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const { searchParams } = new URL(request.url);
@@ -221,6 +226,6 @@ export async function DELETE(request: NextRequest) {
     }
     return NextResponse.json({ success: true, deleted: true, insights: rebuilt });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

@@ -78,10 +78,17 @@ const ghs = (n: number) => `GH₵ ${Math.round(Math.abs(n)).toLocaleString("en-U
  *  predicate financeReport's isSeededBaselineTxn applies client-side). */
 const LIVE_TX_WHERE = `transaction_number !~ '^TRX-\\d{4}-100[1-6]$' AND status <> 'CANCELLED'`;
 
-export async function computeScenarioBaseline(businessId?: number | null): Promise<ScenarioBaseline> {
-  const scoped = businessId != null && Number.isFinite(Number(businessId)) && Number(businessId) > 0;
-  const bizId = scoped ? Number(businessId) : null;
-  const bizFilter = bizId != null ? sql`AND business_id = ${bizId}` : sql``;
+export async function computeScenarioBaseline(scope?: number | number[] | null): Promise<ScenarioBaseline> {
+  // scope: undefined/null ⇒ whole platform; number ⇒ one unit; number[] ⇒ the
+  // caller's reachable unit set (org isolation is enforced by the caller).
+  let bizFilter = sql``;
+  if (typeof scope === "number" && Number.isFinite(scope) && scope > 0) {
+    bizFilter = sql`AND business_id = ${scope}`;
+  } else if (Array.isArray(scope)) {
+    bizFilter = scope.length === 0
+      ? sql`AND false`
+      : sql`AND business_id IN (${sql.join(scope.map((b) => sql`${Number(b)}`), sql`, `)})`;
+  }
 
   const [m] = (
     await db.execute(sql`
@@ -133,8 +140,8 @@ export async function computeScenarioBaseline(businessId?: number | null): Promi
   const avgUnitRevenueQ = revenueQ / units;
 
   return {
-    scope: bizId == null ? "enterprise" : "business",
-    businessId: bizId,
+    scope: typeof scope === "number" ? "business" : "enterprise",
+    businessId: typeof scope === "number" ? scope : null,
     revenueQ,
     expensesQ,
     profitQ,

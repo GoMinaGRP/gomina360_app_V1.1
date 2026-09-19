@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { users, userSessions, userBusinessAccess } from "@/db/schema";
+import { users, userSessions, userBusinessAccess, organizationMembers, organizations, businesses } from "@/db/schema";
 import { businessManageIdsOf } from "./permissions";
 
 /**
@@ -10,8 +10,10 @@ import { businessManageIdsOf } from "./permissions";
  * - Passwords: scrypt with a per-user random salt ("scrypt:<salt>:<hash>", hex).
  * - Sessions: 32-byte random bearer token in an httpOnly, SameSite=Lax cookie;
  *   only the SHA-256 hash is stored server-side (leak ⇒ useless).
- * - Access: OWNER sees everything; every other user sees their primary
- *   assigned business plus businesses the OWNER explicitly granted rows for.
+ * - Access: the platform Super Admin sees everything; an organization OWNER
+ *   sees all businesses of THEIR organization; every other user sees their
+ *   primary assigned business plus granted businesses — always intersected
+ *   with their own organization(s). Users can never cross an org boundary.
  */
 
 export const SESSION_COOKIE = "gomina_session";
@@ -92,7 +94,46 @@ export function readSessionToken(request: Request): string | null {
 export interface SessionInfo {
   sessionId: number;
   user: any;
+  /** The user's primary organization (null only for orphaned/bootstrap users). */
+  orgId: number | null;
+  /** All organizations the user is a member of. */
+  orgIds: number[];
+  isSuperAdmin: boolean;
 }
+
+/** Load the organization ids a user belongs to. Result is cached on the user
+ *  object (session-enriched rows carry it already; raw table rows get one DB hit). */
+export async function resolveUserOrgIds(user: any): Promise<number[]> {
+  if (!user) return [];
+  if (Array.isArray(user.organizationIds)) return user.organizationIds;
+  if (user.primaryOrgId) {
+    const rows = await db
+      .select({ organizationId: organizationMembers.organizationId })
+      .from(organizationMembers)
+      .where(eq(organizationMembers.userId, user.id));
+    const ids = rows.map((r) => Number(r.organizationId));
+    const primary = Number(user.primaryOrgId);
+    const all = ids.includes(primary) ? ids : [primary, ...ids];
+    return all.length ? all : [primary];
+  }
+  const rows = await db
+    .select({ organizationId: organizationMembers.organizationId })
+    .from(organizationMembers)
+    .where(eq(organizationMembers.userId, user.id));
+  return rows.map((r) => Number(r.organizationId));
+}
+
+/** All business ids owned by any of the given organizations. */
+export async function businessIdsOfOrgs(orgIds: number[]): Promise<number[]> {
+  if (!orgIds.length) return [];
+  const rows = await db
+    .select({ id: businesses.id })
+    .from(businesses)
+    .where(inArray(businesses.ownerId, orgIds));
+  return rows.map((r) => Number(r.id));
+}
+
+export const isSuperAdmin = (user: any): boolean => !!user?.isSuperAdmin;
 
 /** Resolve the acting user from the session cookie. Returns null if unauthenticated. */
 export async function getSessionInfo(request: Request): Promise<SessionInfo | null> {
@@ -138,15 +179,55 @@ export async function getSessionInfo(request: Request): Promise<SessionInfo | nu
       .set({ lastSeenAt: new Date(), revokedAt: null })
       .where(eq(userSessions.id, row.session.id));
   }
-  return { sessionId: row.session.id, user: row.user };
+
+  // ── Organization (tenant) context ─────────────────────────────────────
+  const membershipRows = await db
+    .select({
+      organizationId: organizationMembers.organizationId,
+      isPrimary: organizationMembers.isPrimary,
+      status: organizations.status,
+    })
+    .from(organizationMembers)
+    .leftJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
+    .where(eq(organizationMembers.userId, row.user.id));
+  const superAdmin = row.user.isSuperAdmin === true;
+  const orgIds = membershipRows.map((m) => Number(m.organizationId)).filter(Number.isFinite);
+  // NaN is not nullish (?? does not rescue it) — normalize with a helper
+  // before any nullable-fallback chain.
+  const numOrNull = (v: any): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const primaryOrgId =
+    (row.user.primaryOrgId && orgIds.includes(Number(row.user.primaryOrgId)) ? numOrNull(row.user.primaryOrgId) : null) ??
+    numOrNull(membershipRows.find((m) => m.isPrimary)?.organizationId) ??
+    orgIds[0] ??
+    numOrNull(row.user.primaryOrgId);
+  // A SUSPENDED organization locks out every member (super admins keep their
+  // platform seat — they are the ones who suspend/resume orgs).
+  if (!superAdmin && orgIds.length) {
+    const hasActiveOrg = membershipRows.some((m) => m.status !== "SUSPENDED");
+    if (!hasActiveOrg) return null;
+  }
+  const user = {
+    ...row.user,
+    isSuperAdmin: superAdmin,
+    organizationIds: orgIds,
+    orgId: primaryOrgId,
+  };
+  return { sessionId: row.session.id, user, orgId: primaryOrgId, orgIds, isSuperAdmin: superAdmin };
 }
 
-/** Business ids a user may access. Returns null ⇒ unrestricted (OWNER).
- *  Effective access = primary assignment ∪ extra-access grants ∪ units the
- *  user has been granted to MANAGE (managing a unit implies seeing it). */
+/** Business ids a user may access. Returns null ⇒ unrestricted (Super Admin).
+ *  Org OWNER ⇒ every business of their organization(s). Everyone else ⇒
+ *  primary assignment ∪ extra-access grants ∪ managed units, always
+ *  intersected with their own organization(s). */
 export async function accessibleBusinessIds(user: any): Promise<number[] | null> {
   if (!user) return [];
-  if (user.role === "OWNER") return null; // unrestricted
+  if (isSuperAdmin(user)) return null; // platform-unrestricted
+  const orgIds = await resolveUserOrgIds(user);
+  const orgBizIds = await businessIdsOfOrgs(orgIds);
+  if (user.role === "OWNER") return orgBizIds; // org-scoped, never global
   const ids = new Set<number>();
   if (user.assignedBusinessId) ids.add(Number(user.assignedBusinessId));
   for (const m of businessManageIdsOf(user)) ids.add(m); // manage ⇒ access
@@ -155,15 +236,41 @@ export async function accessibleBusinessIds(user: any): Promise<number[] | null>
     .from(userBusinessAccess)
     .where(eq(userBusinessAccess.userId, user.id));
   for (const g of grants) ids.add(Number(g.businessId));
-  return [...ids];
+  // Legacy rows (no org recorded) keep their pre-multi-owner scope exactly:
+  // the org-intersection would empty their world.
+  if (orgIds.length === 0) return [...ids];
+  const orgBiz = new Set(orgBizIds);
+  return [...ids].filter((id) => orgBiz.has(id));
 }
 
 export async function canAccessBusiness(user: any, businessId: number): Promise<boolean> {
   if (!user) return false;
-  if (user.role === "OWNER") return true;
+  if (isSuperAdmin(user)) return true;
   const allowed = await accessibleBusinessIds(user);
   if (allowed === null) return true;
   return allowed.includes(Number(businessId));
+}
+
+/** True when the actor and target share at least one organization. */
+export async function sharesOrganization(a: any, b: any): Promise<boolean> {
+  const aIds = await resolveUserOrgIds(a);
+  const bIds = await resolveUserOrgIds(b);
+  // Legacy rows may carry no org record at all (they predate multi-owner):
+  // two org-less users share the legacy universe, so branch managers of the
+  // demo tenant can keep administering them exactly as before.
+  if (aIds.length === 0 && bIds.length === 0) return true;
+  return aIds.some((id) => bIds.includes(id));
+}
+
+/** May `actor` administer `target` (edit flags, reset password, deactivate…)?
+ *  Super admin ⇒ yes (platform-wide). Org OWNER ⇒ only inside shared orgs.
+ *  Others ⇒ no (handled by callers' own flags). */
+export async function canAdministerUser(actor: any, target: any): Promise<boolean> {
+  if (!actor || !target) return false;
+  if (isSuperAdmin(actor)) return true;
+  if (isSuperAdmin(target)) return false; // only a super admin touches a super admin
+  if (actor.role !== "OWNER") return false;
+  return sharesOrganization(actor, target);
 }
 
 /** Filter an array of rows carrying .businessId to those the user may access. */
@@ -173,10 +280,18 @@ export function filterByAccess<T extends { businessId?: number | null }>(rows: T
   return rows.filter((r) => r.businessId != null && set.has(Number(r.businessId)));
 }
 
-/** Session-resolved OWNER gate for mutation routes (replaces spoofable body roles). */
+/** Session-resolved OWNER gate for mutation routes (replaces spoofable body roles).
+ *  Passes for org OWNERs and the platform Super Admin (role stays OWNER). */
 export async function requireOwner(request: Request): Promise<any | null> {
   const info = await getSessionInfo(request);
   if (!info || info.user.role !== "OWNER") return null;
+  return info.user;
+}
+
+/** Session-resolved Super Admin gate for platform-level routes (org lifecycle). */
+export async function requireSuperAdmin(request: Request): Promise<any | null> {
+  const info = await getSessionInfo(request);
+  if (!info || !info.user.isSuperAdmin) return null;
   return info.user;
 }
 

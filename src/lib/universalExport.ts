@@ -219,7 +219,18 @@ async function generateExcel(records: any[], meta: UniversalExportMeta, qrData: 
 
 async function generateCsv(records: any[], meta: UniversalExportMeta, qrData: string, qrSvg: string, qrPayload: any) {
   const { headers, rows } = normalizedRows(records);
-  const quote = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  // CSV formula-injection guard (M4): Excel/Sheets execute cells whose text
+  // begins with =, +, −, @ (and tab/CR) as formulae when opening raw CSV.
+  // Anything staff-typed (customer/product names, notes) flows through here.
+  // Negative NUMBERS are deliberately left numeric — a plain "-12.5" is a
+  // balance, not a formula — while text like "-Bob's Trick" is escaped.
+  const quote = (v: any) => {
+    let s = String(v ?? "");
+    if (/^[=+@\t\r]/.test(s) || (/^[\-−]/.test(s) && !/^[\-−]?\d/.test(s))) {
+      s = "'" + s;
+    }
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const lines: string[] = [];
   lines.push(quote("GOMINA 360 EXPORT METADATA") + "," + quote("VALUE"));
   metaRows(meta).forEach(([k, v]) => lines.push(`${quote(k)},${quote(v)}`));

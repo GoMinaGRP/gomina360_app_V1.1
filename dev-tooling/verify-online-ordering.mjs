@@ -61,6 +61,8 @@ async function sectionA() {
   ok("A4 menu leaks no costs/margins/thresholds",
     !str.includes("costPriceGhs") && !str.includes("minStockThreshold") && !str.includes("cost_price_ghs"), str.slice(0, 200));
   baseline.menuItem = biz1?.products?.[0];
+  // Named pickup point (units with pickup points require pickupLocationId).
+  baseline.pickId = (biz1?.pickupLocations || [])[0]?.id;
 }
 
 /* ── B: public order placement ──────────────────────────────────────── */
@@ -71,7 +73,7 @@ async function sectionB(cookies) {
     method: "POST",
     body: JSON.stringify({
       businessId: 1, customerName: T, customerPhone: "0551223344",
-      fulfillmentType: "PICKUP", paymentChoice: "ON_DELIVERY",
+      fulfillmentType: "PICKUP", pickupLocationId: baseline.pickId, paymentChoice: "ON_DELIVERY",
       items: [{ inventoryId: p.id, quantity: 1 }], note: "TEST note from customer",
     }),
   });
@@ -91,7 +93,7 @@ async function sectionB(cookies) {
     method: "POST",
     body: JSON.stringify({
       businessId: 1, customerName: T + " Tamper", customerPhone: "0551223344",
-      items: [{ inventoryId: p.id, quantity: 2, unitPrice: 0.01 }],
+      pickupLocationId: baseline.pickId, items: [{ inventoryId: p.id, quantity: 2, unitPrice: 0.01 }],
     }),
   });
   const pr = (await pg.query(`SELECT total_ghs, items FROM customer_trackings WHERE tracking_code=$1`, [price.json?.trackingCode || ""])).rows[0];
@@ -102,7 +104,7 @@ async function sectionB(cookies) {
     method: "POST",
     body: JSON.stringify({
       businessId: 1, customerName: T, customerPhone: "0551998877",
-      items: [{ inventoryId: p.id, quantity: Math.floor(p.available) + 5000 }],
+      pickupLocationId: baseline.pickId, items: [{ inventoryId: p.id, quantity: Math.floor(p.available) + 5000 }],
     }),
   });
   ok("B4 over-ordering stock refused (409, named product)", over.status === 409 && (over.json?.error || "").includes("available"));
@@ -165,7 +167,7 @@ async function sectionC(cookies) {
   // C3 confirm-guard: shrink stock under the order size → confirm must fail
   const guard = await api(null, "/api/order", {
     method: "POST",
-    body: JSON.stringify({ businessId: 1, customerName: T + " Guard", customerPhone: "0551998877", items: [{ inventoryId: p.id, quantity: 5 }] }),
+    body: JSON.stringify({ businessId: 1, customerName: T + " Guard", customerPhone: "0551998877", pickupLocationId: baseline.pickId, items: [{ inventoryId: p.id, quantity: 5 }] }),
   });
   const gRow = (await pg.query(`SELECT id FROM customer_trackings WHERE tracking_code=$1`, [guard.json?.trackingCode || ""])).rows[0];
   baseline.qtyBeforeGuard = invBefore;
@@ -254,10 +256,16 @@ async function sectionD(cookies) {
   await p1.type('[data-testid="oo-name"]', T + " UI");
   await p1.type('[data-testid="oo-phone"]', "0551444555");
   await p1.type('[data-testid="oo-dest-input"]', "TEST Kasoa toll booth");
-  // Delivery orders now pin their exact point on Google Maps (no geolocation
-  // permission here → drop the pin at the map centre, then confirm).
+  // Delivery orders now pin their exact point on Google Maps. The picker
+  // opens centred on the SHOP and the server refuses pins <75 m from it
+  // (anti "did you mean pickup?" guard) — so from the map centre a customer
+  // must do exactly what the on-screen hint says: nudge the pin to their
+  // doorstep first (100 m east here), then confirm.
   await p1.waitForSelector('[data-testid="oo-pin-root"]', { timeout: 10000 });
-  await centreClick("oo-pin-set");
+  const setStep = async (m) => p1.evaluate((mm) => { const s = document.querySelector('[data-testid="oo-pin-step"]'); if (s) { const proto = HTMLSelectElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(s, String(mm)); s.dispatchEvent(new Event("change", { bubbles: true })); } }, m);
+  await setStep(100);
+  await centreClick("oo-pin-e"); // nudge from the shop-centred map STARTS the pin 100 m east (past the 75 m guard)
+  await new Promise((r) => setTimeout(r, 600));
   await p1.waitForFunction(() => (document.querySelector('[data-testid="oo-pin-coords"]')?.textContent || "").includes(","), { timeout: 10000 });
   await centreClick("oo-place");
   await p1.waitForSelector('[data-testid="oo-code"]', { timeout: 20000 });

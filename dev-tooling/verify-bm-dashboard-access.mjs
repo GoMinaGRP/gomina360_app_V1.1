@@ -208,8 +208,8 @@ async function sectionC(browser, cookies) {
     hwState.bodyHasCement, JSON.stringify(hwState));
   await page.screenshot({ path: "/home/user/bm-granted-hardware.png" });
 
-  // Grant POULTRY-02 as well → chip appears, dashboard opens for “kkkkk”
-  await api(cookies.owner, "/api/users", { method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [8, 11] }) });
+  // Grant BLOCK-01 as well → a third chip appears and opens its live dashboard
+  await api(cookies.owner, "/api/users", { method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [8, 2] }) });
   await page.reload({ waitUntil: "networkidle0" });
   await page.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 45000 });
   await sleep(900);
@@ -221,13 +221,13 @@ async function sectionC(browser, cookies) {
   ok("C3 a second granted branch adds a third chip, label “My Branches (3)”",
     chips2.length === 3 && header2 === "My Branches (3)" && chips2.filter((c) => c.granted).length === 2,
     JSON.stringify({ chips2, header2 }));
-  const clickedP2 = await clickExact(page, "kkkkk");
+  const clickedP2 = await clickExact(page, "Mina Concrete & Blocks");
   await sleep(1200);
   const p2State = await page.evaluate(() => ({
-    poultryUI: !!document.querySelector('[data-testid="dash-date-filter"]'),
-    namePresent: /kkkkk/i.test(document.body.innerText),
+    poultryUI: !!document.querySelector('[data-testid="dash-date-filter"], [data-testid="bf-open-expense"]'),
+    namePresent: /Mina Concrete/i.test(document.body.innerText),
   }));
-  ok("C4 the second granted branch (POULTRY-02 kkkkk) opens its live poultry dashboard",
+  ok("C4 the second granted branch (BLOCK-01 blocks depot) opens its live dashboard",
     clickedP2 && p2State.poultryUI && p2State.namePresent, JSON.stringify(p2State));
   await page.screenshot({ path: "/home/user/bm-granted-poultry02.png" });
 

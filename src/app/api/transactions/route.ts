@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { transactions, businesses, recordDeletionLogs } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -8,12 +9,14 @@ import {
   canManageBusinessUnit,
 } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 export async function GET(request: Request) {
   try {
     // Session-scoped: users only ever receive transactions of businesses
     // they are assigned / granted access to.
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
 
     const { searchParams } = new URL(request.url);
@@ -38,7 +41,7 @@ export async function GET(request: Request) {
       .select()
       .from(transactions)
       .orderBy(desc(transactions.id));
-    if (session.user.role === "OWNER") {
+    if (session.user.isSuperAdmin) {
       return NextResponse.json({ success: true, transactions: allTrx });
     }
     const { accessibleBusinessIds } = await import("@/lib/auth");
@@ -47,10 +50,7 @@ export async function GET(request: Request) {
       allowed === null ? allTrx : allTrx.filter((t) => allowed.includes(t.businessId));
     return NextResponse.json({ success: true, transactions: scoped });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -77,6 +77,7 @@ export async function POST(request: Request) {
     // Session identity is authoritative for attribution, and the user must
     // have access to the business the record belongs to.
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     if (!(await canAccessBusiness(session.user, businessId))) {
       return FORBIDDEN("You do not have access to record against that business.");
@@ -128,10 +129,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, transaction: newTrx });
   } catch (error: any) {
     console.error("POST /api/transactions error:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -167,6 +165,10 @@ export async function PATCH(request: Request) {
         { success: false, error: "Transaction not found." },
         { status: 404 }
       );
+    }
+    // Tenant boundary: permission flags never act across organizations.
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, existing.businessId))) {
+      return FORBIDDEN("That transaction belongs to a business you cannot access.");
     }
 
     const d = data || {};
@@ -225,10 +227,7 @@ export async function PATCH(request: Request) {
       .returning();
     return NextResponse.json({ success: true, transaction: updated });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -293,7 +292,12 @@ export async function DELETE(request: Request) {
         { status: 403 }
       );
     }
+    // Tenant boundary: permission flags never act across organizations.
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, existing.businessId))) {
+      return FORBIDDEN("That transaction belongs to a business you cannot access.");
+    }
 
+    const [bizRow] = await db.select({ ownerId: businesses.ownerId }).from(businesses).where(eq(businesses.id, existing.businessId));
     const [log] = await db
       .insert(recordDeletionLogs)
       .values({
@@ -305,6 +309,7 @@ export async function DELETE(request: Request) {
         deletedByUserId: actor?.id ?? null,
         deletedByName: actor?.name || "Unknown",
         deletedByRole: actor?.role || "UNKNOWN",
+        ownerId: bizRow?.ownerId ?? null,
       })
       .returning();
 
@@ -316,9 +321,6 @@ export async function DELETE(request: Request) {
       auditLogId: log.id,
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

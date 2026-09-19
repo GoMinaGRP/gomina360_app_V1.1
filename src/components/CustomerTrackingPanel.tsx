@@ -2,39 +2,43 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Package,
-  Plus,
-  RefreshCw,
-  Search,
-  Truck,
-  CheckCircle2,
-  PackageCheck,
-  MapPin,
-  Copy,
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
-  X,
-  Radio,
-  CircleStop,
-  Clock3,
-  User as UserIcon,
-  Building2,
   Ban,
   Banknote,
-  HandCoins,
-  Globe,
-  StickyNote,
+  Building2,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  CircleStop,
   ClipboardList,
-  Link2,
-  Navigation,
-  ShoppingBag,
-  Landmark,
+  Clock3,
+  Copy,
+  ExternalLink,
+  Factory,
+  Globe,
+  HandCoins,
   Hash,
+  Landmark,
+  Link2,
+  MapPin,
+  Navigation,
+  Package,
+  PackageCheck,
+  Plus,
+  Radio,
+  RefreshCw,
+  Route,
+  Search,
+  ShoppingBag,
+  StickyNote,
   Store,
+  Truck,
+  User as UserIcon,
+  X,
 } from "lucide-react";
 import { formatMoney } from "@/lib/currency";
 import AiSectionGuide from "./AiSectionGuide";
+import PreorderSetupView from "./PreorderSetupView";
+import ProcurementPanel from "./ProcurementPanel";
 import {
   googleMapsEmbed,
   googleMapsLink,
@@ -84,7 +88,7 @@ interface Props {
   lockedBusiness?: any | null;
 }
 
-type PanelView = "ORDERS" | "CONSOLE";
+type PanelView = "ORDERS" | "CONSOLE" | "PREORDER" | "PROCUREMENT";
 
 const PAYCHIP_FOR: Record<string, string> = {
   PAID: "PAID",
@@ -211,6 +215,35 @@ export default function CustomerTrackingPanel({
     try {
       await postAction({ action: "MARK_PAID", id: t.id, method: payMethod[t.id] || t.paymentMethod || "CASH" });
       setFlash(`${t.trackingCode} marked PAID — revenue booked`);
+      await load(true);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusyRow(null);
+    }
+  };
+
+  /** Pre-order payment events — deposit confirmed first, balance afterwards. */
+  const setDeposit = async (t: any) => {
+    setBusyRow(t.id);
+    setError("");
+    try {
+      await postAction({ action: "MARK_DEPOSIT", id: t.id, method: payMethod[t.id] || t.paymentMethod || "CASH" });
+      setFlash(`${t.trackingCode} deposit CONFIRMED`);
+      await load(true);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusyRow(null);
+    }
+  };
+
+  const setBalance = async (t: any) => {
+    setBusyRow(t.id);
+    setError("");
+    try {
+      await postAction({ action: "MARK_BALANCE", id: t.id, method: payMethod[t.id] || t.paymentMethod || "CASH" });
+      setFlash(`${t.trackingCode} balance CONFIRMED — order fully paid`);
       await load(true);
     } catch (e: any) {
       setError(e.message);
@@ -493,10 +526,85 @@ export default function CustomerTrackingPanel({
             )}
           </div>
 
+          {/* Pre-order identity strip */}
+          {t.orderKind && t.orderKind !== "STOCK" && (
+            <div className="mb-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2" data-testid={`ct-preorder-${t.id}`}>
+              <p className="text-[10px] font-black uppercase tracking-wide text-amber-300 flex items-center gap-1">
+                <PackageCheck className="w-3 h-3" /> {t.orderKind === "PREORDER" ? "Pre-Order" : "Mixed basket (stock + pre-order)"}
+              </p>
+              <div className="mt-1 text-[10px] text-amber-100/80 space-y-0.5">
+                {t.preorderSnapshot?.etaStart && (
+                  <p>Expected between <b>{new Date(t.preorderSnapshot.etaStart).toLocaleDateString()}</b> and <b>{new Date(t.preorderSnapshot.etaEnd).toLocaleDateString()}</b></p>
+                )}
+                {t.supplierOrderId ? (
+                  <p>Sourcing: PO #{t.supplierOrderId} raised</p>
+                ) : t.status !== "CANCELLED" && !["DELIVERED", "COMPLETED"].includes(t.status) ? (
+                  <p className="text-amber-300/90 font-bold">Needs a supplier PO — open the Procurement tab to raise one</p>
+                ) : null}
+              </div>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3" data-testid={`ct-actions-${t.id}`}>
+            {/* Pre-order ledger */}
+            {t.orderSource !== "SALE" && t.status !== "CANCELLED" && t.orderKind && t.orderKind !== "STOCK" && (
+              <div className="mb-2.5 pb-2.5 border-b border-slate-700/60" data-testid={`ct-ledger-${t.id}`}>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
+                  <Banknote className="w-3 h-3" /> Pre-order payments
+                </div>
+                <div className="text-[10px] text-slate-400 space-y-0.5 mb-1.5">
+                  <p>Total <b className="text-white">GH₵ {Number(t.totalGhs || 0).toFixed(2)}</b> · paid <b className="text-emerald-300">GH₵ {Number(t.paidGhs || 0).toFixed(2)}</b> · balance <b className="text-amber-300">GH₵ {Number(t.balanceRemainingGhs || 0).toFixed(2)}</b></p>
+                  {t.paymentPlan === "DEPOSIT_NOW" && (
+                    <p>Deposit due <b className="text-white">GH₵ {Number((t.preorderSnapshot || {}).depositDueGhs || 0).toFixed(2)}</b> — balance { (t.preorderSnapshot || {}).termsKey === "ON_ARRIVAL" ? "when stock arrives" : (t.preorderSnapshot || {}).termsKey === "PREPAID" ? "prepaid" : "when order is ready"}</p>
+                  )}
+                </div>
+                {t.paymentStatus !== "PAID" && (
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={payMethod[t.id] || t.paymentMethod || "CASH"}
+                      onChange={(e) => setPayMethod((s) => ({ ...s, [t.id]: e.target.value }))}
+                      className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-slate-200"
+                      data-testid={`ct-paymethod-${t.id}`}
+                    >
+                      <option value="CASH">Cash</option>
+                      <option value="MTN_MOMO">MTN MoMo</option>
+                    </select>
+                    {t.paymentPlan === "DEPOSIT_NOW" && t.paymentStatus !== "DEPOSIT_PAID" && (
+                      <button
+                        onClick={() => setDeposit(t)}
+                        disabled={busyRow === t.id}
+                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold disabled:opacity-40"
+                        data-testid={`ct-deposit-${t.id}`}
+                      >
+                        Confirm deposit
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setBalance(t)}
+                      disabled={busyRow === t.id || (t.paymentPlan === "DEPOSIT_NOW" && t.paymentStatus !== "DEPOSIT_PAID")}
+                      className="flex-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold disabled:opacity-40"
+                      data-testid={`ct-balance-${t.id}`}
+                    >
+                      Confirm balance
+                    </button>
+                  </div>
+                )}
+                {t.paymentStatus === "PAID" && (
+                  <p className="text-[11px] font-bold text-emerald-300" data-testid={`ct-paid-line-${t.id}`}>Fully paid {t.paymentMethod === "MTN_MOMO" ? "via MTN MoMo" : "in Cash"}</p>
+                )}
+                {(t.paymentEvents || []).length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5 text-[9px] text-slate-500" data-testid={`ct-events-${t.id}`}>
+                    {(t.paymentEvents as any[]).map((ev: any) => (
+                      <li key={ev.id}>{ev.kind} — GH₵ {Number(ev.amountGhs).toFixed(2)} · {ev.method}{ev.ref ? ` · ${ev.ref}` : ""} · {new Date(ev.createdAt).toLocaleString()}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             {/* Payment confirmation (not needed for till sales) */}
-            {t.orderSource !== "SALE" && t.status !== "CANCELLED" && (
+            {t.orderSource !== "SALE" && t.status !== "CANCELLED" && (!t.orderKind || t.orderKind === "STOCK") && (
               <div className="mb-2.5 pb-2.5 border-b border-slate-700/60">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
                   <Banknote className="w-3 h-3" /> Payment
@@ -767,6 +875,24 @@ export default function CustomerTrackingPanel({
         >
           <Truck className="w-3.5 h-3.5" /> Live tracking
         </button>
+        <button
+          onClick={() => setView("PREORDER")}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition ${
+            view === "PREORDER" ? "bg-emerald-600 text-white shadow" : "text-slate-300 hover:text-white"
+          }`}
+          data-testid="ct-view-preorder"
+        >
+          <Route className="w-3.5 h-3.5" /> Pre-order setup
+        </button>
+        <button
+          onClick={() => setView("PROCUREMENT")}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition ${
+            view === "PROCUREMENT" ? "bg-emerald-600 text-white shadow" : "text-slate-300 hover:text-white"
+          }`}
+          data-testid="ct-view-procurement"
+        >
+          <Factory className="w-3.5 h-3.5" /> Procurement
+        </button>
       </div>
 
       {/* Shared filters: status · business · search (code/customer/product) */}
@@ -808,6 +934,18 @@ export default function CustomerTrackingPanel({
       </div>
 
       {/* Orders-only filters: branch · payment · date range */}
+      {view === "PREORDER" && (
+        <PreorderSetupView
+          currentUser={currentUser}
+          businesses={[]}
+          scopedBusinesses={scopedBusinesses}
+        />
+      )}
+
+      {view === "PROCUREMENT" && (
+        <ProcurementPanel scopedBusinesses={scopedBusinesses} />
+      )}
+
       {view === "ORDERS" && (
         <div className="flex flex-wrap items-center gap-2" data-testid="ct-orders-filters">
           {branchOptions.length > 1 && (

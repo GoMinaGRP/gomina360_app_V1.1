@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { users, userSessions, businesses, userBusinessAccess } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
-import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, UNAUTHENTICATED } from "@/lib/auth";
+import { users, userSessions, businesses, userBusinessAccess, organizationMembers } from "@/db/schema";
+import { desc, eq, inArray } from "drizzle-orm";
+import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, UNAUTHENTICATED } from "@/lib/auth";
 
 /**
  * Signed-In Staff console — who is signed in right now, from where, since
@@ -77,8 +78,29 @@ export async function GET(request: NextRequest) {
       (sessByUser[s.userId] ||= []).push(s);
     }
 
+    // Org boundary: non-Super-Admin viewers only ever see people who share
+    // their own organization — never another Owner's staff. Legacy users whose
+    // accounts predate multi-owner carry no org record; for them the legacy
+    // universe IS the whole tenant (no org filter), exactly as before.
+    const myOrgs: number[] = Array.isArray(me.organizationIds) ? me.organizationIds.map(Number) : [];
+    let memberIds: Set<number> | null = null;   // org viewers: the allowed set
+    if (!me.isSuperAdmin && myOrgs.length) {
+      const memberRows = await db
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(inArray(organizationMembers.organizationId, myOrgs));
+      memberIds = new Set(memberRows.map((m) => Number(m.userId)));
+    }
+    const visibleUser = (u: any) => {
+      if (me.isSuperAdmin) return true;
+      if (u.id === me.id) return true;
+      if (memberIds) return memberIds.has(Number(u.id));
+      return true; // legacy (org-less) viewer — unrestricted, as pre-multi-owner
+    };
+
     const staff = userRows
       .filter((u) => {
+        if (!visibleUser(u)) return false;
         if (isOwner) return true;
         // delegated manager: only staff whose primary branch is in-scope
         return u.assignedBusinessId != null && (allowed ?? []).includes(Number(u.assignedBusinessId));
@@ -170,6 +192,7 @@ export async function GET(request: NextRequest) {
 const FORBID = (msg: string) => NextResponse.json({ success: false, error: msg }, { status: 403 });
 
 export async function POST(request: NextRequest) {
+  ttlInvalidate("init");
   try {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
@@ -191,6 +214,14 @@ export async function POST(request: NextRequest) {
     if (!target) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
     if (target.id === me.id) return FORBID("You cannot change your own access from this console.");
     if (target.role === "OWNER") return FORBID("The OWNER account can never be disabled or revoked.");
+    // Tenant boundary: never act outside your own organization, and never on
+    // the platform Super Admin account.
+    if (!me.isSuperAdmin) {
+      if (target.isSuperAdmin) return FORBID("The platform Super Admin account is outside your reach.");
+      if (!(await sharesOrganization(me, target))) {
+        return FORBID("That user belongs to a different organization.");
+      }
+    }
 
     if (!isOwner) {
       // Delegated managers: Workers & Branch Managers inside their scope only.

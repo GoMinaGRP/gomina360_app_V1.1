@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   blockFactoryLogs,
@@ -14,7 +15,8 @@ import {
 import { deriveDensityKgm3 } from "@/lib/blockQc";
 import { and, eq } from "drizzle-orm";
 import { computeStockStatus, ensureInventoryItem } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -132,6 +134,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: production, orders, deliveries and stock stay inside the
+    // caller's accessible businesses (OWNER ⇒ all; others ⇒ assignment+grants).
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
 
     const [production, orders, deliveries, inventory, checklists, existingTypes, qcChecks] = await Promise.all([
       db.select().from(blockFactoryLogs).where(eq(blockFactoryLogs.businessId, businessId)),
@@ -166,7 +173,7 @@ export async function GET(request: NextRequest) {
       qcChecks: qcChecks.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -179,6 +186,9 @@ export async function POST(request: NextRequest) {
     const businessId = Number(data?.businessId);
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
@@ -557,7 +567,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unknown entity" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -580,6 +590,9 @@ export async function PATCH(request: NextRequest) {
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
       }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const nowCompleted = !existing.isCompleted;
       const [row] = await db
         .update(blockFactoryChecklists)
@@ -596,6 +609,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unknown entity" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

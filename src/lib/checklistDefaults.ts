@@ -78,6 +78,17 @@ const WASH_TASKS: TaskSeed[] = [
   { taskKey: "YARD_CLOSING", taskLabel: "Close bays, drain lines & store equipment", category: "SECURITY" },
 ];
 
+/** Transportation / fleet-shift opening checks — vehicle-free (vehicle
+ *  pre-trip checks live in the Transport module's own daily checklist). */
+const TRANSPORT_TASKS: TaskSeed[] = [
+  { taskKey: "DRIVER_ROSTER", taskLabel: "Confirm driver assignments & rosters for the day", category: "STAFF" },
+  { taskKey: "TRIP_BOARD", taskLabel: "Review dispatch board — planned trips & bookings", category: "OPERATIONS" },
+  { taskKey: "TRACKER_ONLINE", taskLabel: "Verify vehicle trackers reporting online", category: "EQUIPMENT" },
+  { taskKey: "FUEL_FLOAT", taskLabel: "Confirm fuel float & station credit lines", category: "FINANCE" },
+  { taskKey: "DOCS_COMPLIANCE", taskLabel: "Check insurance/roadworthy/fitness papers aboard", category: "COMPLIANCE" },
+  { taskKey: "YARD_SAFETY", taskLabel: "Yard sweep — parking, spills & gate secured", category: "SAFETY" },
+];
+
 const TELECOM_TASKS: TaskSeed[] = [
   { taskKey: "FLOAT_OPENING", taskLabel: "Record opening float & cash on every MoMo line", category: "FINANCE" },
   { taskKey: "SIM_COMPLIANCE", taskLabel: "Verify agent SIM registration & KYC documents current", category: "COMPLIANCE" },
@@ -130,6 +141,7 @@ const DEFAULT_TASKS_BY_CATEGORY: Record<string, TaskSeed[]> = {
   "Car Wash": WASH_TASKS,
   "Hardware Store": HARDWARE_TASKS,
   "Telecom & Digital Services": TELECOM_TASKS,
+  Transportation: TRANSPORT_TASKS,
 };
 
 /** Pick the best task set for a business: exact code → category → generic. */

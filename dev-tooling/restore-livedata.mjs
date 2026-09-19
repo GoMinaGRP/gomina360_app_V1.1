@@ -38,20 +38,39 @@ for (const [table, rows] of Object.entries(backup.tables || {})) {
   const wanted = Object.keys(rows[0]).filter((c) => live.has(c));
   if (wanted.length === 0) continue;
   let inserted = 0;
+  let skipped = 0;
   for (const row of rows) {
     const cols = wanted.filter((c) => row[c] !== undefined);
+    // Multi-owner NOT NULL tenant columns: rows archived before the upgrade
+    // all belong to the main organization — stamp them on the way in.
+    for (const tenantCol of ["owner_id", "organization_id"]) {
+      if (live.has(tenantCol) && !cols.includes(tenantCol)) cols.push(tenantCol);
+    }
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
     const values = cols.map((c) => {
+      if (c === "owner_id" || c === "organization_id") return row[c] ?? 1;
       const v = row[c];
       if (v === null || typeof v !== "object") return v;
       return JSON.stringify(v); // jsonb columns
     });
-    const res = await pg.query(
-      `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders})
-       ON CONFLICT (id) DO NOTHING RETURNING id`,
-      values,
-    );
-    inserted += res.rowCount;
+    try {
+      const res = await pg.query(
+        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders})
+         ON CONFLICT (id) DO NOTHING RETURNING id`,
+        values,
+      );
+      inserted += res.rowCount;
+    } catch (e) {
+      if (e && e.code === "23505") {
+        // Some tables have a natural unique key (e.g. businesses.code) besides
+        // the surrogate id — when a fresh seed already created an equivalent
+        // row, id-replay collides on THAT key. The row is already present in
+        // a semantically equal form: count it as satisfied and keep going.
+        skipped++;
+        continue;
+      }
+      throw e;
+    }
   }
   // Keep the serial ahead of anything we restored.
   const { rows: seqRows } = await pg.query(
@@ -63,7 +82,8 @@ for (const [table, rows] of Object.entries(backup.tables || {})) {
     const { rows: maxRows } = await pg.query(`SELECT COALESCE(MAX(id),0)::bigint m FROM ${table}`);
     await pg.query(`SELECT setval($1, $2)`, [seq, maxRows[0].m]);
   }
-  console.log(`✔ ${table}: ${inserted}/${rows.length} row(s) restored`);
+  const suffix = skipped ? ` (${skipped} already present by unique key)` : "";
+  console.log(`✔ ${table}: ${inserted}/${rows.length} row(s) restored${suffix}`);
 }
 await pg.end();
 console.log(`RESTORE-LIVEDATA COMPLETE (backup from ${backup.capturedAt || "unknown"})`);

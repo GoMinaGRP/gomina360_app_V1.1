@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { universalExports, users, businesses } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, sharesOrganization, UNAUTHENTICATED } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
+import { apiError } from "@/lib/apiError";
 
 async function getUser(userId: number) {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -21,25 +23,43 @@ export async function GET(request: NextRequest) {
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
+    const me = __authSession.user;
     const { searchParams } = new URL(request.url);
     const userId = Number(searchParams.get("userId"));
-    if (!userId) {
-      return NextResponse.json({ success: false, error: "userId is required" }, { status: 400 });
+
+    // The session decides WHO is asking — a user may only read their own
+    // export history; executives of the same organization may read theirs
+    // too; the Super Admin may read anyone's. Passing someone else's userId
+    // no longer switches identity.
+    const targetId = userId || me.id;
+    const viewingSelf = targetId === me.id;
+    const canViewOther = me.isSuperAdmin || isExecutive(me.role);
+    if (!viewingSelf && !canViewOther) {
+      return NextResponse.json({ success: false, error: "You can only view your own export history." }, { status: 403 });
     }
 
-    const user = await getUser(userId);
+    const user = await getUser(viewingSelf ? me.id : targetId);
     if (!user) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    if (!viewingSelf && !me.isSuperAdmin && !(await sharesOrganization(me, user))) {
+      return NextResponse.json({ success: false, error: "That user belongs to a different organization." }, { status: 403 });
+    }
 
     let rows = await db.select().from(universalExports).orderBy(desc(universalExports.id));
+    if (!me.isSuperAdmin) {
+      const myOrgs = new Set(me.organizationIds || []);
+      rows = rows.filter((r) => r.ownerId != null && myOrgs.has(Number(r.ownerId)) || (r.ownerId == null && r.requesterUserId === me.id));
+    }
     if (user.role === "WORKER") {
       rows = rows.filter((r) => r.requesterUserId === user.id);
     } else if (user.role === "BRANCH_MANAGER") {
       rows = rows.filter((r) => r.businessId === user.assignedBusinessId);
+    } else if (!viewingSelf) {
+      rows = rows.filter((r) => r.requesterUserId === user.id);
     }
 
     return NextResponse.json({ success: true, exports: rows });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -61,7 +81,6 @@ export async function POST(request: NextRequest) {
       moduleLabel,
       exportType,
       format,
-      requesterUserId,
       businessId,
       businessName,
       branchCode,
@@ -73,15 +92,16 @@ export async function POST(request: NextRequest) {
       status: requestedStatus,
     } = body;
 
-    if (!exportId || !moduleKey || !format || !requesterUserId) {
+    if (!exportId || !moduleKey || !format) {
       return NextResponse.json(
-        { success: false, error: "exportId, moduleKey, format and requesterUserId are required" },
+        { success: false, error: "exportId, moduleKey and format are required" },
         { status: 400 }
       );
     }
 
-    const user = await getUser(Number(requesterUserId));
-    if (!user) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    // Identity & permissions always come from the signed-in session — the
+    // body's requesterUserId is never trusted.
+    const user = __authSession.user;
 
     // ── Permission gate ─────────────────────────────────────────────
     if (!isExecutive(user.role)) {
@@ -118,6 +138,11 @@ export async function POST(request: NextRequest) {
       scopedBranchName = biz?.name || null;
     }
 
+    // Executives exporting a specific business must have (org-scoped) access to it.
+    if (isExecutive(user.role) && scopedBusinessId != null && !(await canAccessBusiness(user, scopedBusinessId))) {
+      return NextResponse.json({ success: false, error: "You do not have access to that business." }, { status: 403 });
+    }
+
     // Workers always need approval, regardless of requested status.
     // Branch Managers with permission export directly (COMPLETED).
     const status = user.role === "WORKER" ? "PENDING" : requestedStatus || "COMPLETED";
@@ -142,14 +167,18 @@ export async function POST(request: NextRequest) {
         recordCount: Number(recordCount) || 0,
         qrCodeData: qrCodeData || null,
         qrCodePayload: qrCodePayload || null,
+        ownerId: scopedBusinessId != null ? ((await ownerOrgOfBusiness(scopedBusinessId)) ?? __authSession.orgId ?? null) : (__authSession.orgId ?? null),
         completedAt: status === "COMPLETED" ? new Date() : null,
       })
       .returning();
 
     return NextResponse.json({ success: true, export: row });
   } catch (error: any) {
+    // Deliberate: the file's own unique-key conflict surfaces as 409 with its
+    // text; anything truly unexpected goes through the sanitized sink (M3).
     const status = String(error?.message || "").includes("unique") ? 409 : 500;
-    return NextResponse.json({ success: false, error: error.message }, { status });
+    if (status === 409) return NextResponse.json({ success: false, error: error.message }, { status });
+    return apiError(error);
   }
 }
 
@@ -162,16 +191,21 @@ export async function PATCH(request: NextRequest) {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
     const body = await request.json();
-    const { id, action, actorUserId, qrCodeData, qrCodePayload, recordCount } = body;
-    if (!id || !action || !actorUserId) {
-      return NextResponse.json({ success: false, error: "id, action and actorUserId required" }, { status: 400 });
+    const { id, action, qrCodeData, qrCodePayload, recordCount } = body;
+    if (!id || !action) {
+      return NextResponse.json({ success: false, error: "id and action required" }, { status: 400 });
     }
 
-    const actor = await getUser(Number(actorUserId));
-    if (!actor) return NextResponse.json({ success: false, error: "Actor not found" }, { status: 404 });
+    // The approver/completer is always the signed-in user.
+    const actor = __authSession.user;
 
     const [existing] = await db.select().from(universalExports).where(eq(universalExports.id, Number(id)));
     if (!existing) return NextResponse.json({ success: false, error: "Export record not found" }, { status: 404 });
+
+    // Tenant boundary: no action on another organization's export records.
+    if (!actor.isSuperAdmin && existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
+      return NextResponse.json({ success: false, error: "That export belongs to a different organization." }, { status: 403 });
+    }
 
     if (action === "APPROVE" || action === "REJECT") {
       if (!isExecutive(actor.role)) {
@@ -213,6 +247,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unknown action" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

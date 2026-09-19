@@ -152,6 +152,17 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
             <div key={i.id} className={`bg-slate-950/60 border rounded-xl p-4 space-y-3 ${focusIssueId === i.id ? "border-amber-400/60 ring-1 ring-amber-400/40" : "border-slate-700/80"}`} data-testid={`myi-issue-${i.id}`}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATUS_TINT[i.status] || STATUS_TINT.FLAGGED}`} data-testid={`myi-status-${i.id}`}>{STEP_LABEL[i.status] || i.status}</span>
+                <span
+                  className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${
+                    String(i.priority || "MEDIUM").toUpperCase() === "CRITICAL" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" :
+                    String(i.priority || "MEDIUM").toUpperCase() === "HIGH" ? "bg-orange-500/15 text-orange-300 border-orange-500/40" :
+                    String(i.priority || "MEDIUM").toUpperCase() === "MEDIUM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40" :
+                    "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                  }`}
+                  data-testid={`myi-priority-${i.id}`}
+                >
+                  {String(i.priority || "MEDIUM").toUpperCase()}
+                </span>
                 {i.issueTitle && <span className="font-black text-slate-100 text-xs">{i.issueTitle}</span>}
                 <span className="text-[10px] text-slate-500 ml-auto">{fmtTs(i.createdAt)}</span>
               </div>

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { transactions, inventoryItems, salesDocuments, businesses, customers, customerTrackings } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { buildTrackingCode } from "@/lib/tracking";
+import { apiError } from "@/lib/apiError";
 
 /**
  * POST /api/sales
@@ -27,6 +29,7 @@ import { buildTrackingCode } from "@/lib/tracking";
  * }
  */
 export async function POST(request: NextRequest) {
+  ttlInvalidate("init");
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
@@ -51,6 +54,11 @@ export async function POST(request: NextRequest) {
         { success: false, error: "businessId and at least one cart item are required." },
         { status: 400 }
       );
+    }
+    // A sale deducts stock and posts revenue — only inside businesses the
+    // signed-in user can actually access.
+    if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     // ── 1. Validate every item against inventory ──────────────────────
@@ -384,9 +392,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("POST /api/sales error:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

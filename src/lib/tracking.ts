@@ -12,6 +12,12 @@ export const TRACK_STATUSES = [
   "RECEIVED",
   "CONFIRMED",
   "PROCESSING",
+  // ── PRE-ORDER stages (ride the same order row & tracking code) ──
+  "PROCUREMENT",
+  "SHIPPED",
+  "IN_TRANSIT",
+  "ARRIVED",
+  "RECEIVED_STOCK",
   "READY",
   "DISPATCHED",
   "DELIVERED",
@@ -25,12 +31,39 @@ export const TRACK_STATUS_LABELS: Record<TrackStatus, string> = {
   RECEIVED: "Order Received",
   CONFIRMED: "Confirmed",
   PROCESSING: "Processing",
+  PROCUREMENT: "Supplier Procurement",
+  SHIPPED: "Shipped",
+  IN_TRANSIT: "In Transit",
+  ARRIVED: "Arrived",
+  RECEIVED_STOCK: "Received Into Stock",
   READY: "Ready for Pickup",
   DISPATCHED: "Dispatched",
   DELIVERED: "Delivered",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
+
+/** Order kinds — legacy rows are all STOCK; PREORDER/MIXED include pre-order lines. */
+export const ORDER_KINDS = ["STOCK", "PREORDER", "MIXED"] as const;
+export type OrderKind = (typeof ORDER_KINDS)[number];
+
+/** Payment plan keys — how/when the customer pays. */
+export const PAYMENT_PLAN_LABELS: Record<string, string> = {
+  FULL_NOW: "Paid in full",
+  DEPOSIT_NOW: "Deposit + balance",
+  ON_FULFILLMENT: "Pay on fulfillment",
+};
+
+/** Status sequence preorders follow (a LINEAR chain; staff still control every hop). */
+export const PREORDER_CHAIN: TrackStatus[] = [
+  "RECEIVED",
+  "CONFIRMED",
+  "PROCUREMENT",
+  "SHIPPED",
+  "IN_TRANSIT",
+  "ARRIVED",
+  "RECEIVED_STOCK",
+];
 
 export const TERMINAL_STATUSES: TrackStatus[] = ["DELIVERED", "COMPLETED", "CANCELLED"];
 
@@ -39,10 +72,30 @@ export const PAYMENT_STATUS_LABELS: Record<string, string> = {
   UNPAID: "Not paid yet",
   PENDING_CONFIRMATION: "Awaiting payment confirmation",
   CREDIT: "Credit — paying in installments",
+  DEPOSIT_PAID: "Deposit paid — balance due",
 };
+
+/** The deposit currently demanded (0 when the order has none). */
+export function depositDue(row: any): number {
+  const snap = (row?.preorderSnapshot || {}) as any;
+  return Number(snap.depositDueGhs || 0);
+}
+
+/** Balance still owed after the payments already logged (0 = settled). */
+export function balanceDue(row: any, payments?: any[]): number {
+  if (row?.balanceDueGhs != null) return Math.max(0, Number(row.balanceDueGhs));
+  const total = Number(row?.totalGhs || 0);
+  const paid = (payments || []).reduce((a, p) => a + (p.kind === "REFUND" ? -p.amountGhs : p.amountGhs), 0);
+  return Math.max(0, total - paid);
+}
 
 /** Customer-facing description of how/when payment happens. */
 export function paymentExplainer(row: any): string {
+  if (row.paymentStatus === "DEPOSIT_PAID") {
+    const bal = row.balanceDueGhs != null ? ` GH₵ ${Number(row.balanceDueGhs).toFixed(2)}` : "";
+    const when = row.preorderSnapshot?.termsKey === "ON_ARRIVAL" ? "when your goods arrive" : "when your order is ready";
+    return `Deposit received — thank you! The balance${bal} is due ${when}.`;
+  }
   if (row.paymentStatus === "CREDIT")
     return "This order is on credit — pay in installments with the business; your balance is shown below.";
   if (row.paymentStatus === "PAID") {
@@ -73,6 +126,14 @@ export const ALLOWED_TRANSITIONS: Record<TrackStatus, TrackStatus[]> = {
   RECEIVED: ["CONFIRMED", "CANCELLED"],
   CONFIRMED: ["PROCESSING", "CANCELLED"],
   PROCESSING: ["READY", "DISPATCHED", "CANCELLED"],
+  // PRE-ORDER chain — linear; RECEIVED_STOCK hands back to the stock flow.
+  // (STOCK orders never touch these statuses, so existing transitions are
+  // byte-identical for them; transitions OUT of them only exist on preorders.)
+  PROCUREMENT: ["SHIPPED", "CANCELLED"],
+  SHIPPED: ["IN_TRANSIT", "CANCELLED"],
+  IN_TRANSIT: ["ARRIVED", "CANCELLED"],
+  ARRIVED: ["RECEIVED_STOCK", "CANCELLED"],
+  RECEIVED_STOCK: ["READY", "DISPATCHED", "CANCELLED"],
   READY: ["COMPLETED", "DISPATCHED", "CANCELLED"],
   DISPATCHED: ["DELIVERED"],
   DELIVERED: [],
@@ -80,14 +141,25 @@ export const ALLOWED_TRANSITIONS: Record<TrackStatus, TrackStatus[]> = {
   CANCELLED: [],
 };
 
-/** Next statuses valid for THIS order (dispatching needs DELIVERY fulfillment). */
-export function nextStatuses(status: string, fulfillmentType: string): TrackStatus[] {
-  const opts = ALLOWED_TRANSITIONS[(status as TrackStatus) || "RECEIVED"] || [];
+/** Is this one of the pre-order-only intermediate stages? */
+export const PREORDER_ONLY_STAGES: TrackStatus[] = ["PROCUREMENT", "SHIPPED", "IN_TRANSIT", "ARRIVED", "RECEIVED_STOCK"];
+
+/**
+ * Next statuses valid for THIS order. STOCK orders keep the exact legacy
+ * behaviour; PREORDER/MIXED orders replace the CONFIRMED→PROCESSING hop with
+ * CONFIRMED→PROCUREMENT and then walk the linear supplier chain. Dispatching
+ * still requires DELIVERY fulfillment.
+ */
+export function nextStatuses(status: string, fulfillmentType: string, orderKind?: string): TrackStatus[] {
+  const kind = orderKind || "STOCK";
+  const st = (status as TrackStatus) || "RECEIVED";
+  let opts: TrackStatus[] = ALLOWED_TRANSITIONS[st] || [];
+  if (kind !== "STOCK" && st === "CONFIRMED") opts = ["PROCUREMENT", "CANCELLED"];
   return opts.filter((s) => s !== "DISPATCHED" || fulfillmentType === "DELIVERY");
 }
 
-export function isValidTransition(from: string, to: string, fulfillmentType: string): boolean {
-  return nextStatuses(from, fulfillmentType).includes(to as TrackStatus);
+export function isValidTransition(from: string, to: string, fulfillmentType: string, orderKind?: string): boolean {
+  return nextStatuses(from, fulfillmentType, orderKind).includes(to as TrackStatus);
 }
 
 /** Customer-facing 5-step journey index (0-based) for the public stepper. */
@@ -106,6 +178,47 @@ export function journeyStep(status: string): number {
     default:
       return 0; // RECEIVED
   }
+}
+
+/** How delivery timeline overlay stages map onto the semantic DOM. */
+export const JOURNEY_STAGE_LABELS: Record<TrackStatus, string> = TRACK_STATUS_LABELS;
+
+/** Linear stage list a preorder travels (drives the public stepper + audit). */
+export const PREORDER_STAGE_LIST = PREORDER_CHAIN;
+
+/** Build the customer-facing journey DOM for an order. STOCK orders use the
+ *  legacy 5 steps; preorder orders get the extended chain rendered from the
+ *  same primitive. Staff-configurable via this table only — no UI branches. */
+export function journeyStages(orderKind: string | null | undefined): { key: string; preorderOnly: boolean; label: string }[] {
+  const out: { key: string; preorderOnly: boolean; label: string }[] = [
+    { key: "RECEIVED", preorderOnly: false, label: TRACK_STATUS_LABELS.RECEIVED },
+    { key: "CONFIRMED", preorderOnly: false, label: TRACK_STATUS_LABELS.CONFIRMED },
+  ];
+  if (orderKind && orderKind !== "STOCK") {
+    out.push(
+      { key: "PROCUREMENT", preorderOnly: true, label: TRACK_STATUS_LABELS.PROCUREMENT },
+      { key: "SHIPPED", preorderOnly: true, label: TRACK_STATUS_LABELS.SHIPPED },
+      { key: "IN_TRANSIT", preorderOnly: true, label: TRACK_STATUS_LABELS.IN_TRANSIT },
+      { key: "ARRIVED", preorderOnly: true, label: TRACK_STATUS_LABELS.ARRIVED },
+      { key: "RECEIVED_STOCK", preorderOnly: true, label: TRACK_STATUS_LABELS.RECEIVED_STOCK },
+    );
+  } else {
+    out.push({ key: "PROCESSING", preorderOnly: false, label: TRACK_STATUS_LABELS.PROCESSING });
+  }
+  out.push(
+    { key: "READY", preorderOnly: false, label: "Ready / Dispatched" },
+    { key: "DONE", preorderOnly: false, label: "Delivered / Completed" },
+  );
+  return out;
+}
+
+/** Index into `journeyStages` for the stepper (handles DONE collapsing). */
+export function journeyStepIndex(status: string, orderKind?: string): number {
+  const stages = journeyStages(orderKind);
+  if (status === "READY" || status === "DISPATCHED") return stages.findIndex((s) => s.key === "READY");
+  if (status === "DELIVERED" || status === "COMPLETED") return stages.findIndex((s) => s.key === "DONE");
+  const i = stages.findIndex((s) => s.key === status);
+  return i >= 0 ? i : 0;
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ2345679"; // no I/L/O/0/1 — hard to misread
@@ -359,7 +472,22 @@ export function publicTrackingPayload(row: any, biz: any, credit?: any) {
     status: row.status,
     statusLabel: TRACK_STATUS_LABELS[row.status as TrackStatus] || row.status,
     isTerminal: TERMINAL_STATUSES.includes(row.status),
-    journeyStep: row.status === "CANCELLED" ? null : journeyStep(row.status),
+    journeyStep: row.status === "CANCELLED" ? null : journeyStepIndex(row.status, row.orderKind || "STOCK"),
+    // Full stage list for the public stepper (5-step legacy or preorder chain).
+    journeyStagesList: journeyStages(row.orderKind || "STOCK"),
+    orderKind: row.orderKind || "STOCK",
+    paymentPlan: row.paymentPlan || "FULL_NOW",
+    // Customer-safe subset of the pre-order snapshot (ETA window, methods,
+    // deposit outstanding) — never the cost bookkeeping of the staff console.
+    preorderSnapshot: (row.orderKind || "STOCK") !== "STOCK"
+      ? {
+          etaStart: (row.preorderSnapshot as any)?.etaStart || null,
+          etaEnd: (row.preorderSnapshot as any)?.etaEnd || null,
+          methods: (row.preorderSnapshot as any)?.methods || [],
+          termsKey: (row.preorderSnapshot as any)?.termsKey || null,
+          depositDueGhs: (row.preorderSnapshot as any)?.depositDueGhs ?? null,
+        }
+      : null,
     placedAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
     updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
     // Payment status for the customer — never the MoMo reference (staff-only).

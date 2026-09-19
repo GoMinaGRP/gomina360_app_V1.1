@@ -41,7 +41,8 @@ const B = {
   sessionMax: (await q1("SELECT COALESCE(max(id),0) m FROM user_sessions")).m,
   grantsMax: (await q1("SELECT COALESCE(max(id),0) m FROM audit_assignments")).m,
   grants: Number((await q1("SELECT count(*) c FROM audit_assignments")).c),
-  comfort: (await q1("SELECT is_active FROM audit_assignments WHERE id=1"))?.is_active,
+  // M5: stale chaos anchors dropped — byte-snapshot every pre-existing audit grant instead
+  auditStates: JSON.stringify(await q("SELECT id,is_active FROM audit_assignments WHERE id <= (SELECT COALESCE(max(id),0) m FROM audit_assignments) ORDER BY id")),
   kofiDeleg: (await q1("SELECT can_manage_auditors FROM users WHERE id=4"))?.can_manage_auditors,
   trailMax: (await q1("SELECT COALESCE(max(id),0) m FROM audit_trail")).m,
   trail: Number((await q1("SELECT count(*) c FROM audit_trail")).c),
@@ -237,12 +238,14 @@ try {
     trail: Number((await q1("SELECT count(*) c FROM audit_trail")).c),
     txn: Number((await q1("SELECT count(*) c FROM transactions")).c),
     reviews: Number((await q1("SELECT count(*) c FROM audit_reviews")).c),
-    comfort: (await q1("SELECT is_active FROM audit_assignments WHERE id=1"))?.is_active,
+    auditStates: JSON.stringify(await q("SELECT id,is_active FROM audit_assignments ORDER BY id")),
     kofiDeleg: (await q1("SELECT can_manage_auditors FROM users WHERE id=4"))?.can_manage_auditors,
-    emmanuel: (await q1("SELECT is_active FROM audit_assignments WHERE user_id=3 AND business_id=2"))?.is_active,
   };
   ok("Z1 audit tables back to baseline (grants/trail/reviews/txn)", F.grants === B.grants && F.trail === B.trail && F.reviews === B.reviews && F.txn === B.txn, JSON.stringify({ g: `${F.grants}/${B.grants}`, t: `${F.trail}/${B.trail}`, r: `${F.reviews}/${B.reviews}`, x: `${F.txn}/${B.txn}` }));
-  ok("Z2 owner's revoked grant stays revoked + delegation restored + Emmanuel intact", F.comfort === false && F.kofiDeleg === (B.kofiDeleg ?? false) && F.emmanuel === true);
+  // M5: the durable property — every pre-existing audit grant is byte-identical
+  // after the suite (no TEST row reactivates a stranger's grant, none are lost),
+  // and Kofi's auditor delegation is restored to what the owner had set.
+  ok("Z2 pre-existing audit grants byte-identical + delegation restored", F.auditStates === B.auditStates && F.kofiDeleg === (B.kofiDeleg ?? false));
   ok("Z3 zero page errors", pageErrors.length === 0, pageErrors[0] || "");
   await browser.close();
   await client.end();

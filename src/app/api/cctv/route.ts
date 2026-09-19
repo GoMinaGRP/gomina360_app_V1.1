@@ -8,6 +8,7 @@ import {
   FORBIDDEN,
   UNAUTHENTICATED,
 } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * CCTV Security Cameras — organised Business → Branch → Cameras.
@@ -29,11 +30,11 @@ function sanitize(cam: any) {
   return { ...rest, hasCredentials: !!password };
 }
 
-/** OWNER => full; otherwise needs canManageCctv + business scope. Returns
- * null when allowed, or a NextResponse describing the denial. */
+/** Super Admin => full; org OWNER or canManageCctv + business scope (org-bound).
+ * Returns null when allowed, or a NextResponse describing the denial. */
 async function assertManage(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
-  if (!user.canManageCctv) {
+  if (user.isSuperAdmin) return null;
+  if (user.role !== "OWNER" && !user.canManageCctv) {
     return FORBIDDEN(
       "The OWNER has not granted you CCTV management. Ask the OWNER to enable it under Users & Access."
     );
@@ -87,10 +88,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -222,10 +220,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, camera: sanitize(inserted) });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -325,10 +320,7 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true, camera: sanitize(updated) });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -358,9 +350,6 @@ export async function DELETE(request: Request) {
     await db.delete(cctvCameras).where(eq(cctvCameras.id, id));
     return NextResponse.json({ success: true, removed: cam.name });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

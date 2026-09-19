@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   TrendingUp,
@@ -40,6 +40,7 @@ import {
   Area,
 } from "recharts";
 import { CurrencyCode, formatMoney, convertGhs } from "@/lib/currency";
+import { rollupsByOrg } from "@/lib/orgGrouping";
 import { ActiveTab } from "./Sidebar";
 import FinancialReportSection from "./FinancialReportSection";
 
@@ -71,6 +72,13 @@ interface CommandCenterDashboardProps {
   // OWNER or an OWNER-delegated manager (Users & Access console access).
   canManageUsersConsole?: boolean;
   checklists?: { templates: any[]; entries: any[] };
+  /** SUPER ADMIN — Organization Lens: the Command Center becomes either the
+   *  focused workspace view ("MY"/one org) or the platform oversight view
+   *  ("ALL" ⇒ per-organization rollups + platform totals). */
+  currentUser?: any;
+  organizations?: { id: number; name: string; slug?: string; status: string }[];
+  orgLens?: string;
+  lensOrgName?: string;
 }
 
 export default function CommandCenterDashboard({
@@ -91,7 +99,12 @@ export default function CommandCenterDashboard({
   canManageOnline = false,
   canManageUsersConsole = false,
   checklists,
+  currentUser = null,
+  organizations = [],
+  orgLens = "MY",
+  lensOrgName = "",
 }: CommandCenterDashboardProps) {
+  const isSuperAdminUser = !!currentUser?.isSuperAdmin;
   const [chartView, setChartView] = useState<
     "PROFIT_BAR" | "ROI_RADAR" | "CASH_AREA" | "SALES_BAR" | "ASSETS_BAR"
   >("PROFIT_BAR");
@@ -213,6 +226,13 @@ export default function CommandCenterDashboard({
   // The dataset used by charts & tables
   const displayData = groupedData;
 
+  // Super Admin platform oversight: one financial rollup per Owner/Org
+  // (memoized — this maps every business × metric row per render).
+  const orgRollups = useMemo(
+    () => (orgLens === "ALL" ? rollupsByOrg(businesses, metrics, organizations) : []),
+    [orgLens, businesses, metrics, organizations]
+  );
+
   // Calculate combined KPI totals across the SELECTED + grouped scope
   const totalRevenue = displayData.reduce((acc, b) => acc + b.revenueGhs, 0);
   const totalExpenses = displayData.reduce((acc, b) => acc + b.expensesGhs, 0);
@@ -303,6 +323,20 @@ export default function CommandCenterDashboard({
           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white">
             Enterprise Performance Overview
           </h2>
+          {isSuperAdminUser && (
+            <div
+              data-testid="lens-banner"
+              className={`inline-flex items-center gap-2 mt-2 px-3 py-1.5 rounded-full border text-[11px] font-black ${
+                orgLens === "ALL"
+                  ? "bg-sky-500/10 text-sky-300 border-sky-500/40"
+                  : "bg-violet-500/10 text-violet-300 border-violet-500/40"
+              }`}
+            >
+              {orgLens === "ALL"
+                ? "ALL ORGANIZATIONS — PLATFORM OVERSIGHT (totals below combine every Owner)"
+                : `${lensOrgName || "My Workspace"} — FOCUSED VIEW`}
+            </div>
+          )}
           <p className="text-sm text-slate-300 mt-1 max-w-2xl">
             Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across all 7 Ghanaian operating units.
           </p>
@@ -369,6 +403,63 @@ export default function CommandCenterDashboard({
           )}
         </div>
       </div>
+
+      {/* SUPER ADMIN — Organization Lens "ALL": per-Owner/Org rollups. Each
+          Owner's numbers stay clearly separated; platform totals follow in
+          the KPI cards below (labeled as combining every Owner). */}
+      {isSuperAdminUser && orgLens === "ALL" && orgRollups.length > 0 && (
+        <div data-testid="org-rollup-grid" className="space-y-2">
+          <div className="text-[11px] font-black uppercase tracking-wider text-sky-300 px-1">
+            Per-Organization Rollup — every Owner separated
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {orgRollups.map((o) => (
+              <div
+                key={o.orgId}
+                data-testid={`org-rollup-card-${o.orgId}`}
+                className={`rounded-xl border p-4 shadow ${
+                  o.isMain
+                    ? "bg-violet-500/10 border-violet-500/40"
+                    : "bg-slate-800/90 border-slate-700/80"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  {o.orgLogo && (
+                    <img src={o.orgLogo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-sm font-black text-white truncate">{o.orgName}</div>
+                    <div className={`text-[10px] font-bold ${o.isMain ? "text-violet-300" : "text-sky-300"}`}>
+                      {o.isMain ? "MY WORKSPACE (MAIN OWNER)" : "OWNER / ORGANIZATION"}
+                      {o.orgStatus !== "ACTIVE" ? ` · ${o.orgStatus}` : ""}
+                    </div>
+                  </div>
+                  <span className="ml-auto text-[10px] font-black text-slate-400 bg-slate-700/60 border border-slate-600 px-1.5 py-0.5 rounded shrink-0">
+                    {o.units} unit{o.units === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-3 text-center">
+                  <div>
+                    <div className="text-[9px] text-slate-500 font-bold">REVENUE</div>
+                    <div className="text-xs font-black text-emerald-400">{formatMoney(o.revenueGhs, currentCurrency, true)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-slate-500 font-bold">EXPENSES</div>
+                    <div className="text-xs font-black text-rose-400">{formatMoney(o.expensesGhs, currentCurrency, true)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-slate-500 font-bold">NET PROFIT</div>
+                    <div className={`text-xs font-black ${o.netProfitGhs >= 0 ? "text-teal-300" : "text-rose-300"}`}>{formatMoney(o.netProfitGhs, currentCurrency, true)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] text-slate-500 px-1">
+            The KPI scorecards below sum ALL organizations — the platform-wide oversight total.
+          </div>
+        </div>
+      )}
 
       {/* Enterprise Combined Executive KPI Scorecards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { computeScenarioBaseline, computeScenarioImpacts } from "@/lib/scenarioEngine";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Live what-if sandbox — the Scenario Planner slider calls this (debounced)
@@ -45,6 +46,6 @@ export async function GET(request: Request) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

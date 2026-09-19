@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { expenseCategories } from "@/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
@@ -9,6 +10,8 @@ import {
   canAccessBusiness,
   accessibleBusinessIds,
 } from "@/lib/auth";
+import { ownerOrgOfBusiness } from "@/lib/notify";
+import { apiError } from "@/lib/apiError";
 
 /**
  * GET /api/expense-categories?businessId=1&branchCode=POULTRY-01
@@ -55,7 +58,7 @@ export async function GET(request: NextRequest) {
     categories.sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
     return NextResponse.json({ success: true, categories });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -64,6 +67,7 @@ export async function GET(request: NextRequest) {
  * Create a new custom expense category.
  */
 export async function POST(request: NextRequest) {
+  ttlInvalidate("init");
   try {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
@@ -82,11 +86,14 @@ export async function POST(request: NextRequest) {
       return FORBIDDEN("You do not have access to record categories for that business.");
     }
 
-    // Check if category already exists
-    const [existing] = await db
+    const catOwnerId = (await ownerOrgOfBusiness(Number(businessId))) ?? session.orgId ?? null;
+
+    // Check if this OWNER's organization already has that category
+    const existingRows = await db
       .select()
       .from(expenseCategories)
       .where(eq(expenseCategories.name, name.trim()));
+    const existing = existingRows.find((r) => Number(r.ownerId) === Number(catOwnerId));
 
     if (existing) {
       return NextResponse.json(
@@ -103,12 +110,13 @@ export async function POST(request: NextRequest) {
         name: name.trim(),
         icon: icon || null,
         createdBy: session.user.name || createdBy || "User",
+        ownerId: catOwnerId,
         isActive: true,
       })
       .returning();
 
     return NextResponse.json({ success: true, category: newCategory });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

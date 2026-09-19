@@ -33,7 +33,7 @@ const WORKER = { email: "kwabena.mensah@gomina360.com", pass: "GoMina@User11" };
 
 const ANCHOR = { lat: 5.6037, lng: -0.187 };        // Accra CBD (biz1 temp anchor)
 const ANCHOR_FAR = { lat: 6.6911, lng: -1.6244 };   // Kumasi (biz2 temp anchor)
-const CUST_NEAR = { lat: 5.6041, lng: -0.187 };     // ~45 m from biz1 anchor
+const CUST_NEAR = { lat: 5.6054, lng: -0.187 };     // ~190 m from ANCHOR — in-area, but OUTSIDE the 75 m anti-pin-at-the-shop guard
 const CUST_INTL = { lat: 6.9, lng: -1.9 };          // 33 km+ from both anchors
 const PIN_FAR = { lat: 5.9, lng: -0.187 };          // ~33 km north of ANCHOR
 const RADIUS_KM = 8;
@@ -184,7 +184,7 @@ async function sectionA(cookies) {
   });
   const pickOk = await api(null, "/api/order", {
     method: "POST",
-    body: JSON.stringify({ businessId: 1, customerName: "TEST PickSwitch", customerPhone: "0551000004", fulfillmentType: "PICKUP", items: [{ inventoryId: p.id, quantity: 1 }] }),
+    body: JSON.stringify({ businessId: 1, customerName: "TEST PickSwitch", customerPhone: "0551000004", fulfillmentType: "PICKUP", pickupLocationId: baseline.pickId, items: [{ inventoryId: p.id, quantity: 1 }] }),
   });
   ok("A7 delivery switch OFF: DELIVERY refused 400 with hint, PICKUP still works",
     delBlocked.status === 400 && /not offering delivery/i.test(delBlocked.json?.error || "") && pickOk.status === 200,
@@ -228,7 +228,7 @@ async function sectionB() {
   await page.waitForSelector('[data-testid="oo-locate-state"]', { timeout: 20000 });
   const state = await page.$eval('[data-testid="oo-locate-state"]', (el) => el.textContent || "");
   ok("B1 GPS fix captured on the storefront (coords + source shown)",
-    /GPS fix/.test(state) && /5\.604/.test(state), state.slice(0, 120));
+    /GPS fix/.test(state) && state.includes(CUST_NEAR.lat.toFixed(5).slice(0, 6)), state.slice(0, 120));
   const dist = await page.$eval('[data-testid="oo-biz-dist-1"]', (el) => el.textContent || "").catch(() => "");
   const biz2Gone = (await page.$('[data-testid="oo-biz-2"]')) === null;
   const biz1There = (await page.$('[data-testid="oo-biz-1"]')) !== null;
@@ -249,7 +249,7 @@ async function sectionB() {
   await page.waitForSelector('[data-testid="oo-root"]', { timeout: 30000 });
   const selActive = await page.$eval('[data-testid="oo-biz-2"]', (el) => el.className || "");
   ok("B5 shared/QR link ?biz= still selects the branch (never a dead end)",
-    /border-cyan-500\/60/.test(selActive), selActive.slice(0, 120));
+    /border-cyan-500/.test(selActive), selActive.slice(0, 120));
   await ctx.close();
 
   // B6 — far GPS: biz1 drops out of the serving list too. Select an
@@ -482,6 +482,10 @@ async function sectionF() {
     const btn = [...document.querySelectorAll("button[type=submit]")].find((b) => (b.textContent || "").includes("Save Record"));
     btn?.click();
   });
+  // Inventory entries (ITEM) are confirm-gated — approve the shared
+  // entry-confirmation dialog before the form closes.
+  await page.waitForSelector('[data-testid="shared-confirm-entry-confirm"]', { timeout: 10000 });
+  await page.click('[data-testid="shared-confirm-entry-confirm"]');
   await page.waitForFunction(() => !document.querySelector('[data-testid="inv-name"]'), { timeout: 20000 });
   ok("F1 completed Add-Stock-Item form closes itself on save", true);
   await page.waitForSelector('[data-testid="sem-form-flash"]', { timeout: 15000 });
@@ -595,6 +599,9 @@ async function main() {
   const menu = (await api(null, "/api/menu")).json;
   baseline.product = (menu.businesses || []).find((b) => b.businessId === 1)?.products?.find((p) => p.available >= 5);
   baseline.product2 = (menu.businesses || []).find((b) => b.businessId === 2)?.products?.[0];
+  // Pickup-point rule: a unit running named pickup points requires
+  // pickupLocationId on PICKUP orders — the suite must name one explicitly.
+  baseline.pickId = (menu.businesses || []).find((b) => b.businessId === 1)?.pickupLocations?.[0]?.id;
   if (!baseline.product || !baseline.product2) throw new Error("menu lacks sellable products on biz 1/2");
   baseline.qtyBefore = Number((await pg.query(`SELECT quantity FROM inventory_items WHERE id=$1`, [baseline.product.id])).rows[0].quantity);
 

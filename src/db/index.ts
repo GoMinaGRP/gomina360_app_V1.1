@@ -182,6 +182,11 @@ export function getPool(): Pool {
       keepAlive: true,
     });
     globalForDb.__arenaNextJsPostgresqlPool = pool;
+    // Sandboxed previews can sit on lightweight wire-protocol servers (e.g.
+    // PGlite's socket multiplexer) that emit stray async messages after an
+    // error response; without a listener that fires as an unhandled 'error'
+    // and kills the whole Node process. On real Postgres this never fires.
+    pool.on("error", (err) => console.warn("[db] idle pool client noise:", err.message));
     // One sanitized line per cold start — appears in the Vercel function logs
     // (Runtime Logs tab) and tells the operator EXACTLY which database the
     // deployment is really talking to, without ever printing credentials.

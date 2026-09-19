@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   employees,
@@ -17,6 +18,7 @@ import {
   UNAUTHENTICATED,
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Employee Registration — complete HR records:
@@ -72,7 +74,7 @@ async function nextEmployeeNo(): Promise<string> {
 }
 
 async function assertEmployeeAccess(user: any, businessId: number) {
-  if (user.role === "OWNER") return null;
+  if (user.isSuperAdmin) return null;
   if (!canManageSharedRecords(user)) {
     return FORBIDDEN("Only the OWNER (or a manager the OWNER has granted record-management permission) can manage employee records.");
   }
@@ -109,6 +111,7 @@ async function hist(
 export async function GET(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const url = new URL(request.url);
@@ -209,13 +212,14 @@ export async function GET(request: Request) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -334,13 +338,14 @@ export async function POST(request: Request) {
     );
     return NextResponse.json({ success: true, employee: row });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function PATCH(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -404,13 +409,14 @@ export async function PATCH(request: Request) {
     }
     return NextResponse.json({ success: true, employee: updated, changes: changes.length + (photoChanged ? 1 : 0) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function DELETE(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     const body = await request.json();
@@ -426,6 +432,6 @@ export async function DELETE(request: Request) {
     await hist(doc.employeeId, doc.businessId, "DOCUMENT_REMOVED", `Document removed: ${doc.title} (${doc.docType.replaceAll("_", " ").toLowerCase()})`, user);
     return NextResponse.json({ success: true, removed: docId });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

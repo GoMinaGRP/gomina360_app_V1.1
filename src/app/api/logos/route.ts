@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { businesses, companySettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -10,6 +11,7 @@ import {
   UNAUTHENTICATED,
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Company & business logo management.
@@ -33,12 +35,16 @@ function validLogo(logo: any): logo is string {
 export async function GET(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const allowed = await accessibleBusinessIds(session.user);
     const rows = (await db.select().from(businesses).orderBy(businesses.id)).filter(
       (b) => allowed === null || allowed.includes(b.id)
     );
-    const [cfg] = await db.select().from(companySettings).where(eq(companySettings.id, 1));
+    const [cfg] = await db
+      .select()
+      .from(companySettings)
+      .where(eq(companySettings.organizationId, session.orgId ?? 1));
     return NextResponse.json({
       success: true,
       companyLogo: cfg?.companyLogo || null,
@@ -46,13 +52,14 @@ export async function GET(request: Request) {
       scope: { canManage: canManageSharedRecords(session.user), isOwner: session.user.role === "OWNER" },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
     if (user.role !== "OWNER" && !canManageSharedRecords(user)) {
@@ -65,13 +72,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Logo must be an image under about 1MB." }, { status: 400 });
     }
 
-    // ── Company (group) logo — the ultimate fallback ─────────────────────
+    // ── Company (organization) logo — the per-Owner fallback ────────────
     if (action === "SET_COMPANY_LOGO") {
-      const [cfg] = await db.select().from(companySettings).where(eq(companySettings.id, 1));
+      const orgId = session.orgId ?? 1;
+      const [cfg] = await db.select().from(companySettings).where(eq(companySettings.organizationId, orgId));
       const values = { companyLogo: logo, updatedByUserId: user.id, updatedByName: user.name, updatedByRole: user.role, updatedAt: new Date() };
       let row;
-      if (cfg) [row] = await db.update(companySettings).set(values).where(eq(companySettings.id, 1)).returning();
-      else [row] = await db.insert(companySettings).values({ id: 1, ...values }).returning();
+      if (cfg) [row] = await db.update(companySettings).set(values).where(eq(companySettings.organizationId, orgId)).returning();
+      else [row] = await db.insert(companySettings).values({ organizationId: orgId, ...values }).returning();
       return NextResponse.json({ success: true, companyLogo: row.companyLogo });
     }
 
@@ -100,6 +108,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: false, error: "Unknown logo action." }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

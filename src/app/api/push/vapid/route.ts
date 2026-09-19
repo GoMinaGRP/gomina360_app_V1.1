@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { getVapidKeys } from "@/lib/push";
+import { apiError } from "@/lib/apiError";
 
 /** The group-wide VAPID public key — the browser needs it to subscribe. */
 export async function GET(request: Request) {
@@ -10,6 +11,6 @@ export async function GET(request: Request) {
     const keys = await getVapidKeys();
     return NextResponse.json({ success: true, publicKey: keys.publicKey });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

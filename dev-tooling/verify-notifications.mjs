@@ -37,7 +37,7 @@ import https from "https";
 import fs from "fs";
 import crypto from "crypto";
 const require = createRequire("/home/user/pgtooling/package.json");
-const requireApp = createRequire("/home/user/gomina360_app_V1/package.json");
+const requireApp = createRequire(new URL("../package.json", import.meta.url));
 const puppeteer = require("puppeteer-core");
 const { Client } = require("pg");
 const webpush = requireApp("web-push");
@@ -115,9 +115,18 @@ const clickT = async (page, testid) => {
 
 /* ── mock push endpoint (stands in for FCM/Mozilla push service) ────── */
 const mock = { hits: [], server: null, port: 0 };
+// Self-healing (M5): the /tmp keypair dies with every sandbox reset — mint a
+// fresh one instead of crashing with ENOENT. (Coverage of the push payload is
+// unchanged; this is harness plumbing.)
+function ensurePushCerts() {
+  if (fs.existsSync("/tmp/pushsrv-key.pem") && fs.existsSync("/tmp/pushsrv.pem")) return;
+  const { execSync } = require("child_process");
+  execSync('openssl req -x509 -newkey rsa:2048 -keyout /tmp/pushsrv-key.pem -out /tmp/pushsrv.pem -days 2 -nodes -subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"', { stdio: "ignore" });
+}
 async function startMock() {
   // Web Push always uses TLS — the mock presents a cert (SAN IP:127.0.0.1)
   // signed by a local test CA the app server trusts via NODE_EXTRA_CA_CERTS.
+  ensurePushCerts();
   mock.server = https.createServer(
     { key: fs.readFileSync("/tmp/pushsrv-key.pem"), cert: fs.readFileSync("/tmp/pushsrv.pem") },
     (req, res) => {
@@ -319,6 +328,12 @@ async function sectionC(cookies) {
   const menu = await api(null, "/api/menu");
   const biz1 = (menu.json?.businesses || []).find((b) => b.businessId === 1);
   const item = (biz1?.products || []).find((p) => p.available > 0) || biz1?.products?.[0];
+  // Named pickup points are enforced for customers — resolve one the same way
+  // a shopper does (mirrors verify-online-ordering; M5 staleness repair).
+  const pickId = (await pg.query(
+    `SELECT id FROM pickup_locations WHERE business_id=1 AND active=true ORDER BY sort_order, id LIMIT 1`
+  )).rows[0]?.id || null;
+  const pickBody = pickId ? { pickupLocationId: pickId } : {};
   ok("C0 menu item available for TEST orders", !!item, "no products");
   if (!item) return;
   baseline.menuItem = item;
@@ -333,7 +348,7 @@ async function sectionC(cookies) {
     method: "POST",
     body: JSON.stringify({
       businessId: 1, customerName: `${T} One`, customerPhone: "0551223344",
-      fulfillmentType: "PICKUP", paymentChoice: "ON_DELIVERY",
+      fulfillmentType: "PICKUP", paymentChoice: "ON_DELIVERY", ...pickBody,
       items: [{ inventoryId: item.id, quantity: 1 }], note: "TEST push C1",
     }),
   });
@@ -368,7 +383,7 @@ async function sectionC(cookies) {
     method: "POST",
     body: JSON.stringify({
       businessId: 1, customerName: `${T} Two`, customerPhone: "0551223344",
-      fulfillmentType: "PICKUP", paymentChoice: "ON_DELIVERY",
+      fulfillmentType: "PICKUP", paymentChoice: "ON_DELIVERY", ...pickBody,
       items: [{ inventoryId: item.id, quantity: 1 }], note: "TEST push C5",
     }),
   });

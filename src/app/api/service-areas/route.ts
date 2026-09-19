@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { businesses, serviceAreas, pickupLocations } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { managesBusiness } from "@/lib/permissions";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Service areas / localities + pickup locations per Business (branch unit).
@@ -33,12 +35,16 @@ function kindFrom(request: Request): Kind {
 
 async function gate(request: Request, businessId: number) {
   const session = await getSessionInfo(request);
+  ttlInvalidate("init");
   if (!session) return { error: UNAUTHENTICATED() };
   const user = session.user as any;
-  if (user.role === "OWNER") return { user };
+  if (user.isSuperAdmin) return { user };
+  const inScope = await canAccessBusiness(user, businessId);
+  // Org OWNER — full power, strictly inside their organization's units.
+  if (user.role === "OWNER" && inScope) return { user };
   // "Manage Unit" grantee — owner-equivalent for their granted unit (this
   // includes the service/ordering settings that live here).
-  if (managesBusiness(user, businessId)) return { user };
+  if (inScope && managesBusiness(user, businessId)) return { user };
   if (!user.canManageOnline) {
     return {
       error: FORBIDDEN(
@@ -46,7 +52,7 @@ async function gate(request: Request, businessId: number) {
       ),
     };
   }
-  if (!(await canAccessBusiness(user, businessId))) {
+  if (!inScope) {
     return { error: FORBIDDEN("You do not have access to this business.") };
   }
   return { user };
@@ -81,6 +87,7 @@ function checksumPhone(v: any): string | null {
 export async function GET(request: Request) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const businessId = Number(new URL(request.url).searchParams.get("businessId"));
     if (!Number.isFinite(businessId) || businessId <= 0) {
@@ -94,7 +101,7 @@ export async function GET(request: Request) {
     ]);
     return NextResponse.json({ success: true, areas, pickups });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -171,7 +178,7 @@ export async function POST(request: Request) {
       throw e;
     }
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -250,7 +257,7 @@ export async function PATCH(request: Request) {
     const [row] = await db.update(table).set(updates).where(eq(table.id, id)).returning();
     return NextResponse.json({ success: true, [kind === "pickups" ? "pickup" : "area"]: row });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -275,6 +282,6 @@ export async function DELETE(request: Request) {
     // (Business → Branch → Orders → Delivery → Pickup) survives removal.
     return NextResponse.json({ success: true, removed: id });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

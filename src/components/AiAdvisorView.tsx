@@ -85,15 +85,15 @@ export default function AiAdvisorView({
               Strategic Decision-Support Engine
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
-              AI-powered analysis of risks, efficiency gains, and capital allocation across all 7 Ghanaian businesses.
+              Rule-based decision support grounded in your live books — tested playbooks and modeled scenarios for your businesses. (On-device rules, not an external AI service.)
             </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-2">
-          <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
+          <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-semibold border border-emerald-500/30" title="How it works: deterministic playbooks matched to your question, every cedi figure from your real quarterly ledger — no data leaves this server.">
             <CheckCircle2 className="w-4 h-4" />
-            <span>AI Risk Radar Online</span>
+            <span>Risk Radar Online · rule-based</span>
           </span>
         </div>
       </div>

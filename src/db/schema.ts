@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   serial,
@@ -8,6 +9,7 @@ import {
   timestamp,
   jsonb,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 
 // 1. Users & Role-Based Access Control
@@ -105,6 +107,13 @@ export const users = pgTable("users", {
   // and re-admission requires an explicit owner re-enable + password reset.
   // Null while access is ACTIVE or only temporarily DISABLED.
   accessRevokedAt: timestamp("access_revoked_at"),
+  // ── Multi-owner tenancy ──────────────────────────────────────────────
+  // Platform-level Super Admin (the Main Owner) — administers organizations
+  // and may read across them; normal org OWNERs never gain this flag.
+  isSuperAdmin: boolean("is_super_admin").default(false),
+  // The organization this user primarily operates in (organizations.id);
+  // membership rows in organization_members are authoritative.
+  primaryOrgId: integer("primary_org_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -127,7 +136,11 @@ export const userSessions = pgTable("user_sessions", {
   endedAt: timestamp("ended_at"),
   endReason: text("end_reason"),
   revokedAt: timestamp("revoked_at"),
-});
+},
+  (t) => [
+    index("user_sessions_token_hash_idx").on(t.tokenHash),
+  ]
+);
 
 // OWNER-granted business access (in addition to the user's primary
 // assigned_business_id). Effective access = assignment ∪ these grants;
@@ -143,6 +156,57 @@ export const userBusinessAccess = pgTable("user_business_access", {
 // Immutable audit trail of every shared-record deletion: WHO deleted WHAT,
 // WHEN (date + time) and WHY (mandatory reason), with a full snapshot of the
 // removed record so nothing is ever lost without trace.
+// 1b. Organizations (multi-owner tenancy root)
+// Each independent Owner gets exactly one organization; every business, user
+// and record of that Owner hangs off it. The platform Main Owner (Super
+// Admin) administers organizations themselves and can read across them.
+export const organizations = pgTable("organizations", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(), // reserved for future per-owner storefronts (/[slug])
+  status: text("status").notNull().default("ACTIVE"), // 'ACTIVE' | 'SUSPENDED'
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  // Informational primary-owner pointer; organization_members is authoritative.
+  ownerUserId: integer("owner_user_id"),
+  createdByUserId: integer("created_by_user_id"),
+  // Allowed Business Types gate: when FALSE (default, all pre-existing orgs)
+  // the Owner may create every current and FUTURE business type. When TRUE,
+  // the organization_business_types allowlist is authoritative.
+  businessTypesRestricted: boolean("business_types_restricted").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// ─── Allowed Business Types per organization (Super-Admin-managed) ─────────
+// Which business categories ("Poultry Farm", "Block Factory", …) the Owner of
+// an organization is authorized to create and operate. Rows ONLY matter when
+// organizations.business_types_restricted = TRUE; an unrestricted org ignores
+// this list (so revoking a type can never brick existing businesses — it only
+// gates NEW creation, never access to units the Owner legitimately owns).
+export const organizationBusinessTypes = pgTable("organization_business_types", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  businessTypeKey: text("business_type_key").notNull(), // canonical key from src/lib/businessTypes.ts
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("organization_business_types_org_type_uq").on(t.organizationId, t.businessTypeKey),
+]);
+
+// user ↔ organization membership. A user normally belongs to exactly one
+// organization; is_primary marks the org they land in after login.
+export const organizationMembers = pgTable("organization_members", {
+  id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  roleInOrg: text("role_in_org").notNull().default("MEMBER"), // 'OWNER' | 'MEMBER'
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("organization_members_org_user_uq").on(t.organizationId, t.userId),
+]);
+
 export const recordDeletionLogs = pgTable("record_deletion_logs", {
   id: serial("id").primaryKey(),
   module: text("module").notNull(), // 'TRANSACTIONS' | 'SUPPLIERS' | 'EMPLOYEES'
@@ -153,6 +217,7 @@ export const recordDeletionLogs = pgTable("record_deletion_logs", {
   deletedByUserId: integer("deleted_by_user_id"),
   deletedByName: text("deleted_by_name").notNull(),
   deletedByRole: text("deleted_by_role").notNull(),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id); backfilled per org
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -192,6 +257,11 @@ export const businesses = pgTable("businesses", {
   // delivery pins are refused at checkout and the storefront's
   // "serving my location" filter hides the unit beyond the radius.
   onlineOrderingEnabled: boolean("online_ordering_enabled").default(true),
+  // Pre-Order enable flag — OWNER (or Manage-Unit grantee) turns this on per
+  // unit/branch to publish fulfilment options and accept pre-orders on the
+  // customer storefront. Server-enforced: menu emits options, checkout accepts
+  // them and the catalogue editor writes options ONLY while this is true.
+  preOrderEnabled: boolean("pre_order_enabled").default(false),
   pickupEnabled: boolean("pickup_enabled").default(true),
   deliveryEnabled: boolean("delivery_enabled").default(true),
   serviceRadiusKm: doublePrecision("service_radius_km"),
@@ -202,6 +272,19 @@ export const businesses = pgTable("businesses", {
   customerHelpPhone: text("customer_help_phone"), // "Need help? Call/WhatsApp …"
   momoNumber: text("momo_number"), // mobile-money number customers pay to
   momoName: text("momo_name"), // payee name shown beside the MoMo number
+  // Customer-storefront image watermark — display-time branding applied by
+  // the storefront UI as a faint overlay above product photos (cards,
+  // thumbnail strips, lightbox incl. full-screen/zoom). The original
+  // inventory photos are NEVER modified: the watermark composites purely on
+  // the client, so enabling/disabling is instant and lossless. Manageable
+  // from Manage Businesses → Online (canManageOnline scope).
+  watermarkEnabled: boolean("watermark_enabled").default(false),
+  /** 'AUTO' = logo when the unit has one, else the business name;
+   *  'LOGO' = logo only (name when no logo uploaded);
+   *  'NAME' = name text always. */
+  watermarkMode: text("watermark_mode").default("AUTO"),
+  // Tenant scope: which organization (Owner) this business belongs to.
+  ownerId: integer("owner_id").references(() => organizations.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -227,7 +310,11 @@ export const serviceAreas = pgTable("service_areas", {
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("service_areas_business_id_active_idx").on(t.businessId, t.active),
+  ]
+);
 
 // Pickup locations a Business (branch unit) offers online customers. A unit
 // may run several (main shop, depot, partner point…); when at least one is
@@ -251,13 +338,18 @@ export const pickupLocations = pgTable("pickup_locations", {
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("pickup_locations_business_id_active_idx").on(t.businessId, t.active),
+  ]
+);
 
 /** Group-wide company settings (single live row, id=1) — the GoMina
  *  company logo used as the ultimate fallback on every generated document,
  *  and on group-level reports that span multiple businesses. */
 export const companySettings = pgTable("company_settings", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id"), // one settings row per organization
   companyLogo: text("company_logo"),
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
@@ -282,6 +374,7 @@ export const customerSupportInfo = pgTable("customer_support_info", {
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
+  organizationId: integer("organization_id"), // one support-info row per organization
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -316,7 +409,8 @@ export const customers = pgTable("customers", {
   town: text("town"),
   totalSpentGhs: doublePrecision("total_spent_ghs").default(0),
   loyaltyPoints: integer("loyalty_points").default(0),
-  businessId: integer("business_id"), // null if shared across multiple units
+  businessId: integer("business_id"), // null if shared across the Owner's units
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -334,6 +428,7 @@ export const suppliers = pgTable("suppliers", {
   district: text("district"),
   town: text("town"),
   totalSuppliedGhs: doublePrecision("total_supplied_ghs").default(0),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -459,6 +554,7 @@ export const assetAuditLogs = pgTable("asset_audit_logs", {
   approvedByUserId: integer("approved_by_user_id"),
   approvedByName: text("approved_by_name"),
   detailsJson: jsonb("details_json"),
+  ownerId: integer("owner_id"), // tenant scope (denormalized from the asset's business)
   createdAt: timestamp("created_at").defaultNow(),
   resolvedAt: timestamp("resolved_at"),
 });
@@ -487,6 +583,17 @@ export const inventoryItems = pgTable("inventory_items", {
   /** Primary product photo (data URL) + full set — uploaded or camera-captured. */
   photo: text("photo"),
   photos: jsonb("photos"),
+  /** Rich product details registered ONCE at stock-in and served verbatim on
+   *  the customer storefront product view (no duplicate entry anywhere):
+   *  free description, brand/model, typed specifications (key/value rows —
+   *  e.g. Size: 6-inch, Weight: 2.4 kg, Voltage: 220 V) and display-only
+   *  variant names (Colour/Pack options that exist in this unit — pricing
+   *  stays on sellingPriceGhs so variants can never fork the price logic). */
+  description: text("description"),
+  brand: text("brand"),
+  model: text("model"),
+  specifications: jsonb("specifications"),
+  variants: jsonb("variants"),
   /** QR identity tag — globally unique when set; scanned with the camera or
    *  auto-generated at registration, printed on the stock label. */
   qrCode: text("qr_code"),
@@ -498,6 +605,7 @@ export const inventoryItems = pgTable("inventory_items", {
   uniqueIndex("inventory_items_business_sku_unique").on(t.businessId, t.sku),
   // Globally unique QR across the whole group — NULLs (legacy rows) may repeat.
   uniqueIndex("inventory_items_qr_code_unique").on(t.qrCode),
+  index("inventory_items_business_id_idx").on(t.businessId)
 ]);
 
 // 8b. Inventory Downloads audit trail
@@ -515,6 +623,7 @@ export const inventoryDownloads = pgTable("inventory_downloads", {
   qrCodeData: text("qr_code_data"),
   qrCodePayload: jsonb("qr_code_payload"),
   status: text("status").notNull().default("COMPLETED"),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -534,6 +643,7 @@ export const universalExports = pgTable("universal_exports", {
   businessName: text("business_name"),
   branchCode: text("branch_code"),
   branchName: text("branch_name"),
+  ownerId: integer("owner_id"), // tenant scope
   filtersJson: jsonb("filters_json"),
   recordCount: integer("record_count").default(0),
   qrCodeData: text("qr_code_data"),
@@ -574,12 +684,15 @@ export const expenseCategories = pgTable("expense_categories", {
   id: serial("id").primaryKey(),
   businessId: integer("business_id").notNull(),
   branchCode: text("branch_code"),
-  name: text("name").notNull().unique(), // e.g. "Generator Diesel", "Egg Tray Restock"
+  name: text("name").notNull(), // e.g. "Generator Diesel", "Egg Tray Restock"
   icon: text("icon"), // emoji or icon name
   isActive: boolean("is_active").default(true),
   createdBy: text("created_by"),
+  ownerId: integer("owner_id"), // tenant scope — unique per Owner organization, not global
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("expense_categories_owner_name_uq").on(t.ownerId, t.name),
+]);
 
 // 9b. Sales Documents (Invoices, Quotations, Receipts)
 export const salesDocuments = pgTable("sales_documents", {
@@ -687,12 +800,153 @@ export const customerTrackings = pgTable("customer_trackings", {
   paymentMarkedAt: timestamp("payment_marked_at"),
   customerNote: text("customer_note"), // checkout note typed by the customer
   stockCommitted: boolean("stock_committed").notNull().default(false), // online order stock deducted at CONFIRM
+  // ── PRE-ORDER columns (additive; legacy rows stay STOCK with nulls) ──
+  orderKind: text("order_kind").notNull().default("STOCK"), // 'STOCK' | 'PREORDER' | 'MIXED'
+  paymentPlan: text("payment_plan"), // 'FULL_NOW' | 'DEPOSIT_NOW' | 'ON_FULFILLMENT'
+  preorderExpectedAt: text("preorder_expected_at"), // ISO date — the fulfillment window end promised at order time
+  preorderSnapshot: jsonb("preorder_snapshot"), // {depositDueGhs, requiredNowGhs, etaStart, etaEnd, balanceOnARRIVAL|FULFILLMENT}
+  supplierOrderId: integer("supplier_order_id"), // supplier_orders.id covering this order's pre-order lines
+  // Stock-commit discipline per order stage: preorder lines commit at
+  // RECEIVED_STOCK (never earlier); stock lines commit at CONFIRMED as before.
+  stockCommitStage: text("stock_commit_stage"), // last stage at which stock was deducted
+  balanceDueGhs: doublePrecision("balance_due_ghs"), // remaining balance owed (deposits reduce it)
   notes: text("notes"),
   createdByUserId: integer("created_by_user_id"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+},
+  (t) => [
+    index("customer_trackings_business_id_idx").on(t.businessId),
+  ]
+);
+
+// ═══ PRE-ORDER SYSTEM ════════════════════════════════════════════════════
+// One order system, enriched — pre-orders live inside customer_trackings.
+// Seller-configurable fulfilment CATALOGUE drives everything; nothing
+// hard-coded. Tenant scope: ownerId = organizations.id everywhere.
+//
+// 9d-1. Fulfilment methods (Air, Sea, Road, Local Delivery, Pickup, …)
+export const fulfillmentMethods = pgTable("fulfillment_methods", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope (organizations.id)
+  businessId: integer("business_id"), // null = available to every unit of the org
+  branchCode: text("branch_code"),
+  key: text("key").notNull(), // 'AIR' | 'SEA' | 'ROAD' | 'LOCAL' | 'PICKUP' | custom keys
+  label: text("label").notNull(), // seller-facing wording shown to customers
+  icon: text("icon").notNull().default("truck"),
+  defaultLeadMinDays: integer("default_lead_min_days").notNull().default(7),
+  defaultLeadMaxDays: integer("default_lead_max_days").notNull().default(14),
+  requiresAddress: boolean("requires_address").notNull().default(false),
+  requiresPin: boolean("requires_pin").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("fulfillment_methods_owner_key_biz_unique").on(t.ownerId, t.key, t.businessId),
+]);
+
+// 9d-2. Fulfilment options — a product's seller-defined pre-order offer per
+// method: its own price, lead-time window and payment terms. A product with
+// any ACTIVE option is sellable as a pre-order; stock determines whether it
+// is ALSO "In Stock".
+export const fulfillmentOptions = pgTable("fulfillment_options", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  inventoryId: integer("inventory_id").notNull(), // the product (inventory_items.id)
+  methodId: integer("method_id").notNull(), // fulfillment_methods.id
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  priceGhs: doublePrecision("price_ghs").notNull(), // pre-order price per unit
+  leadMinDays: integer("lead_min_days").notNull(),
+  leadMaxDays: integer("lead_max_days").notNull(),
+  // 'NONE' (full upfront) | 'PERCENT' (e.g. depositValue=30 → 30% deposit)
+  // | 'FIXED' (depositValue GHS per unit)
+  depositType: text("deposit_type").notNull().default("NONE"),
+  depositValue: doublePrecision("deposit_value").notNull().default(0),
+  // balance timing: 'ON_ARRIVAL' | 'ON_FULFILLMENT'
+  termsKey: text("terms_key").notNull().default("ON_FULFILLMENT"),
+  capacityPerPeriod: doublePrecision("capacity_per_period"), // optional cap
+  /** Preferred supplier for re-ordering this pre-order item (org-scoped).
+   *  Shown in setup + pre-fills the procurement raise. NULL = choose later. */
+  supplierId: integer("supplier_id").references(() => suppliers.id),
+  requiresAddress: boolean("requires_address"), // override method default
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+},
+  (t) => [
+    index("fulfillment_options_inventory_id_idx").on(t.inventoryId),
+  ]
+);
+
+// 9d-3. Order payments — every money event against an order (deposit /
+// balance / full / refund) as an append-only log + linked Finance
+// transaction per event (receipt pattern like credit_payments).
+export const orderPayments = pgTable("order_payments", {
+  id: serial("id").primaryKey(),
+  trackingId: integer("tracking_id").notNull(),
+  kind: text("kind").notNull(), // 'DEPOSIT' | 'BALANCE' | 'FULL' | 'REFUND'
+  amountGhs: doublePrecision("amount_ghs").notNull(),
+  method: text("method").notNull(), // 'CASH' | 'MTN_MOMO'
+  paymentRef: text("payment_ref"),
+  transactionId: integer("transaction_id"), // transactions.id for the income
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope
+  markedByUserId: integer("marked_by_user_id"),
+  markedByName: text("marked_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// 9d-4. Supplier orders — the shared procurement pipeline pre-orders demand.
+export const supplierOrders = pgTable("supplier_orders", {
+  id: serial("id").primaryKey(),
+  purchaseNumber: text("purchase_number").notNull().unique(), // 'PO-SO-2026-0007'
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  supplierId: integer("supplier_id"), // suppliers.id (nullable → ad-hoc name kept in supplierName)
+  supplierName: text("supplier_name").notNull(),
+  shippingMethodKey: text("shipping_method_key"), // AIR/SEA/ROAD… how the goods travel
+  trackingLineIds: jsonb("tracking_line_ids").notNull().default([]), // [itemRef] demand covered
+  status: text("status").notNull().default("RAISED"), // RAISED | SENT | SHIPPED | IN_TRANSIT | ARRIVED | RECEIVED | CANCELLED
+  expectedAt: text("expected_at"), // promised supplier ETA
+  currency: text("currency").notNull().default("GHS"),
+  items: jsonb("items").notNull().default([]), // [{inventoryId, description, qty, unitCostGhs, trackingId}]
+  totalGhs: doublePrecision("total_ghs").notNull().default(0),
+  statusHistory: jsonb("status_history").notNull().default([]),
+  expenseBooked: boolean("expense_booked").notNull().default(false),
+  notes: text("notes"),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// 9d-5. Goods receipts — the ONLY stock gate for pre-ordered goods: a posted
+// receipt increments inventory_items.quantity; nothing before it does.
+export const goodsReceipts = pgTable("goods_receipts", {
+  id: serial("id").primaryKey(),
+  receiptNumber: text("receipt_number").notNull().unique(), // 'GRN-2026-0005'
+  supplierOrderId: integer("supplier_order_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id").notNull(),
+  items: jsonb("items").notNull().default([]), // [{inventoryId, qty, newQty, note}]
+  notes: text("notes"),
+  receivedByUserId: integer("received_by_user_id"),
+  receivedByName: text("received_by_name"),
+  receivedAt: timestamp("received_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // 9d. Credit Sales — buy-now-pay-in-installments anchored to a secure
@@ -1560,6 +1814,7 @@ export const aiInsights = pgTable("ai_insights", {
   metricAffected: text("metric_affected").notNull(), // e.g. "Net Profit (+GH₵ 42,000)", "Breakage Rate (-4.5%)"
   projectedGainGhs: doublePrecision("projected_gain_ghs").default(0),
   status: text("status").default("NEW"), // 'NEW', 'ACTIONED', 'ARCHIVED'
+  ownerId: integer("owner_id"), // tenant scope; businessId null = this Owner's enterprise-wide
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1575,6 +1830,7 @@ export const scenarioSimulations = pgTable("scenario_simulations", {
   expectedProfitImpactGhs: doublePrecision("expected_profit_impact_ghs").notNull(),
   expectedRoiDelta: doublePrecision("expected_roi_delta").notNull(), // e.g. +3.4% or -1.8%
   createdBy: text("created_by").notNull(),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1587,6 +1843,7 @@ export const integrations = pgTable("integrations", {
   status: text("status").notNull(), // 'CONNECTED', 'READY_TO_CONNECT', 'OFFLINE_SYNCING'
   lastSync: text("last_sync").notNull(),
   configJson: jsonb("config_json"),
+  ownerId: integer("owner_id"), // tenant scope
 });
 
 // 19b. CCTV Security Cameras — organised Business → Branch → Cameras.
@@ -1757,6 +2014,7 @@ export const payrollStatutoryConfig = pgTable("payroll_statutory_config", {
   updatedByUserId: integer("updated_by_user_id"),
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
+  organizationId: integer("organization_id"), // one config row per organization
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1779,6 +2037,7 @@ export const AUDIT_MODULES = [
   "ASSETS",
   "CCTV",
   "USERS",
+  "TRANSPORT",
 ] as const;
 
 /** Issue lifecycle for flagged records / correction requests:
@@ -1848,6 +2107,12 @@ export const auditReviews = pgTable("audit_reviews", {
   workerName: text("worker_name"), // employee/recorder the record belongs to
   action: text("action").notNull(), // VERIFIED | FLAGGED | COMMENT | CORRECTION_REQUESTED
   status: text("status").notNull().default("INFO"), // FLAGGED | UNDER_REVIEW | CORRECTION_REQUIRED | RESOLVED | VERIFIED | INFO (OPEN = legacy FLAGGED)
+  /** Priority the auditor assigns when flagging: LOW | MEDIUM | HIGH | CRITICAL.
+   *  Carried into every bell notification and drives escalation: branch
+   *  managers always see flagged issues in their businesses; the org OWNER
+   *  is additionally pulled in on HIGH/CRITICAL (and always when the issue
+   *  could not be assigned to a user account). */
+  priority: text("priority").notNull().default("MEDIUM"),
   issueTitle: text("issue_title"), // short label shown on dashboards & notifications
   reason: text("reason"), // why flagged / why correction requested / verification basis
   comment: text("comment"),
@@ -1904,6 +2169,10 @@ export const notifications = pgTable("notifications", {
   businessId: integer("business_id"),
   branchCode: text("branch_code"),
   actorName: text("actor_name"), // who triggered it
+  /** Priority carried from the flagged audit issue (LOW|MEDIUM|HIGH|CRITICAL);
+   *  null for non-audit events (orders, purchases…). */
+  priority: text("priority"),
+  ownerId: integer("owner_id"), // tenant scope of the recipient
   isRead: boolean("is_read").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -1960,6 +2229,7 @@ export const auditTrail = pgTable("audit_trail", {
   branchCode: text("branch_code"),
   reason: text("reason"),
   detail: text("detail"),
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1976,6 +2246,7 @@ export const assetDownloads = pgTable("asset_downloads", {
   recordCount: integer("record_count").notNull(),
   qrCodeData: text("qr_code_data").notNull(), // Base64 encoded QR code image
   qrCodePayload: jsonb("qr_code_payload"), // QR code content (download details)
+  ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
   status: text("status").notNull().default("COMPLETED"), // 'COMPLETED' or 'APPROVED'
 });
@@ -2218,4 +2489,256 @@ export const restaurantPurchases = pgTable("restaurant_purchases", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// TRANSPORTATION & HAULAGE MODULE — fleet, trips, bookings, fuel, maintenance,
+// daily checklists, geofences and GPS tracker violations. Mirrors the shared
+// linkage discipline of every other module:
+//   • BOOKING completed      → INCOME transaction ("Transport Booking") +
+//                              customer upsert (spend) + trip can reference it
+//   • TRIP started/completed → vehicle odometer / status / utilization sync
+//   • FUEL logged            → EXPENSE transaction ("Transport Fuel") + odometer
+//   • MAINTENANCE done       → EXPENSE transaction ("Transport Maintenance") +
+//                              vehicle service stamps (last/next due)
+//   • Tracker violation      → transports bell notification for business
+//                              managers + OWNER (push mirrored)
+// Every table carries org-scoping (ownerId) and per-unit scoping (businessId +
+// branchCode) so existing access rules apply unchanged.
+// ════════════════════════════════════════════════════════════════════════════
+
+export const transportVehicles = pgTable("transport_vehicles", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  name: text("name").notNull(), // e.g. "Tipper Truck 01"
+  vehicleType: text("vehicle_type").notNull().default("TRUCK"), // TRUCK|VAN|PICKUP|TRAILER|BUS|BIKE|CAR
+  licensePlate: text("license_plate").notNull(),
+  make: text("make"),
+  model: text("model"),
+  year: integer("year"),
+  color: text("color"),
+  fuelType: text("fuel_type").default("DIESEL"), // PETROL|DIESEL|LPG|EV
+  odometerUnit: text("odometer_unit").notNull().default("KM"), // KM|MILES
+  odometerKm: doublePrecision("odometer_km").notNull().default(0), // base unit: KM (miles converted on write)
+  loadCapacity: doublePrecision("load_capacity"), // tonnes
+  seats: integer("seats"),
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE|MAINTENANCE|OUT_OF_SERVICE
+  assignedEmployeeId: integer("assigned_employee_id"), // employees.id (default driver)
+  defaultDriverName: text("default_driver_name"), // snapshot for displays
+  insuranceCompany: text("insurance_company"),
+  insuranceExpiry: text("insurance_expiry"), // yyyy-mm-dd
+  licenseExpiry: text("license_expiry"), // roadworthy / vehicle registration
+  fitnessExpiry: text("fitness_expiry"),
+  roadworthyExpiry: text("roadworthy_expiry"),
+  tags: text("tags"),
+  notes: text("notes"),
+  assetId: integer("asset_id"), // linked assets.id (VEHICLE module visibility)
+  photo: text("photo"),
+  purchaseCostGhs: doublePrecision("purchase_cost_ghs").default(0),
+  purchaseDate: text("purchase_date"),
+  // GPS tracker wiring (any provider; "SIMULATED" = built-in test generator)
+  gpsDeviceImei: text("gps_device_imei"),
+  gpsDeviceSecret: text("gps_device_secret"), // bearer token for the ingest endpoint
+  gpsProviderKey: text("gps_provider_key"), // GPS_PROVIDER_LIBRARY key or CUSTOM
+  gpsDeviceLabel: text("gps_device_label"), // friendly device nickname shown in the Trackers hub
+  gpsSimNumber: text("gps_sim_number"), // data SIM MSISDN inside the tracker (Ghana networks)
+  gpsEnabled: boolean("gps_enabled").notNull().default(false),
+  gpsHealth: text("gps_health").default("UNKNOWN"), // ONLINE|STALE|OFFLINE|UNKNOWN
+  gpsLastLat: doublePrecision("gps_last_lat"),
+  gpsLastLng: doublePrecision("gps_last_lng"),
+  gpsLastSpeedKmh: doublePrecision("gps_last_speed_kmh"),
+  gpsLastSeenTs: timestamp("gps_last_seen_ts"),
+  gpsMileageTodayKm: doublePrecision("gps_mileage_today_km").notNull().default(0),
+  gpsBreadcrumbs: jsonb("gps_breadcrumbs").default(sql`'[]'::jsonb`), // ring buffer ≤ 500 pts
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const transportTrips = pgTable("transport_trips", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  driverEmployeeId: integer("driver_employee_id"), // employees.id
+  driverName: text("driver_name"),
+  status: text("status").notNull().default("PLANNED"), // PLANNED|EN_ROUTE|COMPLETED|CANCELLED
+  purpose: text("purpose"), // DELIVERY|PICKUP|CHARTER|STAFF|RUNNING|PERSONAL|MAINTENANCE
+  source: text("source"),
+  destination: text("destination"),
+  startTs: timestamp("start_ts"),
+  endTs: timestamp("end_ts"),
+  startOdometerKm: doublePrecision("start_odometer_km"),
+  endOdometerKm: doublePrecision("end_odometer_km"),
+  expectedKm: doublePrecision("expected_km"),
+  actualKm: doublePrecision("actual_km"),
+  cargo: text("cargo"),
+  notes: text("notes"),
+  customerId: integer("customer_id"),
+  bookingId: integer("booking_id"), // transport_bookings.id (when booked)
+  fareGhs: doublePrecision("fare_ghs").default(0),
+  routePoints: jsonb("route_points").default(sql`'[]'::jsonb`), // [{lat,lng,label}]
+  gpsStarted: boolean("gps_started").default(false),
+  gpsCompletedTs: timestamp("gps_completed_ts"),
+  gpsRoute: jsonb("gps_route").default(sql`'[]'::jsonb`), // recorded track ≤ 5000 pts
+  gpsDistanceKm: doublePrecision("gps_distance_km").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const transportBookings = pgTable("transport_bookings", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  customerName: text("customer_name").notNull(),
+  customerPhone: text("customer_phone"),
+  customerId: integer("customer_id"), // linked/upserted customers.id
+  status: text("status").notNull().default("PENDING"), // PENDING|CONFIRMED|IN_PROGRESS|COMPLETED|CANCELLED
+  cargo: text("cargo"),
+  passengers: integer("passengers").default(0),
+  origin: text("origin"),
+  destination: text("destination"),
+  scheduledFor: timestamp("scheduled_for"),
+  completedAt: timestamp("completed_at"),
+  fareGhs: doublePrecision("fare_ghs").notNull().default(0),
+  depositGhs: doublePrecision("deposit_ghs").default(0),
+  notes: text("notes"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"), // transport_trips.id
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  cancelledReason: text("cancelled_reason"),
+});
+
+export const transportFuelLogs = pgTable("transport_fuel_logs", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  driverEmployeeId: integer("driver_employee_id"),
+  odometerKm: doublePrecision("odometer_km").notNull(),
+  quantityLiters: doublePrecision("quantity_liters").notNull(),
+  pricePerLiterGhs: doublePrecision("price_per_liter_ghs").notNull(),
+  totalGhs: doublePrecision("total_ghs").notNull(),
+  fuelType: text("fuel_type").notNull().default("DIESEL"),
+  station: text("station"),
+  notes: text("notes"),
+  receiptPhoto: text("receipt_photo"), // data:image/*
+  loggedDate: text("logged_date").notNull(), // yyyy-mm-dd
+  loggedAt: timestamp("logged_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const transportMaintenance = pgTable("transport_maintenance", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  category: text("category").notNull().default("PREVENTIVE"), // PREVENTIVE|REPAIR|INSPECTION|TYRES|BATTERY|OTHER|ENGINE|BRAKES|ELECTRICAL|SUSPENSION|BODY
+  status: text("status").notNull().default("DUE"), // DUE|IN_PROGRESS|DONE
+  title: text("title").notNull(),
+  description: text("description"),
+  assignedToEmployeeId: integer("assigned_to_employee_id"), // employees (tech) id; null = external
+  vendorName: text("vendor_name"),
+  odometerKm: doublePrecision("odometer_km"),
+  estimatedCostGhs: doublePrecision("estimated_cost_ghs").default(0),
+  actualCostGhs: doublePrecision("actual_cost_ghs").default(0),
+  dueDate: text("due_date"),
+  doneDate: text("done_date"),
+  nextDueOdometerKm: doublePrecision("next_due_odometer_km"),
+  nextDueDate: text("next_due_date"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+});
+
+export const transportVehicleChecklists = pgTable("transport_vehicle_checklists", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"),
+  shiftDate: text("shift_date").notNull(), // yyyy-mm-dd
+  odometerKm: doublePrecision("odometer_km").notNull(),
+  fuelLevelPct: integer("fuel_level_pct"),
+  lightsOk: boolean("lights_ok").notNull().default(false),
+  brakesOk: boolean("brakes_ok").notNull().default(false),
+  tyresOk: boolean("tyres_ok").notNull().default(false),
+  oilOk: boolean("oil_ok").notNull().default(false),
+  coolantOk: boolean("coolant_ok").notNull().default(false),
+  beltsOk: boolean("belts_ok").notNull().default(false),
+  mirrorsOk: boolean("mirrors_ok").notNull().default(false),
+  hornOk: boolean("horn_ok").notNull().default(false),
+  fireExtinguisherOk: boolean("fire_extinguisher_ok").notNull().default(false),
+  firstAidOk: boolean("first_aid_ok").notNull().default(false),
+  documentationOk: boolean("documentation_ok").notNull().default(false),
+  cleaningOk: boolean("cleaning_ok").notNull().default(false),
+  notes: text("notes"),
+  photo: text("photo"),
+  completedAt: timestamp("completed_at").defaultNow(),
+  userName: text("user_name"),
+  userRole: text("user_role"),
+  employeeId: integer("employee_id"), // employees.id (driver)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const transportGeofences = pgTable("transport_geofences", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("CIRCLE"), // CIRCLE|POLYGON
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  radiusM: integer("radius_m"),
+  polygon: jsonb("polygon"), // [[lat,lng],...] — only for POLYGON kind
+  notifyOnEnter: boolean("notify_on_enter").notNull().default(true),
+  notifyOnExit: boolean("notify_on_exit").notNull().default(true),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+});
+
+export const transportTrackerViolations = pgTable("transport_tracker_violations", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  vehicleId: integer("vehicle_id"),
+  tripId: integer("trip_id"),
+  kind: text("kind").notNull(), // SPEEDING|ROUTE_DEVIATION|UNAUTHORIZED_MOVEMENT|PROLONGED_STOP|GEOFENCE_ENTER|GEOFENCE_EXIT|TRACKER_OFFLINE|TRACKER_TAMPERED
+  severity: text("severity").notNull().default("CRITICAL"), // LOW|MEDIUM|HIGH|CRITICAL
+  detail: text("detail"),
+  remedyHint: text("remedy_hint"),
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  vehiclePlate: text("vehicle_plate"),
+  tripLabel: text("trip_label"),
+  status: text("status").notNull().default("UNRESOLVED"), // UNRESOLVED|ACKNOWLEDGED|RESOLVED
+  resolvedAt: timestamp("resolved_at"),
+  resolvedByName: text("resolved_by_name"),
+  resolutionNote: text("resolution_note"),
+  createdAt: timestamp("created_at").defaultNow(),
+  notifiedManagerUserIds: jsonb("notified_manager_user_ids").default(sql`'[]'::jsonb`),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
 });

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { attendanceLogs, businesses, employees, payrollAttendance } from "@/db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getSessionInfo, accessibleBusinessIds, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Staff Attendance — Clock In / Clock Out with GPS.
@@ -34,7 +35,9 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number) {
 function reviewerScope(user: any, allowed: number[] | null) {
   const canReview = user.role === "OWNER" || !!user.canManageRecords || REVIEW_ROLES.includes(user.role);
   if (!canReview) return { canReview: false, businessIds: [] as number[] | null };
-  return { canReview: true, businessIds: user.role === "OWNER" ? null : allowed };
+  // Only the platform Super Admin is scope-unrestricted; an org OWNER gets
+  // their organization's business ids from `allowed`.
+  return { canReview: true, businessIds: user.isSuperAdmin ? null : allowed };
 }
 
 /** Resolve the employees row for a user inside a business (email first, then exact name). */
@@ -118,7 +121,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -307,6 +310,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unknown action" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
