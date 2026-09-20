@@ -1,3 +1,4 @@
+import { throttle, clientIp } from "@/lib/rateLimit";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { customerTrackings, businesses, creditSales, creditPayments } from "@/db/schema";
@@ -19,6 +20,10 @@ import { publicCreditPayload } from "@/lib/credit";
  * about other orders. Unknown codes return 404; malformed codes 400.
  */
 export async function GET(request: NextRequest) {
+  // M7: IP-level throttle — codes are the access key; enumeration is already
+  // bounded by the 36⁶ code space, this stops scripted grinding anyway.
+  const limited = throttle(clientIp(request), { key: "track", limit: 60, windowMs: 60_000 });
+  if (limited) return limited;
   try {
     const code = normalizeTrackingCode(new URL(request.url).searchParams.get("code"));
     if (!code) {

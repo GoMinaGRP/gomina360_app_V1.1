@@ -105,3 +105,16 @@ html {
     font-size: 14px;
   }
 }
+
+/* ── L1: global print hygiene ─────────────────────────────────────────
+   Only previously-hotel PayrollCenter had print rules; every other surface
+   printed with full nav/bell/sidebar chrome. Now any element marked
+   data-printchrome="true" (top nav, sidebar, notification bell, account
+   menu, scrollbars/buttons) is hidden on paper, documents keep a clean
+   margin, and ink-heavy backgrounds are flattened by the browser default. */
+@media print {
+  [data-printchrome="true"] { display: none !important; }
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  @page { margin: 12mm; }
+}

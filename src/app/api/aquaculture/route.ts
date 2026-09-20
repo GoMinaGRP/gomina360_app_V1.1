@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   aquaculturePonds,
@@ -13,7 +14,10 @@ import {
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { stockIn, stockOut } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
+import { auditLog } from "@/lib/audit";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -35,6 +39,11 @@ export async function GET(request: NextRequest) {
     const businessId = Number(searchParams.get("businessId"));
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId is required" }, { status: 400 });
+    }
+    // Scope gate: ponds, batches, feed, water quality and harvest data stay
+    // inside the caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const scope = (table: any) =>
@@ -62,7 +71,7 @@ export async function GET(request: NextRequest) {
       weightLogs: weightLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -77,17 +86,46 @@ export async function POST(request: NextRequest) {
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId are required" }, { status: 400 });
     }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const branchCode = data.branchCode || biz?.code || null;
     const branchName = data.branchName || biz?.name || null;
     const today = new Date().toISOString().split("T")[0];
     const now = new Date();
+    const me = __authSession.user;
+    const orgId = await ownerOrgOfBusiness(businessId).catch(() => null);
+
+    // Shared ownership check: ponds/batches referenced by id must belong to
+    // this business — otherwise a caller could link (or mutate) another
+    // tenant's assets through the core aquaculture entities.
+    const ownPond = async (pondId: any) => {
+      if (pondId === null || pondId === undefined || pondId === "") return { ok: true as const, pond: null };
+      const id = Number(pondId);
+      if (!id) return { ok: false as const, error: "Invalid pondId" };
+      const [pond] = await db.select().from(aquaculturePonds)
+        .where(and(eq(aquaculturePonds.id, id), eq(aquaculturePonds.businessId, businessId)));
+      return pond ? { ok: true as const, pond } : { ok: false as const, error: "Pond not found for this business." };
+    };
+    const ownBatch = async (batchId: any) => {
+      if (batchId === null || batchId === undefined || batchId === "") return { ok: true as const, batch: null };
+      const id = Number(batchId);
+      if (!id) return { ok: false as const, error: "Invalid batchId" };
+      const [batch] = await db.select().from(aquacultureBatches)
+        .where(and(eq(aquacultureBatches.id, id), eq(aquacultureBatches.businessId, businessId)));
+      return batch ? { ok: true as const, batch } : { ok: false as const, error: "Batch not found for this business." };
+    };
 
     // ─────────────────────────────────────────────────────────────────
     //  POND / CAGE / TANK
     // ─────────────────────────────────────────────────────────────────
     if (entity === "POND") {
+      const capacityLiters = Number(data.capacityLiters) || 0;
+      const currentBiomassKg = Number(data.currentBiomassKg) || 0;
+      if (capacityLiters < 0) return NextResponse.json({ success: false, error: "capacityLiters cannot be negative" }, { status: 400 });
+      if (currentBiomassKg < 0) return NextResponse.json({ success: false, error: "currentBiomassKg cannot be negative" }, { status: 400 });
       const [row] = await db.insert(aquaculturePonds).values({
         businessId, branchCode,
         pondId: data.pondId || `CAGE-${Math.floor(100 + Math.random() * 900)}`,
@@ -99,6 +137,10 @@ export async function POST(request: NextRequest) {
         notes: data.notes || null,
         createdByName: data.createdByName || "Aquaculture User",
       }).returning();
+      await auditLog(me, "AQUA_POND_CREATE", "RECORD", `Pond ${row.name} (${row.pondId})`,
+        "OPERATION_LOG", row.id, businessId, branchCode,
+        `${row.type} · capacity ${(capacityLiters || 0).toLocaleString()} L`,
+        orgId ?? null).catch((e: any) => console.error("[aqua] audit failed:", e));
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -107,6 +149,14 @@ export async function POST(request: NextRequest) {
     // ─────────────────────────────────────────────────────────────────
     if (entity === "BATCH") {
       const initialCount = Number(data.initialCount) || 0;
+      if (initialCount <= 0) {
+        return NextResponse.json({ success: false, error: "initialCount (fish stocked) must be greater than 0" }, { status: 400 });
+      }
+      if ((Number(data.currentCount) || initialCount) < 0 || (Number(data.mortalityTotal) || 0) < 0 || (Number(data.avgWeightGrams) || 0) < 0) {
+        return NextResponse.json({ success: false, error: "counts and weights cannot be negative" }, { status: 400 });
+      }
+      const pondCheck = await ownPond(data.pondId);
+      if (!pondCheck.ok) return NextResponse.json({ success: false, error: pondCheck.error }, { status: 404 });
       const [row] = await db.insert(aquacultureBatches).values({
         businessId, branchCode,
         batchNumber: data.batchNumber || `BATCH-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`,
@@ -124,16 +174,18 @@ export async function POST(request: NextRequest) {
         createdByName: data.createdByName || "Aquaculture User",
       }).returning();
 
-      // Update pond biomass
-      if (row.pondId) {
-        const [pond] = await db.select().from(aquaculturePonds).where(eq(aquaculturePonds.id, row.pondId));
-        if (pond) {
-          const fishWeightKg = (initialCount * (Number(data.avgWeightGrams) || 0)) / 1000;
-          await db.update(aquaculturePonds).set({
-            currentBiomassKg: (pond.currentBiomassKg || 0) + fishWeightKg,
-          }).where(eq(aquaculturePonds.id, pond.id));
-        }
+      // Update pond biomass (pond already ownership-validated above)
+      if (row.pondId && pondCheck.pond) {
+        const fishWeightKg = (initialCount * (Number(data.avgWeightGrams) || 0)) / 1000;
+        await db.update(aquaculturePonds).set({
+          currentBiomassKg: (pondCheck.pond.currentBiomassKg || 0) + fishWeightKg,
+        }).where(eq(aquaculturePonds.id, pondCheck.pond.id));
       }
+
+      await auditLog(me, "AQUA_BATCH_STOCKED", "RECORD", `Fish batch ${row.batchNumber} stocked`,
+        "OPERATION_LOG", row.id, businessId, branchCode,
+        `${initialCount.toLocaleString()} ${row.species} fingerlings stocked${pondCheck.pond ? ` into ${pondCheck.pond.name}` : ""} · avg ${(Number(data.avgWeightGrams) || 0)}g`,
+        orgId ?? null).catch((e: any) => console.error("[aqua] audit failed:", e));
 
       return NextResponse.json({ success: true, item: row });
     }
@@ -145,6 +197,16 @@ export async function POST(request: NextRequest) {
       const qty = Number(data.quantityKg) || 0;
       const costPerKg = Number(data.costPerKgGhs) || 0;
       const totalCost = Number(data.totalCostGhs) || qty * costPerKg;
+      if (qty <= 0) {
+        return NextResponse.json({ success: false, error: "quantityKg must be greater than 0" }, { status: 400 });
+      }
+      if (costPerKg < 0 || totalCost < 0) {
+        return NextResponse.json({ success: false, error: "feed costs cannot be negative" }, { status: 400 });
+      }
+      const feedPond = await ownPond(data.pondId);
+      if (!feedPond.ok) return NextResponse.json({ success: false, error: feedPond.error }, { status: 404 });
+      const feedBatch = await ownBatch(data.batchId);
+      if (!feedBatch.ok) return NextResponse.json({ success: false, error: feedBatch.error }, { status: 404 });
       const [row] = await db.insert(aquacultureFeedLogs).values({
         businessId, branchCode,
         batchId: data.batchId ? Number(data.batchId) : null,
@@ -177,6 +239,10 @@ export async function POST(request: NextRequest) {
           recordedByRole: data.recordedByRole || null,
           recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
         });
+        await auditLog(me, "AQUA_FEED_PURCHASE", "RECORD", `Fish feed purchase ${qty} kg ${row.feedType}`,
+          "OPERATION_LOG", row.id, businessId, branchCode,
+          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"} — expense ${trxNum}`,
+          orgId ?? null).catch((e: any) => console.error("[aqua] audit failed:", e));
       }
 
       return NextResponse.json({ success: true, item: row });
@@ -224,13 +290,28 @@ export async function POST(request: NextRequest) {
     }
 
     if (entity === "WATER") {
+      // pH / dissolved oxygen are REQUIRED real measurements — the previous
+      // ||7.0 / ||6.0 fallbacks silently fabricated ideal readings into the
+      // water log and poisoned the water-quality analytics.
+      const phLevel = Number(data.phLevel);
+      const dissolvedOxygenMgL = Number(data.dissolvedOxygenMgL);
+      if (!(phLevel >= 0 && phLevel <= 14)) {
+        return NextResponse.json({ success: false, error: "phLevel is required (0–14)" }, { status: 400 });
+      }
+      if (!(dissolvedOxygenMgL >= 0 && dissolvedOxygenMgL <= 30)) {
+        return NextResponse.json({ success: false, error: "dissolvedOxygenMgL is required (0–30 mg/L)" }, { status: 400 });
+      }
+      // pondId stays optional, but is never invented (no phantom "pond 1"
+      // writes) and must belong to this business when supplied.
+      const waterPond = await ownPond(data.pondId);
+      if (!waterPond.ok) return NextResponse.json({ success: false, error: waterPond.error }, { status: 404 });
       const [row] = await db.insert(aquacultureWaterQualityLogs).values({
         businessId, branchCode,
-        pondId: Number(data.pondId) || 1,
+        pondId: waterPond.pond ? waterPond.pond.id : null,
         sampleDate: data.sampleDate || today,
         waterLiters: Number(data.waterLiters) || 0,
-        phLevel: Number(data.phLevel) || 7.0,
-        dissolvedOxygenMgL: Number(data.dissolvedOxygenMgL) || 6.0,
+        phLevel,
+        dissolvedOxygenMgL,
         temperatureC: Number(data.temperatureC) || null,
         ammoniaMgL: Number(data.ammoniaMgL) || 0,
         turbidity: data.turbidity || "CLEAR",
@@ -250,10 +331,26 @@ export async function POST(request: NextRequest) {
       const harvested = Number(data.harvestedCount) || 0;
       const totalWt = Number(data.totalWeightKg) || 0;
       const revenue = Number(data.revenueGhs) || 0;
+      if (harvested <= 0) {
+        return NextResponse.json({ success: false, error: "harvestedCount must be greater than 0" }, { status: 400 });
+      }
+      if (totalWt < 0 || revenue < 0) {
+        return NextResponse.json({ success: false, error: "totalWeightKg and revenueGhs cannot be negative" }, { status: 400 });
+      }
+      // A completed harvest always comes from a specific pond (schema column
+      // is NOT NULL) — refuse cleanly instead of inventing "pond 1".
+      if (data.pondId === null || data.pondId === undefined || data.pondId === "") {
+        return NextResponse.json({ success: false, error: "pondId is required for a harvest" }, { status: 400 });
+      }
+      const harvestPond = await ownPond(data.pondId);
+      if (!harvestPond.ok) return NextResponse.json({ success: false, error: harvestPond.error }, { status: 404 });
+      // Batch must belong to this business before we touch its live counts.
+      const harvestBatch = await ownBatch(data.batchId);
+      if (!harvestBatch.ok) return NextResponse.json({ success: false, error: harvestBatch.error }, { status: 404 });
       const [row] = await db.insert(aquacultureHarvests).values({
         businessId, branchCode,
-        batchId: data.batchId ? Number(data.batchId) : null,
-        pondId: Number(data.pondId) || 1,
+        batchId: harvestBatch.batch ? harvestBatch.batch.id : null,
+        pondId: harvestPond.pond!.id,
         species: data.species || "VOLTA_TILAPIA",
         harvestedCount: harvested,
         totalWeightKg: totalWt,
@@ -297,13 +394,23 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Mark batch as harvested
-      if (data.batchId) {
+      // Count the harvest against the batch's live fish count. Partial
+      // harvests (the norm for tilapia cropping) only subtract — the batch
+      // is marked HARVESTED solely when nothing remains. Previously every
+      // harvest zeroed the batch, corrupting partial-harvest operations.
+      if (harvestBatch.batch) {
+        const remaining = Math.max(0, (harvestBatch.batch.currentCount || 0) - harvested);
         await db.update(aquacultureBatches).set({
-          status: "HARVESTED",
-          currentCount: 0,
-        }).where(eq(aquacultureBatches.id, Number(data.batchId)));
+          status: remaining === 0 ? "HARVESTED" : harvestBatch.batch.status,
+          currentCount: remaining,
+        }).where(eq(aquacultureBatches.id, harvestBatch.batch.id));
+        if (remaining === 0) stockNote += ` | batch ${harvestBatch.batch.batchNumber} fully harvested`;
       }
+
+      await auditLog(me, "AQUA_HARVEST", "RECORD", `Harvest ${harvested.toLocaleString()} ${row.species}`,
+        "OPERATION_LOG", row.id, businessId, branchCode,
+        `${harvested.toLocaleString()} fish · ${totalWt} kg${revenue > 0 ? ` · sold GH₵ ${revenue.toFixed(2)} to ${data.buyerName || "unknown buyer"}` : ""}${stockNote}`,
+        orgId ?? null).catch((e: any) => console.error("[aqua] audit failed:", e));
 
       return NextResponse.json({ success: true, item: row, stockNote });
     }
@@ -320,11 +427,26 @@ export async function POST(request: NextRequest) {
         { key: "FILTER_CLEAN", label: "Clean water filters", category: "CLEANING" },
         { key: "SECURITY_CHECK", label: "Inspect moorings and biosecurity", category: "SECURITY" },
       ];
+      const targetDate = data.checklistDate || today;
+      // Idempotent per day: re-generating today's checklist returns the
+      // existing rows instead of duplicating them (Block Factory contract).
+      const existing = await db
+        .select()
+        .from(aquacultureChecklists)
+        .where(
+          and(
+            eq(aquacultureChecklists.businessId, businessId),
+            eq(aquacultureChecklists.checklistDate, targetDate),
+          )
+        );
+      if (existing.length > 0) {
+        return NextResponse.json({ success: true, items: existing.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)), alreadyExists: true });
+      }
       const rows = [];
       for (const t of tasks) {
         const [row] = await db.insert(aquacultureChecklists).values({
           businessId, branchCode,
-          checklistDate: data.checklistDate || today,
+          checklistDate: targetDate,
           taskKey: t.key,
           taskLabel: t.label,
           category: t.category,
@@ -337,7 +459,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -352,6 +474,9 @@ export async function PATCH(request: NextRequest) {
       const [existing] = await db.select().from(aquacultureChecklists).where(eq(aquacultureChecklists.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const [row] = await db
         .update(aquacultureChecklists)
@@ -368,6 +493,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unsupported patch operation" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

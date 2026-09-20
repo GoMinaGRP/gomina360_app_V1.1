@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   restaurantOrders,
@@ -10,8 +11,9 @@ import {
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
+import { apiError } from "@/lib/apiError";
 
 // NOTE: the Restaurant menu master list starts EMPTY for every business — no
 // sample dishes are auto-seeded (owner directive: new / reset units begin with
@@ -88,6 +90,11 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: menu costing, kitchen orders, waste and purchases stay
+    // inside the caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const menu = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, businessId));
     const [orders, waste, purchases] = await Promise.all([
       db.select().from(restaurantOrders).where(eq(restaurantOrders.businessId, businessId)),
@@ -103,7 +110,7 @@ export async function GET(request: NextRequest) {
       purchases: purchases.sort(descId),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -116,6 +123,9 @@ export async function POST(request: NextRequest) {
     const businessId = Number(data?.businessId);
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const branchCode = data.branchCode || biz?.code || null;
@@ -262,7 +272,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -278,6 +288,14 @@ export async function PATCH(request: NextRequest) {
     const today = new Date().toISOString().split("T")[0];
 
     if (entity === "ORDER") {
+      const [orderBefore] = await db
+        .select()
+        .from(restaurantOrders)
+        .where(eq(restaurantOrders.id, Number(id)));
+      if (!orderBefore) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, orderBefore.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(restaurantOrders)
         .set({ status: ["QUEUED", "COOKING", "READY", "SERVED", "CANCELLED"].includes(data?.status) ? data.status : undefined })
@@ -288,6 +306,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (entity === "MENU_ITEM") {
+      const [menuBefore] = await db
+        .select()
+        .from(restaurantMenuItems)
+        .where(eq(restaurantMenuItems.id, Number(id)));
+      if (!menuBefore) return NextResponse.json({ success: false, error: "Menu item not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, menuBefore.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const [row] = await db
         .update(restaurantMenuItems)
         .set({
@@ -307,6 +333,9 @@ export async function PATCH(request: NextRequest) {
     if (entity === "PURCHASE") {
       const [existing] = await db.select().from(restaurantPurchases).where(eq(restaurantPurchases.id, Number(id)));
       if (!existing) return NextResponse.json({ success: false, error: "Purchase not found" }, { status: 404 });
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const newStatus = ["ORDERED", "RECEIVED", "CANCELLED"].includes(data?.status) ? data.status : existing.status;
       const [row] = await db
         .update(restaurantPurchases)
@@ -339,6 +368,6 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

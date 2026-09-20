@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { userPushSettings } from "@/db/schema";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { PUSH_CATEGORIES } from "@/lib/push";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Per-user notification settings — master switch + per-category toggles
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
     }
     return NextResponse.json({ success: true, settings: toClient(row) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -45,7 +46,7 @@ export async function PUT(request: Request) {
       .returning();
     return NextResponse.json({ success: true, settings: toClient(updated) });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 

@@ -6,7 +6,7 @@ import FishGrowthAnalytics from "./FishGrowthAnalytics";
 import {
   Fish, Droplets, HeartPulse, Activity, Egg as EggIcon, Boxes,
   Wallet, ClipboardCheck, Plus, X, Loader2, Building2,
-  TrendingUp, TrendingDown, AlertTriangle, CalendarCheck,
+  TrendingUp, TrendingDown, AlertTriangle, CalendarCheck, Wheat,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzeAquaculture, AQUA_ALERT_STYLES, AQUA_METRIC_COLORS } from "@/lib/aquacultureAnalytics";
 import DailyChecklistPanel from "./DailyChecklistPanel";
+import AquaFeedMill from "./AquaFeedMill";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
@@ -32,13 +33,14 @@ interface Props {
   onRefreshData: () => void;
 }
 
-type AquaTab = "DASHBOARD" | "STOCK" | "PONDS" | "FEED" | "WATER" | "HEALTH" | "HARVEST" | "FINANCE";
+type AquaTab = "DASHBOARD" | "STOCK" | "PONDS" | "FEED" | "FEED_MILL" | "WATER" | "HEALTH" | "HARVEST" | "FINANCE";
 
 const TABS: { key: AquaTab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: Activity },
   { key: "STOCK", label: "Fish Stock & Batches", icon: Fish },
   { key: "PONDS", label: "Ponds / Tanks", icon: Droplets },
   { key: "FEED", label: "Feed Management", icon: Boxes },
+  { key: "FEED_MILL", label: "Feed Mill", icon: Wheat },
   { key: "WATER", label: "Water Quality", icon: HeartPulse },
   { key: "HEALTH", label: "Tasks & Activities", icon: ClipboardCheck },
   { key: "HARVEST", label: "Harvest Status", icon: TrendingDown },
@@ -550,6 +552,16 @@ export default function AquacultureModule({
         </Card>
       )}
 
+      {/* ══════════ FEED MILL (in-house aquatic feed production) ══════════ */}
+      {tab === "FEED_MILL" && (
+        <AquaFeedMill
+          currentUser={currentUser}
+          businessInfo={businessInfo}
+          currentCurrency={currentCurrency}
+          onChanged={() => { refresh?.(); onRefreshData?.(); }}
+        />
+      )}
+
       {/* ══════════ WATER QUALITY ══════════ */}
       {tab === "WATER" && (
         <Card title="Water Quality Monitoring" icon={HeartPulse}
@@ -783,14 +795,19 @@ function FormSelect({ f, set, label, k, opts }: any) {
   );
 }
 
-function PondSelect({ ponds, f, set }: any) {
+function PondSelect({ ponds, f, set, required, hint }: any) {
   return (
-    <FormSelect f={f} set={set} label="Pond / Tank / Cage" k="pondId"
-      opts={[
-        { v: "", l: "— Select pond —" },
-        ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
-      ]}
-    />
+    <div>
+      <FormSelect f={f} set={set} label={required ? "Pond / Tank / Cage *" : "Pond / Tank / Cage"} k="pondId"
+        opts={[
+          { v: "", l: "— Select pond —" },
+          ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
+        ]}
+      />
+      {required && !f.pondId && (
+        <p className="text-[10px] text-amber-400 mt-0.5">{hint || "Required"}</p>
+      )}
+    </div>
   );
 }
 
@@ -927,7 +944,7 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
 
           {type === "HARVEST" && (
             <>
-              <PondSelect ponds={ponds} f={f} set={set} />
+              <PondSelect ponds={ponds} f={f} set={set} required hint="A harvest must name the pond it came from" />
               <BatchSelect batches={batches} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
                 <FormField f={f} set={set} label="Harvest Date" k="saleDate" t="date" defaultValue={today} />

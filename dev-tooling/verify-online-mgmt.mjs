@@ -813,7 +813,10 @@ async function main() {
   baseline.bmOnlineWas = (await pg.query(`SELECT can_manage_online f FROM users WHERE id=3`)).rows[0]?.f === true;
 
   const menu = (await api(null, "/api/menu")).json;
-  baseline.product = (menu.businesses || []).find((b) => b.businessId === 1)?.products?.find((p) => p.available >= 5);
+  // Sellable = stock AND a real price. Zero-priced demo raw materials are
+  // legitimately listed by units (0-GH₵ give-aways) but can't exercise money
+  // math (discount narration, totals) — skip them here.
+  baseline.product = (menu.businesses || []).find((b) => b.businessId === 1)?.products?.find((p) => p.available >= 5 && Number(p.price) > 0);
   if (!baseline.product) throw new Error("menu lacks a sellable product on biz 1");
   baseline.qtyBefore = Number((await pg.query(`SELECT quantity FROM inventory_items WHERE id=$1`, [baseline.product.id])).rows[0].quantity);
 

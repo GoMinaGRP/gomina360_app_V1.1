@@ -15,7 +15,7 @@
 // Every mutation also writes an immutable audit_trail row.
 
 import { NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   users,
@@ -35,7 +35,23 @@ import {
   electronicsLogs,
   carWashLogs,
   hardwareLogs,
+  poultryFeedLogs,
+  poultryProduction,
+  poultryHealthRecords,
+  poultryFeedFormulations,
+  poultryFeedBatches,
+  poultryFeedQcChecks,
+  fishFeedFormulations,
+  fishFeedBatches,
+  fishFeedQcChecks,
+  blockMixFormulations,
+  blockMixBatches,
   checklistEntries,
+  transportVehicles,
+  transportTrips,
+  transportBookings,
+  transportMaintenance,
+  transportTrackerViolations,
   recordDeletionLogs,
   employeeHistory,
   assetAuditLogs,
@@ -44,11 +60,14 @@ import {
   auditIssueUpdates,
   auditTrail,
   notifications,
+  organizationMembers,
   AUDIT_MODULES,
 } from "@/db/schema";
-import { getSessionInfo, accessibleBusinessIds, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, accessibleBusinessIds, sharesOrganization, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
+import { apiError } from "@/lib/apiError";
 
 const MODULES = [...AUDIT_MODULES] as string[];
 
@@ -70,8 +89,9 @@ const isOpenIssue = (r: any) => isIssue(r) && OPEN_STATUSES.includes(normStatus(
 
 /** Notifies a user's dashboard (bell) about issue workflow events — and
  *  mirrors the event as an OS-level push so it lands even outside the app. */
-async function notify(userId: number | null | undefined, n: { type: string; title: string; body?: string | null; issueId?: number | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; businessId?: number | null; branchCode?: string | null; actorName?: string | null }) {
+async function notify(userId: number | null | undefined, n: { type: string; title: string; body?: string | null; issueId?: number | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; businessId?: number | null; branchCode?: string | null; actorName?: string | null; priority?: string | null }) {
   if (!userId) return;
+  const nOwnerId = n.businessId != null ? await ownerOrgOfBusiness(Number(n.businessId)) : null;
   await db.insert(notifications).values({
     userId,
     type: n.type,
@@ -84,6 +104,10 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
     businessId: n.businessId ?? null,
     branchCode: n.branchCode ?? null,
     actorName: n.actorName ?? null,
+    // M1: carry the auditor's severity onto the bell row — the bell renders a
+    // colour-coded severity chip from this, and HIGH/CRITICAL escalate triage.
+    priority: n.priority ?? null,
+    ownerId: nOwnerId,
   });
   pushAfterBell([Number(userId)], {
     type: n.type,
@@ -93,10 +117,34 @@ async function notify(userId: number | null | undefined, n: { type: string; titl
   });
 }
 
+/** An issue transition supercedes every bell item that pointed to it — mark
+ *  ALL earlier notifications for the issue read (assigned user, watchers,
+ *  reviewer), so bells always reflect the CURRENT state of the issue. The
+ *  fresh notification for the new state is inserted afterwards and stays
+ *  unread for its recipient. */
+async function autoReadIssue(issueId: number) {
+  await db.update(notifications).set({ isRead: true }).where(eq(notifications.issueId, Number(issueId)));
+}
+
+const ISSUE_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+const normPriority = (v: any) => (ISSUE_PRIORITIES.includes(String(v || "").toUpperCase() as any) ? String(v).toUpperCase() : "MEDIUM");
+// L2: text-only labels — emoji flag glyphs render as tofu (□) in fonts
+// without emoji coverage (kiosk/headless), corrupting the bell titles.
+const PRIORITY_LABEL: Record<string, string> = { LOW: "LOW", MEDIUM: "MEDIUM", HIGH: "HIGH", CRITICAL: "CRITICAL" };
+
+/** Business + branch naming for notification text (resolved per flag — the
+ *  record row snapshots survive later edits). */
+async function bizLabels(businessId: number, branchCode: string | null | undefined) {
+  const [b] = await db.select({ name: businesses.name, code: businesses.code }).from(businesses).where(eq(businesses.id, Number(businessId)));
+  return { businessName: b?.name || `Business #${businessId}`, branchLabel: branchCode || b?.code || "—" };
+}
+
 type Scope = {
   eligible: boolean;
   level: "OWNER" | "SUPERVISOR" | "AUDITOR" | "NONE";
-  businessIds: number[] | null; // null = unrestricted (OWNER)
+  businessIds: number[] | null; // null = unrestricted (Super Admin)
+  /** Caller organizations — used to scope platform-level (businessId=null) rows. */
+  ownerIds: number[];
   moduleByBusiness: Record<number, string[]>;
   /** Branch restriction per business: undefined/null ⇒ all branches of the
    *  business; otherwise the exact branch codes the auditor may see. */
@@ -107,8 +155,16 @@ type Scope = {
 };
 
 async function scopeFor(user: any): Promise<Scope> {
+  if (user.isSuperAdmin) {
+    return { eligible: true, level: "OWNER", businessIds: null, ownerIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: true, grantBusinessIds: null };
+  }
   if (user.role === "OWNER") {
-    return { eligible: true, level: "OWNER", businessIds: null, moduleByBusiness: {}, branchByBusiness: {}, canGrant: true, grantBusinessIds: null };
+    // Org OWNER: full audit control of their OWN organization's units only.
+    const orgBiz = ((await accessibleBusinessIds(user)) || []).map(Number);
+    const moduleByBusiness: Record<number, string[]> = {};
+    const branchByBusiness: Record<number, string[] | null> = {};
+    for (const bid of orgBiz) { moduleByBusiness[bid] = MODULES; branchByBusiness[bid] = null; }
+    return { eligible: true, level: "OWNER", businessIds: orgBiz, ownerIds: user.organizationIds || [], moduleByBusiness, branchByBusiness, canGrant: true, grantBusinessIds: orgBiz };
   }
   // Audit & Review is ASSIGNMENT-ONLY: no role (WORKER / BRANCH_MANAGER /
   // SUPERVISOR / GENERAL_MANAGER) gets it by default. A user sees the center
@@ -127,7 +183,7 @@ async function scopeFor(user: any): Promise<Scope> {
     .where(eq(auditAssignments.userId, user.id))).filter((g) => g.isActive);
   const canGrant = !!user.canManageAuditors;
   if (grants.length === 0 && !canGrant && managedIds.length === 0) {
-    return { eligible: false, level: "NONE", businessIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
+    return { eligible: false, level: "NONE", businessIds: [], ownerIds: [], moduleByBusiness: {}, branchByBusiness: {}, canGrant: false, grantBusinessIds: [] };
   }
   const moduleByBusiness: Record<number, string[]> = {};
   const branchByBusiness: Record<number, string[] | null> = {};
@@ -147,6 +203,7 @@ async function scopeFor(user: any): Promise<Scope> {
   return {
     eligible: true,
     level: grants.length > 0 ? "AUDITOR" : "SUPERVISOR",
+    ownerIds: user.organizationIds || [],
     businessIds: [...new Set([...grants.map((g) => g.businessId), ...managedIds])],
     moduleByBusiness,
     branchByBusiness,
@@ -332,12 +389,46 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     opsPush("car_wash_logs", l.id, l.businessId, `SHIFT-${l.shiftDate}-${l.id}`, `Car wash shift ${l.shiftDate} — ${l.vehiclesWashed} vehicles`, `Revenue GH₵ ${l.totalRevenueGhs} · chemicals ${l.chemicalUsedLiters}L`, null, l.recordedDate || l.shiftDate);
   for (const l of await db.select().from(hardwareLogs).orderBy(desc(hardwareLogs.id)).limit(120))
     opsPush("hardware_logs", l.id, l.businessId, l.receiveNoteNumber, `${l.itemName} × ${l.quantityReceived} ${l.unit}`, `Supplier ${l.supplierName} · condition ${l.condition}`, l.receivedBy, l.recordedDate);
+  // POULTRY — closes the "poultry records flagged ✅" hole: feeding,
+  // production, health, and the full feed-mill chain (formulas → batches →
+  // QC) are auditable records like every other operations log.
+  for (const l of await db.select().from(poultryFeedLogs).orderBy(desc(poultryFeedLogs.id)).limit(120))
+    opsPush("poultry_feed_logs", l.id, l.businessId, `FDL-${l.id}`, `Poultry feeding — ${l.feedType} × ${l.quantityKg} kg`, `Source ${l.sourceType || "PURCHASED"}${l.batchNumber ? ` · from batch ${l.batchNumber}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const l of await db.select().from(poultryProduction).orderBy(desc(poultryProduction.id)).limit(120))
+    opsPush("poultry_production", l.id, l.businessId, `PP-${l.id}`, `Poultry production — ${l.productionType}${l.eggsCollected ? ` · ${l.eggsCollected} eggs` : ""}${l.birdsHarvested ? ` · ${l.birdsHarvested} birds` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.layPercentage ? ` · lay ${l.layPercentage}%` : ""}${l.fcr ? ` · FCR ${l.fcr}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const l of await db.select().from(poultryHealthRecords).orderBy(desc(poultryHealthRecords.id)).limit(120))
+    opsPush("poultry_health_records", l.id, l.businessId, `PHR-${l.id}`, `Poultry health — ${l.recordType}${l.diseaseOrCondition ? ` · ${l.diseaseOrCondition}` : ""}${l.mortalityCount ? ` · ${l.mortalityCount} dead` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.vaccineOrDrug ? ` · ${l.vaccineOrDrug}` : ""}${l.nextDueDate ? ` · next due ${l.nextDueDate}` : ""}`, l.recordedByName || null, l.recordedDate);
+  for (const f of await db.select().from(poultryFeedFormulations).orderBy(desc(poultryFeedFormulations.id)).limit(80))
+    opsPush("poultry_feed_formulations", f.id, f.businessId, f.formulationNo, `Feed formula — ${f.name} (${f.feedType}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(poultryFeedBatches).orderBy(desc(poultryFeedBatches.id)).limit(120))
+    opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+  for (const q of await db.select().from(poultryFeedQcChecks).orderBy(desc(poultryFeedQcChecks.id)).limit(120))
+    opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+  // FISH FEED MILL — same chain for the aquaculture mill (formulas → batches → QC).
+  for (const f of await db.select().from(fishFeedFormulations).orderBy(desc(fishFeedFormulations.id)).limit(80))
+    opsPush("fish_feed_formulations", f.id, f.businessId, f.formulationNo, `Fish feed formula — ${f.name} (${f.species} · ${f.feedClass} ${f.feedStage}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(fishFeedBatches).orderBy(desc(fishFeedBatches.id)).limit(120))
+    opsPush("fish_feed_batches", b.id, b.businessId, b.batchNumber, `Fish feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+  for (const q of await db.select().from(fishFeedQcChecks).orderBy(desc(fishFeedQcChecks.id)).limit(120))
+    opsPush("fish_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Fish feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.floatPct != null ? ` · ${q.floatPct}% float` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+  // BLOCK FACTORY — MIXING chain (recipes → mixer batches).
+  for (const f of await db.select().from(blockMixFormulations).orderBy(desc(blockMixFormulations.id)).limit(80))
+    opsPush("block_mix_formulations", f.id, f.businessId, f.formulationNo, `Mix recipe — ${f.name} (${f.blockType}) v${f.version || 1}`, `Batch ${f.batchSizeKg} kg${f.waterCementRatio ? ` · w/c ${f.waterCementRatio}` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(blockMixBatches).orderBy(desc(blockMixBatches.id)).limit(120))
+    opsPush("block_mix_batches", b.id, b.businessId, b.mixBatchNumber, `Mix batch — ${b.formulationName || "recipe"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.slumpMm != null ? ` · slump ${b.slumpMm} mm` : ""}${b.costPerKgGhs ? ` · GH₵ ${(b.costPerKgGhs).toFixed(2)}/kg` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
 
   // OPERATIONS — daily checklist tasks: one auditable row per dated task
   // completion (or pending/incomplete task), linked to the assigned worker's
   // login so flagged issues route straight to their dashboard.
+  // M1 note: /api/init now auto-generates today's checklist rows for every
+  // unit. Those untouched auto copies are schedule noise, not staff actions —
+  // the audit trail keeps them ONLY once real activity lands (a completion, a
+  // note, or an explicit re-assignment), so this module can't flood the record
+  // universe and hide transactions/payroll/etc. behind "pending" rows.
   const chk = await db.select().from(checklistEntries).orderBy(desc(checklistEntries.id)).limit(240);
   for (const c of chk) {
+    const hasActivity = !!c.isCompleted || !!c.notes || !!c.completedByName;
+    if (!hasActivity) continue;
     push({
       key: `CHECKLIST:checklist_entries:${c.id}`, recordType: "CHECKLIST", recordSource: "checklist_entries", recordId: c.id,
       ref: `CHK-${c.checklistDate}-${c.id}`,
@@ -430,7 +521,15 @@ async function scopedTrail(scope: Scope) {
   const all = await db.select().from(auditTrail).orderBy(desc(auditTrail.id)).limit(300);
   if (scope.businessIds === null) return all;
   const ids = scope.businessIds;
-  return all.filter((t) => t.businessId == null || (ids.includes(t.businessId) && (!t.branchCode || branchOk(scope, t.businessId, t.branchCode))));
+  const orgs = new Set(scope.ownerIds);
+  return all.filter((t) => {
+    if (t.businessId == null) {
+      // Platform-level trail rows (grants, delegations) are tenant data too:
+      // visible only inside the organization they were recorded for.
+      return t.ownerId != null && orgs.has(Number(t.ownerId));
+    }
+    return ids.includes(t.businessId) && (!t.branchCode || branchOk(scope, t.businessId, t.branchCode));
+  });
 }
 
 function buildReport(records: AuditRecordRow[], reviews: any[]) {
@@ -553,11 +652,20 @@ export async function GET(request: Request) {
       const rid = Number(url.searchParams.get("recordId") || 0);
       if (!rt || !rid) return NextResponse.json({ success: false, error: "recordType and recordId are required" }, { status: 400 });
       if (rt === "SUPPLIER" || rt === "CUSTOMER") {
-        // Global vendor/customer directory — shared across units, so it is
-        // visible to every eligible auditor (they already see the full party
-        // summary in the parent transaction's related list).
+        // Vendor/customer directories are PER-ORGANIZATION: an auditor may
+        // inspect a party detail only when that party belongs to one of the
+        // organizations they belong to (Super Admin sees all).
         const detail = await loadFullRecord(rt, rs, rid);
         if (!detail) return NextResponse.json({ success: false, error: "Record not found" }, { status: 404 });
+        if (!user.isSuperAdmin) {
+          const myOrgs = new Set(user.organizationIds || []);
+          const partyOrg = ((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId) != null
+            ? Number((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId)
+            : null;
+          if (partyOrg == null || !myOrgs.has(partyOrg)) {
+            return FORBIDDEN("This record belongs to another organization.");
+          }
+        }
         return NextResponse.json({ success: true, detail });
       }
       const scoped = await resolveRecord(rt, rs, rid);
@@ -621,8 +729,21 @@ export async function GET(request: Request) {
       const g = await db.select().from(auditAssignments).orderBy(desc(auditAssignments.id));
       grants = scope.grantBusinessIds === null ? g : g.filter((x) => scope.grantBusinessIds!.includes(x.businessId));
       const all = await db.select().from(users);
+      // Auditor candidates are strictly members of the caller's own
+      // organization(s) — the platform Super Admin sees everyone.
+      const memberUserIds = user.isSuperAdmin
+        ? null
+        : new Set(
+            (
+              await db
+                .select({ userId: organizationMembers.userId })
+                .from(organizationMembers)
+                .where(inArray(organizationMembers.organizationId, user.organizationIds?.length ? user.organizationIds : [-1]))
+            ).map((m) => Number(m.userId)),
+          );
       grantUsers = all
         .filter((u) => u.role !== "OWNER" && u.isActive)
+        .filter((u) => memberUserIds === null || memberUserIds.has(Number(u.id)))
         .filter((u) => scope.grantBusinessIds === null || ["GENERAL_MANAGER"].includes(u.role) || u.assignedBusinessId == null || scope.grantBusinessIds!.includes(u.assignedBusinessId))
         .map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email, assignedBusinessId: u.assignedBusinessId, canManageAuditors: !!u.canManageAuditors }));
     }
@@ -647,13 +768,35 @@ export async function GET(request: Request) {
     const report = buildReport(records, reviews);
     return NextResponse.json({ success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
 /** Resolves the record the review targets DIRECTLY from the source table —
  *  business, branch, module, ref, title and worker are derived server-side so
  *  review records always stay linked to the real worker record. */
+/** Operations-log source registry — shared by the summary resolver and the
+ * full-record drawer so every module's daily logs (incl. the poultry feed
+ * mill chain) open identically in the Audit & Review UI. */
+const OP_LOG_SOURCES: Record<string, { table: any; ref: (r: any) => string; worker: (r: any) => string }> = {
+  livestock_logs: { table: livestockLogs, ref: (r) => r.tagNumber, worker: (r) => r.receivedBy || "" },
+  restaurant_logs: { table: restaurantLogs, ref: (r) => `SHIFT-${r.shiftDate}-${r.id}`, worker: (r) => r.receivedBy || "" },
+  electronics_logs: { table: electronicsLogs, ref: (r) => r.serialNumber, worker: (r) => r.receivedBy || "" },
+  car_wash_logs: { table: carWashLogs, ref: (r) => `SHIFT-${r.shiftDate}-${r.id}`, worker: (r) => r.receivedBy || "" },
+  hardware_logs: { table: hardwareLogs, ref: (r) => r.receiveNoteNumber, worker: (r) => r.receivedBy || "" },
+  poultry_feed_logs: { table: poultryFeedLogs, ref: (r) => `FDL-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_production: { table: poultryProduction, ref: (r) => `PP-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_health_records: { table: poultryHealthRecords, ref: (r) => `PHR-${r.id}`, worker: (r) => r.recordedByName || "" },
+  poultry_feed_formulations: { table: poultryFeedFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  poultry_feed_batches: { table: poultryFeedBatches, ref: (r) => r.batchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
+  poultry_feed_qc_checks: { table: poultryFeedQcChecks, ref: (r) => r.batchNumber || `QC-${r.id}`, worker: (r) => r.testerName || r.recordedByName || "" },
+  fish_feed_formulations: { table: fishFeedFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  fish_feed_batches: { table: fishFeedBatches, ref: (r) => r.batchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
+  fish_feed_qc_checks: { table: fishFeedQcChecks, ref: (r) => r.batchNumber || `QC-${r.id}`, worker: (r) => r.testerName || r.recordedByName || "" },
+  block_mix_formulations: { table: blockMixFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  block_mix_batches: { table: blockMixBatches, ref: (r) => r.mixBatchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
+};
+
 async function resolveRecord(recordType: string, recordSource: string | null, recordId: number) {
   const first = async (rows: any[]) => rows[0] || null;
   switch (recordType) {
@@ -686,12 +829,12 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
       return r && { businessId: r.businessId, branchCode: r.branchCode, module: "CCTV", ref: `CAM-${r.id}`, title: `${r.name} — ${r.brand} · ${cFriendly(r)}`, workerName: r.createdByName };
     }
     case "OPERATION_LOG": {
-      const table: any = { livestock_logs: livestockLogs, restaurant_logs: restaurantLogs, electronics_logs: electronicsLogs, car_wash_logs: carWashLogs, hardware_logs: hardwareLogs }[recordSource || ""];
-      if (!table) return null;
-      const r = await first(await db.select().from(table).where(eq(table.id, recordId)));
+      const meta = OP_LOG_SOURCES[recordSource || ""];
+      if (!meta) return null;
+      const r = await first(await db.select().from(meta.table).where(eq(meta.table.id, recordId)));
       if (!r) return null;
-      const ref = r.tagNumber || r.serialNumber || r.receiveNoteNumber || `SHIFT-${r.shiftDate}-${r.id}`;
-      return { businessId: r.businessId, branchCode: null, module: "OPERATIONS", ref, title: `Operations log ${ref}`, workerName: r.receivedBy || null };
+      const ref = meta.ref(r) || `${recordSource}-${r.id}`;
+      return { businessId: r.businessId, branchCode: null, module: "OPERATIONS", ref, title: `Operations log ${ref}`, workerName: meta.worker(r) || null };
     }
     case "CHECKLIST": {
       const r = await first(await db.select().from(checklistEntries).where(eq(checklistEntries.id, recordId)));
@@ -729,6 +872,27 @@ async function resolveRecord(recordType: string, recordSource: string | null, re
     case "PAYROLL_ENTRY": {
       const r = await first(await db.select().from(payrollEntries).where(eq(payrollEntries.id, recordId)));
       return r && { businessId: r.businessId, branchCode: r.branchCode, module: "PAYROLL", ref: `PE-${r.id}`, title: `${r.employeeName} — net GH₵ ${Number(r.netPayGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, workerName: r.employeeName };
+    }
+    // Transportation module records
+    case "TRANSPORT_VEHICLE": {
+      const r = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `TRP-V${r.assetId || r.id} · ${r.licensePlate}`, title: `${r.name} (${r.licensePlate}) — ${r.vehicleType} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_TRIP": {
+      const r = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `TRP-T${r.tripRef || r.id}`, title: `Trip ${r.source || "?"} → ${r.destination || "?"} — ${r.status}${r.actualKm ? ` · ${r.actualKm} km` : ""}`, workerName: r.driverName };
+    }
+    case "TRANSPORT_BOOKING": {
+      const r = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `BKG-${r.reference}`, title: `Booking ${r.reference} — ${r.customerName || "walk-in"} · GH₵ ${ghc(r.finalPriceGhs ?? r.quotedPriceGhs)} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_MAINTENANCE": {
+      const r = await first(await db.select().from(transportMaintenance).where(eq(transportMaintenance.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `MNT-${(r.dueDate || "").slice(0, 7).replaceAll("-", "") || "WK"}-${r.id}`, title: `${r.title} — ${r.category} · GH₵ ${ghc(r.actualCostGhs ?? r.estimatedCostGhs)} · ${r.status}`, workerName: r.createdByName };
+    }
+    case "TRANSPORT_VIOLATION": {
+      const r = await first(await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.id, recordId)));
+      return r && { businessId: r.businessId, branchCode: r.branchCode || null, module: "TRANSPORT", ref: `VIO-${r.kind}-${r.id}`, title: `${r.vehiclePlate || "Vehicle"} — ${r.kind} · ${r.severity} · ${r.status}`, workerName: r.createdByName };
     }
     default:
       return null;
@@ -884,6 +1048,93 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
       }
       return { record: r, photos: [], related: related(rel) };
     }
+    // ── Transportation module records (detail drawer + related links) ─────
+    case "TRANSPORT_VEHICLE": {
+      const r = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      const trips = await db.select().from(transportTrips).where(eq(transportTrips.vehicleId, recordId)).limit(10);
+      for (const t of trips) rel.push({ key: `TRANSPORT_TRIP:transport_trips:${t.id}`, recordType: "TRANSPORT_TRIP", recordSource: "transport_trips", recordId: t.id, ref: `TRP-T${t.id}`, title: `Trip ${t.source || "?"} → ${t.destination || "?"} — ${t.status}`, detail: `${t.actualKm ?? t.expectedKm ?? "?"} km${t.startTs ? ` · ${tsDay(t.startTs)}` : ""}`, module: "TRANSPORT", businessId: t.businessId, branchCode: t.branchCode, date: tsDay(t.startTs), amountGhs: t.fareGhs, status: t.status, imageCount: 0 });
+      if (r.assetId) {
+        const a = await first(await db.select().from(assets).where(eq(assets.id, Number(r.assetId))));
+        if (a) rel.push({ key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id, ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`, detail: `value GH₵ ${ghc(a.currentValueGhs)} · ${a.location}`, module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode), date: tsDay(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition, imageCount: Array.isArray(a.assetImages) ? a.assetImages.length : 0 });
+      }
+      const viols = await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.vehicleId, recordId)).limit(8);
+      for (const v of viols) rel.push({ key: `TRANSPORT_VIOLATION:transport_tracker_violations:${v.id}`, recordType: "TRANSPORT_VIOLATION", recordSource: "transport_tracker_violations", recordId: v.id, ref: `VIO-${v.kind}-${v.id}`, title: `${v.kind} — ${v.severity}`, detail: v.detail || "", module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      return { record: r, photos: photoList(r as any), related: related(rel) };
+    }
+    case "TRANSPORT_TRIP": {
+      const r = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate}) — ${v.vehicleType} · ${v.status}`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      }
+      if (r.bookingId) {
+        const b = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, Number(r.bookingId))));
+        if (b) rel.push({ key: `TRANSPORT_BOOKING:transport_bookings:${b.id}`, recordType: "TRANSPORT_BOOKING", recordSource: "transport_bookings", recordId: b.id, ref: `BKG-${b.id}`, title: `Booking — ${b.customerName} · GH₵ ${ghc(b.fareGhs)} · ${b.status}`, detail: `${b.origin || "?"} → ${b.destination || "?"}`, module: "TRANSPORT", businessId: b.businessId, branchCode: b.branchCode, date: tsDay(b.scheduledFor), amountGhs: b.fareGhs, status: b.status, imageCount: 0 });
+      }
+      if (r.customerId) {
+        const c = await first(await db.select().from(customers).where(eq(customers.id, Number(r.customerId))));
+        if (c) rel.push({ key: `CUSTOMER:customers:${c.id}`, recordType: "CUSTOMER", recordSource: "customers", recordId: c.id, ref: `CUS-${c.id}`, title: `${c.name} — ${c.type}`, detail: c.phone, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(c.createdAt), amountGhs: c.totalSpentGhs, status: null, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_BOOKING": {
+      const r = await first(await db.select().from(transportBookings).where(eq(transportBookings.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.customerId) {
+        const c = await first(await db.select().from(customers).where(eq(customers.id, Number(r.customerId))));
+        if (c) rel.push({ key: `CUSTOMER:customers:${c.id}`, recordType: "CUSTOMER", recordSource: "customers", recordId: c.id, ref: `CUS-${c.id}`, title: `${c.name} — ${c.type}`, detail: c.phone, module: "FINANCE", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode), date: tsDay(c.createdAt), amountGhs: c.totalSpentGhs, status: null, imageCount: 0 });
+      }
+      if (r.tripId) {
+        const t = await first(await db.select().from(transportTrips).where(eq(transportTrips.id, Number(r.tripId))));
+        if (t) rel.push({ key: `TRANSPORT_TRIP:transport_trips:${t.id}`, recordType: "TRANSPORT_TRIP", recordSource: "transport_trips", recordId: t.id, ref: `TRP-T${t.id}`, title: `Trip ${t.source || "?"} → ${t.destination || "?"} — ${t.status}`, detail: `${t.actualKm ?? t.expectedKm ?? "?"} km`, module: "TRANSPORT", businessId: t.businessId, branchCode: t.branchCode, date: tsDay(t.startTs), amountGhs: t.fareGhs, status: t.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_MAINTENANCE": {
+      const r = await first(await db.select().from(transportMaintenance).where(eq(transportMaintenance.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate}) — ${v.vehicleType} · ${v.status}`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "TRANSPORT_VIOLATION": {
+      const r = await first(await db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.vehicleId) {
+        const v = await first(await db.select().from(transportVehicles).where(eq(transportVehicles.id, Number(r.vehicleId))));
+        if (v) rel.push({ key: `TRANSPORT_VEHICLE:transport_vehicles:${v.id}`, recordType: "TRANSPORT_VEHICLE", recordSource: "transport_vehicles", recordId: v.id, ref: `TRP-V${v.assetId || v.id} · ${v.licensePlate}`, title: `${v.name} (${v.licensePlate})`, detail: `odo ${v.odometerKm} km`, module: "TRANSPORT", businessId: v.businessId, branchCode: v.branchCode, date: tsDay(v.createdAt), amountGhs: null, status: v.status, imageCount: 0 });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "OPERATION_LOG": {
+      // Daily operations / production logs — incl. the poultry feed-mill
+      // chain (formulations, batches, QC checks, feed logs) added under the
+      // same registry as the summary resolver.
+      const meta = OP_LOG_SOURCES[recordSource || ""];
+      if (!meta) return null;
+      const r = await first(await db.select().from(meta.table).where(eq(meta.table.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      // Feed-mill chain links: batch ← its QC checks; QC check → its batch.
+      if (recordSource === "poultry_feed_batches") {
+        const qcs = await db.select().from(poultryFeedQcChecks).where(eq(poultryFeedQcChecks.batchId, r.id)).limit(10);
+        for (const x of qcs) rel.push({ key: `OPERATION_LOG:poultry_feed_qc_checks:${x.id}`, recordType: "OPERATION_LOG", recordSource: "poultry_feed_qc_checks", recordId: x.id, ref: x.batchNumber || `QC-${x.id}`, title: `QC — ${x.testName} → ${x.passFail}`, detail: `${x.stage} · ${x.testResult || "—"}`, module: "OPERATIONS", businessId: x.businessId, branchCode: null, date: tsDay(x.testedAt), amountGhs: null, status: x.passFail, imageCount: 0 });
+      }
+      if (recordSource === "poultry_feed_qc_checks" && r.batchId) {
+        const b = await first(await db.select().from(poultryFeedBatches).where(eq(poultryFeedBatches.id, Number(r.batchId))));
+        if (b) rel.push({ key: `OPERATION_LOG:poultry_feed_batches:${b.id}`, recordType: "OPERATION_LOG", recordSource: "poultry_feed_batches", recordId: b.id, ref: b.batchNumber, title: `${b.formulationName} — ${b.actualOutputKg} kg`, detail: `Status ${b.status}`, module: "OPERATIONS", businessId: b.businessId, branchCode: null, date: tsDay(b.createdAt), amountGhs: null, status: b.status, imageCount: 0 });
+      }
+      return { record: r, photos: (r as any).photo ? [String((r as any).photo)] : [], related: related(rel) };
+    }
     default:
       return null;
   }
@@ -893,17 +1144,30 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
  *  record's own worker account (checklists), then the active user whose name
  *  matches the record's worker — preferring someone assigned to that business. */
 async function resolveAssignee(rec: any, explicitUserId: number | null) {
+  // Tenant guard: an issue may only ever be routed to a member of the
+  // record's own organization — never a same-named user in another Owner's
+  // organization (explicit, linked, or fuzzy name path alike).
+  const orgId = rec.businessId != null ? await ownerOrgOfBusiness(Number(rec.businessId)) : null;
+  let memberIds: Set<number> | null = null;
+  if (orgId != null) {
+    const ms = await db
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, Number(orgId)));
+    memberIds = new Set(ms.map((m) => Number(m.userId)));
+  }
+  const inOrg = (u: any) => memberIds == null || memberIds.has(Number(u.id));
   if (explicitUserId) {
     const [u] = await db.select().from(users).where(eq(users.id, explicitUserId));
-    if (u && u.isActive) return u;
+    if (u && u.isActive && inOrg(u)) return u;
   }
   if (rec.workerUserId) {
     const [u] = await db.select().from(users).where(eq(users.id, Number(rec.workerUserId)));
-    if (u && u.isActive) return u;
+    if (u && u.isActive && inOrg(u)) return u;
   }
   if (rec.workerName) {
     const all = await db.select().from(users);
-    const matches = all.filter((u) => u.isActive && (u.name || "").toLowerCase() === String(rec.workerName).toLowerCase());
+    const matches = all.filter((u) => u.isActive && inOrg(u) && (u.name || "").toLowerCase() === String(rec.workerName).toLowerCase());
     if (matches.length > 0) return matches.find((u) => u.assignedBusinessId === rec.businessId) || matches[0];
   }
   return null;
@@ -911,6 +1175,7 @@ async function resolveAssignee(rec: any, explicitUserId: number | null) {
 const cFriendly = (c: any) => `${c.cameraType} @ ${c.location}`;
 
 async function writeTrail(actor: any, entry: { action: string; targetType: string; targetLabel: string; recordType?: string | null; recordId?: number | null; businessId?: number | null; branchCode?: string | null; reason?: string | null; detail?: string | null }) {
+  const tOwnerId = entry.businessId != null ? await ownerOrgOfBusiness(Number(entry.businessId)) : (actor.orgId ?? null);
   await db.insert(auditTrail).values({
     actorUserId: actor.id,
     actorName: actor.name,
@@ -924,6 +1189,7 @@ async function writeTrail(actor: any, entry: { action: string; targetType: strin
     branchCode: entry.branchCode ?? null,
     reason: entry.reason ?? null,
     detail: entry.detail ?? null,
+    ownerId: tOwnerId,
   });
 }
 
@@ -956,6 +1222,10 @@ export async function POST(request: Request) {
       const [target] = await db.select().from(users).where(eq(users.id, targetId));
       if (!target || !target.isActive) return NextResponse.json({ success: false, error: "User not found or inactive." }, { status: 404 });
       if (target.role === "OWNER") return NextResponse.json({ success: false, error: "The OWNER already controls all audits." }, { status: 400 });
+      // Auditor assignments can never cross an organization boundary.
+      if (!user.isSuperAdmin && !(await sharesOrganization(user, target))) {
+        return FORBIDDEN("You can only grant Auditor access to users inside your own organization.");
+      }
       const bizRows = await db.select().from(businesses);
       const note = body.note ? String(body.note).trim() : null;
       // Per-business branch selection (multi mode): { [businessId]: [codes] }
@@ -1025,36 +1295,57 @@ export async function POST(request: Request) {
     }
     // Route the issue to the user responsible for the record (their dashboard).
     const assignee = ISSUE_ACTIONS.includes(action) ? await resolveAssignee(rec, Number(body.assignedUserId) || null) : null;
+    const priority = normPriority(body.priority);
     const [review] = await db.insert(auditReviews).values({
       recordType, recordSource: body.recordSource ? String(body.recordSource) : null, recordId,
       recordRef: rec.ref, recordTitle: rec.title, module: rec.module,
       businessId: rec.businessId, branchCode: rec.branchCode, workerName: rec.workerName,
       action, status, reason: reason || null, comment: comment || null, evidence: evidence || null,
+      priority,
       issueTitle: ISSUE_ACTIONS.includes(action) ? issueTitle : null,
       evidencePhoto: photo || null,
       assignedUserId: assignee?.id ?? null, assignedUserName: assignee?.name ?? null, assignedUserRole: assignee?.role ?? null,
       reviewerUserId: user.id, reviewerName: user.name, reviewerRole: user.role,
     }).returning();
-    await writeTrail(user, { action: REVIEW_TO_TRAIL[action], targetType: "RECORD", targetLabel: rec.ref || rec.title, recordType, recordId, businessId: rec.businessId, branchCode: rec.branchCode, reason: reason || null, detail: comment || evidence || null });
+    await writeTrail(user, { action: REVIEW_TO_TRAIL[action], targetType: "RECORD", targetLabel: rec.ref || rec.title, recordType, recordId, businessId: rec.businessId, branchCode: rec.branchCode, reason: reason || null, detail: `${comment || evidence || ""} [priority ${priority}]`.trim() });
     if (ISSUE_ACTIONS.includes(action)) {
       await db.insert(auditIssueUpdates).values({
         issueId: review.id, actorUserId: user.id, actorName: user.name, actorRole: user.role,
         action: REVIEW_TO_TRAIL[action], statusFrom: null, statusTo: status,
         note: reason || comment || null, evidence: evidence || null, photo: photo || null,
       });
+      const { businessName, branchLabel } = await bizLabels(rec.businessId, rec.branchCode);
+      const reasonLine = `${reason || ""}${comment ? ` — ${comment}` : ""}`;
+      const whereLine = `Flagged by ${user.name} (${user.role}) · Business: ${businessName} · Branch: ${branchLabel} · Record: ${rec.ref}`;
       if (assignee) {
         await notify(assignee.id, {
           type: action === "CORRECTION_REQUESTED" ? "AUDIT_CORRECTION_REQUIRED" : "AUDIT_ISSUE_ASSIGNED",
-          title: `${action === "CORRECTION_REQUESTED" ? "Correction required" : "Issue flagged"}: ${issueTitle || rec.ref}`,
-          body: `${reason || ""}${comment ? ` — ${comment}` : ""}`,
+          title: `${action === "CORRECTION_REQUESTED" ? "Correction required" : "Issue flagged"} [${PRIORITY_LABEL[priority]}]: ${issueTitle || rec.ref}`,
+          body: `${reasonLine}\n${whereLine}\nRequired action: open My Audit Issues, respond with your fix/evidence, then mark it resolved.`,
           issueId: review.id, recordType, recordId, recordRef: rec.ref,
-          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name,
+          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name, priority,
+        });
+      }
+      // Escalation watch: responsible managers always see flagged issues in
+      // their businesses; the org OWNER is pulled in on HIGH/CRITICAL — and
+      // always when the issue could not be assigned to a user account.
+      const watchers = await auditEscalationRecipients(rec.businessId, priority, {
+        unassigned: !assignee,
+        excludeIds: [user.id, assignee?.id ?? null],
+      });
+      for (const w of watchers) {
+        await notify(w.id, {
+          type: "AUDIT_ISSUE_WATCH",
+          title: `${action === "CORRECTION_REQUESTED" ? "Correction watch" : "Issue watch"} [${PRIORITY_LABEL[priority]}]: ${issueTitle || rec.ref}`,
+          body: `${reasonLine}\n${whereLine}\n${assignee ? `Assigned to ${assignee.name} — you are notified as ${w.role === "OWNER" ? "the organization Owner" : "a responsible manager"}.` : "No user account is linked to this record — review and route it from the Audit Command Center."}`,
+          issueId: review.id, recordType, recordId, recordRef: rec.ref,
+          businessId: rec.businessId, branchCode: rec.branchCode, actorName: user.name, priority,
         });
       }
     }
     return NextResponse.json({ success: true, review, assignedTo: assignee ? { id: assignee.id, name: assignee.name, role: assignee.role } : null });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -1085,6 +1376,7 @@ export async function PATCH(request: Request) {
       const note = String(body.resolution || "").trim();
       if (!note) return NextResponse.json({ success: false, error: "Add a verification note — what did you confirm before closing it?" }, { status: 400 });
       const from = normStatus(row.status);
+      await autoReadIssue(row.id); // closing the issue retires every earlier bell item for it
       const [updated] = await db.update(auditReviews)
         .set({ status: "VERIFIED", resolvedByUserId: user.id, resolvedByName: user.name, resolvedAt: new Date(), resolutionNote: note })
         .where(eq(auditReviews.id, row.id)).returning();
@@ -1095,9 +1387,9 @@ export async function PATCH(request: Request) {
       await writeTrail(user, { action: "VERIFY", targetType: "RECORD", targetLabel: row.recordRef || row.recordTitle, recordType: row.recordType, recordId: row.recordId, businessId: row.businessId, branchCode: row.branchCode, reason: row.reason, detail: `Verified & closed (${from} → VERIFIED): ${note}` });
       if (row.assignedUserId && row.assignedUserId !== user.id) {
         await notify(row.assignedUserId, {
-          type: "AUDIT_ISSUE_VERIFIED", title: `Verified & closed: ${row.issueTitle || row.recordRef}`,
+          type: "AUDIT_ISSUE_VERIFIED", title: `Verified & closed [${PRIORITY_LABEL[normPriority(row.priority)]}]: ${row.issueTitle || row.recordRef}`,
           body: note, issueId: row.id, recordType: row.recordType, recordId: row.recordId,
-          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name, priority: normPriority(row.priority),
         });
       }
       return NextResponse.json({ success: true, review: updated });
@@ -1129,6 +1421,7 @@ export async function PATCH(request: Request) {
       const [updated] = await db.update(auditReviews)
         .set({ status: "CORRECTION_REQUIRED" })
         .where(eq(auditReviews.id, row.id)).returning();
+      await autoReadIssue(row.id); // the fresh correction-required notice below replaces everything prior
       await db.insert(auditIssueUpdates).values({
         issueId: row.id, actorUserId: user.id, actorName: user.name, actorRole: user.role,
         action: "REQUEST_CORRECTION", statusFrom: from, statusTo: "CORRECTION_REQUIRED", note, photo: photo || null,
@@ -1136,9 +1429,10 @@ export async function PATCH(request: Request) {
       await writeTrail(user, { action: "REQUEST_CORRECTION", targetType: "RECORD", targetLabel: row.recordRef || row.recordTitle, recordType: row.recordType, recordId: row.recordId, businessId: row.businessId, branchCode: row.branchCode, reason: row.reason, detail: `${from} → CORRECTION_REQUIRED: ${note}` });
       if (row.assignedUserId && row.assignedUserId !== user.id) {
         await notify(row.assignedUserId, {
-          type: "AUDIT_CORRECTION_REQUIRED", title: `Correction required: ${row.issueTitle || row.recordRef}`,
-          body: note, issueId: row.id, recordType: row.recordType, recordId: row.recordId,
-          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+          type: "AUDIT_CORRECTION_REQUIRED", title: `Correction required [${PRIORITY_LABEL[normPriority(row.priority)]}]: ${row.issueTitle || row.recordRef}`,
+          body: `${note}\nRequired action: fix the issue, respond with what you did, then mark it resolved in My Audit Issues.`,
+          issueId: row.id, recordType: row.recordType, recordId: row.recordId,
+          recordRef: row.recordRef, businessId: row.businessId, branchCode: row.branchCode, actorName: user.name, priority: normPriority(row.priority),
         });
       }
       return NextResponse.json({ success: true, review: updated });
@@ -1158,6 +1452,6 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: false, error: "Unknown action." }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

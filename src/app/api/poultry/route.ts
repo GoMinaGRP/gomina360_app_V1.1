@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   poultryFlocks,
@@ -15,10 +16,13 @@ import {
 import { eq, desc, and } from "drizzle-orm";
 import { stockIn, stockOut, ensureInventoryItem } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
+import { auditLog } from "@/lib/audit";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
-export const POULTRY_PRODUCTS = {
+const POULTRY_PRODUCTS = {
   EGGS: {
     // matches the seeded product SKU so production tops up the existing item
     sku: "POUL-EGG-L01",
@@ -59,15 +63,25 @@ function slugify(name: string): string {
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { searchParams } = new URL(request.url);
     const businessIdParam = searchParams.get("businessId");
     const bizId = businessIdParam ? Number(businessIdParam) : null;
 
+    // Tenant isolation: without a businessId the route previously returned
+    // EVERY tenant's poultry data, and with one it skipped the access gate —
+    // any authenticated user could read any farm. Match the block-factory /
+    // aquaculture contract: businessId required + caller must have access.
+    if (!bizId) {
+      return NextResponse.json({ success: false, error: "businessId is required" }, { status: 400 });
+    }
+    if (!(await canAccessBusiness(session.user, bizId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
+
     const scope = <T extends { businessId: any }>(table: any) =>
-      bizId
-        ? db.select().from(table).where(eq(table.businessId, bizId))
-        : db.select().from(table);
+      db.select().from(table).where(eq(table.businessId, bizId));
 
     const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs] =
       await Promise.all([
@@ -86,14 +100,10 @@ export async function GET(request: NextRequest) {
     // Log Production form. The demo flagship POULTRY-01 receives its two
     // system products (Eggs, Broiler) from the seed (seed.ts) only.
     let products: any[] = [];
-    if (bizId) {
-      products = await db
-        .select()
-        .from(poultryProducts)
-        .where(eq(poultryProducts.businessId, bizId));
-    } else {
-      products = await db.select().from(poultryProducts);
-    }
+    products = await db
+      .select()
+      .from(poultryProducts)
+      .where(eq(poultryProducts.businessId, bizId));
 
     const sortByIdDesc = (a: any, b: any) => (b.id || 0) - (a.id || 0);
 
@@ -110,10 +120,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("GET /api/poultry error:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -142,6 +149,7 @@ export async function POST(request: NextRequest) {
     }
 
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     if (!(await canAccessBusiness(session.user, businessId))) {
       return FORBIDDEN("You do not have access to that business.");
@@ -159,6 +167,18 @@ export async function POST(request: NextRequest) {
     // ── FLOCK ──────────────────────────────────────────────────────
     if (entity === "FLOCK") {
       const initialCount = Number(data.initialCount) || 0;
+      if (initialCount <= 0) {
+        return NextResponse.json(
+          { success: false, error: "initialCount (birds stocked) must be greater than 0" },
+          { status: 400 }
+        );
+      }
+      if ((Number(data.currentCount) || initialCount) < 0 || (Number(data.mortalityTotal) || 0) < 0 || (Number(data.costPerBirdGhs) || 0) < 0) {
+        return NextResponse.json(
+          { success: false, error: "counts and costs cannot be negative" },
+          { status: 400 }
+        );
+      }
       const [row] = await db
         .insert(poultryFlocks)
         .values({
@@ -187,6 +207,11 @@ export async function POST(request: NextRequest) {
           createdByRole: data.createdByRole || null,
         })
         .returning();
+      await auditLog(session.user, "POULTRY_FLOCK_CREATE", "RECORD", `Flock ${row.flockName || row.batchNumber} stocked`,
+        "OPERATION_LOG", row.id, businessId, branchCode,
+        `${initialCount.toLocaleString()} ${row.birdType}${row.breed ? ` (${row.breed})` : ""} arrived${row.houseName ? ` into ${row.houseName}` : ""}`,
+        (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+      ).catch((e: any) => console.error("[poultry] audit failed:", e));
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -195,6 +220,31 @@ export async function POST(request: NextRequest) {
       const qty = Number(data.quantityKg) || 0;
       const costPerKg = Number(data.costPerKgGhs) || 0;
       const totalCost = Number(data.totalCostGhs) || qty * costPerKg;
+      if (qty <= 0) {
+        return NextResponse.json(
+          { success: false, error: "quantityKg must be greater than 0" },
+          { status: 400 }
+        );
+      }
+      if (costPerKg < 0 || totalCost < 0) {
+        return NextResponse.json(
+          { success: false, error: "feed costs cannot be negative" },
+          { status: 400 }
+        );
+      }
+      // Flock references must stay inside this business.
+      if (data.flockId) {
+        const [flockOk] = await db
+          .select({ id: poultryFlocks.id })
+          .from(poultryFlocks)
+          .where(and(eq(poultryFlocks.id, Number(data.flockId)), eq(poultryFlocks.businessId, businessId)));
+        if (!flockOk) {
+          return NextResponse.json(
+            { success: false, error: "Flock not found for this business." },
+            { status: 404 }
+          );
+        }
+      }
       const [row] = await db
         .insert(poultryFeedLogs)
         .values({
@@ -227,13 +277,20 @@ export async function POST(request: NextRequest) {
           amountGhs: totalCost,
           paymentMethod: data.paymentMethod || "CASH",
           description: `Feed: ${row.feedType.replace(/_/g, " ")} — ${qty}kg | ${row.brandSupplier || "No supplier"}`,
-          date: today,
+          // Book the expense on the feed log's own date so back-dated entries
+          // land on the right ledger day (aquaculture already does this).
+          date: data.recordedDate || today,
           createdAt: new Date(),
           status: "COMPLETED",
           recordedBy: data.recordedByName || "Poultry Farm User",
           recordedByRole: data.recordedByRole || null,
           recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
         });
+        await auditLog(session.user, "POULTRY_FEED_PURCHASE", "RECORD", `Feed purchase ${qty} kg ${row.feedType}`,
+          "OPERATION_LOG", row.id, businessId, branchCode,
+          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"} — expense ${trxNum}`,
+          (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+        ).catch((e: any) => console.error("[poultry] audit failed:", e));
       }
 
       return NextResponse.json({ success: true, item: row });
@@ -304,6 +361,12 @@ export async function POST(request: NextRequest) {
     // ── HEALTH ─────────────────────────────────────────────────────
     if (entity === "HEALTH") {
       const healthCost = Number(data.costGhs) || 0;
+      if (healthCost < 0 || (Number(data.mortalityCount) || 0) < 0 || (Number(data.birdsAffected) || 0) < 0) {
+        return NextResponse.json(
+          { success: false, error: "bird counts and costs cannot be negative" },
+          { status: 400 }
+        );
+      }
       const [row] = await db
         .insert(poultryHealthRecords)
         .values({
@@ -340,7 +403,7 @@ export async function POST(request: NextRequest) {
           amountGhs: healthCost,
           paymentMethod: data.paymentMethod || "CASH",
           description: `Health: ${row.recordType} — ${row.vaccineOrDrug || row.diseaseOrCondition || "Routine"}${row.administeredBy ? ` | Admin: ${row.administeredBy}` : ""}`,
-          date: today,
+          date: data.recordedDate || today,
           createdAt: new Date(),
           status: "COMPLETED",
           recordedBy: data.recordedByName || "Poultry Farm User",
@@ -349,13 +412,21 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Mortalities reduce the flock's live bird count
+      // Mortalities reduce the flock's live bird count — flock resolved
+      // INSIDE this business so a mortality write can never drain another
+      // tenant's flock.
       const mortality = Number(data.mortalityCount) || 0;
       if (mortality > 0 && data.flockId) {
         const [flock] = await db
           .select()
           .from(poultryFlocks)
-          .where(eq(poultryFlocks.id, Number(data.flockId)));
+          .where(and(eq(poultryFlocks.id, Number(data.flockId)), eq(poultryFlocks.businessId, businessId)));
+        if (!flock) {
+          return NextResponse.json(
+            { success: false, error: "Flock not found for this business." },
+            { status: 404 }
+          );
+        }
         if (flock) {
           await db
             .update(poultryFlocks)
@@ -460,6 +531,26 @@ export async function POST(request: NextRequest) {
       const soldEggs = Number(data.eggsSold) || 0;
       const revenue = Number(data.revenueGhs) || 0;
       const broilersSold = Number(data.broilersSold) || 0;
+      if (eggs < 0 || soldEggs < 0 || revenue < 0 || broilersSold < 0 ||
+          (Number(data.crackedEggs) || 0) < 0 || (Number(data.birdsHarvested) || 0) < 0 ||
+          (Number(data.traysProduced) || 0) < 0) {
+        return NextResponse.json(
+          { success: false, error: "production counts and revenue cannot be negative" },
+          { status: 400 }
+        );
+      }
+      if (soldEggs > eggs) {
+        return NextResponse.json(
+          { success: false, error: "eggsSold cannot exceed eggsCollected on the same record" },
+          { status: 400 }
+        );
+      }
+      if ((Number(data.crackedEggs) || 0) > eggs) {
+        return NextResponse.json(
+          { success: false, error: "crackedEggs cannot exceed eggsCollected" },
+          { status: 400 }
+        );
+      }
 
       // Custom Master-Product production types: productionType carries the
       // poultry_products.product_key (CUSTOM_*). Quantity is recorded in the
@@ -531,7 +622,7 @@ export async function POST(request: NextRequest) {
             description: `Poultry production — ${qty} ${product.unit} ${product.name}${
               qtySold > 0 ? `, ${qtySold} sold` : ""
             }${stockNote}`,
-            date: today,
+            date: data.recordedDate || today,
             createdAt: new Date(),
             status: "COMPLETED",
             recordedBy: data.recordedByName || "Poultry Farm User",
@@ -552,7 +643,11 @@ export async function POST(request: NextRequest) {
           batchNumber: data.batchNumber || null,
           productionType: data.productionType || "EGGS",
           eggsCollected: eggs,
-          traysProduced: Number(data.traysProduced) || Number((eggs / 30).toFixed(2)),
+          // Cracked eggs can never fill a tray — the auto default divides
+          // the GOOD eggs only (stock-in does the same below).
+          traysProduced: Number(data.traysProduced) > 0
+            ? Number(Number(data.traysProduced).toFixed(2))
+            : Number((Math.max(0, eggs - (Number(data.crackedEggs) || 0)) / 30).toFixed(2)),
           crackedEggs: Number(data.crackedEggs) || 0,
           gradeA: Number(data.gradeA) || 0,
           gradeB: Number(data.gradeB) || 0,
@@ -574,7 +669,13 @@ export async function POST(request: NextRequest) {
       let stockNote = "";
       if (row.productionType === "EGGS") {
         const goodEggs = Math.max(0, eggs - (Number(data.crackedEggs) || 0));
-        const cratesIn = Number(data.traysProduced) || eggs > 0 ? Number((goodEggs / 30).toFixed(2)) : 0;
+        // Operator-precedence fix: `a || b > 0 ? x : 0` parsed as
+        // `(a || (b > 0)) ? x : 0`, silently discarding the operator's
+        // explicit tray count whenever cracked eggs were logged. An explicit
+        // traysProduced entry wins; otherwise derive from good eggs.
+        const cratesIn = Number(data.traysProduced) > 0
+          ? Number(Number(data.traysProduced).toFixed(2))
+          : (eggs > 0 ? Number((goodEggs / 30).toFixed(2)) : 0);
         if (cratesIn > 0) {
           await stockIn({ businessId, ...POULTRY_PRODUCTS.EGGS, quantity: cratesIn });
           stockNote += ` | +${cratesIn} crates to stock`;
@@ -616,7 +717,7 @@ export async function POST(request: NextRequest) {
           amountGhs: revenue,
           paymentMethod: data.paymentMethod || "CASH",
           description: desc,
-          date: today,
+          date: data.recordedDate || today,
           createdAt: new Date(),
           status: "COMPLETED",
           recordedBy: data.recordedByName || "Poultry Farm User",
@@ -631,6 +732,22 @@ export async function POST(request: NextRequest) {
     // ── CHECKLIST (create today's list) ────────────────────────────
     if (entity === "CHECKLIST") {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      const targetDate = data.checklistDate || today;
+      // Idempotent per day: re-generating today's checklist returns the
+      // existing rows instead of duplicating them (same contract the
+      // Block Factory checklist already uses).
+      const existing = await db
+        .select()
+        .from(poultryChecklists)
+        .where(
+          and(
+            eq(poultryChecklists.businessId, businessId),
+            eq(poultryChecklists.checklistDate, targetDate),
+          )
+        );
+      if (existing.length > 0) {
+        return NextResponse.json({ success: true, items: existing.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)), alreadyExists: true });
+      }
       const rows = [];
       for (const t of tasks) {
         const [row] = await db
@@ -638,7 +755,7 @@ export async function POST(request: NextRequest) {
           .values({
             businessId,
             branchCode,
-            checklistDate: data.checklistDate || today,
+            checklistDate: targetDate,
             taskKey: t.taskKey,
             taskLabel: t.taskLabel,
             category: t.category || "GENERAL",
@@ -656,10 +773,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (error: any) {
     console.error("POST /api/poultry error:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -670,6 +784,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const body = await request.json();
     const { entity, id, data } = body;
@@ -684,6 +799,11 @@ export async function PATCH(request: NextRequest) {
           { success: false, error: "Checklist task not found" },
           { status: 404 }
         );
+      }
+      // Tenant gate: the row's business must be one the caller can access —
+      // previously any authenticated user could toggle any tenant's tasks.
+      if (!(await canAccessBusiness(session.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const nowCompleted = !existing.isCompleted;
       const [row] = await db
@@ -700,6 +820,28 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (entity === "FLOCK" && id) {
+      // Tenant gate: resolve the flock first and verify the caller may touch
+      // its business — previously any authenticated user could rewrite any
+      // flock's head-count/status cross-tenant.
+      const [existingFlock] = await db
+        .select()
+        .from(poultryFlocks)
+        .where(eq(poultryFlocks.id, Number(id)));
+      if (!existingFlock) {
+        return NextResponse.json(
+          { success: false, error: "Flock not found" },
+          { status: 404 }
+        );
+      }
+      if (!(await canAccessBusiness(session.user, existingFlock.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
+      if (data?.currentCount !== undefined && Number(data.currentCount) < 0) {
+        return NextResponse.json(
+          { success: false, error: "currentCount cannot be negative" },
+          { status: 400 }
+        );
+      }
       const [row] = await db
         .update(poultryFlocks)
         .set({
@@ -711,6 +853,15 @@ export async function PATCH(request: NextRequest) {
         })
         .where(eq(poultryFlocks.id, Number(id)))
         .returning();
+      await auditLog(session.user, "POULTRY_FLOCK_UPDATE", "RECORD", `Flock ${row.flockName || row.batchNumber || row.id} updated`,
+        "OPERATION_LOG", row.id, existingFlock.businessId, existingFlock.branchCode || null,
+        [
+          data?.currentCount !== undefined ? `count ${existingFlock.currentCount} → ${row.currentCount}` : null,
+          data?.status ? `status ${existingFlock.status} → ${row.status}` : null,
+          data?.ageWeeks !== undefined ? `age → ${row.ageWeeks} wk` : null,
+        ].filter(Boolean).join(" · ") || "flock details updated",
+        (await ownerOrgOfBusiness(existingFlock.businessId).catch(() => null)) ?? null
+      ).catch((e: any) => console.error("[poultry] audit failed:", e));
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -719,9 +870,6 @@ export async function PATCH(request: NextRequest) {
       { status: 400 }
     );
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

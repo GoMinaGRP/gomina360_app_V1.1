@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { groupBusinessesByOrg } from "@/lib/orgGrouping";
 import {
   Beef,
   LayoutDashboard,
@@ -32,6 +33,7 @@ import {
   Landmark,
   Wifi,
   Settings2,
+  CalendarClock,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -78,6 +80,10 @@ interface SidebarProps {
   accessibleBusinessIds?: number[] | null;
   /** Opens Manage Businesses & Branches — shown to "Manage Unit" grantees. */
   onOpenManageBusinesses?: () => void;
+  /** SUPER ADMIN ONLY — Organization Lens context + org directory. */
+  organizations?: { id: number; name: string; slug: string; status: string }[];
+  orgLens?: string; // "MY" | "ALL" | "<orgId>"
+  onLensChange?: (lens: string) => void;
 }
 
 export default function Sidebar({
@@ -86,6 +92,9 @@ export default function Sidebar({
   businesses,
   currentUser,
   auditEligible,
+  organizations = [],
+  orgLens = "MY",
+  onLensChange,
   onOpenSupportInfo,
   accessibleBusinessIds,
   onOpenManageBusinesses,
@@ -94,6 +103,87 @@ export default function Sidebar({
   const isWorker = currentUser?.role === "WORKER";
   const isExecutive =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
+  const isSuperAdmin = !!currentUser?.isSuperAdmin;
+  const myOrgName = organizations.find((o) => Number(o.id) === 1)?.name || "GoMina Group";
+  // Super-Admin grouped business list (Organization Lens): the Main Owner's
+  // own workspace first, then each other Owner's org — org identity is
+  // never invisible inside the business/branch list anymore.
+  const businessGroups = useMemo(
+    () => (isSuperAdmin ? groupBusinessesByOrg(businesses, organizations) : []),
+    [isSuperAdmin, businesses, organizations]
+  );
+
+  /** One business/branch chip in the list — identical for Owners and super
+   *  admins; grouping happens at the caller (group headers for SA only). */
+  const renderBizButton = (biz: any) => {
+    const IconComp = businessIcons[biz.code] || CATEGORY_ICONS[biz.category] || Building2;
+    const accessible = isAccessible(biz);
+    return (
+      <button
+        key={biz.code}
+        onClick={() => {
+          if (accessible) selectTab(biz.code as ActiveTab);
+        }}
+        disabled={!accessible}
+        className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+          activeTab === biz.code
+            ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
+            : accessible
+            ? "hover:bg-slate-800/70 text-slate-300"
+            : "opacity-40 cursor-not-allowed text-slate-500"
+        }`}
+        title={
+          accessible
+            ? isPrimary(biz) || isExecutive
+              ? `${biz.name} (${biz.branchLocation})`
+              : `${biz.name} (${biz.branchLocation}) — granted by the OWNER`
+            : "Restricted to assigned branch manager"
+        }
+      >
+        <div className="flex items-center space-x-1.5 sm:space-x-2.5 truncate">
+          {biz.logo ? (
+            <img
+              src={biz.logo}
+              alt=""
+              data-testid={`sidebar-biz-logo-${biz.code}`}
+              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
+          ) : (
+            <IconComp
+              className={`w-4 h-4 ${
+                activeTab === biz.code
+                  ? "text-emerald-400"
+                  : "text-slate-400"
+              }`}
+            />
+          )}
+          <span className="truncate">{biz.name}</span>
+          {!isExecutive && isBusinessManager && accessible && !isPrimary(biz) && (
+            <span
+              className="text-[8px] font-black text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-1 py-0.5 rounded shrink-0"
+              data-testid={`sidebar-chip-granted-${biz.code}`}
+            >
+              GRANTED
+            </span>
+          )}
+          {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
+            <span
+              className="text-[8px] font-black text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded shrink-0"
+              data-testid={`sidebar-chip-manage-${biz.code}`}
+              title="Owner-equivalent management of this unit"
+            >
+              MANAGE
+            </span>
+          )}
+          {(biz.status || "").toUpperCase() === "INACTIVE" && (
+            <span className="text-[9px] font-black text-rose-300 bg-rose-500/15 border border-rose-500/40 px-1 py-0.5 rounded shrink-0">
+              INACTIVE
+            </span>
+          )}
+        </div>
+        <ChevronRight className="w-3.5 h-3.5 opacity-50 hidden sm:block shrink-0" />
+      </button>
+    );
+  };
   const assignedBusinessId = currentUser?.assignedBusinessId;
   // OWNER-delegated "Manage Business / Unit" managers: owner-equivalent power
   // strictly for the granted units — they get the same enterprise sections,
@@ -174,7 +264,7 @@ export default function Sidebar({
        content keeps room: 160px phones, 224px tablets, 256px desktop. It
        never slides in/out and never covers the page. */
     <aside
-      data-testid="nav-sidebar"
+      data-testid="nav-sidebar" data-printchrome="true"
       data-collapsed={collapsed}
       className={`${
         collapsed ? "w-12 sm:w-14" : "w-40 sm:w-56 lg:w-64"
@@ -222,79 +312,111 @@ export default function Sidebar({
 
       {/* Businesses — executives see every unit; a branch manager sees the
           dashboards of their assigned branch AND every branch the OWNER
-          granted them access to (extra branches carry the GRANTED badge). */}
+          granted them access to (extra branches carry the GRANTED badge).
+          The SUPER ADMIN additionally gets the Organization Lens: "My
+          Workspace" (default operational view), "All Organizations"
+          (platform oversight), or one Owner at a time — and the business
+          list is grouped by owning Owner/Organization. */}
+
+      {/* ── SUPER ADMIN: Organization Lens selector ── */}
+      {isSuperAdmin && !isWorker && (
+        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70 bg-fuchsia-900/10">
+          <div className="px-1 sm:px-3 py-1 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
+            Organization Lens
+          </div>
+          <select
+            data-testid="org-lens-select"
+            value={orgLens}
+            onChange={(e) => onLensChange?.(e.target.value)}
+            title="Choose whose workspace you are looking at right now"
+            className="mx-1 sm:mx-3 mb-1 w-[calc(100%-0.5rem)] sm:w-[calc(100%-1.5rem)] px-2 py-1.5 rounded-lg bg-slate-800 border border-fuchsia-500/40 text-fuchsia-100 text-[11px] font-bold focus:outline-none"
+          >
+            <option value="MY">My Workspace — {myOrgName}</option>
+            <option value="ALL">All Organizations (platform oversight)</option>
+            {organizations
+              .filter((o) => Number(o.id) !== 1)
+              .map((o) => (
+                <option key={o.id} value={String(o.id)}>
+                  {o.name}
+                  {o.status && o.status !== "ACTIVE" ? ` (${o.status})` : ""}
+                </option>
+              ))}
+          </select>
+          <p className="px-1 sm:px-3 text-[9px] leading-snug text-slate-500">
+            {orgLens === "MY"
+              ? "Operating view — just your own businesses, like any Owner sees."
+              : orgLens === "ALL"
+                ? "Oversight view — every Owner grouped below; Command Center shows per-org rollups + platform totals."
+                : `Focused view — ${organizations.find((o) => String(o.id) === orgLens)?.name || "one Owner"} only.`}
+          </p>
+        </div>
+      )}
+
       {!isWorker && (
       <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
         <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-          {isExecutive
+          {isSuperAdmin
+            ? orgLens === "MY"
+              ? `My Businesses (${businesses.length})`
+              : orgLens === "ALL"
+                ? `Platform Businesses (${businesses.length} · ${businessGroups.length} owners)`
+                : `Owned by ${organizations.find((o) => String(o.id) === orgLens)?.name || "this Owner"} (${businesses.length})`
+            : isExecutive
             ? `${businesses.length} Ghana Businesses`
             : businesses.filter(isAccessible).length > 1
             ? `My Branches (${businesses.filter(isAccessible).length})`
             : "My Branch"}
         </div>
         <div className="space-y-1 mt-1">
-          {businesses.map((biz) => {
-            const IconComp = businessIcons[biz.code] || CATEGORY_ICONS[biz.category] || Building2;
-            const accessible = isAccessible(biz);
-
-            return (
-              <button
-                key={biz.code}
-                onClick={() => {
-                  if (accessible) selectTab(biz.code as ActiveTab);
-                }}
-                disabled={!accessible}
-                className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                  activeTab === biz.code
-                    ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                    : accessible
-                    ? "hover:bg-slate-800/70 text-slate-300"
-                    : "opacity-40 cursor-not-allowed text-slate-500"
-                }`}
-                title={
-                  accessible
-                    ? isPrimary(biz) || isExecutive
-                      ? `${biz.name} (${biz.branchLocation})`
-                      : `${biz.name} (${biz.branchLocation}) — granted by the OWNER`
-                    : "Restricted to assigned branch manager"
-                }
-              >
-                <div className="flex items-center space-x-1.5 sm:space-x-2.5 truncate">
-                  <IconComp
-                    className={`w-4 h-4 ${
-                      activeTab === biz.code
-                        ? "text-emerald-400"
-                        : "text-slate-400"
+          {/* ── SUPER ADMIN: grouped by owning Owner/Organization ── */}
+          {isSuperAdmin ? (
+            <>
+              {businessGroups.map((group) => (
+                <div key={group.orgId} className="space-y-1">
+                  <div
+                    data-testid={`sidebar-org-group-${group.orgId}`}
+                    className={`flex items-center gap-1.5 px-1.5 pt-2 pb-1 text-[9px] font-black tracking-wider ${
+                      group.isMain ? "text-violet-300" : "text-sky-300"
                     }`}
-                  />
-                  <span className="truncate">{biz.name}</span>
-                  {!isExecutive && isBusinessManager && accessible && !isPrimary(biz) && (
-                    <span
-                      className="text-[8px] font-black text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-1 py-0.5 rounded shrink-0"
-                      data-testid={`sidebar-chip-granted-${biz.code}`}
-                    >
-                      GRANTED
+                  >
+                    {group.orgLogo ? (
+                      <img
+                        src={group.orgLogo}
+                        alt=""
+                        data-testid={`sidebar-org-logo-${group.orgId}`}
+                        className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
+                    ) : (
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                          group.isMain ? "bg-violet-400" : "bg-sky-400"
+                        }`}
+                      />
+                    )}
+                    <span className="truncate">
+                      {group.isMain
+                        ? `YOUR BUSINESSES — ${group.orgName.toUpperCase()} (MAIN OWNER)`
+                        : `OWNED BY ${group.orgName.toUpperCase()}`}
                     </span>
-                  )}
-                  {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
-                    <span
-                      className="text-[8px] font-black text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded shrink-0"
-                      data-testid={`sidebar-chip-manage-${biz.code}`}
-                      title="Owner-equivalent management of this unit"
-                    >
-                      MANAGE
-                    </span>
-                  )}
-                  {(biz.status || "").toUpperCase() === "INACTIVE" && (
-                    <span className="text-[9px] font-black text-rose-300 bg-rose-500/15 border border-rose-500/40 px-1 py-0.5 rounded shrink-0">
-                      INACTIVE
-                    </span>
-                  )}
+                    {group.orgStatus !== "ACTIVE" && (
+                      <span className="text-[8px] font-black px-1 py-0.5 rounded border bg-slate-500/15 text-slate-400 border-slate-500/40 shrink-0">
+                        {group.orgStatus}
+                      </span>
+                    )}
+                    <span className="ml-auto text-slate-500 shrink-0">{group.businesses.length}</span>
+                  </div>
+                  {group.businesses.map((biz) => renderBizButton(biz))}
                 </div>
-                <ChevronRight className="w-3.5 h-3.5 opacity-50 hidden sm:block shrink-0" />
-              </button>
-            );
-          })}
+              ))}
+              {businesses.length === 0 && (
+                <p className="px-1 sm:px-3 py-2 text-[10px] text-slate-500">
+                  No businesses in this view yet.
+                </p>
+              )}
+            </>
+          ) : (
+            /* ── Normal Owners & staff: the ORIGINAL flat list, unchanged ── */
+            businesses.map((biz) => renderBizButton(biz))
+          )}
         </div>
       </div>
       )}
@@ -404,6 +526,22 @@ export default function Sidebar({
                 <span>Customer Order & Tracking</span>
               </div>
               <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">LIVE</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("PREORDERS")}
+              data-testid="sidebar-tab-preorders"
+              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "PREORDERS"
+                  ? "bg-indigo-500/15 text-indigo-300 font-bold border-l-2 border-indigo-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                <CalendarClock className="w-4 h-4 text-indigo-400/90" />
+                <span>Pre-Orders</span>
+              </div>
+              <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
             </button>
 
             <button
@@ -694,6 +832,24 @@ export default function Sidebar({
                   <span>Enterprise Users</span>
                 </div>
                 <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">HQ</span>
+              </button>
+            )}
+
+            {/* SUPER ADMIN ONLY — Platform Owner/Organization lifecycle console */}
+            {!!currentUser?.isSuperAdmin && (
+              <button
+                onClick={() => selectTab("PLATFORM_ADMIN")}
+                className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                  activeTab === "PLATFORM_ADMIN"
+                    ? "bg-fuchsia-500/15 text-fuchsia-300 font-bold border-l-2 border-fuchsia-400"
+                    : "hover:bg-slate-800/70 text-slate-300"
+                }`}
+              >
+                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                  <Building2 className="w-4 h-4 text-fuchsia-300" />
+                  <span>Platform Owners</span>
+                </div>
+                <span className="hidden sm:inline text-[9px] bg-fuchsia-500/20 text-fuchsia-200 px-1 py-0.5 rounded font-bold border border-fuchsia-500/30">PLATFORM</span>
               </button>
             )}
           </div>

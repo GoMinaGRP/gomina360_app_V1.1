@@ -242,6 +242,10 @@ try {
   await sleep(300);
   ok("G1 live margin preview (50 + 1 − 48 = 3)", await innerHas('[data-testid="telf-margin-preview"]', "3.00"));
   await clickTid("telf-submit");
+  // Sale-classified entries (AIRDATA_TXN/VOUCHER_SELL) require the shared
+  // entry-confirmation dialog before the POST executes — confirm it.
+  await waitSel('[data-testid="tel-confirm-entry-confirm"]', 5000);
+  await clickTid("tel-confirm-entry-confirm");
   await sleep(1500);
   const wl = await q1(`SELECT float_ghs f, cash_ghs c FROM telecom_lines WHERE id=${LINE_WALLET.id}`);
   ok("G2 wallet float 1000−48+3=955 / cash 51", num(wl.f) === 955 && num(wl.c) === 51, `f=${wl.f} c=${wl.c}`);
@@ -282,6 +286,8 @@ try {
   await setTid("telf-customerName", "TEST Kofi Mensah");
   await setTid("telf-customerPhone", "0555000222");
   await clickTid("telf-submit");
+  await waitSel('[data-testid="tel-confirm-entry-confirm"]', 5000);
+  await clickTid("tel-confirm-entry-confirm");
   await sleep(1500);
   const soldV = await q1(`SELECT status s, expires_at x FROM telecom_vouchers WHERE id=${V_SELL.id}`);
   const hours72 = soldV.x ? Math.abs((new Date(soldV.x) - Date.now()) / 3600000 - 72) < 0.2 : false;

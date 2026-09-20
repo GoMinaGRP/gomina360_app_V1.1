@@ -28,11 +28,15 @@ import {
   Mail,
   MessageCircle,
   Clock,
+  CalendarClock,
   Info,
 } from "lucide-react";
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
-import { googleMapsEmbed, businessServesLocation, haversineM } from "@/lib/tracking";
+import ProductLightbox from "@/components/ProductLightbox";
+import WatermarkOverlay from "@/components/WatermarkOverlay";
+import MiniLeafletMap from "@/components/MiniLeafletMap";
+import { businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
 function fmtMoney(amount: number | null | undefined, currency = "GHS") {
@@ -41,10 +45,39 @@ function fmtMoney(amount: number | null | undefined, currency = "GHS") {
   return `${currency} ${Number(amount).toFixed(2)}`;
 }
 
+/** All images registered for a product (primary photo + extras), as the
+ *  Amazon-style gallery source. Falls back to the legacy `photo` field. */
+function productPhotos(p: any): string[] {
+  const arr: string[] = [];
+  if (typeof p.photo === "string" && p.photo.length > 0) arr.push(p.photo);
+  if (Array.isArray(p.photos)) {
+    for (const ph of p.photos) {
+      if (typeof ph === "string" && ph.length > 0 && !arr.includes(ph)) arr.push(ph);
+    }
+  }
+  return arr;
+}
+
+/** Watermark spec for a menu business row — the faint overlay composites at
+ *  display time; the stored product photo bytes are never modified. */
+function wmSpecOf(b: any) {
+  return b
+    ? {
+        enabled: b.watermarkEnabled === true,
+        mode: b.watermarkMode || "AUTO",
+        logo: b.logo || null,
+        name: b.businessName || b.name || "GoMina 360",
+      }
+    : null;
+}
+
+
 interface CartLine {
   biz: any;
   product: any;
   qty: number;
+  /** Chosen fulfilment option (pre-order) for this line, if any. */
+  option?: any | null;
 }
 
 /**
@@ -106,6 +139,241 @@ function QtyInput({
   );
 }
 
+/**
+ * One product card — Amazon-style: image, name, category, price,
+ * availability and an always-one-tap Add / stepper.
+ *
+ * Module-level + React.memo with a field-wise comparator: the order page
+ * re-renders on every keystroke of the checkout name/phone/address fields,
+ * every pin drag and every cart mutation, and previously that re-rendered
+ * the entire product grid (every photo, thumbnail and lightbox button of
+ * every card). With the memoized card, only the card(s) whose OWN quantity
+ * changed re-render; `p`/`fromBiz`/`wmBiz` keep object identity because the
+ * menu payload is parsed once per fetch, and the callbacks are identity-
+ * stable useCallback hooks.
+ */
+/**
+ * The "How to use this order page" guide — ONE source of truth at module
+ * scope so the step list and every "N-step guide" / "N quick steps" mention
+ * (intro blurb, HELP heading, footer) stay consistent automatically: they
+ * all render HOWTO_STEPS.length. The steps mirror the actual customer
+ * journey on THIS page (labels bolded exactly as the buttons read):
+ * browse → details/zoom → stock vs pre-order → quantities → cart →
+ * Proceed to Checkout → details+phone → pickup/delivery+map pin → payment →
+ * Place order → GM- code → live tracking. verify-storefront-help (C3/C3b/C3c)
+ * asserts both the step count and that these phrases match the live DOM.
+ */
+const HOWTO_STEPS: [string, React.ReactNode][] = [
+  ["Browse shops & categories", <>Every product from <span className="font-bold text-emerald-700">all our businesses</span> sits on this ONE page — grouped by business, then category. Tap a store card (or a group's <span className="font-bold">Focus →</span>) to zoom into one shop, tap a <span className="font-bold text-cyan-700">category chip</span> in the bar under the header, or type in the search box to search everywhere. <span className="font-bold text-emerald-700">Use my location</span> sorts branches by who delivers to you.</>],
+  ["See details & zoom photos", <>Tap a product photo, a thumbnail, or its <span className="font-bold text-emerald-700">ⓘ details</span> chip for the full details page — big photos of every angle, price, description & specs. Zoom with the <span className="font-bold">+/−</span> buttons, the mouse wheel, or pinch on touchscreens, then drag to look around.</>],
+  ["Pick stock or Pre-order", <>Items <span className="font-bold text-emerald-700">In stock</span> take <span className="font-bold">Add to Cart</span>. Cards showing <span className="font-bold text-indigo-700">Pre-order only</span> (or “pre-order also available”) list indigo option cards — each with its supply method (e.g. Air/Sea), lead days, price and deposit terms. Tap <span className="font-bold text-indigo-700">Pre-order</span> on the option you want.</>],
+  ["Set quantities", <>Use <span className="font-bold">+ / −</span> on any card, or tap the number and type an exact quantity. The cart bar at the bottom keeps the running count and total.</>],
+  ["Proceed to Checkout", <>Tap <span className="font-bold">Proceed to Checkout ▼</span> on the cart bar — it guides you down to the one checkout form for the shop you're buying from (each order goes to one branch).</>],
+  ["Your name & phone", <>Your name, and a phone number we can reach you on: <span className="font-bold text-cyan-700">exactly 10 digits</span>, like 0551234567 — no +233 country code. The page tells you instantly if the number is wrong.</>],
+  ["Pickup or Delivery", <><span className="font-bold">Pickup</span>: choose a pickup point — you'll see it on the map. <span className="font-bold">Delivery</span>: describe your address, then <span className="font-bold text-rose-600">drag the map</span> until the red centre-pin sits exactly on your doorstep. Zoom with +/−, nudge with the arrow pad, or tap <span className="font-bold text-cyan-700">Use my location</span> for GPS.</>],
+  ["Choose payment", <><span className="font-bold">Pay on delivery/pickup</span> (cash or MoMo when the order reaches you), or <span className="font-bold">Pay now with MTN MoMo</span> — the pay-to number is shown — and paste your transaction reference. Pre-orders pay the deposit by MoMo now, the balance on the stated terms. Add a note for the staff if you like.</>],
+  ["Place order & track it", <>Tap <span className="font-bold text-emerald-700">Place order</span> — you instantly get a <span className="font-mono text-cyan-700">GM-…</span> code (<span className="font-bold">Copy code</span> to keep it safe). <span className="font-bold text-cyan-700">Track my order live →</span> opens an auto-refreshing page: Received → Confirmed → Processing → Ready/Dispatched → Delivered — pre-orders add Pre-order → Procurement → Shipped → In transit → Arrived → Stock received — plus payment status and a live courier map.</>],
+];
+
+type ProductCardProps = {
+  p: any;
+  fromBiz?: any;
+  wmBiz: any;
+  /** Quantity of the stock line (no fulfilment option) currently in the cart. */
+  stockQty: number;
+  /** Quantities of each pre-order option line, keyed by option id string. */
+  optionQtys: Record<string, number>;
+  add: (p: any, delta: number, fromBiz?: any, option?: any) => void;
+  setQty: (p: any, qty: number, fromBiz?: any, option?: any) => void;
+  onOpenLightbox: (p: any, fromBiz: any, idx: number) => void;
+};
+
+function optionQtysEqual(a: Record<string, number>, b: Record<string, number>) {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => a[k] === b[k]);
+}
+
+function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
+  return (
+    prev.p === next.p &&
+    prev.fromBiz === next.fromBiz &&
+    prev.wmBiz === next.wmBiz &&
+    prev.stockQty === next.stockQty &&
+    prev.add === next.add &&
+    prev.setQty === next.setQty &&
+    prev.onOpenLightbox === next.onOpenLightbox &&
+    optionQtysEqual(prev.optionQtys, next.optionQtys)
+  );
+}
+
+const ProductCard = React.memo(function ProductCard({
+  p,
+  fromBiz,
+  wmBiz,
+  stockQty: q,
+  optionQtys,
+  add,
+  setQty,
+  onOpenLightbox,
+}: ProductCardProps) {
+  const photos = productPhotos(p);
+  return (
+      <div
+        key={p.id}
+        className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
+        data-testid={`oo-prod-${p.id}`}
+      >
+        {photos.length > 0 ? (
+          <div className="mb-2.5">
+            <button
+              type="button"
+              onClick={() => onOpenLightbox(p, fromBiz, 0)}
+              className="relative w-full group cursor-zoom-in bg-white"
+              title="Tap for details & photos"
+              data-testid={`oo-photo-${p.id}`}
+            >
+              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              {/* Faint storefront watermark (Owner-toggleable) — overlay only,
+                  never baked into the stored image; keeps zoom-in affordance. */}
+              <span className="absolute inset-0 rounded-lg overflow-hidden">
+                <WatermarkOverlay spec={wmSpecOf(wmBiz)} />
+              </span>
+              <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
+                <ZoomIn className="w-3 h-3" />
+              </span>
+            </button>
+            {photos.length > 1 && (
+              <div
+                className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5"
+                data-testid={`oo-thumbs-${p.id}`}
+                aria-label={`${photos.length} photos of ${p.name}`}
+              >
+                {photos.map((ph, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onOpenLightbox(p, fromBiz, i)}
+                    className={`relative shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
+                      i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
+                    }`}
+                    data-testid={`oo-thumb-${p.id}-${i}`}
+                    aria-label={`View photo ${i + 1} of ${photos.length}`}
+                  >
+                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="w-full h-32 sm:h-36 rounded-lg mb-2.5 bg-slate-50 border border-slate-100 flex items-center justify-center">
+            <PackageCheck className="w-8 h-8 text-slate-300" />
+          </div>
+        )}
+        <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
+        <div className="text-[10px] text-slate-500 mt-1">
+          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
+          <span className="ml-1">per {p.unit}</span>
+          {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
+          {p.brand && (
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 font-bold text-sky-700" data-testid={`oo-brand-${p.id}`}>{p.brand}</span>
+          )}
+          {/* Details hint — the lightbox doubles as the product-details page. */}
+          {(p.description || (Array.isArray(p.specifications) && p.specifications.length > 0) || (Array.isArray(p.variants) && p.variants.length > 0)) && (
+            <button
+              type="button"
+              onClick={() => onOpenLightbox(p, fromBiz || wmBiz, 0)}
+              className="ml-1 inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 font-bold text-emerald-700 hover:bg-emerald-100"
+              data-testid={`oo-details-${p.id}`}
+            >ⓘ details</button>
+          )}
+        </div>
+        <div className="mt-1.5 flex items-end justify-between gap-1">
+          <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
+          {p.available >= 10 ? (
+            <span className="text-[11px] font-bold text-emerald-600">In stock</span>
+          ) : p.available > 0 ? (
+            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
+          ) : (p.preorderOptions || []).length > 0 ? (
+            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
+          ) : (
+            <span className="text-[11px] font-bold text-rose-600">Out of stock</span>
+          )}
+          {p.available > 0 && (p.preorderOptions || []).length > 0 && (
+            <span className="text-[10px] font-bold text-indigo-600/80">· pre-order also available</span>
+          )}
+        </div>
+        {q === 0 ? (
+          <button
+            onClick={() => add(p, 1, fromBiz)}
+            disabled={p.available <= 0}
+            className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+            data-testid={`oo-add-${p.id}`}
+          >
+            <Plus className="w-3.5 h-3.5" /> Add to Cart
+          </button>
+        ) : (
+          <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
+            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
+            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Pre-order option cards — each one is an explicit customer fulfilment choice. */}
+        {(p.preorderOptions || []).map((opt: any) => {
+          const optQty = Number(optionQtys[String(opt.id)] || 0);
+          const depUnit = opt.depositType === "NONE" ? Number(opt.priceGhs) : opt.depositType === "PERCENT" ? (Number(opt.priceGhs) * Number(opt.depositValue || 0)) / 100 : Number(opt.depositValue || 0);
+          const cap = opt.capacityPerPeriod != null ? Number(opt.capacityPerPeriod) : 9999;
+          return (
+            <div key={opt.id} className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1.5" data-testid={`oo-preorder-opt-${p.id}-${opt.id}`}>
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="font-extrabold text-indigo-800 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> {opt.methodLabel || "Pre-order"} · {opt.leadMinDays}–{opt.leadMaxDays}d
+                </span>
+                <span className="font-black text-indigo-900">{fmtMoney(opt.priceGhs)}</span>
+              </div>
+              <p className="text-[9px] text-indigo-700/80 mt-0.5">
+                {opt.depositType === "NONE"
+                  ? "Pay full now — reserved with supplier"
+                  : `Deposit ${fmtMoney(depUnit)}/unit · balance ${opt.termsKey === "ON_ARRIVAL" ? "on arrival" : opt.termsKey === "PREPAID" ? "prepaid" : "when ready"}`}
+                {opt.requiresAddress ? " · delivery only" : ""}
+              </p>
+              {optQty === 0 ? (
+                <button
+                  onClick={() => add(p, 1, fromBiz, opt)}
+                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+                  data-testid={`oo-preadd-${p.id}-${opt.id}`}
+                >
+                  <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
+                </button>
+              ) : (
+                <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
+                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
+                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+}, productCardPropsEqual);
+
 function OrderInner() {
   const params = useSearchParams();
   const [menu, setMenu] = useState<any[] | null>(null);
@@ -121,6 +389,28 @@ function OrderInner() {
   const [cat, setCat] = useState("ALL");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  // Guided checkout: the sticky bar's primary CTA (“Proceed to Checkout ▼”)
+  // smooth-scrolls here and the panel greets with a soft pulse + live
+  // summary. The only real “Place order” lives at the END of the form.
+  const checkoutRef = useRef<HTMLElement | null>(null);
+  const [checkoutFlash, setCheckoutFlash] = useState(false);
+  const checkoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const goToCheckout = () => {
+    checkoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setCheckoutFlash(true);
+    if (checkoutTimer.current) clearTimeout(checkoutTimer.current);
+    checkoutTimer.current = setTimeout(() => setCheckoutFlash(false), 2600);
+  };
+  // Auto-open the compact cart summary ONCE after the first add — the
+  // customer instantly sees what they picked without tapping ▴.
+  const autoCartOpenedRef = useRef(false);
+  useEffect(() => {
+    if (cart.length > 0 && !autoCartOpenedRef.current) {
+      autoCartOpenedRef.current = true;
+      setCartOpen(true);
+    }
+    if (cart.length === 0) autoCartOpenedRef.current = false;
+  }, [cart.length]);
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -159,19 +449,10 @@ function OrderInner() {
   // which of the product's photos the gallery is currently showing.
   const [lightbox, setLightbox] = useState<{ p: any; fromBiz?: any; idx: number } | null>(null);
 
+  const openLightbox = useCallback((lp: any, lb?: any, li = 0) => setLightbox({ p: lp, fromBiz: lb, idx: li }), []);
+
   // All images registered for a product (primary photo + extras), as the
   // Amazon-style gallery source. Falls back to the legacy `photo` field.
-  const productPhotos = (p: any): string[] => {
-    const arr: string[] = [];
-    if (typeof p.photo === "string" && p.photo.length > 0) arr.push(p.photo);
-    if (Array.isArray(p.photos)) {
-      for (const ph of p.photos) {
-        if (typeof ph === "string" && ph.length > 0 && !arr.includes(ph)) arr.push(ph);
-      }
-    }
-    return arr;
-  };
-
   useEffect(() => {
     (async () => {
       try {
@@ -205,6 +486,17 @@ function OrderInner() {
   }, []);
 
   const biz = useMemo(() => (menu || []).find((b) => b.businessId === bizId) || null, [menu, bizId]);
+
+  // Refs mirrored to live state — the memoized ProductCard callbacks (add /
+  // setQty, created with useCallback([])) read these instead of closures.
+  const cartRef = useRef<CartLine[]>(cart);
+  const bizRef = useRef<any>(biz);
+  const bizIdRef = useRef<number | null>(bizId);
+  useEffect(() => {
+    cartRef.current = cart;
+    bizRef.current = biz;
+    bizIdRef.current = bizId;
+  }, [cart, biz, bizId]);
   // Distance (metres) between the customer's delivery pin and the shop's own
   // GPS point — used narrowly to block "pin left exactly at the shop".
   const pinAtShopM =
@@ -239,9 +531,23 @@ function OrderInner() {
     return out;
   }, [products]);
 
-  const cartTotal = cart.reduce((acc, l) => acc + l.product.price * l.qty, 0);
+  /** Unit price for a cart line: preorder = option's quoted price; stock = product price. */
+  const lineUnitPrice = (l: CartLine) => (l.option ? Number(l.option.priceGhs ?? l.product.price) : Number(l.product.price));
+  const cartTotal = cart.reduce((acc, l) => acc + lineUnitPrice(l) * l.qty, 0);
   const cartCount = cart.reduce((acc, l) => acc + l.qty, 0);
-  const inCart = (id: number) => cart.find((l) => l.product.id === id)?.qty || 0;
+  // Pre-order quick facts for the checkout strip.
+  const preorderLines = cart.filter((l) => l.option);
+  const hasPreorder = preorderLines.length > 0;
+  const depositDueTotal = preorderLines.reduce((acc, l) => {
+    const o = l.option;
+    const unit = lineUnitPrice(l);
+    const dep = o.depositType === "NONE" ? unit : o.depositType === "PERCENT" ? (unit * Number(o.depositValue || 0)) / 100 : Number(o.depositValue || 0);
+    return acc + dep * l.qty;
+  }, 0);
+  const inCart = (id: number) => cart.find((l) => l.product.id === id && !l.option)?.qty || 0;
+  /** Quantity for a specific (product, option) line — option lines keyed "id:optId". */
+  const cartQty = (key: string) =>
+    cart.find((l) => `${l.product.id}:${l.option?.id ?? "stock"}` === key)?.qty || 0;
 
   // ── "Serving my location" (Google Maps) ─────────────────────────────
   const useMyLocation = () => {
@@ -360,6 +666,22 @@ function OrderInner() {
   // auto-filled it (preserves manual edits).
   const lastReverseRef = useRef<{ lat: number; lng: number; label: string } | null>(null);
   const autoFilledRef = useRef(false);
+  // The full Google-Places-style reference of the customer's pick — captured
+  // at selection time (formatted address, place_id, exact lat/lng) and kept
+  // even if the pin is then nudged manually, so the order records BOTH the
+  // chosen place and the final adjusted doorway pin.
+  const [deliveryPlace, setDeliveryPlace] = useState<{
+    placeId: string | number;
+    label: string;
+    lat: number;
+    lng: number;
+  } | null>(null);
+  // Sticky "the customer has CHOSEN this address from the Places list" flag —
+  // keeps their selection authoritative so the reverse-geocode of the same
+  // pin can never clobber it (previously: pick → pin dropped → reverse-
+  // geocode overwrote the picked label, which re-armed the autocomplete and
+  // re-opened/swiped the dropdown the customer just dismissed).
+  const pickedPlacesRef = useRef(false);
   useEffect(() => {
     if (!deliveryPin) return;
     const { lat, lng } = deliveryPin;
@@ -367,7 +689,7 @@ function OrderInner() {
     if (lastReverseRef.current && lastReverseRef.current.label &&
         `${lastReverseRef.current.lat.toFixed(5)},${lastReverseRef.current.lng.toFixed(5)}` === rounded) {
       // Same place we already reverse-coded — reuse cached label.
-      if (!destination.trim() || autoFilledRef.current) {
+      if (!pickedPlacesRef.current && (!destination.trim() || autoFilledRef.current)) {
         setDestination(lastReverseRef.current.label);
         autoFilledRef.current = true;
       }
@@ -380,7 +702,7 @@ function OrderInner() {
         const data = await res.json() as { label?: string };
         const label = String(data.label || "").trim();
         lastReverseRef.current = { lat, lng, label };
-        if (label && (!destination.trim() || autoFilledRef.current)) {
+        if (label && !pickedPlacesRef.current && (!destination.trim() || autoFilledRef.current)) {
           setDestination(label);
           autoFilledRef.current = true;
         }
@@ -389,6 +711,12 @@ function OrderInner() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deliveryPin?.lat, deliveryPin?.lng]);
+
+  // Deposit required? The payment anchor must be MoMo NOW — pay-on-delivery
+  // cannot hold a reservation that needs a deposit first.
+  useEffect(() => {
+    if (depositDueTotal > 0) setPayChoice("MOMO_NOW");
+  }, [depositDueTotal]);
 
   // Esc closes the product-image lightbox and the HELP panel.
   useEffect(() => {
@@ -400,54 +728,70 @@ function OrderInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightbox, helpOpen]);
 
-  const add = (p: any, delta: number, fromBiz?: any) => {
-    const pBiz = fromBiz || biz;
+  // Identity-stable cart mutations for the memoized ProductCards: the guard
+  // dialogs below must read LIVE state (refs), never stale useCallback
+  // closures. setCart/setBizId are already referentially stable.
+  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any) => {
+    const cartNow = cartRef.current;
+    const pBiz = fromBiz || bizRef.current;
+    // Cart lines differ per fulfilment option: product × option is the launch key.
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
     // Cross-shop guard: adding a NEW line from a different business follows
     // the same confirm-then-switch rule as the branch chips (cart is
     // single-business: stock, tracking & payment are all per-branch).
-    if (delta > 0 && !inCart(p.id) && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
-      const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
+    if (delta > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
+      const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: 1 }]);
+      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
     // First item in an empty cart: checkout surfaces follow that product's
     // shop (pickup points, delivery switches, service areas).
-    if (delta > 0 && !inCart(p.id) && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (delta > 0 && !inCartKey() && cartNow.length === 0 && pBiz && pBiz.businessId !== bizIdRef.current) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
-      const existing = c.find((l) => l.product.id === p.id);
-      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1 }];
+      const existing = c.find((l) => lineKey(l) === myKey);
+      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null }];
       if (!existing) return c;
-      const qty = Math.max(0, Math.min(p.available, existing.qty + delta));
-      if (qty === 0) return c.filter((l) => l.product.id !== p.id);
-      return c.map((l) => (l.product.id === p.id ? { ...l, qty } : l));
+      // Stock lines clamp to branch availability; pre-order lines are
+      // open-ended, just capped by the seller's per-period capacity (if any).
+      const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+      const qty = Math.max(0, Math.min(cap, existing.qty + delta));
+      if (qty === 0) return c.filter((l) => lineKey(l) !== myKey);
+      return c.map((l) => (lineKey(l) === myKey ? { ...l, qty } : l));
     });
-  };
+  }, []);
 
   // Direct (typed) quantity entry — same clamping rules as the −/+ stepper.
-  const setQty = (p: any, qty: number, fromBiz?: any) => {
-    const pBiz = fromBiz || biz;
-    if (qty > 0 && !inCart(p.id) && cart.length > 0 && cart[0]?.biz?.businessId !== pBiz?.businessId) {
-      const msg = `Your cart has items from ${cart[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
+  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any) => {
+    const cartNow = cartRef.current;
+    const pBiz = fromBiz || bizRef.current;
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
+    const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+    if (qty > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
+      const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: Math.min(p.available, qty) }]);
+      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
-    if (qty > 0 && !inCart(p.id) && cart.length === 0 && pBiz && pBiz.businessId !== bizId) {
+    if (qty > 0 && !inCartKey() && cartNow.length === 0 && pBiz && pBiz.businessId !== bizIdRef.current) {
       setBizId(pBiz.businessId);
     }
     setCart((c) => {
-      const existing = c.find((l) => l.product.id === p.id);
-      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(p.available, qty) }] : c;
-      const q = Math.max(0, Math.min(p.available, qty));
-      if (q === 0) return c.filter((l) => l.product.id !== p.id);
-      return c.map((l) => (l.product.id === p.id ? { ...l, qty: q } : l));
+      const existing = c.find((l) => lineKey(l) === myKey);
+      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }] : c;
+      const q = Math.max(0, Math.min(cap, qty));
+      if (q === 0) return c.filter((l) => lineKey(l) !== myKey);
+      return c.map((l) => (lineKey(l) === myKey ? { ...l, qty: q } : l));
     });
-  };
+  }, []);
 
   const pickBiz = (id: number) => {
     if (id === bizId) { setAllMode(false); return; }
@@ -510,18 +854,34 @@ function OrderInner() {
                 deliveryLat: deliveryPin.lat,
                 deliveryLng: deliveryPin.lng,
                 deliveryAccuracyM: deliveryPin.accuracyM ?? undefined,
+                ...(deliveryPlace
+                  ? {
+                      deliveryPlace: {
+                        placeId: deliveryPlace.placeId,
+                        label: deliveryPlace.label,
+                        lat: deliveryPlace.lat,
+                        lng: deliveryPlace.lng,
+                      },
+                    }
+                  : {}),
               }
             : {}),
           paymentChoice: payChoice,
           momoRef: momoRef.trim(),
           note: note.trim(),
           items: cart.map((l) => ({ inventoryId: l.product.id, quantity: l.qty })),
+          // Chosen fulfilment options — the server validates every entry.
+          fulfillmentPicker: Object.fromEntries(
+            cart.filter((l) => l.option).map((l) => [l.product.id, l.option.id]),
+          ),
         }),
       });
       const data = await res.json();
       if (data?.success) {
         setPlaced(data.order);
         setCart([]);
+        // Keep the captured place — the confirmation screen may show it;
+        // it resets when the customer starts a fresh DELIVERY form.
       } else {
         setOrderError(data?.error || "Could not place your order. Please try again.");
       }
@@ -537,97 +897,34 @@ function OrderInner() {
     .some((k) => typeof support[k] === "string" && support[k].trim() !== "");
   const whatsappDigits = support?.whatsapp ? String(support.whatsapp).replace(/\D/g, "") : "";
 
+  // Resolve which menu business row a product belongs to — menu product
+  // objects carry no businessId field, so match by catalogue membership.
+  const bizOfProduct = (p: any) =>
+    (menu || []).find((b: any) => (b?.products || []).some((x: any) => x && x.id === p.id)) || null;
+
+  // Watermark spec for a menu business row — the faint overlay composites at
+  // display time; the stored product photo bytes are never modified.
+
   // One product card — Amazon-style: image, name, category, price,
-  // availability and an always-one-tap Add / stepper.
+  // availability and an always-one-tap Add / stepper. The card itself is a
+  // memoized module-level <ProductCard/>; this wrapper only computes the
+  // per-card bits that depend on live cart state, so typing in the form or
+  // toggling UI chrome no longer re-renders the whole catalog.
   const renderProduct = (p: any, fromBiz?: any) => {
-    const q = inCart(p.id);
-    const photos = productPhotos(p);
+    const qtys: Record<string, number> = {};
+    for (const opt of p.preorderOptions || []) qtys[String(opt.id)] = cartQty(`${p.id}:${opt.id}`);
     return (
-      <div
+      <ProductCard
         key={p.id}
-        className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
-        data-testid={`oo-prod-${p.id}`}
-      >
-        {photos.length > 0 ? (
-          <div className="mb-2.5">
-            <button
-              type="button"
-              onClick={() => setLightbox({ p, fromBiz, idx: 0 })}
-              className="relative w-full group cursor-zoom-in bg-white"
-              title="Tap to enlarge"
-              data-testid={`oo-photo-${p.id}`}
-            >
-              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
-              <span className="absolute bottom-1 right-1 p-1 rounded-md bg-black/50 text-white opacity-70 group-hover:opacity-100">
-                <ZoomIn className="w-3 h-3" />
-              </span>
-            </button>
-            {photos.length > 1 && (
-              <div
-                className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5"
-                data-testid={`oo-thumbs-${p.id}`}
-                aria-label={`${photos.length} photos of ${p.name}`}
-              >
-                {photos.map((ph, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setLightbox({ p, fromBiz, idx: i })}
-                    className={`shrink-0 w-11 h-11 rounded-md border-2 overflow-hidden bg-white transition ${
-                      i === 0 ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
-                    }`}
-                    data-testid={`oo-thumb-${p.id}-${i}`}
-                    aria-label={`View photo ${i + 1} of ${photos.length}`}
-                  >
-                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="w-full h-32 sm:h-36 rounded-lg mb-2.5 bg-slate-50 border border-slate-100 flex items-center justify-center">
-            <PackageCheck className="w-8 h-8 text-slate-300" />
-          </div>
-        )}
-        <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
-        <div className="text-[10px] text-slate-500 mt-1">
-          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
-          <span className="ml-1">per {p.unit}</span>
-        </div>
-        <div className="mt-1.5 flex items-end justify-between gap-1">
-          <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
-        </div>
-        <div className="mt-1" data-testid={`oo-avail-${p.id}`}>
-          {p.available >= 10 ? (
-            <span className="text-[11px] font-bold text-emerald-600">In stock</span>
-          ) : p.available > 0 ? (
-            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
-          ) : (
-            <span className="text-[11px] font-bold text-rose-600">Out of stock</span>
-          )}
-        </div>
-        {q === 0 ? (
-          <button
-            onClick={() => add(p, 1, fromBiz)}
-            disabled={p.available <= 0}
-            className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
-            data-testid={`oo-add-${p.id}`}
-          >
-            <Plus className="w-3.5 h-3.5" /> Add to Cart
-          </button>
-        ) : (
-          <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
-            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
-            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-      </div>
+        p={p}
+        fromBiz={fromBiz}
+        wmBiz={fromBiz || bizOfProduct(p)}
+        stockQty={inCart(p.id)}
+        optionQtys={qtys}
+        add={add}
+        setQty={setQty}
+        onOpenLightbox={openLightbox}
+      />
     );
   };
 
@@ -741,7 +1038,7 @@ function OrderInner() {
                 Pick products, place your order, and get a <span className="font-mono font-bold text-cyan-700">GM-*</span> tracking
                 code instantly. Follow every step — confirmation, preparation, dispatch with a live map, delivery —
                 on the <a href="/track" className="text-cyan-700 font-bold underline">tracking page</a>. No account, ever.
-                New here? Tap the <span className="font-black text-amber-700">HELP</span> button above for the 7-step guide,
+                New here? Tap the <span className="font-black text-amber-700">HELP</span> button above for the {HOWTO_STEPS.length}-step guide,
                 support contacts and opening hours.
               </p>
             </section>
@@ -910,6 +1207,12 @@ function OrderInner() {
                 {biz.serviceNote}
               </p>
             )}
+            {biz?.preOrderEnabled === true && (biz?.products || []).some((p: any) => (p.preorderOptions || []).length > 0) && (
+              <p className="text-[9px] font-extrabold text-indigo-700 px-1 flex items-center gap-1" data-testid="oo-biz-preorder-badge">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                This branch accepts pre-orders — indigo options ship in and land for you automatically.
+              </p>
+            )}
             {biz && (biz.serviceAreas || []).length > 0 && (
               <div className="flex flex-wrap items-center gap-1 px-1" data-testid="oo-biz-areas">
                 <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Delivers to:</span>
@@ -1000,9 +1303,18 @@ function OrderInner() {
                 )}
 
                 {/* Checkout */}
-                <section className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-sm" data-testid="oo-checkout">
-                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <section
+            ref={(el) => { checkoutRef.current = el; }}
+            className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-shadow ${checkoutFlash ? "border-emerald-300 ring-2 ring-emerald-400/70 ring-offset-2 ring-offset-slate-50" : "border-slate-200"}`}
+            data-testid="oo-checkout"
+          >
+                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2" data-testid="oo-checkout-title">
                     <ClipboardList className="w-4 h-4 text-emerald-600" /> Checkout — your details
+                    {cart.length > 0 && (
+                      <span className="ml-auto text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 whitespace-nowrap" data-testid="oo-checkout-summary">
+                        {cartCount} item{cartCount === 1 ? "" : "s"} · {fmtMoney(cartTotal)}
+                      </span>
+                    )}
                   </h2>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="relative">
@@ -1083,21 +1395,31 @@ function OrderInner() {
                           // reverse-geocode results as non-authoritative so
                           // we don't overwrite what they just typed.
                           autoFilledRef.current = false;
+                          pickedPlacesRef.current = false;
                         }}
                         onPick={(s: AddressSuggestion) => {
-                          // Drop the pin at the chosen address (flew the
-                          // map there too) and remember this was an
-                          // auto-fill so reverse-geocode won't fight the
-                          // user later.
-                          const center = s.bbox
-                            ? { lat: (s.bbox[0] + s.bbox[2]) / 2, lng: (s.bbox[1] + s.bbox[3]) / 2 }
-                            : { lat: s.lat, lng: s.lng };
-                          setDeliveryPin({ lat: center.lat, lng: center.lng, accuracyM: null });
+                          // Drop the pin at the EXACT point of the chosen
+                          // place (never the bbox centre — a house address or
+                          // business has a single canonical coordinate). The
+                          // map flies there; the full place reference
+                          // (formatted address + place_id + lat/lng) is
+                          // captured for the order record and survives later
+                          // manual pin adjustments.
+                          setDeliveryPin({ lat: s.lat, lng: s.lng, accuracyM: null });
+                          setDeliveryPlace({
+                            placeId: s.place_id,
+                            label: s.label,
+                            lat: s.lat,
+                            lng: s.lng,
+                          });
                           autoFilledRef.current = true;
+                          pickedPlacesRef.current = true;
                         }}
                         onClear={() => {
                           setDeliveryPin(null);
+                          setDeliveryPlace(null);
                           autoFilledRef.current = false;
+                          pickedPlacesRef.current = false;
                         }}
                         bias={
                           biz.gpsLat != null && biz.gpsLng != null
@@ -1141,14 +1463,18 @@ function OrderInner() {
                         </label>
                       ))}
                       {chosenPickPoint && chosenPickPoint.lat != null && chosenPickPoint.lng != null && (
-                        <div className="rounded-xl border border-slate-300 bg-slate-50 overflow-hidden" data-testid="oo-pickup-map">
-                          <iframe
+                        <div data-testid="oo-pickup-map">
+                          {/* Local tile map (OpenStreetMap) — Google's keyless
+                              iframe embed is region-blocked in some networks,
+                              which read as a dead grey box ("blocked map"). */}
+                          <MiniLeafletMap
                             key={`${chosenPickPoint.lat},${chosenPickPoint.lng}`}
-                            title={`Pickup point map — ${chosenPickPoint.name}`}
-                            src={googleMapsEmbed(chosenPickPoint.lat, chosenPickPoint.lng, 16)}
-                            className="w-full h-[180px] bg-slate-200"
-                            loading="lazy"
-                            referrerPolicy="no-referrer-when-downgrade"
+                            lat={chosenPickPoint.lat}
+                            lng={chosenPickPoint.lng}
+                            zoom={16}
+                            height={180}
+                            label={chosenPickPoint.name}
+                            prefix="oo-pickup"
                             data-testid="oo-pickup-map-frame"
                           />
                         </div>
@@ -1160,13 +1486,14 @@ function OrderInner() {
                       <p className="px-3 pt-2.5 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-emerald-600" /> Pickup point — {biz.branchName}
                       </p>
-                      <iframe
+                      <MiniLeafletMap
                         key={`${biz.gpsLat},${biz.gpsLng}`}
-                        title="Branch pickup point — Google Maps"
-                        src={googleMapsEmbed(biz.gpsLat, biz.gpsLng, 16)}
-                        className="w-full h-[200px] bg-slate-200"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
+                        lat={biz.gpsLat}
+                        lng={biz.gpsLng}
+                        zoom={16}
+                        height={200}
+                        label={biz.branchName}
+                        prefix="oo-pickup"
                         data-testid="oo-pickup-map-frame"
                       />
                       <p className="px-3 py-2 text-[10px] text-slate-500">
@@ -1175,19 +1502,45 @@ function OrderInner() {
                     </div>
                   )}
 
+                  {/* Pre-order deposit explainer + forced MoMo anchor. */}
+                  {hasPreorder && (
+                    <div className="mb-1.5 rounded-xl border border-indigo-300 bg-indigo-50/70 px-3 py-2.5" data-testid="oo-preorder-terms">
+                      <p className="text-[11px] font-extrabold text-indigo-900 flex items-center gap-1.5">
+                        <CalendarClock className="w-3.5 h-3.5" /> Pre-order in your cart
+                      </p>
+                      <ul className="mt-1 space-y-0.5 text-[10px] text-indigo-800/90" data-testid="oo-preorder-lines">
+                        {preorderLines.map((l) => (
+                          <li key={l.option.id}>
+                            <b>{l.qty}× {l.product.name}</b> via {l.option.methodLabel} ({l.option.leadMinDays}–{l.option.leadMaxDays} days)
+                            {l.option.depositType !== "NONE"
+                              ? ` — deposit ${fmtMoney(l.option.depositType === "PERCENT" ? (lineUnitPrice(l) * Number(l.option.depositValue || 0)) / 100 * l.qty : Number(l.option.depositValue || 0) * l.qty)}, balance when ${l.option.termsKey === "ON_ARRIVAL" ? "the stock arrives" : l.option.termsKey === "PREPAID" ? "now" : "your order is ready"}.`
+                              : " — paid in full now to lock your slot."}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1 text-[9px] text-indigo-700/80">
+                        Goods are sourced after your deposit — they never appear as branch stock until physically received. Cancel any time before shipment for a full refund.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="space-y-1.5" data-testid="oo-payment">
-                    <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition ${payChoice === "ON_DELIVERY" ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-ondelivery">
-                      <input type="radio" className="mt-0.5" checked={payChoice === "ON_DELIVERY"} onChange={() => setPayChoice("ON_DELIVERY")} />
+                    <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border transition ${depositDueTotal > 0 ? "opacity-50 cursor-not-allowed" : "cursor-pointer"} ${payChoice === "ON_DELIVERY" && depositDueTotal <= 0 ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-ondelivery">
+                      <input type="radio" className="mt-0.5" checked={payChoice === "ON_DELIVERY" && depositDueTotal <= 0} disabled={depositDueTotal > 0} onChange={() => setPayChoice("ON_DELIVERY")} />
                       <span>
                         <span className="flex items-center gap-1.5 text-[12px] font-extrabold text-slate-900"><Banknote className="w-3.5 h-3.5 text-emerald-600" /> Pay on {fulfillment === "DELIVERY" ? "delivery" : "pickup"}</span>
                         <span className="block text-[9px] text-slate-500">Cash or MoMo when the order reaches you.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition ${payChoice === "MOMO_NOW" ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400" : "bg-white border-slate-300 hover:border-slate-400"}`} data-testid="oo-pay-momo">
-                      <input type="radio" className="mt-0.5" checked={payChoice === "MOMO_NOW"} onChange={() => setPayChoice("MOMO_NOW")} />
+                      <input type="radio" className="mt-0.5" checked={payChoice === "MOMO_NOW" || depositDueTotal > 0} onChange={() => setPayChoice("MOMO_NOW")} />
                       <span className="flex-1">
                         <span className="flex items-center gap-1.5 text-[12px] font-extrabold text-slate-900"><Smartphone className="w-3.5 h-3.5 text-amber-500" /> Pay now with MTN MoMo</span>
-                        <span className="block text-[9px] text-slate-500">The branch shares the MoMo number and confirms your payment on your tracking page.</span>
+                        <span className="block text-[9px] text-slate-500">
+                          {depositDueTotal > 0
+                            ? `Pre-order deposit ${fmtMoney(depositDueTotal)} is confirmed here first — the branch shares the MoMo number on your tracking page.`
+                            : "The branch shares the MoMo number and confirms your payment on your tracking page."}
+                        </span>
                         {biz.momoNumber && (
                           <span className="block text-[10px] font-bold text-amber-700 mt-0.5" data-testid="oo-momo-dest">
                             Pay to: {biz.momoNumber}{biz.momoName ? ` — ${biz.momoName}` : ""}
@@ -1219,6 +1572,30 @@ function OrderInner() {
                       {orderError}
                     </div>
                   )}
+
+                  {/* The ONE real submit — at the END of the form, exactly
+                      where the customer finishes. The sticky cart bar above
+                      only GUIDES here (Proceed to Checkout ▼); it never
+                      submits. Cart is re-summarised inline for confidence. */}
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-2" data-testid="oo-submit-card">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
+                      <span data-testid="oo-submit-summary">
+                        {cartCount} item{cartCount === 1 ? "" : "s"} · {fulfillment === "DELIVERY" ? "Delivery" : "Pickup"}
+                      </span>
+                      <span className="text-base font-black text-slate-900" data-testid="oo-submit-total">{fmtMoney(cartTotal)}</span>
+                    </div>
+                    <button
+                      onClick={placeOrder}
+                      disabled={placing || cart.length === 0}
+                      className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[15px] font-black shadow-lg disabled:opacity-40 transition"
+                      data-testid="oo-place"
+                    >
+                      {placing ? "Placing…" : "Place order"}
+                    </button>
+                    <p className="text-[10px] text-slate-500 text-center">
+                      You instantly get a GM- tracking code to follow your order live.
+                    </p>
+                  </div>
                 </section>
               </>
             )}
@@ -1240,20 +1617,48 @@ function OrderInner() {
             <div className="text-[11px] text-slate-600">
               Total: <span className="font-black text-emerald-700">{fmtMoney(placed.totalGhs, placed.currency)}</span> ·{" "}
               {placed.fulfillmentType === "DELIVERY" ? "Delivery" : "Pickup"} ·{" "}
-              {placed.payment === "PENDING_CONFIRMATION" ? "MoMo payment being confirmed" : "Pay on pickup/delivery"}
+              {placed.paymentPlan === "DEPOSIT_NOW"
+                ? "Deposit now (MoMo) — balance on readiness"
+                : placed.payment === "PENDING_CONFIRMATION"
+                ? "MoMo payment being confirmed"
+                : "Pay on pickup/delivery"}
             </div>
+            {placed.preorder && (
+              <div className="rounded-xl border border-indigo-300 bg-indigo-50 px-4 py-3 text-left space-y-1.5" data-testid="oo-success-preorder">
+                <p className="text-[11px] font-extrabold text-indigo-900 flex items-center gap-1.5">
+                  <CalendarClock className="w-3.5 h-3.5" /> This is a pre-order — your goods are sourced with our supplier
+                </p>
+                <ul className="text-[10px] text-indigo-800/90 space-y-0.5">
+                  {(placed.preorder.methods || []).map((m: string) => (
+                    <li key={m}>Fulfilment: <b>{m}</b></li>
+                  ))}
+                  {placed.preorder.etaStart && (
+                    <li className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Expected between <b>{new Date(placed.preorder.etaStart).toLocaleDateString()}</b> and <b>{new Date(placed.preorder.etaEnd).toLocaleDateString()}</b>
+                    </li>
+                  )}
+                  {placed.preorder.depositDueGhs > 0 && (
+                    <li>Deposit required now: <b>{fmtMoney(placed.preorder.depositDueGhs)}</b> · balance: <b>{fmtMoney(placed.preorder.balanceDueGhs)}</b> ({placed.preorder.termsKey === "ON_ARRIVAL" ? "when stock arrives" : placed.preorder.termsKey === "PREPAID" ? "prepaid" : "when your order is ready"})</li>
+                  )}
+                </ul>
+                <p className="text-[9px] text-indigo-700/80">
+                  Track the journey live — Pre-order → Received → Procurement → Shipped → In transit → Arrived → Stock received → Ready.
+                </p>
+              </div>
+            )}
             {placed.deliveryLocation && (
               <div className="rounded-xl border border-slate-300 overflow-hidden text-left" data-testid="oo-success-map">
                 <p className="px-3 pt-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-cyan-600" /> Your pinned delivery point
                 </p>
-                <iframe
+                <MiniLeafletMap
                   key={`${placed.deliveryLocation.lat},${placed.deliveryLocation.lng}`}
-                  title="Your pinned delivery point — Google Maps"
-                  src={googleMapsEmbed(placed.deliveryLocation.lat, placed.deliveryLocation.lng, 17)}
-                  className="w-full h-[180px] bg-slate-200"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  lat={placed.deliveryLocation.lat}
+                  lng={placed.deliveryLocation.lng}
+                  zoom={17}
+                  height={180}
+                  label="Delivery point"
+                  prefix="oo-success"
                   data-testid="oo-success-map-frame"
                 />
                 <p className="px-3 py-1.5 text-[10px] text-slate-500 font-mono">
@@ -1266,13 +1671,14 @@ function OrderInner() {
                 <p className="px-3 pt-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-emerald-600" /> Pickup point — {placed.branchName}
                 </p>
-                <iframe
+                <MiniLeafletMap
                   key={`${placed.pickupLocation.lat},${placed.pickupLocation.lng}`}
-                  title="Branch pickup point — Google Maps"
-                  src={googleMapsEmbed(placed.pickupLocation.lat, placed.pickupLocation.lng, 16)}
-                  className="w-full h-[180px] bg-slate-200"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
+                  lat={placed.pickupLocation.lat}
+                  lng={placed.pickupLocation.lng}
+                  zoom={16}
+                  height={180}
+                  label={placed.branchName}
+                  prefix="oo-success-pickup"
                 />
               </div>
             )}
@@ -1333,7 +1739,7 @@ function OrderInner() {
       <footer className="border-t border-slate-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 py-5 text-center space-y-1">
           <p className="text-[11px] text-slate-600">
-            Need a hand? Tap the <button type="button" onClick={() => setHelpOpen(true)} className="font-black text-amber-700 underline" data-testid="oo-help-footer">HELP</button> button for support contacts, opening hours and the 7-step guide.
+            Need a hand? Tap the <button type="button" onClick={() => setHelpOpen(true)} className="font-black text-amber-700 underline" data-testid="oo-help-footer">HELP</button> button for support contacts, opening hours and the {HOWTO_STEPS.length}-step guide.
           </p>
           <p className="text-[10px] text-slate-400">GoMina 360 · Official customer storefront — no sign-in needed.</p>
         </div>
@@ -1451,21 +1857,14 @@ function OrderInner() {
                 )}
               </section>
 
-              {/* How to use this order page — 7 quick steps */}
+              {/* How to use this order page — step count is derived from the
+                  HOWTO_STEPS source of truth (see module scope). */}
               <section data-testid="oo-howto">
                 <h3 className="text-[12px] font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5 mb-2.5">
-                  <Info className="w-3.5 h-3.5 text-cyan-600" /> How to use this order page — 7 quick steps
+                  <Info className="w-3.5 h-3.5 text-cyan-600" /> How to use this order page — {HOWTO_STEPS.length} quick steps
                 </h3>
                 <ol className="space-y-2" data-testid="oo-howto-steps">
-                  {([
-                    ["Everything on one page", <>Every product from <span className="font-bold text-emerald-700">all our businesses</span> sits on this ONE page — grouped by business, then category. Tap a store card (or a group's <span className="font-bold">Focus →</span>) to zoom into one shop, or tap <span className="font-bold text-emerald-700">Use my location</span> to sort branches by who delivers to you.</>],
-                    ["Browse products by category", <>Products are grouped under their <span className="font-bold text-cyan-700">category sections</span>. Tap a department chip in the bar under the header to filter — or type in the search box to search every shop at once.</>],
-                    ["Add to cart", <>Tap <span className="font-bold">Add to Cart</span>, then use <span className="font-bold">+ / −</span> or type the exact quantity into the number box. Your cart bar sits at the bottom of the screen — tap it any time to review or change items.</>],
-                    ["Enter your details", <>Your name, and a phone number we can reach you on: <span className="font-bold text-cyan-700">exactly 10 digits</span>, like 0551234567 — no +233 country code.</>],
-                    ["Pickup or delivery", <>Pickup: choose a pickup point. Delivery: describe your area, then <span className="font-bold text-rose-600">drag the map</span> so the red pin — it always stays at the centre of the map — sits exactly on your doorstep. Use +/− to zoom and the arrow pad for fine nudges, or tap <span className="font-bold text-cyan-700">Use my location</span> for GPS.</>],
-                    ["Choose payment", <>Pay on delivery (cash/MoMo on arrival), or pay by MoMo now and paste the transaction reference. You can add a note for the branch too.</>],
-                    ["Place order & track it", <>Tap <span className="font-bold text-emerald-700">Place order</span> — you instantly get a <span className="font-mono text-cyan-700">GM-…</span> code. Keep it, open <a href="/track" className="text-cyan-700 font-bold underline">Track order</a>, and follow confirmation, preparation, dispatch on a live map, and delivery.</>],
-                  ] as [string, React.ReactNode][]).map(([title, body], i) => (
+                  {HOWTO_STEPS.map(([title, body], i) => (
                     <li key={i} className="flex gap-2.5" data-testid={`oo-howto-step-${i + 1}`}>
                       <span className="shrink-0 w-5 h-5 rounded-full bg-cyan-50 border border-cyan-300 text-cyan-700 text-[10px] font-black flex items-center justify-center">{i + 1}</span>
                       <p className="text-[11px] text-slate-600 leading-relaxed"><span className="font-bold text-slate-900">{title}.</span> {body}</p>
@@ -1488,120 +1887,30 @@ function OrderInner() {
         </div>
       )}
 
-      {/* Product image lightbox — tap a product photo to enlarge it.
-          Amazon-style gallery: main image, prev/next, thumbnails. */}
+      {/* Product image lightbox — Amazon-inspired gallery (main image,
+          thumbnails, prev/next, counter, add-to-cart) with a full zoom
+          engine: buttons, wheel, drag-pan, double-tap, pinch-to-zoom and a
+          true full-screen mode. Extracted into ProductLightbox. */}
       {lightbox && (() => {
         const photos = productPhotos(lightbox.p);
         const count = photos.length;
         const idx = count > 0 ? Math.min(Math.max(lightbox.idx || 0, 0), count - 1) : 0;
-        const showNav = count > 1;
-        const go = (d: number) => {
-          const next = (idx + d + count) % count;
-          setLightbox({ ...lightbox, idx: next });
-        };
         return (
-          <div
-            className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setLightbox(null)}
-            data-testid="oo-lightbox"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Enlarged photos of ${lightbox.p.name}`}
-          >
-            <div
-              className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
-                <div className="min-w-0">
-                  <div className="text-sm font-extrabold text-slate-900 truncate">{lightbox.p.name}</div>
-                  <div className="text-[10px] text-slate-500">
-                    {lightbox.p.category} · {fmtMoney(lightbox.p.price)} / {lightbox.p.unit} · {lightbox.p.available} {lightbox.p.unit} left
-                  </div>
-                </div>
-                <button
-                  onClick={() => setLightbox(null)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 shrink-0"
-                  data-testid="oo-lightbox-close"
-                  aria-label="Close"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="relative bg-white">
-                {count > 0 ? (
-                  <img
-                    src={photos[idx]}
-                    alt={`${lightbox.p.name} — photo ${idx + 1} of ${count}`}
-                    className="w-full max-h-[52vh] object-contain bg-white"
-                    data-testid="oo-lightbox-img"
-                  />
-                ) : (
-                  <div className="w-full max-h-[52vh] aspect-square bg-slate-50 flex items-center justify-center">
-                    <PackageCheck className="w-12 h-12 text-slate-300" />
-                  </div>
-                )}
-                {showNav && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => go(-1)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
-                      data-testid="oo-lightbox-prev"
-                      aria-label="Previous photo"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => go(1)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center transition"
-                      data-testid="oo-lightbox-next"
-                      aria-label="Next photo"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </>
-                )}
-              </div>
-              {showNav && (
-                <div className="px-4 py-2 flex items-center gap-2 border-t border-slate-100 overflow-x-auto">
-                  {photos.map((ph, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setLightbox({ ...lightbox, idx: i })}
-                      className={`shrink-0 w-12 h-12 rounded-md border-2 overflow-hidden bg-white transition ${
-                        i === idx ? "border-amber-400" : "border-slate-200 hover:border-amber-300"
-                      }`}
-                      data-testid={`oo-lightbox-thumb-${i}`}
-                      aria-label={`Photo ${i + 1} of ${count}`}
-                      aria-current={i === idx}
-                    >
-                      <img src={ph} alt={`${lightbox.p.name} ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
-                  ))}
-                  <span className="ml-auto text-[10px] font-bold text-slate-400 whitespace-nowrap" data-testid="oo-lightbox-count">
-                    {idx + 1} / {count}
-                  </span>
-                </div>
-              )}
-              <div className="px-4 py-3 flex items-center justify-between gap-3">
-                <div className="text-lg font-black text-slate-900">{fmtMoney(lightbox.p.price)}</div>
-                <button
-                  onClick={() => {
-                    add(lightbox.p, 1, lightbox.fromBiz);
-                    setLightbox(null);
-                  }}
-                  disabled={lightbox.p.available <= 0}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
-                  data-testid="oo-lightbox-add"
-                >
-                  <Plus className="w-4 h-4" /> Add to Cart
-                </button>
-              </div>
-            </div>
-          </div>
+          <ProductLightbox
+            photos={photos}
+            idx={idx}
+            product={lightbox.p}
+            wmSpec={wmSpecOf(lightbox.fromBiz || bizOfProduct(lightbox.p))}
+            fromBiz={lightbox.fromBiz}
+            canAdd={lightbox.p.available > 0}
+            fmtMoney={fmtMoney}
+            onClose={() => setLightbox(null)}
+            onNavigate={(i) => setLightbox({ ...lightbox, idx: i })}
+            onAdd={() => {
+              add(lightbox.p, 1, lightbox.fromBiz);
+              setLightbox(null);
+            }}
+          />
         );
       })()}
 
@@ -1612,15 +1921,27 @@ function OrderInner() {
             {cartOpen && (
               <div className="max-h-56 overflow-y-auto mb-2 divide-y divide-slate-100" data-testid="oo-cart-lines">
                 {cart.map((l) => (
-                  <div key={l.product.id} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
-                    <span className="flex-1 min-w-0 truncate text-slate-700">{l.qty}× {l.product.name}</span>
-                    <span className="text-slate-500">{fmtMoney(l.product.price * l.qty)}</span>
-                    <button onClick={() => add(l.product, -l.qty)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
+                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
+                    <span className="flex-1 min-w-0 truncate text-slate-700">
+                      {l.qty}× {l.product.name}
+                      {l.option && (
+                        <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-[9px] font-bold text-indigo-700" data-testid={`oo-cart-line-pre-${l.product.id}`}>
+                          PRE-ORDER · {l.option.methodLabel}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-slate-500">{fmtMoney(lineUnitPrice(l) * l.qty)}</span>
+                    <button onClick={() => add(l.product, -l.qty, undefined, l.option ?? undefined)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
                       <Trash className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ))}
               </div>
+            )}
+            {!cartOpen && (
+              <p className="text-[10px] font-bold text-emerald-700 mb-1" data-testid="oo-cart-hint">
+                ✓ Added — proceed to checkout below to fill name, phone, address & payment (your cart is kept in sync automatically).
+              </p>
             )}
             <div className="flex items-center gap-2">
               <button onClick={() => setCartOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700">
@@ -1631,12 +1952,11 @@ function OrderInner() {
               <span className="flex-1" />
               <span className="text-sm font-black text-slate-900" data-testid="oo-cart-total">{fmtMoney(cartTotal)}</span>
               <button
-                onClick={placeOrder}
-                disabled={placing}
-                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-bold shadow-lg disabled:opacity-40"
-                data-testid="oo-place"
+                onClick={() => { setCartOpen(false); goToCheckout(); }}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-black shadow-lg"
+                data-testid="oo-proceed-checkout"
               >
-                {placing ? "Placing…" : "Place order"}
+                Proceed to Checkout ▼
               </button>
             </div>
           </div>

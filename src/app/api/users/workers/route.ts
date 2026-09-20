@@ -1,10 +1,28 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 // BRANCH_MANAGER: List all WORKER accounts within their branch
+/** Never expose auth secrets on user rows. */
+const stripSecret = (u: any) => {
+  const { passwordHash, failedLoginAttempts, lockedUntil, passwordChangedAt, ...safe } = u;
+  return { ...safe, hasPassword: Boolean(u.passwordHash) };
+};
+
+/** The caller may manage workers inside `businessId`: the Super Admin always;
+ *  an org OWNER / GENERAL_MANAGER / BRANCH_MANAGER only with (org-scoped)
+ *  access to that business. Mirrors the Users & Access permission matrix. */
+async function managerCanScope(user: any, businessId: number): Promise<boolean> {
+  if (!user) return false;
+  if (user.isSuperAdmin) return true;
+  if (!["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(user.role)) return false;
+  return canAccessBusiness(user, businessId);
+}
+
 export async function GET(request: Request) {
   try {
     const __authSession = await getSessionInfo(request);
@@ -20,6 +38,12 @@ export async function GET(request: Request) {
       );
     }
 
+    // Worker accounts live inside business scope; the list is only visible
+    // to callers who can access that business — and never with auth secrets.
+    if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
+
     const rows = await db
       .select()
       .from(users)
@@ -31,12 +55,9 @@ export async function GET(request: Request) {
       )
       .orderBy(users.id);
 
-    return NextResponse.json({ success: true, workers: rows });
+    return NextResponse.json({ success: true, workers: rows.map(stripSecret) });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -74,6 +95,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Mirror the Users & Access creation matrix: only the OWNER or a
+    // GENERAL_MANAGER / BRANCH_MANAGER scope-managing that business may mint
+    // a WORKER account — never a plain worker, never for another unit.
+    if (!(await managerCanScope(__authSession.user, Number(assignedBusinessId)))) {
+      return FORBIDDEN("You can only create workers for businesses you manage.");
+    }
+
     const [newWorker] = await db
       .insert(users)
       .values({
@@ -96,12 +124,9 @@ export async function POST(request: Request) {
       })
       .returning();
 
-    return NextResponse.json({ success: true, worker: newWorker });
+    return NextResponse.json({ success: true, worker: stripSecret(newWorker) });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -132,13 +157,19 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // Only managers of the worker's own business may touch the account —
+    // a worker can never toggle flags on colleagues, even in-branch.
+    if (!(await managerCanScope(__authSession.user, Number(existing.assignedBusinessId)))) {
+      return FORBIDDEN("You can only manage workers inside businesses you manage.");
+    }
+
     if (action === "TOGGLE_ENABLE") {
       const [updated] = await db
         .update(users)
         .set({ isWorkerEnabled: !existing.isWorkerEnabled })
         .where(eq(users.id, Number(workerId)))
         .returning();
-      return NextResponse.json({ success: true, worker: updated });
+      return NextResponse.json({ success: true, worker: stripSecret(updated) });
     }
 
     if (action === "UPDATE_PERMISSIONS") {
@@ -151,7 +182,7 @@ export async function PATCH(request: Request) {
         })
         .where(eq(users.id, Number(workerId)))
         .returning();
-      return NextResponse.json({ success: true, worker: updated });
+      return NextResponse.json({ success: true, worker: stripSecret(updated) });
     }
 
     return NextResponse.json(
@@ -159,10 +190,7 @@ export async function PATCH(request: Request) {
       { status: 400 }
     );
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -193,13 +221,15 @@ export async function DELETE(request: Request) {
       );
     }
 
+    // Same manager gate as PATCH: deletion stays inside the caller's scope.
+    if (!(await managerCanScope(__authSession.user, Number(existing.assignedBusinessId)))) {
+      return FORBIDDEN("You can only remove workers inside businesses you manage.");
+    }
+
     await db.delete(users).where(eq(users.id, Number(workerId)));
 
     return NextResponse.json({ success: true, deleted: true });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

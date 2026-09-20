@@ -7,6 +7,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { tileOfflineMessage, TILE_ERROR_THRESHOLD, useTileErrors } from "./tileHealth";
+import { STANDARD_LAYERS, useLayerFailover } from "@/lib/mapLayers";
 import type { PinValue, TileStyle } from "./LocationPinPicker";
 
 export default function LeafletPinMap({
@@ -26,6 +28,18 @@ export default function LeafletPinMap({
   style: TileStyle;
   prefix: string;
 }) {
+  const { failed, bind, reset } = useTileErrors();
+  // Standard road-map with automatic provider failover (single hard-coded
+  // OSM URL → map went dark whenever any one CDN was blocked). The declared
+  // active layer is never inferred from imagery — it IS the audit truth.
+  const std = useLayerFailover(`pinmap:${prefix}`, STANDARD_LAYERS);
+  // A fresh provider starts with a clean health slate — previous failures
+  // must not leave the offline notice stuck over a working layer.
+  useEffect(() => { reset(); }, [std.layer.key, reset]);
+  const stdHandlers = {
+    tileerror: () => { bind.tileerror(); std.handlers.tileerror(); },
+    tileload: () => { bind.tileload(); std.handlers.tileload(); },
+  } as const;
   const initialCenter: [number, number] = useMemo(
     () => [pin?.lat ?? center.lat, pin?.lng ?? center.lng],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -49,13 +63,13 @@ export default function LeafletPinMap({
   );
 
   return (
+    <div className="relative w-full h-full" data-testid={`${prefix}-map`}>
     <MapContainer
       center={initialCenter}
       zoom={zoom}
       zoomControl={false}
       scrollWheelZoom
       style={{ width: "100%", height: "100%", background: "#0f172a" }}
-      data-testid={`${prefix}-map`}
     >
       <MapInternals
         pin={pin}
@@ -67,9 +81,12 @@ export default function LeafletPinMap({
 
       {style === "STANDARD" ? (
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
+          key={std.layer.key} // remount per provider on failover
+          attribution={std.layer.attribution}
+          url={std.layer.url}
+          maxZoom={std.layer.maxZoom}
+          subdomains={std.layer.subdomains ?? "abc"}
+          eventHandlers={stdHandlers}
         />
       ) : (
         <>
@@ -78,6 +95,7 @@ export default function LeafletPinMap({
             attribution="Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics"
             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
             maxZoom={19}
+            eventHandlers={bind}
           />
           {/* Hybrid place/boundary labels so the satellite view isn't just
               an unlabelled photograph (fixes the old "Satellite doesn't work"
@@ -85,12 +103,22 @@ export default function LeafletPinMap({
           <TileLayer
             url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
             maxZoom={19}
+            eventHandlers={bind}
           />
         </>
       )}
 
       <CentreMarker icon={pinIcon} />
     </MapContainer>
+    {failed >= TILE_ERROR_THRESHOLD && (
+      <div
+        className="absolute left-1/2 -translate-x-1/2 bottom-2 z-[500] w-[92%] max-w-md bg-amber-50/95 border border-amber-300 rounded-lg px-3 py-1.5 text-[10px] font-bold text-amber-900 pointer-events-none text-center"
+        data-testid={`${prefix}-map-offline`}
+      >
+        {tileOfflineMessage()}
+      </div>
+    )}
+    </div>
   );
 }
 

@@ -72,7 +72,10 @@ import {
   provisionBusiness,
 } from "@/lib/businessProvisioning";
 import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/lib/auth";
+import { businessTypeAllowed } from "@/lib/businessTypes";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { managesBusiness } from "@/lib/permissions";
+import { apiError } from "@/lib/apiError";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
  *  the ONLY business fields a non-OWNER may change — and only staff carrying
@@ -89,6 +92,8 @@ const ONLINE_ORDERING_FIELDS = [
   "momoName",
   "gpsLat",
   "gpsLng",
+  "watermarkEnabled",
+  "watermarkMode",
 ] as const;
 
 const VALID_CATEGORIES = [
@@ -127,8 +132,10 @@ async function businessControlLevel(
   const session = await getSessionInfo(request);
   const user = session?.user as any;
   if (!user) return null;
-  if (user.role === "OWNER") return "OWNER";
-  if (managesBusiness(user, businessId)) return "UNIT_MANAGER";
+  if (user.isSuperAdmin) return "OWNER";
+  // Org OWNER ⇒ owner-level control strictly of their own organization's units.
+  if (user.role === "OWNER" && (await canAccessBusiness(user, businessId))) return "OWNER";
+  if (managesBusiness(user, businessId) && (await canAccessBusiness(user, businessId))) return "UNIT_MANAGER";
   return null;
 }
 
@@ -231,7 +238,7 @@ export async function GET(
     const counts = await relatedCounts(businessId);
     return NextResponse.json({ success: true, business: biz, counts });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -243,6 +250,8 @@ export async function GET(
  * dashboard, inventory, finance and report view stays correct.
  */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -322,6 +331,20 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           { status: 400 }
         );
       }
+      // Re-typing an existing unit is bound by the same Allowed Business
+      // Types gate as creating one — otherwise a category flip would bypass
+      // the per-Owner grant control. Existing (already-owned) units stay
+      // fully manageable: only re-typing into a non-granted type is refused.
+      {
+        const catSession = await getSessionInfo(request);
+        const catUser = catSession?.user as any;
+        const verdict = await businessTypeAllowed(catSession?.orgId ?? null, category, !!catUser?.isSuperAdmin);
+        if (!verdict.allowed) {
+          return FORBIDDEN(
+            `Your organization is not authorized to operate "${category}" businesses.`,
+          );
+        }
+      }
       updates.category = category;
       updates.iconName = CATEGORY_ICON[category] || "Building2";
       categoryChanged = true;
@@ -376,6 +399,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.onlineOrderingEnabled !== undefined) {
       updates.onlineOrderingEnabled = !!body.onlineOrderingEnabled;
     }
+    // Pre-order capability toggle — OWNER / Manage-Unit scope only (deliberately
+    // NOT in ONLINE_ORDERING_FIELDS: deferred-sales liability belongs with the
+    // unit owner, never with Online-Storefront grantees).
+    if (body.preOrderEnabled !== undefined) {
+      updates.preOrderEnabled = !!body.preOrderEnabled;
+    }
     if (body.pickupEnabled !== undefined) {
       updates.pickupEnabled = !!body.pickupEnabled;
     }
@@ -412,6 +441,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.momoName !== undefined) {
       const s = typeof body.momoName === "string" ? body.momoName.trim().slice(0, 60) : "";
       updates.momoName = s || null;
+    }
+    // Storefront watermarking — display-time overlay only; never touches
+    // stored product photos.
+    if (body.watermarkEnabled !== undefined) {
+      updates.watermarkEnabled = !!body.watermarkEnabled;
+    }
+    if (body.watermarkMode !== undefined) {
+      const mode = String(body.watermarkMode || "").toUpperCase();
+      if (!["AUTO", "LOGO", "NAME"].includes(mode)) {
+        return NextResponse.json(
+          { success: false, error: "Watermark mode must be AUTO, LOGO or NAME." },
+          { status: 400 },
+        );
+      }
+      updates.watermarkMode = mode;
     }
     if (body.gpsLat !== undefined || body.gpsLng !== undefined) {
       if (body.gpsLat === null && body.gpsLng === null) {
@@ -456,7 +500,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     return NextResponse.json({ success: true, business: updated, typeChange });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -469,6 +513,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
  * (never deleted). Body: { confirmCode: "<BUSINESS-CODE>" }.
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  ttlInvalidate("menu");
+  ttlInvalidate("init");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -489,6 +535,12 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     // Session-verified OWNER gate (secure login cookie — no spoofing).
     const actor = await requireOwner(request);
     if (!actor) return FORBIDDEN("Only the OWNER can delete businesses.");
+    // Tenant boundary FIRST: a non-platform Owner can only ever delete a unit
+    // of their own organization (cross-org deletions are refused outright,
+    // before the public-ish code-confirmation gate runs).
+    if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, businessId))) {
+      return FORBIDDEN("You do not have access to this business.");
+    }
     // Mandatory confirmation gate — the caller must echo the exact unit code.
     if (body.confirmCode !== biz.code) {
       return NextResponse.json(
@@ -596,7 +648,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       removedRecords: counts.totalRecords,
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -805,6 +857,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

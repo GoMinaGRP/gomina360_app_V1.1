@@ -169,13 +169,15 @@ try {
   await show(page, '[data-testid="oo-pin-manual-toggle"]');
   await page.click('[data-testid="oo-pin-manual-toggle"]');
   await page.waitForSelector('[data-testid="oo-pin-manual-lat"]', { timeout: 10000 });
-  await setInput(page, '[data-testid="oo-pin-manual-lat"]', "5.650123");
-  await setInput(page, '[data-testid="oo-pin-manual-lng"]', "-0.155456");
+  // ~660 m NE of the current shop anchor (5.556, -0.183): past the
+  // 75 m anti-pin-at-the-shop guard, well inside the 12 km radius.
+  await setInput(page, '[data-testid="oo-pin-manual-lat"]', "5.561234");
+  await setInput(page, '[data-testid="oo-pin-manual-lng"]', "-0.179876");
   await show(page, '[data-testid="oo-pin-manual-apply"]');
   await page.click('[data-testid="oo-pin-manual-apply"]');
   await sleep(900);
   const coords = await page.$eval('[data-testid="oo-pin-coords"]', (el) => el.textContent.trim());
-  ok("manual coordinates set the pin", coords.includes("5.650123") && coords.includes("-0.155456"), coords);
+  ok("manual coordinates set the pin", coords.includes("5.561234") && coords.includes("-0.179876"), coords);
 
   await show(page, '[data-testid="oo-pin-n"]');
   await page.click('[data-testid="oo-pin-n"]');
@@ -207,6 +209,21 @@ try {
   await page.keyboard.press("Escape");
   await sleep(300);
 
+  // Picking an autocomplete suggestion re-captures the pin to that place.
+  // "Spintex" resolves ~25 km from the CURRENT shop anchor (outside the
+  // branch's 12 km service radius → the server refuses with a distance
+  // hint). A real customer whose pin lands out of area would re-pin — do
+  // exactly that before placing: explicit coordinates ~660 m from the
+  // anchor (past the 75 m shop guard, inside the radius).
+  await show(page, '[data-testid="oo-pin-manual-toggle"]');
+  await page.click('[data-testid="oo-pin-manual-toggle"]');
+  await page.waitForSelector('[data-testid="oo-pin-manual-lat"]', { timeout: 10000 });
+  await setInput(page, '[data-testid="oo-pin-manual-lat"]', "5.561234");
+  await setInput(page, '[data-testid="oo-pin-manual-lng"]', "-0.179876");
+  await show(page, '[data-testid="oo-pin-manual-apply"]');
+  await page.click('[data-testid="oo-pin-manual-apply"]');
+  await sleep(900);
+
   // ── Payment choice ────────────────────────────────────────────────────
   await show(page, '[data-testid="oo-pay-momo"]');
   await page.click('[data-testid="oo-pay-momo"]');
@@ -232,7 +249,8 @@ try {
   await sleep(3500);
   const body = await page.$eval("body", (b) => b.innerText);
   const code = (body.match(/GM-[A-Z0-9-]+/) || [])[0] || "";
-  ok("delivery order placed end-to-end", !!code, body.slice(0, 220));
+  const placeErr = await page.$eval('[data-testid="oo-error"]', (el) => el.textContent).catch(() => "");
+  ok("delivery order placed end-to-end", !!code, placeErr ? `oo-error: ${placeErr}` : body.slice(0, 220));
   if (code) console.log(`   tracking code: ${code}`);
 
   ok("zero page errors across the whole flow", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));

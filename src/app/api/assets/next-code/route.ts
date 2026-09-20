@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { assets } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Asset Code helper.
@@ -71,9 +72,6 @@ export async function GET(request: Request) {
       existingCount: branchAssets.length,
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

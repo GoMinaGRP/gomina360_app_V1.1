@@ -1,7 +1,8 @@
+import { throttle, clientIp } from "@/lib/rateLimit";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, dbFailureMessage } from "@/db";
-import { users } from "@/db/schema";
+import { users, organizationMembers, organizations } from "@/db/schema";
 import {
   createSession,
   verifyPassword,
@@ -9,6 +10,8 @@ import {
   MAX_FAILED_LOGINS,
   LOCK_MINUTES,
   accessibleBusinessIds,
+  deviceLabel,
+  hashClientIp,
 } from "@/lib/auth";
 
 // Session cookie tuned for the EMBEDDED preview (the app runs inside an
@@ -26,6 +29,11 @@ const COOKIE_BASE = `Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-A
 
 export async function POST(request: Request) {
   let operation = "request parsing";
+  // M7: IP-level throttle — 30 attempts / minute per IP (in front of the
+  // per-account 5-fail lock, so spraying many accounts from one host stalls;
+  // generous enough for whole offices on one NAT and for the E2E suites).
+  const limited = throttle(clientIp(request), { key: "login", limit: 30, windowMs: 60_000 });
+  if (limited) return limited;
   try {
     const body = await request.json().catch(() => ({}));
     const email = String(body.email || "").trim().toLowerCase();
@@ -51,6 +59,34 @@ export async function POST(request: Request) {
         { success: false, error: "This account is deactivated. Contact the OWNER." },
         { status: 403 }
       );
+    }
+
+    // Platform-level suspension / removal: members of a SUSPENDED organization
+    // cannot authenticate (temporary, reversible). Members of a DELETED
+    // organization are locked out too — deletion permanently revokes platform
+    // access while preserving every row of their data (Super-Admin restorable).
+    // The Super Admin's primary org stays ACTIVE by construction.
+    {
+      const memberships = await db
+        .select({ status: organizations.status })
+        .from(organizationMembers)
+        .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
+        .where(eq(organizationMembers.userId, user.id));
+      const stat = (m: any) => (m.status || "ACTIVE").toUpperCase();
+      if (memberships.length > 0) {
+        if (memberships.every((m) => stat(m) === "DELETED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace was removed from the platform. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
+        if (memberships.every((m) => stat(m) === "SUSPENDED")) {
+          return NextResponse.json(
+            { success: false, error: "This organization's workspace is suspended. Contact the platform administrator." },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     // Brute-force lockout
@@ -99,7 +135,13 @@ export async function POST(request: Request) {
       .where(eq(users.id, user.id));
 
     operation = "session creation";
-    const { token, expires } = await createSession(user.id);
+    const { label: sessLabel, raw: sessAgent } = deviceLabel(request);
+    const { token, expires } = await createSession(user.id, {
+      deviceLabel: sessLabel,
+      userAgent: sessAgent,
+      ipHash: hashClientIp(request),
+      initialBusinessId: user.assignedBusinessId ?? null,
+    });
     operation = "business-access lookup";
     const access = await accessibleBusinessIds(user);
 

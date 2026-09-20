@@ -110,7 +110,7 @@ export default function Navbar({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 text-white shadow-lg" data-testid="top-navbar">
+    <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 text-white shadow-lg" data-testid="top-navbar" data-printchrome="true">
       {/* flex-wrap is the hard guarantee: if the controls can ever be wider
           than the screen (tiny phones, huge zoom, long names), the row wraps
           to a second line instead of pushing the Staff/Account menu off the

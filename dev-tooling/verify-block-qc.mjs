@@ -99,6 +99,39 @@ async function main() {
     ),
   };
 
+  // Delta-baseline for KPI assertions: the business may legitimately hold
+  // pre-existing (e.g. DEMO) QC rows — the QC centre aggregates across ALL of
+  // them by design, so expectations are computed as baseline + suite-planted.
+  const qBase = (await q(`SELECT
+      count(*)::int AS total,
+      count(*) FILTER (WHERE pass_fail='PASS')::int AS passes,
+      count(*) FILTER (WHERE pass_fail='FAIL')::int AS fails
+    FROM block_qc_checks WHERE business_id=$1`, [BIZ_BLOCKS])).rows[0];
+  const qBaseBatches = (await q(`SELECT batch_id,
+      count(*) FILTER (WHERE pass_fail='FAIL')::int AS fails,
+      bool_or(stage='FINISHED_BLOCK' AND pass_fail='PASS') AS finpass
+    FROM block_qc_checks WHERE business_id=$1 AND batch_id IS NOT NULL
+    GROUP BY batch_id`, [BIZ_BLOCKS])).rows;
+  const BL = {
+    T: qBase.total, P: qBase.passes, F: qBase.fails,
+    bFail: qBaseBatches.filter((g) => g.fails > 0).length,
+  };
+  const pct1 = (x, n) => (n ? Math.round((x / n) * 1000) / 10 : 0);
+  const chipInt = (text, labelRe) => {
+    const m = String(text || "").replace(/\s+/g, "").match(labelRe);
+    return m ? Number(m[1]) : NaN;
+  };
+  // Suite math (mirrors computeBlockQc rounding): 9 planted checks 6P/3F +
+  // 1 PASS from the UI save; +1 held failed batch beyond baseline.
+  const exp = {
+    passRate: pct1(6 + BL.P, 9 + BL.T),
+    defectRate: pct1(3 + BL.F, 9 + BL.T),
+    failedBatches: 1 + BL.bFail,
+    checksTotal: 10 + BL.T,
+    checksPass: 7 + BL.P,
+  };
+  console.log(`  · delta baseline: ${BL.T} pre-existing checks (${BL.P}P/${BL.F}F), ${BL.bFail} failed batches`);
+
   const browser = await puppeteer.launch({
     executablePath: "/tmp/al2023/chromium",
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -183,16 +216,17 @@ async function main() {
       if (!el) return null;
       return (await el.evaluate((e) => e.textContent || "")).trim();
     };
-    check("C1 pass rate 66.7% (6P/3F of 9)", (await kpi("[data-testid='bqc-kpi-passrate']"))?.includes("66.7%"), JSON.stringify(await kpi("[data-testid='bqc-kpi-passrate']")));
+    check(`C1 pass rate ${exp.passRate}% (Δ6P/${9 + BL.T} checks)`, (await kpi("[data-testid='bqc-kpi-passrate']"))?.includes(`${exp.passRate}%`), JSON.stringify(await kpi("[data-testid='bqc-kpi-passrate']")));
     check("C2 batches passed=1 / failed=1",
       (await kpi("[data-testid='bqc-kpi-passed-batches']"))?.startsWith("Batches Passed1") ||
       ((await kpi("[data-testid='bqc-kpi-passed-batches']")) || "").includes("1"),
       JSON.stringify(await kpi("[data-testid='bqc-kpi-passed-batches']")));
     const failedBatches = await kpi("[data-testid='bqc-kpi-failed-batches']");
-    check("C3 failed-batches chip shows 1 held", (failedBatches || "").includes("1"), JSON.stringify(failedBatches));
+    check(`C3 failed-batches chip shows ${exp.failedBatches} held (Δ1 over baseline)`,
+      chipInt(failedBatches, /BatchesFailed(\d+)/) === exp.failedBatches, JSON.stringify(failedBatches));
     check("C4 avg strength 3.6 MPa (4.1+3.9+2.8)/3", (await kpi("[data-testid='bqc-kpi-strength']"))?.includes("3.6 MPa"), JSON.stringify(await kpi("[data-testid='bqc-kpi-strength']")));
     check("C5 rejected blocks chip = 25", (await kpi("[data-testid='bqc-kpi-rejected']"))?.includes("25"), JSON.stringify(await kpi("[data-testid='bqc-kpi-rejected']")));
-    check("C6 defect rate 33.3% (3 fails / 9 checks)", (await kpi("[data-testid='bqc-kpi-defectrate']"))?.includes("33.3%"), JSON.stringify(await kpi("[data-testid='bqc-kpi-defectrate']")));
+    check(`C6 defect rate ${exp.defectRate}% (Δ3F/${9 + BL.T} checks)`, (await kpi("[data-testid='bqc-kpi-defectrate']"))?.includes(`${exp.defectRate}%`), JSON.stringify(await kpi("[data-testid='bqc-kpi-defectrate']")));
 
     check("C7 pipeline B01 PASSED", (await txt("[data-testid='bqc-status-TEST-QC-B01']")) === "PASSED", JSON.stringify(await txt("[data-testid='bqc-status-TEST-QC-B01']")));
     check("C8 pipeline B02 FAILED", (await txt("[data-testid='bqc-status-TEST-QC-B02']")) === "FAILED", JSON.stringify(await txt("[data-testid='bqc-status-TEST-QC-B02']")));
@@ -262,8 +296,13 @@ async function main() {
       !!r0 && r0.pass_fail === "PASS" && Number(r0.weight_kg) === 18.3 && Number(r0.compressive_strength_mpa) === 4.0);
 
     await sleep(2500); // refresh after save
-    const checksChip = await page.evaluate(() => document.querySelector("[data-testid='bqc-kpi-checks']")?.textContent || "");
-    check("D9 checks chip now counts 10 (7 pass, 3 fail)", checksChip.includes("10") && checksChip.includes("7"), checksChip);
+    // innerText keeps block-div line breaks — textContent glues the value to
+    // the sub-label ("12" + "8 pass" → "128 pass") and is unparseable.
+    const checksChip = await page.evaluate(() => document.querySelector("[data-testid='bqc-kpi-checks']")?.innerText || "");
+    const chipLines = checksChip.split("\n").map((s) => s.trim()).filter(Boolean);
+    check(`D9 checks chip counts ${exp.checksTotal} (${exp.checksPass} pass, Δ over baseline)`,
+      Number(chipLines[1]) === exp.checksTotal &&
+      Number((chipLines[2] || "").match(/^(\d+)\s*pass/)?.[1]) === exp.checksPass, checksChip.replace(/\n/g, " | "));
     check("D10 avg strength recomputed 3.7 MPa", (await kpi("[data-testid='bqc-kpi-strength']"))?.includes("3.7"), JSON.stringify(await kpi("[data-testid='bqc-kpi-strength']")));
     await page.screenshot({ path: "/home/user/bqc-1-desktop-qc.png" });
 
@@ -299,7 +338,9 @@ async function main() {
     check("E5 tester filter keeps TEST rows visible", recentAfterTester.includes("TEST Kwame QC"));
     await page.click("[data-testid='bqc-filter-reset']");
     await sleep(1200);
-    check("E6 reset returns to full scope (10 checks)", ((await page.$("[data-testid='bqc-kpi-checks']")) ? await page.$eval("[data-testid='bqc-kpi-checks']", (e) => e.textContent || "") : "").includes("10"));
+    const e6Chip = ((await page.$("[data-testid='bqc-kpi-checks']")) ? await page.$eval("[data-testid='bqc-kpi-checks']", (e) => e.innerText || "") : "");
+    const e6Lines = e6Chip.split("\n").map((s) => s.trim()).filter(Boolean);
+    check(`E6 reset returns to full scope (${exp.checksTotal} checks)`, Number(e6Lines[1]) === exp.checksTotal, e6Chip.replace(/\n/g, " | "));
 
     // ── F. AI Help on the QC tab ─────────────────────────────────────────
     console.log("── F. AI Help ──");

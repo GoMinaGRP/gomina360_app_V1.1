@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSessionInfo, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { readBackupArchive, importBusinessBackup } from "@/lib/businessBackup";
+import { db } from "@/db";
+import { businesses } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { apiError } from "@/lib/apiError";
 
 // Backup parsing uses Buffer/JSZip, so keep this handler on the Node runtime.
 // App Router Route Handlers receive the Web Request directly and parse
@@ -48,11 +52,16 @@ export async function POST(request: Request) {
     const manifest = await readBackupArchive(buf);
     const result = await importBusinessBackup(manifest, { nameOverride, codeOverride });
 
+    // Tenant: the imported unit belongs to the importer's organization.
+    if ((result as any)?.businessId != null && session.orgId != null) {
+      await db
+        .update(businesses)
+        .set({ ownerId: session.orgId })
+        .where(eq(businesses.id, Number((result as any).businessId)));
+    }
+
     return NextResponse.json({ success: true, ...result });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message || String(error) },
-      { status: 500 },
-    );
+    return apiError(error);
   }
 }

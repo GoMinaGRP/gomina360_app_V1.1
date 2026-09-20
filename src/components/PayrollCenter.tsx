@@ -44,6 +44,7 @@ import {
 import AiSectionGuide from "./AiSectionGuide";
 import AttendanceReviewPanel from "./AttendanceReviewPanel";
 import { resolveLogo, getCompanyLogo } from "@/lib/logos";
+import { csvSafeCell } from "@/lib/universalExport";
 
 /**
  * Payroll Command Center — the complete payroll management system behind the
@@ -373,7 +374,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
        x.gross ?? "legacy", x.ssnitEmp ?? "", x.paye ?? "", x.manualDed, x.totalDed ?? "",
        x.net, x.ssnitEr ?? "", x.tier2 ?? "", x.erContrib ?? "", x.erCost ?? "",
        x.status, x.method, x.paidAt, x.ledger]
-        .map((v) => `"${String(v).replaceAll('"', '""')}"`).join(",")
+        .map(csvSafeCell).join(",")
     );
     const blob = new Blob([[CSV_HEAD, ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a");

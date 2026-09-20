@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   checklistTemplates,
@@ -6,39 +7,12 @@ import {
   businesses,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-import { tasksForBusiness, type TaskSeed } from "@/lib/checklistDefaults";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { ensureTemplates, generateEntriesForDate } from "@/lib/checklistGen";
+import { apiError } from "@/lib/apiError";
 
 // Roles allowed to manage checklist templates and generate daily checklists.
 const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
-
-// Seed the template master list for a business exactly once.
-async function ensureTemplates(businessId: number, branchCode: string | null, bizCode: string | undefined, bizCategory?: string | null) {
-  const existing = await db
-    .select()
-    .from(checklistTemplates)
-    .where(eq(checklistTemplates.businessId, businessId));
-  if (existing.length > 0) return existing;
-  const seeds: TaskSeed[] = tasksForBusiness(bizCode, bizCategory);
-  const rows = [];
-  for (let i = 0; i < seeds.length; i++) {
-    const t = seeds[i];
-    const [row] = await db
-      .insert(checklistTemplates)
-      .values({
-        businessId,
-        branchCode,
-        taskKey: t.taskKey,
-        taskLabel: t.taskLabel,
-        category: t.category,
-        sortOrder: i + 1,
-        isActive: true,
-      })
-      .returning();
-    rows.push(row);
-  }
-  return rows;
-}
 
 export async function GET(request: NextRequest) {
   try {
@@ -49,11 +23,25 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.json({ success: false, error: "businessId required" }, { status: 400 });
     }
+    // Scope gate: checklist templates & dated entries stay inside the
+    // caller's accessible businesses.
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     const branchCode = searchParams.get("branchCode");
     const date = searchParams.get("date");
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const templates = await ensureTemplates(businessId, branchCode || biz?.code || null, biz?.code, biz?.category);
+
+    // A read about TODAY auto-provisions today's daily checklist (idempotent)
+    // — any surface that looks at "today" (module panel, Command Center)
+    // therefore always sees the live plan instead of an empty day. Past or
+    // future dates are never fabricated.
+    const todayLocal = new Date().toLocaleDateString("en-CA");
+    if (!date || date === todayLocal) {
+      await generateEntriesForDate(businessId, branchCode || biz?.code || null, todayLocal, biz?.code, biz?.category);
+    }
 
     let entryQuery = db.select().from(checklistEntries).where(eq(checklistEntries.businessId, businessId));
     let entries = await entryQuery;
@@ -67,7 +55,7 @@ export async function GET(request: NextRequest) {
       entries: entries.slice().sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
     });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -81,7 +69,12 @@ export async function POST(request: NextRequest) {
     if (!entity || !businessId) {
       return NextResponse.json({ success: false, error: "entity and businessId required" }, { status: 400 });
     }
-    const role = String(data?.createdByRole || data?.role || "").toUpperCase();
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
+    // Authorization comes from the signed-in session — NEVER from a
+    // client-supplied role field in the request body.
+    const role = String(__authSession.user.role || "").toUpperCase();
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     const branchCode = data.branchCode || biz?.code || null;
     const today = new Date().toISOString().split("T")[0];
@@ -134,50 +127,17 @@ export async function POST(request: NextRequest) {
     // ── GENERATE: build the checklist for a date from ACTIVE templates ─
     if (entity === "GENERATE") {
       const targetDate = data.checklistDate || today;
-      await ensureTemplates(businessId, branchCode, biz?.code, biz?.category);
-      const existing = await db
-        .select()
+      const before = await db
+        .select({ id: checklistEntries.id })
         .from(checklistEntries)
-        .where(
-          and(
-            eq(checklistEntries.businessId, businessId),
-            eq(checklistEntries.checklistDate, targetDate),
-          ),
-        );
-      if (existing.length > 0) {
-        return NextResponse.json({ success: true, items: existing, alreadyExists: true });
-      }
-      const active = (
-        await db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId))
-      )
-        .filter((t: any) => t.isActive !== false)
-        .sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0));
-      const rows = [];
-      for (const t of active) {
-        const [row] = await db
-          .insert(checklistEntries)
-          .values({
-            businessId,
-            branchCode,
-            checklistDate: targetDate,
-            templateId: t.id,
-            taskKey: t.taskKey,
-            taskLabel: t.taskLabel,
-            category: t.category || "GENERAL",
-            assignedToUserId: t.assignedToUserId || null,
-            assignedToName: t.assignedToName || null,
-            assignedToRole: t.assignedToRole || null,
-            isCompleted: false,
-          })
-          .returning();
-        rows.push(row);
-      }
-      return NextResponse.json({ success: true, items: rows });
+        .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, targetDate)));
+      const rows = await generateEntriesForDate(businessId, branchCode, targetDate, biz?.code, biz?.category);
+      return NextResponse.json({ success: true, items: rows, alreadyExists: before.length > 0 });
     }
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -200,6 +160,9 @@ export async function PATCH(request: NextRequest) {
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
       }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
       const nowCompleted = !existing.isCompleted;
       const [row] = await db
         .update(checklistEntries)
@@ -217,7 +180,9 @@ export async function PATCH(request: NextRequest) {
 
     // ── TEMPLATE: edit label/category/assignment or activate/deactivate ─
     if (entity === "TEMPLATE") {
-      const role = String(data?.role || data?.updatedByRole || "").toUpperCase();
+      // Authorization comes from the signed-in session — NEVER from a
+      // client-supplied role field in the request body.
+      const role = String(__authSession.user.role || "").toUpperCase();
       if (!MANAGE_ROLES.includes(role)) {
         return NextResponse.json(
           { success: false, error: "Only the Owner or an authorized manager can edit checklist items" },
@@ -230,6 +195,9 @@ export async function PATCH(request: NextRequest) {
         .where(eq(checklistTemplates.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
       }
       const [row] = await db
         .update(checklistTemplates)
@@ -250,7 +218,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }
 
@@ -260,7 +228,9 @@ export async function DELETE(request: NextRequest) {
     if (!__authSession) return UNAUTHENTICATED();
     const { searchParams } = new URL(request.url);
     const id = Number(searchParams.get("id"));
-    const role = String(searchParams.get("role") || "").toUpperCase();
+    // Authorization comes from the signed-in session — NEVER from a
+    // client-supplied ?role= query parameter.
+    const role = String(__authSession.user.role || "").toUpperCase();
     if (!id) {
       return NextResponse.json({ success: false, error: "id required" }, { status: 400 });
     }
@@ -270,9 +240,19 @@ export async function DELETE(request: NextRequest) {
         { status: 403 },
       );
     }
+    const [existing] = await db
+      .select()
+      .from(checklistTemplates)
+      .where(eq(checklistTemplates.id, id));
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
+    }
+    if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
+    }
     await db.delete(checklistTemplates).where(eq(checklistTemplates.id, id));
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

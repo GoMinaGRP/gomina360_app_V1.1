@@ -23,6 +23,7 @@ import {
   PieChart, Pie, Cell, LineChart, Line,
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
+import { csvSafeCell } from "@/lib/universalExport";
 
 const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
 const MODULE_LABEL: Record<string, string> = {
@@ -132,7 +133,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const [filters, setFilters] = useState({ businessId: "", module: "", recordType: "", branchCode: "", worker: "", status: "", q: "", from: "", to: "" });
   const [histKey, setHistKey] = useState<string | null>(null);
   const [actionModal, setActionModal] = useState<{ rec: Rec; action: string } | null>(null);
-  const [actionForm, setActionForm] = useState({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" });
+  const [actionForm, setActionForm] = useState({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" });
   const [actError, setActError] = useState("");
   const [verifyModal, setVerifyModal] = useState<Rev | null>(null);
   const [verifyNote, setVerifyNote] = useState("");
@@ -280,13 +281,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
           issueTitle: actionForm.issueTitle,
           reason: actionForm.reason, comment: actionForm.comment, evidence: actionForm.evidence,
           evidencePhoto: actionForm.photo,
+          priority: actionForm.priority,
         }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "Review failed");
       const routed = body.assignedTo ? ` Routed to ${body.assignedTo.name}'s dashboard — they were notified.` : actionModal.action === "VERIFIED" || actionModal.action === "COMMENT" ? "" : " No user account matched the record's worker — it stays tracked here.";
       setNotice(`${actionModal.action === "VERIFIED" ? "Record verified" : actionModal.action === "FLAGGED" ? "Issue flagged" : actionModal.action === "CORRECTION_REQUESTED" ? "Correction requested" : "Comment added"} — ${actionModal.rec.ref}. It is on the audit trail.${routed}`);
-      setActionModal(null); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" });
+      setActionModal(null); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" });
       await load();
     } catch (e: any) { setActError(e.message); } finally { setBusy(false); }
   };
@@ -378,7 +380,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
   const downloadCsv = () => {
     const head = ["Date", "Time", "Reviewer", "Reviewer Role", "Action", "Status", "Issue Title", "Assigned To", "Module", "Record", "Record Ref", "Business", "Branch", "Worker", "Reason", "Comment", "Evidence", "Response", "Response By", "Response At", "Resolution", "Verified By", "Verified At"];
-    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const esc = csvSafeCell; // quoting + formula-injection guard (shared)
     const lines = reviews.map((r: Rev) => [dayOnly(r.createdAt), fmtTs(r.createdAt).split(", ").pop(), r.reviewerName, r.reviewerRole, r.action, STEP_LABEL[r.status] || r.status, r.issueTitle || "", r.assignedUserName || "", r.module, r.recordTitle, r.recordRef, bizName(r.businessId), r.branchCode || "", r.workerName || "", r.reason || "", r.comment || "", r.evidence || (r.evidencePhoto ? "[photo attached]" : ""), r.responseNote || "", r.responseByName || "", r.responseAt ? fmtTs(r.responseAt) : "", r.resolutionNote || "", r.resolvedByName || "", r.resolvedAt ? fmtTs(r.resolvedAt) : ""].map(esc).join(","));
     const blob = new Blob(["\uFEFF" + [head.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
@@ -557,10 +559,10 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                       <div className="flex items-center justify-end gap-1">
                         <button title="Open complete record" onClick={() => openRecord(r)} className="p-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/30" data-testid={`aud-open-${r.key}`}><Eye className="w-3.5 h-3.5" /></button>
                         <button title="Review history" onClick={() => setHistKey(histKey === r.key ? null : r.key)} className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400" data-testid={`aud-hist-${r.key}`}><History className="w-3.5 h-3.5" /></button>
-                        <button title="Verify record" onClick={() => { setActionModal({ rec: r, action: "VERIFIED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30" data-testid={`aud-verify-${r.key}`}><BadgeCheck className="w-3.5 h-3.5" /></button>
-                        <button title="Flag issue" onClick={() => { setActionModal({ rec: r, action: "FLAGGED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30" data-testid={`aud-flag-${r.key}`}><Flag className="w-3.5 h-3.5" /></button>
-                        <button title="Request correction" onClick={() => { setActionModal({ rec: r, action: "CORRECTION_REQUESTED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30" data-testid={`aud-correct-${r.key}`}><PencilLine className="w-3.5 h-3.5" /></button>
-                        <button title="Add comment" onClick={() => { setActionModal({ rec: r, action: "COMMENT" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "" }); setActError(""); }} className="p-1.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300 border border-slate-600" data-testid={`aud-comment-${r.key}`}><MessageSquare className="w-3.5 h-3.5" /></button>
+                        <button title="Verify record" onClick={() => { setActionModal({ rec: r, action: "VERIFIED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30" data-testid={`aud-verify-${r.key}`}><BadgeCheck className="w-3.5 h-3.5" /></button>
+                        <button title="Flag issue" onClick={() => { setActionModal({ rec: r, action: "FLAGGED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30" data-testid={`aud-flag-${r.key}`}><Flag className="w-3.5 h-3.5" /></button>
+                        <button title="Request correction" onClick={() => { setActionModal({ rec: r, action: "CORRECTION_REQUESTED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30" data-testid={`aud-correct-${r.key}`}><PencilLine className="w-3.5 h-3.5" /></button>
+                        <button title="Add comment" onClick={() => { setActionModal({ rec: r, action: "COMMENT" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300 border border-slate-600" data-testid={`aud-comment-${r.key}`}><MessageSquare className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>
@@ -1128,6 +1130,34 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
             <div>
               <label className={labelCls}>{actionModal.action === "VERIFIED" ? "Verification basis (optional)" : actionModal.action === "COMMENT" ? "Topic (optional)" : "Reason *"}</label>
               <input className={inputCls} value={actionForm.reason} placeholder={actionModal.action === "FLAGGED" ? "e.g. Amount does not match the MoMo statement" : actionModal.action === "CORRECTION_REQUESTED" ? "e.g. Wrong quantity received" : "e.g. Matched against the MoMo statement"} onChange={(e) => setActionForm({ ...actionForm, reason: e.target.value })} data-testid="aud-action-reason" />
+              {(actionModal.action === "FLAGGED" || actionModal.action === "CORRECTION_REQUESTED") && (
+                <div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Priority — decides who gets notified</div>
+                  <div className="flex gap-1.5" data-testid="aud-action-priority">
+                    {([
+                      ["LOW", "bg-emerald-500/15 text-emerald-300 border-emerald-500/50", "🟢"],
+                      ["MEDIUM", "bg-amber-500/15 text-amber-300 border-amber-500/50", "🟡"],
+                      ["HIGH", "bg-orange-500/15 text-orange-300 border-orange-500/50", "🟠"],
+                      ["CRITICAL", "bg-rose-500/15 text-rose-300 border-rose-500/50", "🔴"],
+                    ] as const).map(([p, cls, dot]) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setActionForm({ ...actionForm, priority: p })}
+                        className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-black transition ${actionForm.priority === p ? `${cls} ring-1 ring-current` : "bg-slate-800 text-slate-400 border-slate-600 hover:text-white"}`}
+                        data-testid={`aud-action-priority-${p.toLowerCase()}`}
+                      >
+                        {dot} {p}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[9px] text-slate-500 mt-1">
+                    {actionForm.priority === "CRITICAL" || actionForm.priority === "HIGH"
+                      ? "The responsible user + business managers and the organization Owner are notified."
+                      : "The responsible user + business managers are notified (Owner joins on HIGH/CRITICAL)."}
+                  </p>
+                </div>
+              )}
             </div>
             <div>
               <label className={labelCls}>Comment</label>

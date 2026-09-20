@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { integrations } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 export async function GET() {
   try {
@@ -12,10 +14,7 @@ export async function GET() {
       .orderBy(desc(integrations.id));
     return NextResponse.json({ success: true, integrations: rows });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }
 
@@ -69,9 +68,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, integration: updated });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

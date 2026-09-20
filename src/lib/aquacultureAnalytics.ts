@@ -84,9 +84,7 @@ export function analyzeAquaculture(data: AquaAnalyticsInput): {
     if ((w.dissolvedOxygenMgL || 0) < doMin) {
       alerts.push({ id: `do-crit-${w.pondId}`, level: "critical", category: "Water Quality", title: `Critical Low DO in ${pondName}`, message: `Dissolved oxygen is ${w.dissolvedOxygenMgL} mg/L (target minimum ${doMin} mg/L). Fish will suffocate.`, recommendation: "Activate additional aeration immediately. Check aerator functions, reduce overstocking, and replace water if necessary.", timestamp: today, value: `${w.dissolvedOxygenMgL} mg/L`, threshold: `>${doMin} mg/L` });
     } else if ((w.dissolvedOxygenMgL || 0) < doMin + 1) {
-      alerts.push({ id: `do-warning-${w.pondId}`, level: "warning", category: "Water Quality", title: `Low DO Warning: ${pondName}`, message: `DO is ${w.dissolvedOxygenMgL} mg/L, approaching minimum safe level.`, recommendation: "Increase aeration. Verify tank cleanliness, remove uneaten feed, and monitor temperature (higher temp = lower DO).", timestamp: today, value: `${w.dissolvedOxygenMgrL?.toFixed(1) || w.dissolvedOxygenMgL} mg/L`, threshold: `>${doMin} mg/L` });
-    } else if ((w.dissolvedOxygenMgL || 0) < doMin + 1) {
-      alerts.push({ id: `do-warning-${w.pondId}`, level: "warning", category: "Water Quality", title: `Low DO Warning: ${pondName}`, message: `DO is ${w.dissolvedOxygenMgL} mg/L, approaching minimum safe level.`, recommendation: "Increase aeration. Verify tank cleanliness, remove uneaten feed, and monitor temperature (higher temp = lower DO).", timestamp: today, value: `${(w.dissolvedOxygenMgL || 0).toFixed(1)} mg/L`, threshold: `>${doMin} mg/L` });
+      alerts.push({ id: `do-warning-${w.pondId}`, level: "warning", category: "Water Quality", title: `Low DO Warning: ${pondName}`, message: `DO is ${w.dissolvedOxygenMgL} mg/L, approaching minimum safe level.`, recommendation: "Increase aeration. Verify tank cleanliness, remove uneaten feed, and monitor temperature (higher temp = lower DO).", timestamp: today, value: `${Number(w.dissolvedOxygenMgL || 0).toFixed(1)} mg/L`, threshold: `>${doMin} mg/L` });
     }
 
     const ph = w.phLevel || 0;

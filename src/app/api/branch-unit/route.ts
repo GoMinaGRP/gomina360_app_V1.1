@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { inventoryItems, transactions, businesses } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * POST /api/branch-unit — operations API for auto-provisioned business units
@@ -25,6 +27,9 @@ export async function POST(request: NextRequest) {
         { success: false, error: "entity and businessId required" },
         { status: 400 }
       );
+    }
+    if (!(await canAccessBusiness(__authSession.user, businessId))) {
+      return FORBIDDEN("You do not have access to that business.");
     }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
@@ -156,6 +161,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Unknown entity" }, { status: 400 });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

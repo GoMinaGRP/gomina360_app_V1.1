@@ -1,4 +1,5 @@
 import { formatMoney } from './currency';
+import { csvSafeCell } from './universalExport';
 import { CurrencyCode } from './currency';
 import QRCode from 'qrcode';
 
@@ -123,7 +124,7 @@ function generateCSV(assets: any[], currency: CurrencyCode): string {
 
   const csvContent = [
     headers.join(','),
-    ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    ...rows.map(row => row.map(csvSafeCell).join(','))
   ].join('\n');
 
   return '\uFEFF' + csvContent; // Add BOM for UTF-8

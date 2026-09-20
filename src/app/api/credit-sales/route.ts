@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
   creditSales,
@@ -27,6 +28,7 @@ import {
   SETTLED_EPSILON,
 } from "@/lib/credit";
 import { uniqueTrackingCode } from "@/lib/trackingServer";
+import { apiError } from "@/lib/apiError";
 
 /**
  * /api/credit-sales — Credit Sale lifecycle.
@@ -324,6 +326,7 @@ async function postInstallment({
 export async function GET(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
 
@@ -408,6 +411,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionInfo(request);
+  ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
     const body = await request.json();
@@ -791,6 +795,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error("POST /api/credit-sales error:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return apiError(error);
   }
 }

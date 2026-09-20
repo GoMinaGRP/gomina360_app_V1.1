@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Poultry AI Knowledge Base — Ghana-focused practical farming guidance.
@@ -244,9 +245,6 @@ export async function GET(request: NextRequest) {
       query: q,
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return apiError(error);
   }
 }

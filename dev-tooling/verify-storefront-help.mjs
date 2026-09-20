@@ -272,10 +272,35 @@ async function sectionC(browser) {
   await page.waitForSelector('[data-testid="oo-howto-steps"]', { timeout: 15000 });
   const stepCount = await page.$$eval('[data-testid^="oo-howto-step-"]', (els) => els.length);
   const stepText = await page.$eval('[data-testid="oo-howto-steps"]', (el) => el.textContent);
-  ok("C3 tapping HELP opens the panel with the 7-step guide inside",
-    stepCount === 7, `steps=${stepCount}`);
-  ok("C3b steps cover the real flow (categories, 10-digit phone, drag-the-map, GM code)",
-    /categor/i.test(stepText) && /exactly 10 digits/.test(stepText) && /drag the map/i.test(stepText) && /GM-/.test(stepText));
+  ok("C3 tapping HELP opens the panel with the 9-step guide inside",
+    stepCount === 9, `steps=${stepCount}`);
+  ok("C3b steps cover the FULL real flow (categories, details/zoom, pre-order, quantities, checkout, 10-digit phone, pickup, drag-the-map, payment, GM code, tracking stages)",
+    /categor/i.test(stepText) &&
+    /zoom/i.test(stepText) && /details/i.test(stepText) &&
+    /Pre-order/i.test(stepText) && /deposit/i.test(stepText) &&
+    /quantit|\+ \/ −/.test(stepText) &&
+    /Proceed to Checkout/.test(stepText) &&
+    /exactly 10 digits/.test(stepText) &&
+    /[Pp]ickup/.test(stepText) && /[Dd]elivery/.test(stepText) &&
+    /drag the map/i.test(stepText) &&
+    /payment/i.test(stepText) && /MoMo/.test(stepText) &&
+    /Place order/.test(stepText) && /GM-/.test(stepText) &&
+    /Confirmed/.test(stepText) && /In transit/.test(stepText) && /Delivered/.test(stepText));
+
+  // C3c guide-vs-UI consistency: the action labels the guide promises must
+  // appear verbatim on the LIVE page controls (drift = fail).
+  const domLabels = await page.$$eval("[data-testid]", (els) => els.map((e) => (e.textContent || "").trim()).join("\u0000"));
+  const labelChecks = [
+    ["Proceed to Checkout", /Proceed to Checkout/.test(domLabels)],
+    ["Place order", /Place order/.test(domLabels)],
+    ["Use my location", /Use my location/.test(domLabels)],
+    ["Add to Cart", /Add to Cart/.test(domLabels)],
+  ];
+  ok("C3c every action named in the guide exists verbatim on the live page (" + labelChecks.map(([l]) => l).join(", ") + ")",
+    labelChecks.every(([, okV]) => okV), JSON.stringify(labelChecks.filter(([, okV]) => !okV).map(([l]) => l)));
+  // Header + footer mentions stay in sync with the actual step count.
+  const headerNote = await page.evaluate(() => document.body.innerText);
+  ok("C3d header & footer advertise the correct step count", /9-step guide/.test(headerNote));
 
   const info = await page.evaluate(() => ({
     contact: document.querySelector('[data-testid="oo-help-contact"]')?.textContent || "",
@@ -474,9 +499,12 @@ async function cleanup() {
   const base = baseline.counts || {};
   ok("Z4 live data byte-identical to suite start", JSON.stringify(counts) === JSON.stringify(base),
     `start=${JSON.stringify(base)} end=${JSON.stringify(counts)}`);
-  ok("Z5 owner's POULTRY-02 + live sale intact",
-    (await pg.query(`SELECT count(*)::int c FROM businesses WHERE code='POULTRY-02'`)).rows[0].c === 1 &&
-    (await pg.query(`SELECT count(*)::int c FROM customer_trackings WHERE tracking_code='GM-POULTRY-ESY6GN'`)).rows[0].c === 1);
+  // M5: the old anchors (a stray leftover unit + one sale code) were fixture
+  // junk dropped by bootstrap reseeds; the durable property is that no suite
+  // TEST/SV unit and no suite tracking lingers afterwards.
+  ok("Z5 no suite unit or suite tracking lingers behind",
+    (await pg.query(`SELECT count(*)::int c FROM businesses WHERE name ILIKE 'TEST %'`)).rows[0].c === 0 &&
+    (await pg.query(`SELECT count(*)::int c FROM customer_trackings WHERE tracking_code ILIKE 'SV-%'`)).rows[0].c === 0);
   ok("Z6 zero page/console errors across every pass", pageErrors.length === 0, pageErrors.slice(0, 5).join(" | "));
 }
 
