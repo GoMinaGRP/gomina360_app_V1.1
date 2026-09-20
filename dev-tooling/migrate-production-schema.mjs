@@ -1,14 +1,43 @@
 #!/usr/bin/env node
 /**
- * Small, additive production migration run before `next build`.
+ * Additive production migration run before `next build`.
  *
  * The project historically used `drizzle-kit push` without checked-in SQL
  * migrations. That allowed application code and an already-populated database
  * to drift apart. Keep release migrations explicit and idempotent here; never
  * infer or destructively rewrite production schema during a deployment.
+ *
+ * SINGLE SOURCE OF TRUTH — SCHEMA RECONCILER
+ * ------------------------------------------
+ * A hand-maintained column allow-list is exactly what let the deployed app and
+ * the production database drift apart (e.g. `user_sessions.device_label` shipped
+ * in src/db/schema.ts but was never added by this script → login failed with
+ * SQLSTATE 42703 `column "device_label" does not exist`). To make that class of
+ * outage impossible, the reconciler below reads `src/db/schema.ts` — the ONE
+ * source of truth every route/lib already imports — and, for every table it
+ * declares:
+ *   • CREATE TABLE IF NOT EXISTS (only when the table is entirely absent), and
+ *   • ADD COLUMN IF NOT EXISTS for every column the live database is missing.
+ *
+ * It is deliberately ADDITIVE and NON-DESTRUCTIVE:
+ *   • It never drops or alters the type of an existing column, never drops a
+ *     table, never touches a row's data.
+ *   • Every newly added column is created NULLABLE (even where schema.ts marks
+ *     it NOT NULL) so adding it to a populated table can never fail. Columns
+ *     that must ultimately be NOT NULL are backfilled + tightened explicitly in
+ *     the curated data-migration section further down (businesses.owner_id,
+ *     expense_categories.owner_id, …), exactly as before.
+ *   • Declared defaults ARE applied, so existing rows get a sensible value and
+ *     new inserts behave identically to a fresh `drizzle-kit push`.
+ * The curated backfill / multi-owner / index / sequence-realignment logic that
+ * follows is preserved unchanged — the reconciler only guarantees the columns
+ * and tables it depends on physically exist first.
  */
 import { config as loadEnv } from "dotenv";
 import pg from "pg";
+import { is, SQL } from "drizzle-orm";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
+import * as appSchema from "../src/db/schema.ts";
 
 const { Client } = pg;
 
@@ -50,6 +79,193 @@ const client = new Client({
         : undefined,
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Schema reconciler helpers (drive DDL from src/db/schema.ts, the single source
+// of truth). Pure functions — no I/O — so they are trivially testable.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Every drizzle pgTable exported by the app schema, as parsed table configs. */
+function collectSchemaTables() {
+  const tables = [];
+  for (const value of Object.values(appSchema)) {
+    if (is(value, PgTable)) tables.push(getTableConfig(value));
+  }
+  return tables;
+}
+
+/** Quote a PostgreSQL identifier safely. */
+function quoteIdent(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/**
+ * Render a column's declared DEFAULT (from schema.ts) as a SQL literal/expression,
+ * or null when the column has no usable default. `serial` is excluded — its
+ * default is the owning sequence, created by the column type itself.
+ */
+function renderColumnDefault(col) {
+  if (!col.hasDefault) return null;
+  if (col.getSQLType() === "serial") return null;
+  const def = col.default;
+  if (is(def, SQL)) {
+    // e.g. sql`now()` / sql`'[]'::jsonb` — concatenate the static string chunks.
+    let out = "";
+    for (const chunk of def.queryChunks || []) {
+      if (chunk && Array.isArray(chunk.value)) out += chunk.value.join("");
+      else if (typeof chunk === "string") out += chunk;
+      else return null; // a parameterised default is not expected here — skip safely
+    }
+    out = out.trim();
+    return out || null;
+  }
+  if (def === undefined) return null;
+  if (typeof def === "boolean") return def ? "true" : "false";
+  if (typeof def === "number") return Number.isFinite(def) ? String(def) : null;
+  if (typeof def === "string") return `'${def.replace(/'/g, "''")}'`;
+  if (def === null) return "null";
+  if (Array.isArray(def) || typeof def === "object") {
+    const cast = col.getSQLType() === "jsonb" ? "jsonb" : "json";
+    return `'${JSON.stringify(def).replace(/'/g, "''")}'::${cast}`;
+  }
+  return null;
+}
+
+/**
+ * Map a drizzle column's SQL type to the concrete type used in ADD COLUMN /
+ * CREATE TABLE. `serial` is only a real column type when the column is the
+ * table's primary key; elsewhere (it never is in this schema) it degrades to
+ * integer. Everything else passes through as drizzle already renders valid
+ * PostgreSQL type names (integer, text, boolean, jsonb, timestamp,
+ * "double precision").
+ */
+function columnSqlType(col) {
+  return col.getSQLType();
+}
+
+/**
+ * Build the column clause used inside CREATE TABLE. Primary-key serial columns
+ * keep NOT NULL + PRIMARY KEY (their sequence default is implicit). Non-PK
+ * columns get their declared default; NOT NULL is applied only when the column
+ * also carries a default or is a serial/primary key, so creating a brand-new
+ * (empty) table matches drizzle while never emitting an unsatisfiable NOT NULL.
+ */
+function createTableColumnClause(col) {
+  const name = quoteIdent(col.name);
+  const type = columnSqlType(col);
+  if (col.primary && type === "serial") {
+    return `${name} serial primary key`;
+  }
+  const parts = [name, type === "serial" ? "integer" : type];
+  const def = renderColumnDefault(col);
+  if (def !== null) parts.push(`default ${def}`);
+  if (col.primary) parts.push("primary key");
+  // On a freshly created (empty) table NOT NULL is always satisfiable.
+  if (col.notNull || col.primary) parts.push("not null");
+  return parts.join(" ");
+}
+
+/**
+ * ADD COLUMN clause for an EXISTING (possibly populated) table. Deliberately
+ * NULLABLE regardless of schema.ts's notNull flag — adding a NOT NULL column to
+ * a table that already has rows would fail. The declared default is still
+ * applied so both existing rows and future inserts get the right value. Columns
+ * that must end up NOT NULL are tightened later, after their explicit backfill.
+ */
+function addColumnClause(col) {
+  const type = columnSqlType(col);
+  const parts = [quoteIdent(col.name), type === "serial" ? "integer" : type];
+  const def = renderColumnDefault(col);
+  if (def !== null) parts.push(`default ${def}`);
+  return parts.join(" ");
+}
+
+/**
+ * Reconcile the live database against src/db/schema.ts: create any wholly
+ * missing table, and add any missing column to every existing table. Returns a
+ * summary of what it changed for the deploy log. Idempotent and additive.
+ */
+async function reconcileSchema(dbClient) {
+  const tables = collectSchemaTables();
+  const createdTables = [];
+  const addedColumns = [];
+
+  // Which public tables already exist?
+  const liveTablesRes = await dbClient.query(
+    `select table_name from information_schema.tables
+       where table_schema = 'public' and table_type = 'BASE TABLE'`,
+  );
+  const liveTables = new Set(liveTablesRes.rows.map((r) => r.table_name));
+
+  for (const table of tables) {
+    // Only reconcile tables in the default (public) schema.
+    if (table.schema && table.schema !== "public") continue;
+    const tableName = table.name;
+
+    if (!liveTables.has(tableName)) {
+      const cols = table.columns.map(createTableColumnClause).join(",\n  ");
+      await dbClient.query(
+        `create table if not exists public.${quoteIdent(tableName)} (\n  ${cols}\n)`,
+      );
+      createdTables.push(tableName);
+      liveTables.add(tableName);
+      continue; // a just-created table already has every column
+    }
+
+    // Existing table → add only the columns it is missing.
+    const liveColsRes = await dbClient.query(
+      `select column_name from information_schema.columns
+         where table_schema = 'public' and table_name = $1`,
+      [tableName],
+    );
+    const liveCols = new Set(liveColsRes.rows.map((r) => r.column_name));
+    for (const col of table.columns) {
+      if (liveCols.has(col.name)) continue;
+      await dbClient.query(
+        `alter table public.${quoteIdent(tableName)} add column if not exists ${addColumnClause(col)}`,
+      );
+      addedColumns.push(`${tableName}.${col.name}`);
+    }
+  }
+
+  return { createdTables, addedColumns };
+}
+
+/**
+ * Create every index/unique constraint declared in schema.ts that does not yet
+ * exist (matched by index name). Idempotent via `IF NOT EXISTS`; a unique index
+ * that already exists on a populated table is a no-op, and no data is touched.
+ * Complements the curated performance indexes created later in this script.
+ */
+async function reconcileIndexes(dbClient) {
+  const tables = collectSchemaTables();
+  const createdIndexes = [];
+  const liveIdxRes = await dbClient.query(
+    `select indexname from pg_indexes where schemaname = 'public'`,
+  );
+  const liveIdx = new Set(liveIdxRes.rows.map((r) => r.indexname));
+
+  for (const table of tables) {
+    if (table.schema && table.schema !== "public") continue;
+    for (const idx of table.indexes || []) {
+      const cfg = idx.config || {};
+      const name = cfg.name;
+      const cols = (cfg.columns || [])
+        .map((c) => c?.name)
+        .filter(Boolean);
+      if (!name || cols.length === 0) continue; // skip expression indexes we can't safely render
+      if (liveIdx.has(name)) continue;
+      const unique = cfg.unique ? "unique " : "";
+      const colList = cols.map(quoteIdent).join(", ");
+      await dbClient.query(
+        `create ${unique}index if not exists ${quoteIdent(name)} on public.${quoteIdent(table.name)} (${colList})`,
+      );
+      createdIndexes.push(name);
+      liveIdx.add(name);
+    }
+  }
+  return { createdIndexes };
+}
+
 try {
   await client.connect();
   await client.query("begin");
@@ -63,56 +279,34 @@ try {
     );
   }
 
-  // Keep this list aligned with every additive users column in src/db/schema.ts.
-  // Foundational NOT NULL identity columns (id, name, email, role, phone) are
-  // intentionally excluded: a database without those requires the full schema.
-  const userColumns = [
-    ["assigned_business_id", "integer"],
-    ["avatar_url", "text"],
-    ["region", "text"],
-    ["district", "text"],
-    ["town", "text"],
-    ["is_active", "boolean default true"],
-    ["is_worker_enabled", "boolean default true"],
-    ["created_by_user_id", "integer"],
-    ["can_record_sales", "boolean default true"],
-    ["can_record_expenses", "boolean default false"],
-    ["can_manage_stock", "boolean default false"],
-    ["can_export_data", "boolean default false"],
-    ["can_manage_records", "boolean default false"],
-    ["can_delete_inventory", "boolean default false"],
-    ["can_manage_expenses", "boolean default false"],
-    ["can_manage_users", "boolean default false"],
-    ["can_manage_cctv", "boolean default false"],
-    ["can_manage_auditors", "boolean default false"],
-    ["can_manage_online", "boolean default false"],
-    ["can_create_business", "boolean default false"],
-    ["can_view_finance", "boolean default false"],
-    ["can_manage_support", "boolean default false"],
-    ["business_manage_ids", "jsonb"],
-    ["password_hash", "text"],
-    ["password_changed_at", "timestamp"],
-    ["failed_login_attempts", "integer default 0"],
-    ["locked_until", "timestamp"],
-    ["access_revoked_at", "timestamp"],
-    ["created_at", "timestamp default now()"],
-  ];
-
-  const existing = await client.query(`
-    select column_name
-    from information_schema.columns
-    where table_schema = 'public' and table_name = 'users'
-  `);
-  const existingNames = new Set(existing.rows.map((row) => row.column_name));
-  const missingNames = userColumns
-    .filter(([name]) => !existingNames.has(name))
-    .map(([name]) => name);
-
-  for (const [name, definition] of userColumns) {
-    await client.query(
-      `alter table public.users add column if not exists ${name} ${definition}`,
-    );
+  // ──────────────────────────────────────────────────────────────────────────────
+  // STEP 1 — Schema reconciler (schema.ts is the single source of truth).
+  //
+  // Create any missing table and add EVERY missing column across all tables,
+  // additively and idempotently. This replaces the previous hand-maintained
+  // per-column allow-lists (which is what silently dropped user_sessions'
+  // device_label / user_agent / ip_hash / initial_business_id and caused the
+  // production 42703 login failure). New columns are added NULLABLE with their
+  // declared default; the curated STEP 2 below backfills and, only where safe,
+  // tightens the specific columns that must be NOT NULL.
+  // ──────────────────────────────────────────────────────────────────────────────
+  const { createdTables, addedColumns } = await reconcileSchema(client);
+  if (createdTables.length) {
+    console.log(`[db:migrate] created missing tables: ${createdTables.join(", ")}`);
   }
+  if (addedColumns.length) {
+    console.log(`[db:migrate] added missing columns: ${addedColumns.join(", ")}`);
+  }
+  const { createdIndexes } = await reconcileIndexes(client);
+  if (createdIndexes.length) {
+    console.log(`[db:migrate] created missing indexes: ${createdIndexes.join(", ")}`);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // STEP 2 — Curated data migration (multi-owner backfill, targeted NOT NULL
+  // tightening, indexes, per-org singletons, sequence realignment). Unchanged;
+  // it now runs against a schema guaranteed to have every required column.
+  // ──────────────────────────────────────────────────────────────────────────────
 
   // ──────────────────────────────────────────────────────────────────────────────
   // Multi-Owner upgrade (additive, idempotent, backfilled — mirrors
@@ -329,8 +523,12 @@ try {
       'select owner_id from public.businesses where id = bid'`);
 
   await client.query("commit");
+  const changeSummary =
+    createdTables.length || addedColumns.length || createdIndexes.length
+      ? `reconciled schema (+${createdTables.length} table(s), +${addedColumns.length} column(s), +${createdIndexes.length} index(es))`
+      : "schema already in sync";
   console.log(
-    `[db:migrate] ${missingNames.length ? `applied users.${missingNames.join(", users.")}` : "verified all users columns"} via ${dbUrlEnv} (${describeTarget()})`,
+    `[db:migrate] ${changeSummary} via ${dbUrlEnv} (${describeTarget()})`,
   );
 } catch (error) {
   await client.query("rollback").catch(() => {});
