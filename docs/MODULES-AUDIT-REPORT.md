@@ -91,11 +91,4 @@ The session-envelope lookup is resolved **lazily** (one fetch per request instea
 
 ## GitHub push status
 
-All work is **committed locally** on `arena/01a0a375-gomina360-app-v1-1` (latest: `d010ccb` + this report). **Push to GitHub cannot be performed from this sandbox** — the sandbox remotes/proxy require browser-side GitHub authorization (personal access token or OAuth via your browser). The work is safe in the local branch; to publish, run on any authenticated machine:
-
-```bash
-git fetch origin arena/01a0a375-gomina360-app-v1-1
-git push origin arena/01a0a375-gomina360-app-v1-1
-```
-
-Nothing needs re-running afterwards — all suites were verified against this exact tree.
+All work is **committed and pushed** to `origin/arena/01a0a375-gomina360-app-v1-1` (includes `7c7f513` suite hardening + `d010ccb` mixed audit fixes + this report). Nothing further to publish — the remote branch is up to date with every verified change in this audit round.
