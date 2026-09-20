@@ -58,6 +58,21 @@ img{display:block}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .input,select,textarea{width:100%;padding:.5rem .7rem;background:#0a1120;border:1px solid #24304b;border-radius:10px;color:#fff;font-size:12.5px;outline:0}
 .input:focus,select:focus,textarea:focus{border-color:rgba(16,185,129,.6)}
+input[type=number]{appearance:textfield;-moz-appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+/* layout containment — flex/grid children must never overhang the viewport
+   (490px-measured columns could burst a 390px phone frame before this) */
+.minw-0{min-width:0}
+.w-full{width:100%}
+.flex-1{flex:1 1 0;min-width:0}
+@media(max-width:520px){.lbl{max-width:100%}}
+@media(max-width:560px){
+  /* dense-but-intact: the full 5-column table stays readable by scrolling
+     inside its own card — never the page */
+  [class*=card]{min-width:0}
+  .grid > *{min-width:0}
+}
+
 label.lbl{display:block;font-size:10px;font-weight:700;color:var(--slate-400);letter-spacing:.05em;text-transform:uppercase;margin-bottom:.3rem}
 /* chips/pills */
 .pill{display:inline-flex;align-items:center;gap:4px;padding:.15rem .55rem;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.03em}
@@ -103,6 +118,9 @@ table.tbl tbody tr:hover{background:rgba(30,41,59,.5)}
 .sect-img{width:224px;height:144px;object-fit:cover;border-radius:16px;border:1px solid #24304b}
 @media(max-width:900px){.md-flex-col{flex-direction:column}.sect-img{width:100%;height:150px}}
 .watermark{position:fixed;left:10px;bottom:8px;z-index:40;font-size:10px;letter-spacing:.12em;color:var(--slate-500);font-weight:700;background:rgba(2,6,23,.8);padding:.3rem .6rem;border-radius:8px;border:1px solid #182238}
+
+/* phone: keep wide tables dense while they scroll inside .scrollx */
+@media(max-width:560px){ .tbl th,.tbl td{padding:.35rem .4rem;font-size:11px} }
 </style>
 </head>
 <body>
@@ -415,14 +433,14 @@ function renderS1(){
           <div><div class="text-sm font-black white">${esc(f.name)}</div><div class="text-2xs slate500">edit % shares — Σ must be 100 ± 0.5</div></div>
           <span id="shareChip" class="pill ${balanced?"pill-em":"pill-rose"}" style="font-size:12px">Σ ${sigma}% ${balanced?"· BALANCED":"· OUT OF BOUNDS"}</span>
         </div>
-        <table class="tbl"><thead><tr><th>Ingredient</th><th style="width:110px">Share %</th><th style="width:120px">Protein</th><th style="width:120px">ME</th><th style="width:60px"></th></tr></thead>
+        <div class="tbl-wrap scrollx"><table class="tbl"><thead><tr><th>Ingredient</th><th style="width:110px">Share %</th><th style="width:120px">Protein</th><th style="width:120px">ME</th><th style="width:60px"></th></tr></thead>
         <tbody>${f.items.map((it,i)=>{const meta=ING[it.name]||{protein:0,energy:0,color:"#64748b"};return `<tr>
           <td><span style="color:${meta.color}">●</span> <span class="white font-bold">${esc(it.name)}</span></td>
           <td><input class="input tnum" data-share-idx="${i}" type="number" step="0.1" min="0" max="100" value="${it.share}"></td>
           <td class="slate400 mono">${r2(it.share*meta.protein/100)} pts</td>
           <td class="slate400 mono">${Math.round(it.share*meta.energy/100)} kcal</td>
           <td><button class="btn btn-ghost" style="padding:.25rem .5rem" onclick="removeIng(${i})">✕</button></td></tr>`;}).join("")}
-        </tbody></table>
+        </tbody></table></div>
         <div class="flex gap2 mt-3 flex-wrap">
           <input list="inglist" id="newIng" class="input" style="width:220px" placeholder="add ingredient…(datalist)">
           <datalist id="inglist">${Object.keys(ING).map(n=>`<option value="${n}">`).join("")}</datalist>
@@ -449,7 +467,7 @@ function renderS1(){
   el("s1").querySelectorAll("[data-share-idx]").forEach(inp=>{
     inp.addEventListener("change",()=>{ const f2=formById(S.selectedForm); f2.items[+inp.dataset.shareIdx].share=+inp.value; recomputeConflicts(); logT(`share edit ${f2.items[+inp.dataset.shareIdx].name} → ${inp.value}% (Σ ${formSum(f2)}%)`); renderAll(); });
   });
-  if(window.innerWidth<900){ el("s1grid").style.gridTemplateColumns="1fr"; }
+  if(window.innerWidth<900){ el("s1grid").style.gridTemplateColumns="minmax(0,1fr)"; }
 }
 window.selectForm=id=>{S.selectedForm=id;renderAll();};
 window.addIng=()=>{ const n=el("newIng").value, sh=+el("newShare").value||0; if(!ING[n]){toast("crit","Unknown ingredient — pick from the datalist");return;} const f=formById(S.selectedForm); if(f.items.some(i=>i.name===n)){toast("warn",n+" already in BOM");return;} f.items.push({name:n,share:sh}); recomputeConflicts(); logT(`ingredient added: ${n} ${sh}% (Σ ${formSum(f)}%)`); renderAll(); };
@@ -457,7 +475,7 @@ window.removeIng=i=>{ const f=formById(S.selectedForm); logT(`ingredient removed
 window.autoFix=fid=>{ const f=formById(fid), s=formSum(f), k=100/s; f.items.forEach(i=>i.share=r2(i.share*k)); const drift=r2(100-formSum(f)); f.items[0].share=r2(f.items[0].share+drift); recomputeConflicts(); logT(`${f.name} auto-fixed pro-rata → Σ ${formSum(f)}%`); toast("ok",`Conflict resolved — ${f.name} now balances at Σ 100%`); renderAll(); };
 function runProbesS1(){
   probeLog.s1=[];
-  const F1=formById("F1"), keep=clone(F1.items);
+  const F1=formById("F1"), keep=clone(F1.items), keepF3=clone(formById("F3").items);
   F1.items=[{name:"Maize",share:89},{name:"Soya Bean Meal",share:11.3}]; recomputeConflicts();
   probePush("s1", Math.abs(formSum(F1)-100)<=0.5 && !S.conflicts.some(c=>c.id==="F1"), "P1 tolerated tolerance bound", `89+11.3 → Σ=${formSum(F1)}% → within ±0.5, no conflict queued (expected: no conflict)`);
   autoFixSilent("F1");  // undo P1's edit so the drawer is back to its seeded state
@@ -465,7 +483,7 @@ function runProbesS1(){
   autoFixSilent("F3"); probePush("s1", formSum(F3)===100 && !S.conflicts.some(c=>c.id==="F3") && S.conflicts.length===0, "P3 auto-fix clears conflict", `resolve → Σ=${formSum(F3)}% · drawer open=${S.conflicts.length} (expected 0)`);
   const before=S.solved.cost; S.cpTarget=20; S.solved=solveBlend();
   probePush("s1", S.solved.shares.soya > 0 && Math.abs(S.solved.cp-20)<0.6, "P4 slider re-solves blend", `target CP 20% → soya ${S.solved.shares.soya}% · achieves CP ${S.solved.cp}% (cost ${GHS(before)}→${GHS(S.solved.cost)})`);
-  S.cpTarget=18; S.solved=solveBlend(); F1.items=keep; recomputeConflicts(); renderAll();
+  S.cpTarget=18; S.solved=solveBlend(); F1.items=keep; formById("F3").items=keepF3; recomputeConflicts(); renderAll();
 }
 function autoFixSilent(fid){ const f=formById(fid), s=formSum(f), k=100/s; f.items.forEach(i=>i.share=r2(i.share*k)); const drift=r2(100-formSum(f)); f.items[0].share=r2(f.items[0].share+drift); recomputeConflicts(); }
 
@@ -537,7 +555,7 @@ function renderS2(){
     </div>
   </div>`;
   const ta=el("s2").querySelector("textarea"); if(ta) ta.addEventListener("input",()=>{S.overrideNote=ta.value;});
-  if(window.innerWidth<900){ el("s2grid").style.gridTemplateColumns="1fr"; }
+  if(window.innerWidth<900){ el("s2grid").style.gridTemplateColumns="minmax(0,1fr)"; }
 }
 window.runStage=s=>{ const b=S.batches[S.selectedBatch]; const score=85+Math.floor(Math.random()*14);
   b.qc[s]={score,verdict:score>=75?"PASS":"FAIL",detail:s==="FINISHED_FEED"?`moisture ${(9+Math.random()*3).toFixed(1)}% ≤ 13%`:"within tolerance"}; logT(`${b.no} ${s} tested → ${score}% ${b.qc[s].verdict}`); renderAll(); };
@@ -561,7 +579,17 @@ function runProbesS2(){
   probeLog.s2=[];
   probeBatch = { toasts: [], logs: [] };
   // P5: blocked release on hold batch without finished pass
-  const idx=S.batches.findIndex(b=>b.no==="FDB-2026-041522"); S.selectedBatch=idx; const b=S.batches[idx];
+  const idx=S.batches.findIndex(b=>b.no==="FDB-2026-041522");
+  // restore seeded state first — a previous battery run released this batch
+  // during P6/P8 (that residue is what made P5 fail on the 2nd manual run)
+  {
+    const bb=S.batches[idx];
+    bb.status="QC_HOLD"; bb.releasedAt=null; bb.override=false; bb.overrideNote="";
+    bb.qc.FINISHED_FEED={score:null,verdict:"PENDING"};
+    S.bins=S.bins.filter(x=>x.no!==bb.no);
+    S.savings.ledger=S.savings.ledger.filter(l=>l.no!==bb.no);
+  }
+  S.selectedBatch=idx; const b=S.batches[idx];
   const tryRelease_final = window.tryRelease;
   window.tryRelease = (ov)=>{ tryRelease_final(ov); return { applied: !(S.batches[S.selectedBatch]._gate || ""), gate: S.batches[S.selectedBatch]._gate || "" }; };
   b.qc.FINISHED_FEED={score:null,verdict:"PENDING"}; const r4=tryRelease(false);
@@ -625,15 +653,15 @@ function renderS3(){
     <div class="card p-4"><div class="lbl">Savings per formulation (GH₵/kg baseline − cost)</div>
       ${barChart(["F1","F2"].map(fid=>{const rs=v.rows.filter(r=>r.form===fid);return {label:(formById(fid)?.name||fid).split(" ")[0]+" "+fid,value:rs.length?r2(sum(rs.map(r=>r.savingKg))/rs.length):0,sub:rs.length+" batches",color:fid==="F1"?"#a78bfa":"#22d3ee"};}),{h:180})}</div>
     <div class="card p-4"><div class="lbl">Cost editor — live recomputation</div>
-      <table class="tbl"><thead><tr><th>Batch</th><th>kg out</th><th>Baseline</th><th style="width:140px">Cost GH₵/kg</th></tr></thead>
+      <div class="tbl-wrap scrollx"><table class="tbl"><thead><tr><th>Batch</th><th>kg out</th><th>Baseline</th><th style="width:140px">Cost GH₵/kg</th></tr></thead>
       <tbody>${S.savings.ledger.map((l,i)=>`<tr><td class="mono text-cyan">${l.no.slice(-6)}</td><td class="tnum">${l.kgOut}</td><td class="tnum slate400">${GHS((S.savings.mode==="FORMULATION_REF"&&formById(l.form)?.refPrice)||SEED.purchAvg)}</td>
-        <td><input class="input tnum" data-cost-idx="${i}" type="number" step="0.01" min="1" value="${l.costPerKg}" ${S.savings.editIdx===null?"disabled":""}></td></tr>`).join("")}</tbody></table>
+        <td><input class="input tnum" data-cost-idx="${i}" type="number" step="0.01" min="1" value="${l.costPerKg}" ${S.savings.editIdx===null?"disabled":""}></td></tr>`).join("")}</tbody></table></div>
       ${S.savings.editIdx===null?'<div class="text-2xs slate500 mt-2">Enable “✎ Edit batch costs” to adjust actuals — everything recomputes.</div>':'<div class="text-2xs amber mt-2">Editing live — savings cards, band chart and totals re-derive per keystroke.</div>'}
     </div>
   </div>
   ${probePanel("s3")}`;
   if(S.savings.editIdx!==null){ el("s3").querySelectorAll("[data-cost-idx]").forEach(inp=>inp.addEventListener("input",()=>{ const l=S.savings.ledger[+inp.dataset.costIdx]; l.costPerKg=+inp.value; logT(`cost edit ${l.no} → ${GHS(l.costPerKg)}/kg`); updateCounter(); renderS3(); })); }
-  if(window.innerWidth<900){ el("s3grid").style.gridTemplateColumns="1fr"; }
+  if(window.innerWidth<900){ el("s3grid").style.gridTemplateColumns="minmax(0,1fr)"; }
 }
 window.setRange=n=>{ S.savings.rangeN=n; logT(`range filter → ${n===99?"all":"last "+n}`); renderAll(); };
 function runProbesS3(){
@@ -650,7 +678,11 @@ function runProbesS3(){
   // P11: edit recabs everything — scope "All" so ledger[0] stays in view even
   // after the S2 probes pushed the released batch into the savings ledger.
   S.savings.mode="FORMULATION_REF"; S.savings.rangeN=99; const before=savingsView().total;
+  const orig=S.savings.ledger[0].costPerKg;
   S.savings.ledger[0].costPerKg=r2(S.savings.ledger[0].costPerKg-0.5); const after=savingsView().total;
+  S.savings.ledger[0].costPerKg=orig; // restore before rendering — cleaned-up
+                                      // first pass previously left the UI showing
+                                      // an arbitrarily reduced cost on re-run
   const churn=r2(after-before), expect=r2(0.5*S.savings.ledger[0].kgOut);
   probePush("s3", Math.abs(churn-expect)<0.51, "P11 cost edit recabs total", `cost −0.50 on ${S.savings.ledger[0].kgOut} kg → savings +${GHS(churn)} (expected ≈ ${GHS(expect)})`);
   Object.assign(S.savings,save); renderAll();
@@ -684,13 +716,13 @@ function renderS4(){
           <span class="lbl" style="margin:0">Filter</span>
           ${[["ALL","All batches"],["STOCKED","Stocked"],["LOW","Low feed"],["EMPTY","Stock-out"]].map(([k,l])=>`<button class="tab ${S.filter===k?"active":""}" style="padding:.35rem .8rem" onclick="S.filter='${k}';renderAll()">${l}</button>`).join("")}
         </div>
-        <table class="tbl"><thead><tr><th>Batch</th><th>Formulation</th><th style="width:260px">Remaining</th><th>Status</th></tr></thead>
+        <div class="tbl-wrap scrollx"><table class="tbl"><thead><tr><th>Batch</th><th>Formulation</th><th style="width:260px">Remaining</th><th>Status</th></tr></thead>
         <tbody>${filteredBins().map(b=>{const pct=binPct(b),tone=binTone(b);return `<tr>
           <td class="mono cyan">${b.no}</td>
           <td class="slate300">${(formById(b.form)?.name||b.form).split("—")[0]}</td>
           <td><div class="flex items-center gap2"><div class="bar" style="width:130px"><div style="width:${pct}%;background:${tone==="emerald"?"#10b981":tone==="amber"?"#f59e0b":"#f43f5e"}"></div></div>
             <span class="text-2xs mono tnum slate300">${b.remaining.toFixed(1)} / ${b.max} kg</span></div></td>
-          <td>${b.remaining<=0?`<span class="pill pill-rose">STOCK-OUT</span>`:`<span class="pill pill-${tone}">${tone==="emerald"?"OK":tone==="amber"?"<50% WARNING":"<20% CRITICAL"}</span>`}</td></tr>`;}).join("")||'<tr><td colspan="4" class="text-center slate500 p-3">no batches under this filter</td></tr>'}</tbody></table>
+          <td>${b.remaining<=0?`<span class="pill pill-rose">STOCK-OUT</span>`:`<span class="pill pill-${tone}">${tone==="emerald"?"OK":tone==="amber"?"<50% WARNING":"<20% CRITICAL"}</span>`}</td></tr>`;}).join("")||'<tr><td colspan="4" class="text-center slate500 p-3">no batches under this filter</td></tr>'}</tbody></table></div>
       </div>
       <div class="card p-4">
         <div class="lbl">Daily flock consumption — last 10 days (stacked, kg)</div>
@@ -730,7 +762,7 @@ function renderS4(){
     </div>
   </div>`;
   el("feedForm")?.addEventListener("submit",ev=>{ ev.preventDefault(); logFeed(); });
-  if(window.innerWidth<900){ el("s4grid").style.gridTemplateColumns="1fr"; }
+  if(window.innerWidth<900){ el("s4grid").style.gridTemplateColumns="minmax(0,1fr)"; }
 }
 function logFeed(){
   const no=el("ffBin").value, qty=+el("ffQty").value, flock=el("ffFlock").value;
