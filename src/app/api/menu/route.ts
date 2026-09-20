@@ -18,7 +18,12 @@ import { ttlGet, ttlSet } from "@/lib/ttlCache";
  * every inventory/business write. Checkout always re-validates stock, so a
  * couple of seconds of catalog staleness can never oversell.
  */
-const MENU_CACHE_KEY = "menu:v1";
+// Cache key shares the app-wide "init" prefix so EVERY mutating route (all
+// of them invalidate "init" by convention — sales, orders, inventory,
+// service-areas, pickup points, businesses…) also flushes this snapshot.
+// A standalone "menu:*" key would stay stale for up to MENU_TTL_MS after
+// any write.
+const MENU_CACHE_KEY = "init:menu:v1";
 const MENU_TTL_MS = 10_000;
 /** Browser/CDN freshness — the server TTL cache (10 s, invalidated on every
  *  inventory/business write) is the source of truth; browsers may serve the

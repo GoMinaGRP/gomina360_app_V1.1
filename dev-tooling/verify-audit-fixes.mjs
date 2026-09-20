@@ -76,6 +76,10 @@ async function purge() {
   await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP]);
   await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateA]);
   await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateP]);
+  await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateA]);
+  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateA]);
+  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateP]);
+  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP]);
   // txns/audit rows use auto-built descriptions (MARK is NOT embedded) —
   // purge by id baseline; the suite runs alone (sequential discipline).
   await q(`DELETE FROM transactions WHERE id > $1`, [made.txnBaseline]);

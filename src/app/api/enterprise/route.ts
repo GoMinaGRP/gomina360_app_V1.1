@@ -1,3 +1,12 @@
+const origError = console.error.bind(console);
+console.error = (...args) => {
+  const s = args.map((a) => String((a && a.message) ? a.message : a)).join(" | ");
+  if (/permission|PERMISSION|Configuration Database|ERR_INSUFFICIENT/i.test(s)) {
+    origError("####APPERROR#### " + s.slice(0, 500) + " ####END####");
+    try { origError("####APPSTACK#### " + String(args[0] && args[0].stack || new Error("stackprobe").stack).slice(0, 800) + " ####END####"); } catch {}
+  }
+  return origError(...args);
+};
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { ttlInvalidate } from "@/lib/ttlCache";

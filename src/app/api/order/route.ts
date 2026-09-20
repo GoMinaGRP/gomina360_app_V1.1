@@ -174,9 +174,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Pickup locations: when the unit runs named pickup points the customer
-    // must choose one — it is snapshotted onto the order so the Business →
-    // Branch → Orders → Delivery → Pickup chain survives later edits/removal.
+    // Pickup locations: when the unit runs MULTIPLE named pickup points the
+    // customer must choose one — only the explicitly chosen point is
+    // snapshotted onto the order so the Business → Branch → Orders →
+    // Delivery → Pickup chain survives later edits/removal. Without an
+    // explicit choice the public payload anchors the customer at the branch
+    // GPS instead (lib/tracking fallback).
     let pickupSnap: {
       pickupLocationId: number;
       pickupLocationName: string;
@@ -189,22 +192,30 @@ export async function POST(request: NextRequest) {
         .select()
         .from(pickupLocations)
         .where(and(eq(pickupLocations.businessId, businessId), eq(pickupLocations.active, true)));
+      // Choice is only mandatory when the unit actually runs MULTIPLE named
+      // points. A single point (or none) needs no chooser: the customer
+      // either collects at that one spot, or — when it wasn't explicit —
+      // the public payload anchors them at the branch GPS (see /api/track).
       if (points.length > 0) {
         const chosenId = Number(body.pickupLocationId);
         const chosen = points.find((p) => p.id === chosenId);
         if (!chosen) {
-          return NextResponse.json(
-            { success: false, error: `Choose where you will collect your order — ${biz.name} has ${points.length} pickup point${points.length === 1 ? "" : "s"}.` },
-            { status: 400 },
-          );
+          if (chosenId || points.length > 1) {
+            return NextResponse.json(
+              { success: false, error: `Choose where you will collect your order — ${biz.name} has ${points.length} pickup point${points.length === 1 ? "" : "s"}.` },
+              { status: 400 },
+            );
+          }
+          // single point, no explicit choice → fall through with no snap
+        } else {
+          pickupSnap = {
+            pickupLocationId: chosen.id,
+            pickupLocationName: chosen.name,
+            pickupLocationAddress: chosen.address || null,
+            pickupLat: chosen.lat ?? null,
+            pickupLng: chosen.lng ?? null,
+          };
         }
-        pickupSnap = {
-          pickupLocationId: chosen.id,
-          pickupLocationName: chosen.name,
-          pickupLocationAddress: chosen.address || null,
-          pickupLat: chosen.lat ?? null,
-          pickupLng: chosen.lng ?? null,
-        };
       }
     }
 
