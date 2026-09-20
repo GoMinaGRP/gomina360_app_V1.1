@@ -7,7 +7,7 @@ import {
   Boxes, Package, Truck, Wallet, AlertTriangle, CheckCircle, Settings,
   Users, Plus, X, Calendar, Filter, TrendingUp, TrendingDown, Loader2,
   Building2, Wrench, Activity, ShoppingCart, LayoutDashboard, ClipboardCheck,
-  BadgeDollarSign, PackagePlus, CircleDot, CheckCircle2, ShieldCheck,
+  BadgeDollarSign, PackagePlus, CircleDot, CheckCircle2, ShieldCheck, Cog,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
+import BlockMixing from "./BlockMixing";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
@@ -33,11 +34,12 @@ interface Props {
 }
 
 type FormType = "PRODUCTION" | "ORDER" | "DELIVERY" | "EXPENSE" | "SALE" | "RESTOCK" | "ITEM" | null;
-type Tab = "DASHBOARD" | "INVENTORY" | "FINANCE" | "QC" | "CHECKLIST";
+type Tab = "DASHBOARD" | "INVENTORY" | "MIXING" | "FINANCE" | "QC" | "CHECKLIST";
 
 const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
   { key: "INVENTORY", label: "Inventory", icon: Boxes },
+  { key: "MIXING", label: "Mixing", icon: Cog },
   { key: "FINANCE", label: "Finance", icon: Wallet },
   { key: "QC", label: "Quality Control", icon: ShieldCheck },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
@@ -64,6 +66,7 @@ export default function BlockFactoryModule({
   const [checklists, setChecklists] = useState<any[]>([]);
   const [blockTypesList, setBlockTypesList] = useState<any[]>([]);
   const [qcChecks, setQcChecks] = useState<any[]>([]);
+  const [mixBatches, setMixBatches] = useState<any[]>([]);
   const [checklistDate, setChecklistDate] = useState<string>(new Date().toISOString().split("T")[0]);
   const [showForm, setShowForm] = useState<FormType>(null);
   const [showExpense, setShowExpense] = useState(false);
@@ -89,6 +92,7 @@ export default function BlockFactoryModule({
         setDeliveries(d.deliveries || []);
         setBlockTypesList(d.blockTypes || []);
         setQcChecks(d.qcChecks || []);
+        setMixBatches(d.mixBatches || []);
       }
     } finally {
       setLoading(false);
@@ -399,7 +403,7 @@ export default function BlockFactoryModule({
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} data-testid={`bf-tab-${t.key}`} onClick={() => setTab(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
               tab === t.key ? "bg-cyan-600 text-white shadow" : "text-slate-300 hover:bg-slate-700/70"}`}>
             <t.icon className="w-4 h-4" />
@@ -428,6 +432,17 @@ export default function BlockFactoryModule({
       </div>
 
       {/* ══════════════ DASHBOARD ══════════════ */}
+      {/* ══════════════ MIXING (mixer batches + recipes · feed-mill pattern) ══════════════ */}
+      {tab === "MIXING" && (
+        <BlockMixing
+          currentUser={currentUser}
+          businessInfo={businessInfo}
+          currentCurrency={currentCurrency}
+          blockTypes={blockTypesList}
+          onChanged={() => { refresh(); onRefreshData?.(); }}
+        />
+      )}
+
       {tab === "DASHBOARD" && (
         <div className="space-y-5">
           {/* KPIs */}
@@ -676,6 +691,7 @@ export default function BlockFactoryModule({
           inventory={branchInventory}
           blockTypes={blockTypesList}
           qcChecks={qcChecks}
+          mixBatches={mixBatches}
           currentUserName={currentUser?.name}
           currentUserRole={currentUser?.role}
           onRefresh={refresh}
@@ -695,7 +711,7 @@ export default function BlockFactoryModule({
         />
       )}
 
-      {showForm && <BlockFactoryForm type={showForm} busy={busy} onClose={() => { setShowForm(null); setError(""); setRestockItemId(null); }} onSubmit={submit} orders={orders} inventory={branchInventory} blockTypeOptions={blockTypeOptions} blockTypes={blockTypesList} initialRestockItemId={restockItemId} />}
+      {showForm && <BlockFactoryForm type={showForm} busy={busy} onClose={() => { setShowForm(null); setError(""); setRestockItemId(null); }} onSubmit={submit} orders={orders} inventory={branchInventory} blockTypeOptions={blockTypeOptions} blockTypes={blockTypesList} initialRestockItemId={restockItemId} mixBatches={mixBatches} />}
 
       <ExpenseEntryForm
         isOpen={showExpense}
@@ -773,7 +789,7 @@ function MiniList({ title, items, render }: any) {
 function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
 function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
 
-function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, blockTypeOptions, blockTypes = [], initialRestockItemId = null }: any) {
+function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, blockTypeOptions, blockTypes = [], initialRestockItemId = null, mixBatches = [] }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
   const [f, setF] = useState<any>({
     blockType: "6-INCH-SOLID", qualityGrade: "GRADE_A_STANDARD", status: "PENDING",
@@ -861,6 +877,25 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
           Production → Stock: +{good.toLocaleString()} good {f.blockType} blocks {it
             ? <>→ “{it.name}” ({it.sku}): {Number(it.quantity || 0).toLocaleString()} → {(Number(it.quantity || 0) + good).toLocaleString()} {it.unit}</>
             : <>→ a finished-goods stock item will be auto-created for this type</>}
+        </div>
+      );
+    })()}
+    {f.blockType !== ADD_NEW_TYPE && (() => {
+      const released = (mixBatches || []).filter((m: any) => m.status === "RELEASED" && (!f.blockType || m.blockType === f.blockType));
+      return (
+        <div className="mt-2 p-3 rounded-lg bg-slate-900/60 border border-slate-700/70">
+          <label className="block text-[10px] font-semibold text-amber-300 uppercase tracking-wide mb-1">Mixing batch (optional) — consume one released mixer batch for this run</label>
+          <select value={f.mixBatchId || ""} onChange={(e) => set("mixBatchId", e.target.value ? e.target.value : "")}
+            className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
+            <option value="">— No mixer batch (ad-hoc bags) —</option>
+            {released.map((m: any) => (
+              <option key={m.id} value={String(m.id)}>
+                {m.mixBatchNumber} · {m.formulationName} · {(m.actualOutputKg || 0).toLocaleString()} kg · GH₵ {(m.costPerKgGhs || 0).toFixed(2)}/kg
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] text-slate-400">Selecting one links mix cost to the produced blocks and marks the mixer batch <b>CONSUMED</b> (1:1). Manage recipes and runs in the <b>Mixing</b> tab.</p>
+          {f.blockType && !released.length && <div className="mt-1 text-[10px] text-amber-300/80">No released mixer batch for this block type — run the mixer in the Mixing tab, pass MIXING QC and release first.</div>}
         </div>
       );
     })()}

@@ -41,6 +41,11 @@ import {
   poultryFeedFormulations,
   poultryFeedBatches,
   poultryFeedQcChecks,
+  fishFeedFormulations,
+  fishFeedBatches,
+  fishFeedQcChecks,
+  blockMixFormulations,
+  blockMixBatches,
   checklistEntries,
   transportVehicles,
   transportTrips,
@@ -399,6 +404,18 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
     opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
   for (const q of await db.select().from(poultryFeedQcChecks).orderBy(desc(poultryFeedQcChecks.id)).limit(120))
     opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+  // FISH FEED MILL — same chain for the aquaculture mill (formulas → batches → QC).
+  for (const f of await db.select().from(fishFeedFormulations).orderBy(desc(fishFeedFormulations.id)).limit(80))
+    opsPush("fish_feed_formulations", f.id, f.businessId, f.formulationNo, `Fish feed formula — ${f.name} (${f.species} · ${f.feedClass} ${f.feedStage}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(fishFeedBatches).orderBy(desc(fishFeedBatches.id)).limit(120))
+    opsPush("fish_feed_batches", b.id, b.businessId, b.batchNumber, `Fish feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+  for (const q of await db.select().from(fishFeedQcChecks).orderBy(desc(fishFeedQcChecks.id)).limit(120))
+    opsPush("fish_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Fish feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.floatPct != null ? ` · ${q.floatPct}% float` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+  // BLOCK FACTORY — MIXING chain (recipes → mixer batches).
+  for (const f of await db.select().from(blockMixFormulations).orderBy(desc(blockMixFormulations.id)).limit(80))
+    opsPush("block_mix_formulations", f.id, f.businessId, f.formulationNo, `Mix recipe — ${f.name} (${f.blockType}) v${f.version || 1}`, `Batch ${f.batchSizeKg} kg${f.waterCementRatio ? ` · w/c ${f.waterCementRatio}` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+  for (const b of await db.select().from(blockMixBatches).orderBy(desc(blockMixBatches.id)).limit(120))
+    opsPush("block_mix_batches", b.id, b.businessId, b.mixBatchNumber, `Mix batch — ${b.formulationName || "recipe"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.slumpMm != null ? ` · slump ${b.slumpMm} mm` : ""}${b.costPerKgGhs ? ` · GH₵ ${(b.costPerKgGhs).toFixed(2)}/kg` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
 
   // OPERATIONS — daily checklist tasks: one auditable row per dated task
   // completion (or pending/incomplete task), linked to the assigned worker's
@@ -773,6 +790,11 @@ const OP_LOG_SOURCES: Record<string, { table: any; ref: (r: any) => string; work
   poultry_feed_formulations: { table: poultryFeedFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
   poultry_feed_batches: { table: poultryFeedBatches, ref: (r) => r.batchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
   poultry_feed_qc_checks: { table: poultryFeedQcChecks, ref: (r) => r.batchNumber || `QC-${r.id}`, worker: (r) => r.testerName || r.recordedByName || "" },
+  fish_feed_formulations: { table: fishFeedFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  fish_feed_batches: { table: fishFeedBatches, ref: (r) => r.batchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
+  fish_feed_qc_checks: { table: fishFeedQcChecks, ref: (r) => r.batchNumber || `QC-${r.id}`, worker: (r) => r.testerName || r.recordedByName || "" },
+  block_mix_formulations: { table: blockMixFormulations, ref: (r) => r.formulationNo, worker: (r) => r.createdByName || "" },
+  block_mix_batches: { table: blockMixBatches, ref: (r) => r.mixBatchNumber, worker: (r) => r.recordedByName || r.operatorName || "" },
 };
 
 async function resolveRecord(recordType: string, recordSource: string | null, recordId: number) {

@@ -6,7 +6,7 @@ import FishGrowthAnalytics from "./FishGrowthAnalytics";
 import {
   Fish, Droplets, HeartPulse, Activity, Egg as EggIcon, Boxes,
   Wallet, ClipboardCheck, Plus, X, Loader2, Building2,
-  TrendingUp, TrendingDown, AlertTriangle, CalendarCheck,
+  TrendingUp, TrendingDown, AlertTriangle, CalendarCheck, Wheat,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzeAquaculture, AQUA_ALERT_STYLES, AQUA_METRIC_COLORS } from "@/lib/aquacultureAnalytics";
 import DailyChecklistPanel from "./DailyChecklistPanel";
+import AquaFeedMill from "./AquaFeedMill";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
@@ -32,13 +33,14 @@ interface Props {
   onRefreshData: () => void;
 }
 
-type AquaTab = "DASHBOARD" | "STOCK" | "PONDS" | "FEED" | "WATER" | "HEALTH" | "HARVEST" | "FINANCE";
+type AquaTab = "DASHBOARD" | "STOCK" | "PONDS" | "FEED" | "FEED_MILL" | "WATER" | "HEALTH" | "HARVEST" | "FINANCE";
 
 const TABS: { key: AquaTab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: Activity },
   { key: "STOCK", label: "Fish Stock & Batches", icon: Fish },
   { key: "PONDS", label: "Ponds / Tanks", icon: Droplets },
   { key: "FEED", label: "Feed Management", icon: Boxes },
+  { key: "FEED_MILL", label: "Feed Mill", icon: Wheat },
   { key: "WATER", label: "Water Quality", icon: HeartPulse },
   { key: "HEALTH", label: "Tasks & Activities", icon: ClipboardCheck },
   { key: "HARVEST", label: "Harvest Status", icon: TrendingDown },
@@ -548,6 +550,16 @@ export default function AquacultureModule({
             </table>
           </div>
         </Card>
+      )}
+
+      {/* ══════════ FEED MILL (in-house aquatic feed production) ══════════ */}
+      {tab === "FEED_MILL" && (
+        <AquaFeedMill
+          currentUser={currentUser}
+          businessInfo={businessInfo}
+          currentCurrency={currentCurrency}
+          onChanged={() => { refresh?.(); onRefreshData?.(); }}
+        />
       )}
 
       {/* ══════════ WATER QUALITY ══════════ */}

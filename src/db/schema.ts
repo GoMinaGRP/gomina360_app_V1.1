@@ -1365,6 +1365,9 @@ export const blockFactoryLogs = pgTable("block_factory_logs", {
   blocksBroken: integer("blocks_broken").default(0),
   qualityGrade: text("quality_grade").default("GRADE_A_STANDARD"),
   recordedDate: text("recorded_date").notNull(),
+  // Mixing link (optional): the mixer batch this production run consumed
+  // (1:1 — set by PRODUCTION when mixBatchId is supplied).
+  mixBatchId: integer("mix_batch_id"),
 });
 
 // 11b. Block Factory Orders
@@ -1555,12 +1558,241 @@ export const aquacultureFeedLogs = pgTable("aquaculture_feed_logs", {
   costPerKgGhs: doublePrecision("cost_per_kg_ghs").default(0),
   totalCostGhs: doublePrecision("total_cost_ghs").default(0),
   entryType: text("entry_type").notNull().default("CONSUMPTION"), // PURCHASE, CONSUMPTION
+  // Fish Feed Mill linkage: own-mill write-up rows are typed OWN_MILL and
+  // carry the producing fish_feed_batches.id (single-booking: no extra txn).
+  sourceType: text("source_type"), // PURCHASE | OWN_MILL
+  feedBatchId: integer("feed_batch_id"), // fish_feed_batches.id (null = purchased feed)
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// A4. Water Quality Logs
+// ──────────────────────────────────────────────────────────────────────────
+// FISH FEED MILL (Aquaculture) — production of pond feed in-house.
+// Mirror of the poultry mill tables with aquatic specifics: species + feeding
+// stage, FLOATING/SINKING class, pellet size, float-test + water-stability
+// QC. Numbers: FMM- (formulations), FPB- (batches).
+// ──────────────────────────────────────────────────────────────────────────
+
+// FF1. Formulations
+export const fishFeedFormulations = pgTable("fish_feed_formulations", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  formulationNo: text("formulation_no").notNull().unique(), // FMM-2026-0007
+  name: text("name").notNull(), // e.g. "Volta Tilapia Grower 32%CP Floating"
+  species: text("species").notNull().default("TILAPIA"), // TILAPIA | CATFISH | HETEROTIS | CARP | ALL
+  feedClass: text("feed_class").notNull().default("FLOATING"), // FLOATING | SINKING
+  feedStage: text("feed_stage").notNull().default("GROWER"), // FRY | STARTER | GROWER | FINISHER | BROODSTOCK
+  pelletMmTarget: doublePrecision("pellet_mm_target"), // target pellet/crumble size
+  batchSizeKg: doublePrecision("batch_size_kg").notNull().default(500),
+  cpPctTarget: doublePrecision("cp_pct_target"), // crude-protein target %
+  commercialRefPriceGhs: doublePrecision("commercial_ref_price_ghs"), // comparison baseline GH₵/kg
+  notes: text("notes"),
+  active: boolean("active").notNull().default(true),
+  version: integer("version").notNull().default(1),
+  lastCostPerKgGhs: doublePrecision("last_cost_per_kg_ghs"), // rolling cache
+  lastProducedAt: timestamp("last_produced_at"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// FF2. Formulation BOM lines
+export const fishFeedFormulationItems = pgTable("fish_feed_formulation_items", {
+  id: serial("id").primaryKey(),
+  formulationId: integer("formulation_id").notNull().references(() => fishFeedFormulations.id),
+  inventoryId: integer("inventory_id"), // raw-material inventory_items row (auto-linked)
+  ingredientName: text("ingredient_name").notNull(),
+  sku: text("sku"),
+  sharePct: doublePrecision("share_pct").notNull(), // Must sum to 100 across the BOM
+  sequence: integer("sequence").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FF3. Production batches (the mix run head + cost engine)
+export const fishFeedBatches = pgTable("fish_feed_batches", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  batchNumber: text("batch_number").notNull().unique(), // FPB-2026-0043
+  formulationId: integer("formulation_id").notNull(),
+  formulationName: text("formulation_name").notNull(),
+  formulationSnapshot: jsonb("formulation_snapshot"),
+  species: text("species"), // snapshot
+  feedClass: text("feed_class"), // snapshot: FLOATING | SINKING
+  feedStage: text("feed_stage"), // snapshot
+  productionDate: text("production_date").notNull(),
+  // QC gate: lands QC_HOLD; released only after a PASS FINISHED_FEED check
+  // (FLOATING feeds additionally need floatPct ≥ 90); OWNER/canManageRecords
+  // may override with a recorded note. REJECTED reverses the stock-in and is terminal.
+  status: text("status").notNull().default("QC_HOLD"), // MIXING | QC_HOLD | RELEASED | REJECTED
+  plannedInputKg: doublePrecision("planned_input_kg").notNull(),
+  actualInputKg: doublePrecision("actual_input_kg").notNull(),
+  actualOutputKg: doublePrecision("actual_output_kg").notNull(),
+  yieldPct: doublePrecision("yield_pct"),
+  ingredientCostGhs: doublePrecision("ingredient_cost_ghs").notNull().default(0), // DERIVED from draw
+  labourCostGhs: doublePrecision("labour_cost_ghs").notNull().default(0), // posts AQUA_FEED_MILL_OPS once
+  overheadCostGhs: doublePrecision("overhead_cost_ghs").notNull().default(0),
+  totalCostGhs: doublePrecision("total_cost_ghs").notNull().default(0),
+  costPerKgGhs: doublePrecision("cost_per_kg_ghs").notNull().default(0),
+  finishedInventoryId: integer("finished_inventory_id"),
+  finishedSku: text("finished_sku"),
+  finishedName: text("finished_name"),
+  stockedQtyKg: doublePrecision("stocked_qty_kg").notNull().default(0),
+  stockedAt: timestamp("stocked_at"),
+  releasedByName: text("released_by_name"),
+  releasedAt: timestamp("released_at"),
+  releaseNote: text("release_note"),
+  operatorName: text("operator_name"),
+  notes: text("notes"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  recordedByUserId: integer("recorded_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FF4. Batch ingredient draws — traceability half-ledger
+export const fishFeedBatchInputs = pgTable("fish_feed_batch_inputs", {
+  id: serial("id").primaryKey(),
+  batchId: integer("batch_id").notNull().references(() => fishFeedBatches.id),
+  inventoryId: integer("inventory_id").notNull(),
+  ingredientName: text("ingredient_name").notNull(),
+  sku: text("sku"),
+  plannedKg: doublePrecision("planned_kg").notNull(),
+  actualKg: doublePrecision("actual_kg").notNull(),
+  unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0),
+  lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// FF5. Feed QC checks — stages incl. FLOATING (float test + water stability)
+export const fishFeedQcChecks = pgTable("fish_feed_qc_checks", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  batchId: integer("batch_id"), // fish_feed_batches.id (null for raw-material checks)
+  batchNumber: text("batch_number"), // snapshot for purge/forensics stability
+  stage: text("stage").notNull(), // RAW_MATERIAL | GRINDING | MIXING | FLOATING | FINISHED_FEED | STORAGE
+  sampleRef: text("sample_ref"),
+  testName: text("test_name").notNull(),
+  requiredStandard: text("required_standard"),
+  testResult: text("test_result"),
+  resultValue: doublePrecision("result_value"),
+  resultUnit: text("result_unit"),
+  passFail: text("pass_fail").notNull().default("PASS"), // PASS | FAIL
+  moisturePct: doublePrecision("moisture_pct"),
+  pelletMmObserved: doublePrecision("pellet_mm_observed"),
+  floatPct: doublePrecision("float_pct"), // % floating after 10 min (FLOATING gate ≥ 90)
+  waterStabilityMin: doublePrecision("water_stability_min"), // minutes pellets hold in water
+  contaminantsNote: text("contaminants_note"),
+  notes: text("notes"),
+  photo: text("photo"),
+  testedAt: timestamp("tested_at").notNull().defaultNow(),
+  testerName: text("tester_name"),
+  testerRole: text("tester_role"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// BLOCK FACTORY — MIXING. Recipes (bound to the block-types master list),
+// mixer runs (BOM draw + water), release gate (MIXING-stage QC via the
+// existing block_qc_checks), 1:1 consumption by production logs, rejection
+// with dry-material recovery. Numbers: MIX- (recipes), MXB- (batches).
+// ──────────────────────────────────────────────────────────────────────────
+
+// BM1. Mix formulations — one recipe per block type (typeKey from the master list)
+export const blockMixFormulations = pgTable("block_mix_formulations", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  formulationNo: text("formulation_no").notNull().unique(), // MIX-2026-0007
+  name: text("name").notNull(),
+  blockType: text("block_type").notNull(), // block_types.type_key — PRODUCTION consumption matches on it
+  designNote: text("design_note"), // e.g. "1:9 lean sandcrete"
+  waterCementRatio: doublePrecision("water_cement_ratio"),
+  batchSizeKg: doublePrecision("batch_size_kg").notNull().default(800),
+  notes: text("notes"),
+  active: boolean("active").notNull().default(true),
+  version: integer("version").notNull().default(1),
+  lastCostPerKgGhs: doublePrecision("last_cost_per_kg_ghs"),
+  lastProducedAt: timestamp("last_produced_at"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// BM2. Recipe BOM lines
+export const blockMixFormulationItems = pgTable("block_mix_formulation_items", {
+  id: serial("id").primaryKey(),
+  formulationId: integer("formulation_id").notNull().references(() => blockMixFormulations.id),
+  inventoryId: integer("inventory_id"), // BLK-RM-* inventory_items row (auto-created)
+  ingredientName: text("ingredient_name").notNull(),
+  sku: text("sku"),
+  sharePct: doublePrecision("share_pct").notNull(), // Must sum to 100
+  sequence: integer("sequence").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// BM3. Mixer batches — status machine QC_HOLD → RELEASED → CONSUMED (1:1) /
+// REJECTED (terminal, optional material recovery)
+export const blockMixBatches = pgTable("block_mix_batches", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"),
+  mixBatchNumber: text("mix_batch_number").notNull().unique(), // MXB-2026-0043
+  formulationId: integer("formulation_id").notNull(),
+  formulationName: text("formulation_name").notNull(), // snapshot
+  formulationSnapshot: jsonb("formulation_snapshot"),
+  blockType: text("block_type").notNull(), // snapshot of recipe block_type at run time
+  productionDate: text("production_date").notNull(),
+  status: text("status").notNull().default("QC_HOLD"), // QC_HOLD | RELEASED | REJECTED | CONSUMED
+  plannedInputKg: doublePrecision("planned_input_kg").notNull(),
+  actualInputKg: doublePrecision("actual_input_kg").notNull(), // dry materials actually drawn
+  waterLitresUsed: doublePrecision("water_litres_used"),
+  actualOutputKg: doublePrecision("actual_output_kg").notNull(), // default = materials + water mass
+  slumpMm: doublePrecision("slump_mm"),
+  ingredientCostGhs: doublePrecision("ingredient_cost_ghs").notNull().default(0),
+  labourCostGhs: doublePrecision("labour_cost_ghs").notNull().default(0), // posts BLOCK_MIX_OPS once
+  overheadCostGhs: doublePrecision("overhead_cost_ghs").notNull().default(0),
+  totalCostGhs: doublePrecision("total_cost_ghs").notNull().default(0),
+  costPerKgGhs: doublePrecision("cost_per_kg_ghs").notNull().default(0),
+  releasedByName: text("released_by_name"),
+  releasedAt: timestamp("released_at"),
+  releaseNote: text("release_note"), // QC-pass basis / override justification / reject reason+recovery
+  operatorName: text("operator_name"),
+  notes: text("notes"),
+  // Consumption link (set when an owner/production run takes the batch).
+  consumedProductionLogId: integer("consumed_production_log_id"), // block_factory_logs.id
+  consumedProductionBatch: text("consumed_production_batch"), // block batch id snapshot
+  consumedAt: timestamp("consumed_at"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  recordedByUserId: integer("recorded_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// BM4. Mixer batch ingredient draws
+export const blockMixBatchInputs = pgTable("block_mix_batch_inputs", {
+  id: serial("id").primaryKey(),
+  mixBatchId: integer("mix_batch_id").notNull().references(() => blockMixBatches.id),
+  inventoryId: integer("inventory_id").notNull(),
+  ingredientName: text("ingredient_name").notNull(),
+  sku: text("sku"),
+  plannedKg: doublePrecision("planned_kg").notNull(),
+  actualKg: doublePrecision("actual_kg").notNull(),
+  unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0),
+  lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
 export const aquacultureWaterQualityLogs = pgTable("aquaculture_water_quality_logs", {
   id: serial("id").primaryKey(),
   businessId: integer("business_id").notNull(),

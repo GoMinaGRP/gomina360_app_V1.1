@@ -73,8 +73,8 @@ interface Input {
   currentCurrency: string;
 }
 
-const RAW_CAT = /feed raw materials/i;
-const MILL_CAT = /animal feed \(milled\)/i;
+const RAW_CAT = /feed raw materials/i; // "Poultry Feed Raw Materials" + "Fish Feed Raw Materials"
+const MILL_CAT = /feed \(milled\)/i; // "Animal Feed (Milled)" + "Fish Feed (Milled)"
 
 export const isRawMaterialItem = (i: any) => RAW_CAT.test(`${i.category}`);
 export const isMilledFeedItem = (i: any) => MILL_CAT.test(`${i.category}`);

@@ -22,6 +22,8 @@ interface Props {
   deliveries: any[];
   inventory: any[];
   blockTypes: any[];
+  // Mixer batches (Mixing tab) — offered when the check's stage is MIXING.
+  mixBatches?: any[];
   qcChecks: any[];
   currentUserName?: string;
   currentUserRole?: string;
@@ -118,6 +120,7 @@ function readPhoto(file: File): Promise<string> {
 export default function BlockQcCenter({
   businessId, businessCode, production, orders, deliveries, inventory,
   blockTypes, qcChecks = [], currentUserName, currentUserRole, onRefresh,
+  mixBatches = [],
 }: Props) {
   const [fBranch, setFBranch] = useState("ALL");
   const [fBatch, setFBatch] = useState("ALL");
@@ -644,10 +647,16 @@ export default function BlockQcCenter({
             {/* Batch + type */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <MFLab>Production Batch {stage === "RAW_MATERIAL" ? "(optional)" : ""}</MFLab>
-                <select data-testid="bqcm-batch" value={mBatch} onChange={(e) => { setMBatch(e.target.value); const b = production.find((p) => p.batchId === e.target.value); if (b) setMType(b.blockType); }} className={input}>
+                <MFLab>{stage === "MIXING" ? "Mixer Batch" : "Production Batch"} {stage === "RAW_MATERIAL" ? "(optional)" : ""}</MFLab>
+                <select data-testid="bqcm-batch" value={mBatch} onChange={(e) => {
+                  setMBatch(e.target.value);
+                  if (stage === "MIXING") { const m = (mixBatches || []).find((x: any) => x.mixBatchNumber === e.target.value); if (m) setMType(m.blockType); return; }
+                  const b = production.find((p) => p.batchId === e.target.value); if (b) setMType(b.blockType);
+                }} className={input}>
                   <option value="">— none / raw materials —</option>
-                  {batchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {(stage === "MIXING"
+                    ? (mixBatches || []).map((m: any) => m.mixBatchNumber)
+                    : batchOptions).map((b: any) => <option key={b} value={b}>{b}</option>)}
                 </select>
               </div>
               <div>
@@ -658,7 +667,15 @@ export default function BlockQcCenter({
                 </select>
               </div>
             </div>
-            {pickedBatch && (
+            {stage === "MIXING" && mBatch && (() => {
+              const m = (mixBatches || []).find((x: any) => x.mixBatchNumber === mBatch);
+              return m ? (
+                <p className="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-700/40 rounded-lg px-2.5 py-1.5">
+                  Linked to mixer batch {m.mixBatchNumber} · {m.blockType} · {(m.actualOutputKg || 0).toLocaleString()} kg · {m.status} · {m.productionDate || ""}
+                </p>
+              ) : null;
+            })()}
+            {stage !== "MIXING" && pickedBatch && (
               <p data-testid="bqcm-info" className="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-700/40 rounded-lg px-2.5 py-1.5">
                 Linked to batch {pickedBatch.batchId} · {pickedBatch.blockType} · molded {pickedBatch.blocksMolded} on {pickedBatch.recordedDate}
               </p>
