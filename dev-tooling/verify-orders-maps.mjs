@@ -455,8 +455,14 @@ async function sectionD() {
   // D2 — drop the pin at the map centre, fine-tune with arrows
   await centreClick('[data-testid="oo-pin-set"]');
   await page.waitForFunction(() => /5\.6037/.test(document.querySelector('[data-testid="oo-pin-coords"]')?.textContent || ""), { timeout: 10000 });
-  const mapSrc = await page.$eval('[data-testid="oo-pin-map"]', (el) => el.getAttribute("src") || "");
-  ok("D2 pin set — embedded Google Map follows it", mapSrc.includes("maps.google.com/maps?q=5.603700"), mapSrc);
+  // Shipped map is Leaflet/OSM (deliberate: Google iframe embed is region-
+  // blocked in some networks → dead grey box). Assert the interactive map
+  // mounted inside oo-pin-map AND the centre pin marker is rendered.
+  const mapEvd = await page.evaluate(() => ({
+    leaflet: !!document.querySelector('[data-testid="oo-pin-map"] .leaflet-container'),
+    marker: !!document.querySelector('[data-testid="oo-pin-map"] .leaflet-marker-icon'),
+  }));
+  ok("D2 pin set — interactive map mounts with the pin marker", mapEvd.leaflet && mapEvd.marker, JSON.stringify(mapEvd));
   await page.select('[data-testid="oo-pin-step"]', "100");
   await page.click('[data-testid="oo-pin-e"]');
   await new Promise((r) => setTimeout(r, 500));
@@ -464,9 +470,11 @@ async function sectionD() {
   const lngAfter = Number(coordsAfter.split(",")[1]);
   ok("D2b arrow pad adjusts the pin (~100 m east per tap)", Number.isFinite(lngAfter) && lngAfter > -0.187 && (-0.187 - lngAfter) * -1 > 0.0005, coordsAfter);
 
-  // D3 — direct coordinates entry (fields prefill from the current pin — clear first)
-  await page.click('[data-testid="oo-pin-manual-toggle"]');
+  // D3 — direct coordinates entry (fields prefill from the current pin — clear first).
+  // All clicks centred: the fixed cart bar can sit above lower controls.
+  await centreClick('[data-testid="oo-pin-manual-toggle"]');
   await page.waitForSelector('[data-testid="oo-pin-manual-lat"]', { timeout: 5000 });
+  await centreClick('[data-testid="oo-pin-manual-lat"]');
   for (const sel of ['[data-testid="oo-pin-manual-lat"]', '[data-testid="oo-pin-manual-lng"]']) {
     await page.click(sel);
     await page.keyboard.down("Control");
@@ -476,7 +484,7 @@ async function sectionD() {
   }
   await page.type('[data-testid="oo-pin-manual-lat"]', "5.611170");
   await page.type('[data-testid="oo-pin-manual-lng"]', "-0.209990");
-  await page.click('[data-testid="oo-pin-manual-apply"]');
+  await centreClick('[data-testid="oo-pin-manual-apply"]');
   await new Promise((r) => setTimeout(r, 500));
   const coordsManual = await page.$eval('[data-testid="oo-pin-coords"]', (el) => el.textContent || "");
   ok("D3 manual coordinates entry works", coordsManual.includes("5.611170") && coordsManual.includes("-0.209990"), coordsManual);
@@ -489,11 +497,19 @@ async function sectionD() {
   await page.waitForSelector('[data-testid="oo-code"]', { timeout: 20000 });
   const uiCode = await page.$eval('[data-testid="oo-code"]', (el) => el.textContent.trim());
   baseline.codeUI = uiCode;
-  const successMap = await page.$eval('[data-testid="oo-success-map-frame"]', (el) => el.getAttribute("src") || "").catch(() => "");
+  // Success screen: MiniLeafletMap (dynamic, ssr:false) — wait for the live
+  // container, then confirm the pinned point is labelled beside it.
+  await page.waitForSelector('[data-testid="oo-success-map-frame"] .leaflet-container', { timeout: 15000 }).catch(() => {});
+  const successMap = await page.evaluate(() => ({
+    frame: !!document.querySelector('[data-testid="oo-success-map-frame"]'),
+    leaflet: !!document.querySelector('[data-testid="oo-success-map-frame"] .leaflet-container'),
+    coords: document.querySelector('[data-testid="oo-success-map"] p.font-mono')?.textContent || "",
+  }));
   const dbPin = (await pg.query(`SELECT delivery_lat, delivery_lng, delivery_accuracy_m FROM customer_trackings WHERE tracking_code=$1`, [uiCode])).rows[0];
   ok("D4 pinned checkout lands: code, success map, pin stored in DB",
-    /^GM-/.test(uiCode) && successMap.includes("maps.google.com/maps?q=5.611170") &&
-    dbPin && Math.abs(dbPin.delivery_lat - 5.61117) < 1e-6 && Math.abs(dbPin.delivery_lng + 0.20999) < 1e-6);
+    /^GM-/.test(uiCode) && successMap.frame && successMap.leaflet && successMap.coords.includes("5.611170") &&
+    dbPin && Math.abs(dbPin.delivery_lat - 5.61117) < 1e-6 && Math.abs(dbPin.delivery_lng + 0.20999) < 1e-6,
+    JSON.stringify(successMap));
   await ctx.close();
 
   // D5 — real GPS capture (mocked device): Use my location
@@ -565,9 +581,14 @@ async function sectionE() {
     hit?.click();
   });
   await page.waitForSelector('[data-testid="oo-pickup-map"]', { timeout: 15000 });
-  const pickSrc = await page.$eval('[data-testid="oo-pickup-map-frame"]', (el) => el.getAttribute("src") || "");
-  ok("E3 pickup shows the branch pickup point on Google Maps while ordering",
-    pickSrc.includes("maps.google.com/maps?q=5.603700"), pickSrc);
+  // MiniLeafletMap is dynamic (ssr:false) — give it a beat to mount.
+  await page.waitForSelector('[data-testid="oo-pickup-map-frame"] .leaflet-container', { timeout: 15000 }).catch(() => {});
+  const pickEvd = await page.evaluate(() => ({
+    frame: !!document.querySelector('[data-testid="oo-pickup-map-frame"]'),
+    leaflet: !!document.querySelector('[data-testid="oo-pickup-map-frame"] .leaflet-container'),
+  }));
+  ok("E3 pickup shows the branch pickup point on the map while ordering",
+    pickEvd.frame && pickEvd.leaflet, JSON.stringify(pickEvd));
   await ctx.close();
 
   const { ctx: ctx2, page: pt } = await newPage("pickup-track", { width: 430, height: 932 });
