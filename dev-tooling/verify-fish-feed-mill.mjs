@@ -278,11 +278,13 @@ async function main() {
     const eReleaseNoQc = await fmPost(page, "RELEASE", { businessId: BIZ, batchId });
     check("E2.release-qc_gate-400", eReleaseNoQc.status === 400 && eReleaseNoQc.body.code === "QC_GATE");
     // failed check → bell + still gated
-    const notifBefore = (await q(`SELECT COUNT(*) c FROM notifications WHERE type='FISH_FEED_QC_FAIL'`)).rows[0];
+    // Delta-tolerant: pre-existing (e.g. DEMO-planted) QC_FAIL bells are
+    // legitimate data, not noise — assert a NEW bell appears after the FAIL.
+    const notifBeforeId = Number((await q(`SELECT COALESCE(MAX(id),0) m FROM notifications WHERE type='FISH_FEED_QC_FAIL'`)).rows[0].m);
     const eQcFail = await fmPost(page, "QC", { businessId: BIZ, batchId, stage: "FINISHED_FEED", testName: "TFFM Moisture quick test", passFail: "FAIL", testResult: "Moisture 16% too high" });
     check("E3.qc-fail-row", eQcFail.body.success === true);
     const notifAfter = (await q(`SELECT * FROM notifications WHERE type='FISH_FEED_QC_FAIL' ORDER BY id DESC LIMIT 1`)).rows[0];
-    check("E4.qc-fail-bell", n(notifBefore.c) === 0 && notifAfter?.priority === "HIGH" && /TFFM/.test(notifAfter?.title || ""), JSON.stringify(notifAfter?.title));
+    check("E4.qc-fail-bell", Number(notifAfter?.id) > notifBeforeId && notifAfter?.priority === "HIGH" && /TFFM/.test(notifAfter?.title || ""), JSON.stringify(notifAfter?.title));
     const eReleaseFail = await fmPost(page, "RELEASE", { businessId: BIZ, batchId });
     check("E5.release-still-gated", eReleaseFail.status === 400);
     // FLOATING specific: PASS without float proof is NOT enough

@@ -795,14 +795,19 @@ function FormSelect({ f, set, label, k, opts }: any) {
   );
 }
 
-function PondSelect({ ponds, f, set }: any) {
+function PondSelect({ ponds, f, set, required, hint }: any) {
   return (
-    <FormSelect f={f} set={set} label="Pond / Tank / Cage" k="pondId"
-      opts={[
-        { v: "", l: "— Select pond —" },
-        ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
-      ]}
-    />
+    <div>
+      <FormSelect f={f} set={set} label={required ? "Pond / Tank / Cage *" : "Pond / Tank / Cage"} k="pondId"
+        opts={[
+          { v: "", l: "— Select pond —" },
+          ...ponds.map((p: any) => ({ v: p.id, l: `${p.name} (${p.pondId})` })),
+        ]}
+      />
+      {required && !f.pondId && (
+        <p className="text-[10px] text-amber-400 mt-0.5">{hint || "Required"}</p>
+      )}
+    </div>
   );
 }
 
@@ -939,7 +944,7 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
 
           {type === "HARVEST" && (
             <>
-              <PondSelect ponds={ponds} f={f} set={set} />
+              <PondSelect ponds={ponds} f={f} set={set} required hint="A harvest must name the pond it came from" />
               <BatchSelect batches={batches} f={f} set={set} />
               <div className="grid grid-cols-2 gap-3">
                 <FormField f={f} set={set} label="Harvest Date" k="saleDate" t="date" defaultValue={today} />
