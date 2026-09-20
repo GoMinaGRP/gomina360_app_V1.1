@@ -1,5 +1,5 @@
 /* Feed Mill Demo Console — headless verification of /demo/index.html
- * Checks: zero console errors, all 12 probes green, four tabs render,
+ * Checks: zero console errors, all 13 probes green, four tabs render,
  * interactivity smoke (share edit → conflict → auto-fix, feed-out → alert),
  * and captures screenshots to /tmp/fm-demo-shots/.
  * Run: bash dev-tooling/run-suite.sh dev-tooling/verify-feed-mill-demo.mjs
@@ -37,7 +37,7 @@ await new Promise((r) => setTimeout(r, 800));
 
 // ── A · boot state ──
 const counter = await page.$eval("#probeCounter", (e) => e.textContent);
-ok(/probes run: 12/.test(counter), "A1 probe battery auto-ran 12 assertions", counter);
+ok(/probes run: 13/.test(counter), "A1 probe battery auto-ran 13 assertions", counter);
 ok(/all green/.test(counter), "A2 all probes green on arrival", counter);
 const sectCount = await page.$$eval("main section", (s) => s.length);
 ok(sectCount === 4, "A3 four demo sections mount", sectCount);
@@ -106,7 +106,7 @@ await page.screenshot({ path: `${SHOTS}/4-feedout-alerts.png`, fullPage: false }
 await page.$eval("#btnReset", (b) => b.click());
 await new Promise((r) => setTimeout(r, 300));
 const counterAfterReset = await page.$eval("#probeCounter", (e) => e.textContent);
-ok(/probes run: 12/.test(counterAfterReset), "Z1 reset restores byte-identical seeds + probe state", counterAfterReset);
+ok(/probes run: 13/.test(counterAfterReset), "Z1 reset restores byte-identical seeds + re-runs probe battery", counterAfterReset);
 ok(consoleErrs.length === 0, "Z2 zero console errors across full run", consoleErrs.slice(0, 3).join(" | ") || "clean");
 
 await browser.close();

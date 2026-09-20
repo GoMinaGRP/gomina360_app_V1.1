@@ -350,8 +350,11 @@ function solveBlend(){
   // Solve shares s for Σs=100 and Σs*cp_i=target, using bran share min 5 absorb residual:
   const cps=ingredients.map(n=>ING[n].protein);
   // parametrize: bran=5; maize = 95 - soya; soya = (target - maizecp*95 - bran*cpBran)/(cpSoya-maizecp)
-  const bran=5, soya=Math.max(0,Math.min(95,(target-(cps[0]*95+cps[2]*bran))/(cps[1]-cps[0])));
-  const sol={maize:r2(95-soya-soya*0),soya:r2(soya),bran};
+  // shares are percentages: Σs=100 with bran pinned at 5% ⇒ maize=95−soya.
+  // Protein balance: soya·cpS + (95−soya)·cpM + 5·cpB = target·100
+  //   ⇒ soya = (target·100 − cpB·5 − cpM·95) / (cpS − cpM)
+  const bran=5, soya=Math.max(0,Math.min(95,(target*100-(cps[2]*bran+cps[0]*95))/(cps[1]-cps[0])));
+  const sol={maize:0,soya:r2(soya),bran};
   sol.maize=r2(100-sol.soya-sol.bran);
   const cp=r2(sum(ingredients.map((n,i)=>[sol.maize,sol.soya,sol.bran][i]*cps[i]/100)));
   const me=Math.round(sum(ingredients.map((n,i)=>[sol.maize,sol.soya,sol.bran][i]*ING[n].energy/100)));
@@ -557,21 +560,21 @@ window.tryReject=()=>{ const b=S.batches[S.selectedBatch];
 function runProbesS2(){
   probeLog.s2=[];
   probeBatch = { toasts: [], logs: [] };
-  // P4: blocked release on hold batch without finished pass
+  // P5: blocked release on hold batch without finished pass
   const idx=S.batches.findIndex(b=>b.no==="FDB-2026-041522"); S.selectedBatch=idx; const b=S.batches[idx];
   const tryRelease_final = window.tryRelease;
   window.tryRelease = (ov)=>{ tryRelease_final(ov); return { applied: !(S.batches[S.selectedBatch]._gate || ""), gate: S.batches[S.selectedBatch]._gate || "" }; };
   b.qc.FINISHED_FEED={score:null,verdict:"PENDING"}; const r4=tryRelease(false);
-  probePush("s2", b.status==="QC_HOLD" && !r4.applied && /BLOCKED/.test(r4.gate), "P4 release gate blocks", `attempt release w/o finished-feed PASS → status stays QC_HOLD · gate msg: "${r4.gate}"`);
-  // P5: passing test enables release
+  probePush("s2", b.status==="QC_HOLD" && !r4.applied && /BLOCKED/.test(r4.gate), "P5 release gate blocks", `attempt release w/o finished-feed PASS → status stays QC_HOLD · gate msg: "${r4.gate}"`);
+  // P6: passing test enables release
   b.qc.FINISHED_FEED={score:93,verdict:"PASS",detail:"moisture 10.9% ≤ 13%"}; b._gate=""; const r5=tryRelease(false);
-  probePush("s2", r5.applied && b.status==="RELEASED" && releaseAllowed(b), "P5 release after PASS", `FINISHED_FEED PASS 93% → status now ${b.status} · bin stocked ${S.bins.find(x=>x.no===b.no)?.remaining} kg`);
+  probePush("s2", r5.applied && b.status==="RELEASED" && releaseAllowed(b), "P6 release after PASS", `FINISHED_FEED PASS 93% → status now ${b.status} · bin stocked ${S.bins.find(x=>x.no===b.no)?.remaining} kg`);
   b.status="QC_HOLD"; b.releasedAt=null; S.bins=S.bins.filter(x=>x.no!==b.no); b.qc.FINISHED_FEED={score:null,verdict:"PENDING"}; // restore
-  // P6: override requires justification
+  // P7: override requires justification
   S.overrideChecked=true; S.overrideNote=""; const r6=tryRelease(true);
-  probePush("s2", b.status==="QC_HOLD" && !r6.applied && /justification/.test(r6.gate), "P6 override needs justification", `blank note → refused: "${r6.gate}"`);
+  probePush("s2", b.status==="QC_HOLD" && !r6.applied && /justification/.test(r6.gate), "P7 override needs justification", `blank note → refused: "${r6.gate}"`);
   S.overrideNote="Vet cleared post-regrind mix — Dr Adjei memo 16-09"; S.overrideChecked=true; const r7=tryRelease(true);
-  probePush("s2", r7.applied && b.status==="RELEASED" && b.override===true && b.overrideNote.length>5, "P7 override release audited", `applied release with note “${b.overrideNote.slice(0,34)}…” · override chip shown`);
+  probePush("s2", r7.applied && b.status==="RELEASED" && b.override===true && b.overrideNote.length>5, "P8 override release audited", `applied release with note “${b.overrideNote.slice(0,34)}…” · override chip shown`);
   S.overrideChecked=false; b._gate="";
   window.tryRelease = tryRelease_final;
   probeBatch = null;
@@ -636,19 +639,20 @@ window.setRange=n=>{ S.savings.rangeN=n; logT(`range filter → ${n===99?"all":"
 function runProbesS3(){
   probeLog.s3=[];
   const save=JSON.parse(JSON.stringify(S.savings));
-  // P8: range filter recompute
+  // P9: range filter recompute
   S.savings.rangeN=6; const vAll=savingsView(); S.savings.rangeN=4; const v4=savingsView();
   const exp4=r2(sum(v4.rows.map(r=>r.savingTotal)));
-  probePush("s3", v4.rows.length===4 && v4.total===exp4 && v4.total!==vAll.total, "P8 range filter refilters", `last-4 total ${GHS(v4.total)} vs full ${GHS(vAll.total)} (expected: different & = Σ slices)`);
-  // P9: baseline mode recompute
+  probePush("s3", v4.rows.length===4 && v4.total===exp4 && v4.total!==vAll.total, "P9 range filter refilters", `last-4 total ${GHS(v4.total)} vs full ${GHS(vAll.total)} (expected: different & = Σ slices)`);
+  // P10: baseline mode recompute
   S.savings.rangeN=6; S.savings.mode="FORMULATION_REF"; const a=savingsView().total;
   S.savings.mode="PURCHASE_AVG"; const b=savingsView().total;
-  probePush("s3", a!==b, "P9 baseline mode re-baselines", `ref-price total ${GHS(a)} vs purchase-avg ${GHS(b)} (expected: differ)`);
-  // P10: edit recabs everything
-  S.savings.mode="FORMULATION_REF"; const before=savingsView().total;
+  probePush("s3", a!==b, "P10 baseline mode re-baselines", `ref-price total ${GHS(a)} vs purchase-avg ${GHS(b)} (expected: differ)`);
+  // P11: edit recabs everything — scope "All" so ledger[0] stays in view even
+  // after the S2 probes pushed the released batch into the savings ledger.
+  S.savings.mode="FORMULATION_REF"; S.savings.rangeN=99; const before=savingsView().total;
   S.savings.ledger[0].costPerKg=r2(S.savings.ledger[0].costPerKg-0.5); const after=savingsView().total;
   const churn=r2(after-before), expect=r2(0.5*S.savings.ledger[0].kgOut);
-  probePush("s3", Math.abs(churn-expect)<0.51, "P10 cost edit recabs total", `cost −0.50 on ${S.savings.ledger[0].kgOut} kg → savings +${GHS(churn)} (expected ≈ ${GHS(expect)})`);
+  probePush("s3", Math.abs(churn-expect)<0.51, "P11 cost edit recabs total", `cost −0.50 on ${S.savings.ledger[0].kgOut} kg → savings +${GHS(churn)} (expected ≈ ${GHS(expect)})`);
   Object.assign(S.savings,save); renderAll();
 }
 
@@ -750,21 +754,24 @@ function gate(msg){ const g=el("ffGate"); if(g){g.textContent=msg;g.classList.re
 function runProbesS4(){
   probeLog.s4=[];
   // ensure a dedicated probe bin exists
-  if(!S.bins.some(b=>b.no==="FDB-PROBE-01")) S.bins.push({no:"FDB-PROBE-01",form:"F1",remaining:120,max:500});
-  const b=S.bins.find(x=>x.no==="FDB-PROBE-01"); b.remaining=120;
+  if(!S.bins.some(b=>b.no==="FDB-PROBE-01")) S.bins.push({no:"FDB-PROBE-01",form:"F1",remaining:300,max:500});
+  const b=S.bins.find(x=>x.no==="FDB-PROBE-01"); b.remaining=300;
   const alertBase=S.alertFeed.length;
-  // P11: crossing <50% fires warning, <20% fires critical, 0 fires stock-out
+  // P12: crossing <50% fires warning, <20% fires critical, 0 fires stock-out.
+  // Draw sequence from 60% full so each level is crossed exactly once
+  // (120 kg on a 500 kg bin starts BELOW the warn line and can never fire it).
   const draw=(q)=>{ const before=b.remaining/b.max; b.remaining=r2(b.remaining-q); const after=b.remaining/b.max;
     if(b.remaining<=0) feedAlert("crit",`STOCK-OUT: ${b.no} exhausted — reorder/mill immediately`);
     else if(before>=THRESH.crit && after<THRESH.crit) feedAlert("crit",`CRITICAL: ${b.no} below 20% — ${b.remaining.toFixed(1)} kg left`);
     else if(before>=THRESH.warn && after<THRESH.warn) feedAlert("warn",`WARNING: ${b.no} below half bin — ${b.remaining.toFixed(1)} kg left`); };
-  draw(80); const warnFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="warn");
-  draw(60); const critFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="crit"&&/below 20%/.test(a.msg));
-  draw(45); const outFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>/STOCK-OUT/.test(a.msg));
-  probePush("s4", warnFired&&critFired&&outFired, "P11 threshold events fire", `120→40 (warn ✓) → -20 (crit ✓) → 0 (stock-out ✓) · alert feed +${S.alertFeed.length-alertBase}`);
-  // P12: overdraw impossible
+  draw(100); const warnFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="warn");
+  draw(120); const critFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>a.kind==="crit"&&/below 20%/.test(a.msg));
+  draw(90);  const outFired=S.alertFeed.slice(0,S.alertFeed.length-alertBase).some(a=>/STOCK-OUT/.test(a.msg));
+  probePush("s4", warnFired&&critFired&&outFired, "P12 threshold events fire",
+    `300→200 (${warnFired?"warn ✓":"warn ✗ — missed <50% crossing"}) → 80 (${critFired?"crit ✓":"crit ✗ — missed <20% crossing"}) → 0 (${outFired?"stock-out ✓":"stock-out ✗"}) · alert feed +${S.alertFeed.length-alertBase}`);
+  // P13: overdraw impossible
   b.remaining=0; const before=b.remaining; const canDraw=b.remaining>0; if(canDraw) b.remaining=r2(b.remaining-5);
-  probePush("s4", b.remaining===before && !canDraw, "P12 over-draw impossible", `draw 5 kg on empty bin refused — remaining stays ${before} kg · gate message rendered`);
+  probePush("s4", b.remaining===before && !canDraw, "P13 over-draw impossible", `draw 5 kg on empty bin refused — remaining stays ${before} kg · gate message rendered`);
   if(b.remaining===0) b.remaining=120; // restore probe bin for interactive play
   renderAll();
 }
@@ -777,7 +784,7 @@ document.querySelectorAll("#tabbar .tab").forEach(t=>t.addEventListener("click",
 }));
 function runAllProbes(){ try{ runProbesS1(); runProbesS2(); runProbesS3(); runProbesS4(); }catch(e){ console.error(e); toast("crit","probe exception: "+e.message); } renderAll(); }
 el("btnRunAll").addEventListener("click",()=>{ logT("full probe battery executed"); runAllProbes(); toast("ok","Probe battery finished — see counters & panels"); });
-el("btnReset").addEventListener("click",()=>{ resetScenario(); renderAll(); updateCounter(); logT("scenario reset to byte-identical seeds"); toast("ok","Scenario reset — all stores re-seeded"); });
+el("btnReset").addEventListener("click",()=>{ resetScenario(); logT("scenario reset to byte-identical seeds"); runAllProbes(); toast("ok","Scenario reset — all stores re-seeded & probe battery re-run"); });
 resetScenario(); renderAll(); updateCounter();
 logT("console booted — 4 interactive feature demos loaded");
 // welcome state: run the probe battery once so everything is green on arrival
