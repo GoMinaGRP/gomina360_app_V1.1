@@ -6,6 +6,7 @@ import {
   telecomWifiPackages,
   checklistTemplates,
   inventoryItems,
+  transactions,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
@@ -346,9 +347,16 @@ export async function provisionBusiness(
   }
 
   // 2. Category starter inventory kit — SAMPLE data, seeded ONLY for
-  //    demo/recovery units (opts.starterKit). Its cost value is folded into
-  //    the metrics row (expenses / inventory value) — NOT booked as a
-  //    transaction — so live layering never double-counts it.
+  //    demo/recovery units (opts.starterKit). The kit cost is booked as a
+  //    REAL expense transaction ("Opening Stock — Starter Kit") so every
+  //    dashboard figure is backed by a manageable, exportable ledger record;
+  //    the metrics row stays zero-based and only carries the stock valuation
+  //    (inventoryValueGhs) of the items that physically exist. Live layering
+  //    (baseline metric + ledger rows) therefore never double-counts it AND
+  //    the owner can audit/reconcile the opening investment like any other
+  //    expense. (Before, the cost was silently folded into the metrics row
+  //    with no transaction — dashboards showed expenses that existed nowhere
+  //    as recorded data.)
   const existingInv = await db
     .select()
     .from(inventoryItems)
@@ -378,6 +386,24 @@ export async function provisionBusiness(
       createdItems.push(row);
     }
     if (kitCost > 0) {
+      const kitTotal = Math.round(kitCost * 100) / 100;
+      const now = new Date();
+      // One real, manageable expense record for the whole opening kit.
+      await db.insert(transactions).values({
+        transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+        businessId,
+        branchCode: biz.code,
+        type: "EXPENSE",
+        category: "Opening Stock — Starter Kit",
+        amountGhs: kitTotal,
+        paymentMethod: "BANK_TRANSFER",
+        description: `Opening stock investment — ${createdItems.length} starter item(s) at cost (${biz.category} kit)`,
+        date: now.toISOString().split("T")[0],
+        createdAt: now,
+        status: "COMPLETED",
+        recordedBy: "System (opening stock)",
+        recordedByRole: "SYSTEM",
+      });
       const [metric] = await db
         .select()
         .from(businessMetrics)
@@ -386,10 +412,7 @@ export async function provisionBusiness(
         await db
           .update(businessMetrics)
           .set({
-            expensesGhs: Math.round(kitCost * 100) / 100,
-            netProfitGhs: Math.round(-kitCost * 100) / 100,
-            cashFlowGhs: Math.round(-kitCost * 100) / 100,
-            inventoryValueGhs: Math.round(kitCost * 100) / 100,
+            inventoryValueGhs: kitTotal,
           })
           .where(eq(businessMetrics.id, metric.id));
       }

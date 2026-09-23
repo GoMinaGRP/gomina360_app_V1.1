@@ -21,7 +21,7 @@ import {
   businesses,
   recordDeletionLogs,
 } from "@/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
@@ -56,20 +56,23 @@ export async function GET(request: Request) {
       const allowed = await accessibleBusinessIds(session.user); // null ⇒ see all
       const canSee = (bizId: number | null | undefined) =>
         allowed == null || (bizId != null && allowed.includes(bizId));
-      const [item] = await db
+      // QR labels are unique PER BUSINESS: two independent organizations may
+      // legitimately carry the same label value (their unit codes can match).
+      // Resolve the caller's accessible match — not just the first global row.
+      const itemRows = await db
         .select()
         .from(inventoryItems)
-        .where(eq(inventoryItems.qrCode, code))
-        .limit(1);
-      if (item && canSee(item.businessId)) {
+        .where(eq(inventoryItems.qrCode, code));
+      const item = itemRows.find((r: any) => canSee(r.businessId));
+      if (item) {
         return NextResponse.json({ success: true, found: true, kind: "inventory", record: item });
       }
-      const [asset] = await db
+      const assetRows = await db
         .select()
         .from(assets)
-        .where(eq(assets.qrCode, code))
-        .limit(1);
-      if (asset && canSee(asset.businessId)) {
+        .where(eq(assets.qrCode, code));
+      const asset = assetRows.find((r: any) => canSee(r.businessId));
+      if (asset) {
         return NextResponse.json({ success: true, found: true, kind: "asset", record: asset });
       }
       return NextResponse.json({ success: true, found: false });
@@ -478,9 +481,13 @@ export async function POST(request: Request) {
       // Quick-add path — auto-assign the employee number and record the
       // registration in the employee record history (same as the full
       // Employee Registration flow in /api/employees).
+      // Staff numbers are PER UNIT (each unit numbers its own roster from
+      // EMP-0001) — never a continuation of another unit's or organization's
+      // sequence.
       const maxRows = await db
         .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-        .from(employees);
+        .from(employees)
+        .where(eq(employees.businessId, empBizId));
       const employeeNo = `EMP-${String((Number(maxRows[0]?.v) || 0) + 1).padStart(4, "0")}`;
       const [inserted] = await db
         .insert(employees)
@@ -577,10 +584,12 @@ export async function POST(request: Request) {
           );
         }
       } else {
+        // Asset codes number PER BUSINESS: two independent organizations may
+        // both run a POULTRY-01 unit with its own AST-0001 registry.
         const branchAssets = await db
           .select()
           .from(assets)
-          .where(eq(assets.branchCode, branchCode));
+          .where(eq(assets.businessId, businessIdNum));
         let seq = branchAssets.length + 1;
         // Guard against gaps/collisions by probing until a free code is found
         // eslint-disable-next-line no-constant-condition
@@ -589,7 +598,7 @@ export async function POST(request: Request) {
           const [exists] = await db
             .select()
             .from(assets)
-            .where(eq(assets.assetCode, candidate));
+            .where(and(eq(assets.assetCode, candidate), eq(assets.businessId, businessIdNum)));
           if (!exists) {
             assetCode = candidate;
             break;
@@ -601,10 +610,12 @@ export async function POST(request: Request) {
       // ── Unique QR tag — a scanned/generated QR must never point at two assets. ──
       const assetQr = data.qrCode ? String(data.qrCode).trim().slice(0, 200) : "";
       if (assetQr) {
+        // QR uniqueness is PER BUSINESS (independent orgs may share unit
+        // codes, so identical label values can exist in two tenants).
         const [qrDupe] = await db
           .select()
           .from(assets)
-          .where(eq(assets.qrCode, assetQr))
+          .where(and(eq(assets.qrCode, assetQr), eq(assets.businessId, businessIdNum)))
           .limit(1);
         if (qrDupe) {
           return NextResponse.json(
@@ -719,7 +730,7 @@ export async function POST(request: Request) {
         const [qrDupe] = await db
           .select()
           .from(inventoryItems)
-          .where(eq(inventoryItems.qrCode, invQr))
+          .where(and(eq(inventoryItems.qrCode, invQr), eq(inventoryItems.businessId, bizId)))
           .limit(1);
         if (qrDupe) {
           return NextResponse.json(

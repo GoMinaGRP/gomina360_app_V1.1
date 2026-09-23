@@ -12,6 +12,7 @@ import {
   sharesOrganization,
   FORBIDDEN,
   UNAUTHENTICATED,
+  bustSessionCache,
 } from "@/lib/auth";
 
 /** May this caller see/pick `targetUserRow`? Super Admin ⇒ anyone; everyone
@@ -659,6 +660,10 @@ export async function PATCH(request: Request) {
       await backfillUserNotifications({ userId: updatedUser.id, userName: updatedUser.name, businessIds: allBiz });
     }
 
+    // Role/permission/assignment/deactivation changes must reach the very
+    // next authenticated request in THIS process immediately.
+    bustSessionCache();
+
     return NextResponse.json({
       success: true,
       user: { ...stripSecret(updatedUser), extraAccessIds: accessMap[updatedUser.id] || [] },
@@ -708,6 +713,7 @@ export async function DELETE(request: Request) {
     await db.delete(userBusinessAccess).where(eq(userBusinessAccess.userId, userId));
     await db.delete(organizationMembers).where(eq(organizationMembers.userId, userId));
     await db.delete(users).where(eq(users.id, userId));
+    bustSessionCache(); // deleted user's memoised sessions must not survive in this process
     return NextResponse.json({ success: true, deleted: true });
   } catch (error: any) {
     return apiError(error);

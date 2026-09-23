@@ -348,7 +348,7 @@ export default function RestaurantKitchenModule({
     </div>
   );
 
-  if (loading) return <div className="p-10 text-center text-slate-400 text-sm">Loading Mina Heritage Kitchen…</div>;
+  if (loading) return <div className="p-10 text-center text-slate-400 text-sm">Loading {businessInfo?.name ? `${businessInfo.name}…` : "Kitchen workspace…"}</div>;
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100">

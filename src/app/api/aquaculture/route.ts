@@ -18,6 +18,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -223,7 +224,7 @@ export async function POST(request: NextRequest) {
 
       // Expense for PURCHASE entries
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId, branchCode, branchName: data.branchName || null,
@@ -376,7 +377,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create income transaction for fish sales
       if (revenue > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId, branchCode, branchName: data.branchName || null,

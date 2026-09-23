@@ -1,5 +1,5 @@
-import { db } from "@/db";
-import { checklistTemplates, checklistEntries, businesses } from "@/db/schema";
+import { db, getPool } from "@/db";
+import { checklistTemplates, checklistEntries } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { tasksForBusiness, type TaskSeed } from "./checklistDefaults";
 
@@ -84,24 +84,34 @@ export async function generateEntriesForDate(businessId: number, branchCode: str
  * One tiny aggregate probe decides whether any work is needed, so steady-state
  * cost is ~1 query (generates only on the first init of the day per business).
  */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export async function ensureTodayFor(businessIds: number[] | null, today: string) {
-  const missing: number[] = [];
-  const bizRows = await db
-    .select({ id: businesses.id, code: businesses.code, category: businesses.category })
-    .from(businesses);
-  // null scope ⇒ Super Admin ⇒ every business; empty array ⇒ nothing scoped.
-  const scoped = businessIds === null ? bizRows : bizRows.filter((b) => businessIds.includes(Number(b.id)));
+  if (typeof today !== "string" || !DATE_RE.test(today)) return; // never interpolate anything else
+  // One round trip for the whole convergence check: the scoped business list
+  // AND the set of businesses that already have entries for today, in a single
+  // multi-statement query. (This used to be 1 + N sequential selects — with a
+  // remote database that alone added ~1 s to every cold dashboard load.)
+  const ids =
+    businessIds === null
+      ? ""
+      : ` WHERE "id" IN (${businessIds.map((n) => Math.trunc(Number(n))).filter(Number.isFinite).join(",") || "-1"})`;
+  const scopedFilter =
+    businessIds === null
+      ? ""
+      : ` AND "business_id" IN (${businessIds.map((n) => Math.trunc(Number(n))).filter(Number.isFinite).join(",") || "-1"})`;
+  const results = (await getPool().query(
+    `SELECT "id", "code", "category" FROM "businesses"${ids};` +
+      `SELECT DISTINCT "business_id" FROM "checklist_entries" WHERE "checklist_date" = '${today}'${scopedFilter};`
+  )) as unknown as any[];
+  const scoped = results[0].rows as any[];
   if (!scoped.length) return;
+  const have = new Set<number>(
+    (results[1].rows as any[]).map((r) => Number(r.business_id)).filter(Number.isFinite)
+  );
   for (const b of scoped) {
-    const existing = await db
-      .select({ id: checklistEntries.id })
-      .from(checklistEntries)
-      .where(and(eq(checklistEntries.businessId, Number(b.id)), eq(checklistEntries.checklistDate, today)))
-      .limit(1);
-    if (existing.length === 0) missing.push(Number(b.id));
-  }
-  for (const id of missing) {
-    const b = scoped.find((x) => Number(x.id) === id);
-    await generateEntriesForDate(id, b?.code || null, today, b?.code, b?.category);
+    if (!have.has(Number(b.id))) {
+      await generateEntriesForDate(Number(b.id), b?.code || null, today, b?.code, b?.category);
+    }
   }
 }

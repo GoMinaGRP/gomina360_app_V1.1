@@ -51,7 +51,7 @@ export const BIZ_TABLES = [
 
 export const BIZ_NAME_PATTERNS = ["MW-%", "TEST%", "TEST %", "Unrelated Biz %", "kkkkk"];
 export const ORG_NAME_PATTERNS = ["MW-%", "AU Unrelated Org %", "TEST%", "TEST %"];
-export const USER_EMAIL_PATTERNS = ["%@demo.local", "%@mw-test.local", "test.%"];
+export const USER_EMAIL_PATTERNS = ["%@demo.local", "%@mw-test.local", "test.%", "audtest.%@gomina360.com"];
 export const USER_NAME_PATTERNS = ["TEST %", "TEST%", "Auditor One %", "Assignee Worker %", "Shared Worker %", "Unrelated Owner %"];
 
 // Inline ONLY trouble-free values (ints + our own constant patterns) into

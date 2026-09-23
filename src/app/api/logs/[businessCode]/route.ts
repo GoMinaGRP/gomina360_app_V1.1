@@ -17,6 +17,21 @@ import { eq, desc } from "drizzle-orm";
 import { stockOut, computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { ttlInvalidate } from "@/lib/ttlCache";
+import { nextTrxNumber } from "@/lib/idNumbers";
+
+/** Unit codes are unique PER ORGANIZATION, so a code may match businesses in
+ *  several tenants. Resolve the first business the caller can access —
+ *  preferring their own organization when several matches are accessible
+ *  (e.g. a super admin spanning two orgs that both run POULTRY-01). */
+async function firstAccessible(session: any, rows: any[]): Promise<any | null> {
+  const own = rows.find((r) => r.ownerId != null && r.ownerId === session.orgId);
+  if (own && (await canAccessBusiness(session.user, own.id))) return own;
+  for (const r of rows) {
+    if (await canAccessBusiness(session.user, r.id)) return r;
+  }
+  return null;
+}
 
 export async function GET(
   request: Request,
@@ -33,20 +48,22 @@ export async function GET(
 
     // Resolve the requesting unit first: every branch (original or newly
     // created, e.g. WASH-02) reads ONLY its own operations logs — never the
-    // shared table of another same-type unit.
-    const [biz] = await db
+    // shared table of another same-type unit. Unit codes are unique PER
+    // ORGANIZATION, so several orgs can carry the same code — resolve the
+    // caller's accessible match.
+    const bizRows = await db
       .select()
       .from(businesses)
       .where(eq(businesses.code, upperCode));
 
-    if (!biz) {
+    const biz = await firstAccessible(session, bizRows);
+    if (!bizRows.length) {
       return NextResponse.json(
         { success: false, error: `Unknown business code: ${upperCode}` },
         { status: 404 }
       );
     }
-
-    if (!(await canAccessBusiness(session.user, biz.id))) {
+    if (!biz) {
       return FORBIDDEN("You do not have access to that business.");
     }
 
@@ -106,21 +123,28 @@ export async function POST(
     const upperCode = businessCode.toUpperCase();
     const body = await request.json();
 
-    const [biz] = await db
+    // Unit codes are unique per organization — resolve the caller's
+    // accessible match among all orgs carrying this code.
+    const bizRows = await db
       .select()
       .from(businesses)
       .where(eq(businesses.code, upperCode));
 
-    if (!biz) {
+    const biz = await firstAccessible(session, bizRows);
+    if (!bizRows.length) {
       return NextResponse.json(
         { success: false, error: "Business not found" },
         { status: 404 }
       );
     }
-
-    if (!(await canAccessBusiness(session.user, biz.id))) {
+    if (!biz) {
       return FORBIDDEN("You do not have access to that business.");
     }
+
+    // Log writes (e.g. the Hardware GRN) cascade into Inventory + Finance —
+    // drop the shared /api/init snapshot cache so post-save refreshes read
+    // fresh stock and ledger data instead of a ≤2.5 s stale copy.
+    ttlInvalidate("init");
 
     const today = new Date().toISOString().split("T")[0];
 
@@ -246,7 +270,7 @@ export async function POST(
       // branch's revenue / profit / dashboards update immediately ──
       if ((inserted.totalRevenueGhs || 0) > 0) {
         await db.insert(transactions).values({
-          transactionNumber: `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
+          transactionNumber: nextTrxNumber(),
           businessId: biz.id,
           branchCode: biz.code,
           branchName: biz.name,
@@ -296,6 +320,24 @@ export async function POST(
       // Finance stay in lock-step with the physical yard.
       const qty = Math.max(0, Number(body.quantityReceived) || 0);
       const unitCost = Number(body.unitCostGhs) || 0;
+      // Permission gate BEFORE any mutation — a refused GRN must leave no
+      // trace. Booking the landed cost writes an EXPENSE transaction, so a
+      // WORKER without expense permission must untick "book expense"
+      // (same rule the feed-mill intake routes enforce).
+      if (
+        body.recordExpense !== false &&
+        session.user.role === "WORKER" &&
+        !session.user.canRecordExpenses
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "This goods receipt needs expense-booking permission. Untick 'Book landed cost to Finance' or ask a manager to record it.",
+          },
+          { status: 403 }
+        );
+      }
       const stampNote = Date.now().toString().slice(-6);
       const [inserted] = await db
         .insert(hardwareLogs)
@@ -361,7 +403,7 @@ export async function POST(
       // ── Finance linkage: landed cost books as an EXPENSE ──
       if (qty > 0 && unitCost > 0 && body.recordExpense !== false) {
         await db.insert(transactions).values({
-          transactionNumber: `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
+          transactionNumber: nextTrxNumber(),
           businessId: biz.id,
           branchCode: biz.code,
           branchName: biz.name,

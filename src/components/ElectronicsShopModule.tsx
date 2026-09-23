@@ -417,7 +417,7 @@ export default function ElectronicsShopModule({
   const nextClaimStatus: Record<string, string> = { OPEN: "IN_PROGRESS", IN_PROGRESS: "RESOLVED" };
 
   if (loading) {
-    return <div className="p-10 text-center text-slate-400 text-sm">Loading Mina Tech &amp; Electronics Hub…</div>;
+    return <div className="p-10 text-center text-slate-400 text-sm">Loading {businessInfo?.name ? `${businessInfo.name}…` : "Electronics workspace…"}</div>;
   }
 
   return (

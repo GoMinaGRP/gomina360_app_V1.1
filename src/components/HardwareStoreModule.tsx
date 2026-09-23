@@ -184,13 +184,23 @@ export default function HardwareStoreModule({
     const soldOrders = deliveredOrders.filter((o) => o.inventoryId === i.id);
     const soldQty = soldOrders.reduce((s, o) => s + (o.quantity || 0), 0);
     const estRevenue = soldOrders.reduce((s, o) => s + (o.totalGhs || 0), 0);
-    const received = opsLogs.filter((l) => {
-      const key = String(l.itemName || "").toUpperCase().slice(0, 12);
-      return i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12));
-    }).reduce((s, l) => s + (l.quantityReceived || 0), 0);
+    // "Received" = everything that stocked this item IN: GRN yard receipts
+    // (matched by name) AND supplier purchases that were RECEIVED against it
+    // (explicit inventoryId link, same name-prefix fallback as the API).
+    const nameKey = String(i.name || "").toUpperCase().slice(0, 12);
+    const matches = (label: any) => {
+      const k = String(label || "").toUpperCase().slice(0, 12);
+      return !!label && (String(label).toUpperCase().includes(nameKey) || k.includes(nameKey));
+    };
+    const grnQty = opsLogs
+      .filter((l) => matches(l.itemName))
+      .reduce((s, l) => s + (l.quantityReceived || 0), 0);
+    const purchaseQty = purchases
+      .filter((p) => p.status === "RECEIVED" && (p.inventoryId === i.id || matches(p.itemName)))
+      .reduce((s, p) => s + (p.quantity || 0), 0);
     const marginPct = i.sellingPriceGhs > 0 ? Math.round(((i.sellingPriceGhs - (i.costPriceGhs || 0)) / i.sellingPriceGhs) * 100) : 0;
-    return { ...i, soldQty, estRevenue, received, marginPct, stockValue: (i.quantity || 0) * (i.costPriceGhs || 0) };
-  }).sort((a, b) => b.estRevenue - a.estRevenue), [branchInventory, deliveredOrders, opsLogs]);
+    return { ...i, soldQty, estRevenue, received: grnQty + purchaseQty, marginPct, stockValue: (i.quantity || 0) * (i.costPriceGhs || 0) };
+  }).sort((a, b) => b.estRevenue - a.estRevenue), [branchInventory, deliveredOrders, opsLogs, purchases]);
 
   // Staff performance
   const staffPerformance = useMemo(() => {

@@ -50,7 +50,7 @@ export async function POST(request: Request) {
 
     const buf = Buffer.from(await file.arrayBuffer());
     const manifest = await readBackupArchive(buf);
-    const result = await importBusinessBackup(manifest, { nameOverride, codeOverride });
+    const result = await importBusinessBackup(manifest, { nameOverride, codeOverride, ownerId: session.orgId ?? null });
 
     // Tenant: the imported unit belongs to the importer's organization.
     if ((result as any)?.businessId != null && session.orgId != null) {
