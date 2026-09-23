@@ -279,7 +279,9 @@ const B = {
   await sleep(400);
   const deriveCount = await page.$$eval('[data-testid^="pobm-derive-"]', (n) => n.length);
   ok("D10 derive picker lists flocks", deriveCount >= 5, `${deriveCount} flocks`);
-  // derive from the good historical cycle
+  // derive from the good historical cycle (remember the high-water id so the
+  // profile this run creates can be cleaned up after the assertions)
+  const preDeriveMax = await q1("SELECT max(id) m FROM poultry_benchmark_profiles");
   const b02id = await q1("SELECT id FROM poultry_flocks WHERE batch_number = 'BENCH-DEMO-B02'");
   await page.evaluate((id) => { const el = document.querySelector(`[data-testid="pobm-derive-${id}"]`); if (el) el.click(); }, b02id.id);
   await sleep(1000);
@@ -289,6 +291,8 @@ const B = {
   await clickTid("pobm-close");
   await sleep(400);
   ok("D13 drawer closed", !(await exists(tid("pobm-root"))));
+  // remove the FARM_HISTORY profile this run derived (keep pre-existing ones)
+  await q(`DELETE FROM poultry_benchmark_profiles WHERE id > ${Number(preDeriveMax.m)}`);
 }
 
 // ═══ 6. FALLBACK BEHAVIOUR (no profile → built-in curves) ═══════════════
