@@ -533,12 +533,27 @@ try {
   // deployments enforced GLOBAL uniqueness — drop those and install the
   // composite forms (existing data is globally unique, so this is a pure
   // widening: every existing row remains valid).
-  await client.query(`drop index if exists public.businesses_code_unique`);
-  await client.query(`drop index if exists public.businesses_code_key`);
-  await client.query(`drop index if exists public.assets_asset_code_unique`);
-  await client.query(`drop index if exists public.assets_asset_code_key`);
+  //
+  // The old globals exist as either a UNIQUE CONSTRAINT (drizzle column
+  // `.unique()` → `ALTER TABLE … ADD CONSTRAINT`, e.g. businesses_code_unique)
+  // or a bare unique INDEX (table-level uniqueIndex). DROP INDEX alone fails
+  // on the constraint shape with "cannot drop index … because constraint …
+  // requires it" — which is exactly what broke the Vercel build-time
+  // migration (build = db:migrate && next build). Drop the CONSTRAINT first
+  // (removes its index with it), then DROP INDEX IF EXISTS for the bare-index
+  // shape; each branch is a safe no-op for the other shape.
+  for (const [table, names] of [
+    ["businesses", ["businesses_code_unique", "businesses_code_key"]],
+    ["assets", ["assets_asset_code_unique", "assets_asset_code_key"]],
+  ]) {
+    for (const n of names) {
+      await client.query(`alter table public.${table} drop constraint if exists ${n}`);
+      await client.query(`drop index if exists public.${n}`);
+    }
+  }
   // Same NAME as the old global QR indexes but new (business_id, …) columns —
   // drop first so the recreate below wins even if it already existed.
+  // (These were table-level uniqueIndex — plain indexes, DROP INDEX is right.)
   await client.query(`drop index if exists public.assets_qr_code_unique`);
   await client.query(`drop index if exists public.inventory_items_qr_code_unique`);
   await client.query(`create unique index if not exists businesses_owner_code_unique on public.businesses (owner_id, code)`);

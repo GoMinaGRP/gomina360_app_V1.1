@@ -47,6 +47,7 @@ export const BIZ_TABLES = [
   "sales_documents",
   "telecom_activities","telecom_lines","telecom_txns","telecom_vouchers","telecom_wifi_packages",
   "transactions",
+  "customers",
 ];
 
 export const BIZ_NAME_PATTERNS = ["MW-%", "TEST%", "TEST %", "Unrelated Biz %", "kkkkk"];
@@ -59,6 +60,9 @@ export const USER_NAME_PATTERNS = ["TEST %", "TEST%", "Auditor One %", "Assignee
 // protocol error response later desyncs the connection (the purge touches
 // tables whose columns may not exist — swallowed below). Identical SQL on
 // real Postgres; impossible to inject since no value is user-supplied here.
+// NOTE: `customers` is business-scoped too — without it, purging a fixture
+// business (MW-*, TEST%) leaves orphaned customer rows that the az-app audit
+// flags as broken foreign keys.
 function inlineParams(sql, params = []) {
   let out = sql;
   for (let i = params.length; i >= 1; i--) {
