@@ -108,6 +108,9 @@ export async function purgeUserId(pg, id) {
     ["push_subscriptions", "user_id"], ["audit_trail", "actor_user_id"],
     ["audit_reviews", "reviewer_user_id"], ["audit_reviews", "assigned_user_id"],
     ["audit_issue_updates", "actor_user_id"],
+    // auditor grants follow the grantee AND the granter — without these the
+    // purged user leaves orphaned rows in the ACCESS tab forever
+    ["audit_assignments", "user_id"], ["audit_assignments", "granted_by_user_id"],
   ];
   let n = 0;
   // assigned_user_id / reviewer_user_id are references to users; nullify

@@ -43,6 +43,7 @@ async function auditList(token, extra = "") {
   return { status: res.status, body: await res.json().catch(() => null) };
 }
 async function auditDetail(token, r) {
+  if (!r) throw new Error("auditDetail: record row not found in list");
   const p = new URLSearchParams({ record: "1", recordType: r.recordType, recordId: String(r.recordId) });
   if (r.recordSource) p.set("recordSource", r.recordSource);
   const res = await fetch(`${BASE}/api/audit?${p.toString()}`, { headers: H(token) });
@@ -51,6 +52,16 @@ async function auditDetail(token, r) {
 
 // ══ 1. Fixtures: seed representative auditable records with photos & links ══
 console.log("── 1. Seed test fixtures ──");
+// Emmanuel Osei (branch manager, business 2) is the demo's scoped auditor.
+// The canonical demo ships his grant; heal it when a past purge removed it
+// (and only then — the suite never touches a pre-existing grant).
+const hadEmanGrant = !!(await q1("SELECT id FROM audit_assignments WHERE user_id=3 AND business_id=2 AND is_active=true"));
+if (!hadEmanGrant) {
+  await q(`INSERT INTO audit_assignments (user_id, user_name, user_role, business_id, branch_code, modules, note, is_active, granted_by_user_id, granted_by_name, granted_by_role)
+           VALUES (3, 'Emmanuel Osei', 'BRANCH_MANAGER', 2, NULL, $1::jsonb, 'Blocks yard operations & books QA review', true, 1, 'Kwame Mina', 'OWNER')`,
+    [JSON.stringify(["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"])]);
+  console.log("  healed Emmanuel's demo auditor grant (business 2)");
+}
 const txId = (await q1(
   `INSERT INTO transactions (transaction_number, business_id, branch_code, type, category, amount_ghs, payment_method, customer_id, supplier_id, description, date, status, recorded_by, recorded_by_role, recorded_by_user_id, receipt_images)
    VALUES ($1, 1, NULL, 'EXPENSE', 'Feed Expense', 1250.5, 'MTN_MOMO', NULL, 1, 'AUDTEST feed purchase with receipts', '2026-09-08', 'COMPLETED', 'Kwame Mina', 'OWNER', 1, $2::jsonb) RETURNING id`,
@@ -86,9 +97,15 @@ try {
   ok("O1 /api/audit 200", full.status === 200, `HTTP ${full.status}`);
   const recs = full.body?.records || [];
   const types = new Set(recs.map((r) => r.recordType));
-  ok("O2 core types present (TRANSACTION, INVENTORY_ITEM, EMPLOYEE, PAYROLL_RUN, ASSET, CHECKLIST, CCTV, OPERATION_LOG)",
-    ["TRANSACTION", "INVENTORY_ITEM", "EMPLOYEE", "PAYROLL_RUN", "ASSET", "CHECKLIST", "CCTV_CAMERA", "OPERATION_LOG"].every((t) => types.has(t)),
+  ok("O2 core types present (TRANSACTION, INVENTORY_ITEM, PAYROLL_RUN, ASSET, CHECKLIST, CCTV, OPERATION_LOG)",
+    ["TRANSACTION", "INVENTORY_ITEM", "PAYROLL_RUN", "ASSET", "CHECKLIST", "CCTV_CAMERA", "OPERATION_LOG"].every((t) => types.has(t)),
     [...types].join(","));
+  // The default view caps at the 250 most-recent records; EMPLOYEE rows are
+  // dated by hire date, so they are reached through the module filter.
+  const empList = await auditList(ownerToken, "?module=EMPLOYEES");
+  ok("O2b EMPLOYEE records visible via the module filter",
+    empList.status === 200 && (empList.body?.records || []).some((r) => r.recordType === "EMPLOYEE"),
+    `${(empList.body?.records || []).length} rows`);
   ok("O3 activity types linked in (ASSET_ACTIVITY, EMPLOYEE_HISTORY, USER_ACTIVITY, DELETION)",
     ["ASSET_ACTIVITY", "EMPLOYEE_HISTORY", "USER_ACTIVITY"].every((t) => types.has(t)),
     [...types].join(","));
@@ -116,7 +133,8 @@ try {
   const runD = await auditDetail(ownerToken, runRow);
   ok("D7 payroll run links its employee entries", (runD.body?.detail?.related || []).filter((x) => x.recordType === "PAYROLL_ENTRY").length >= 1, JSON.stringify((runD.body?.detail?.related || []).map((x) => x.recordType)));
 
-  const empRow = recs.find((r) => r.recordType === "EMPLOYEE" && r.recordId === 1);
+  const empRow = (empList.body?.records || []).find((r) => r.recordType === "EMPLOYEE" && r.recordId === 1)
+    || (empList.body?.records || [])[0];
   const empD = await auditDetail(ownerToken, empRow);
   ok("D8 employee links history/payroll records", (empD.body?.detail?.related || []).some((x) => x.recordType === "EMPLOYEE_HISTORY" || x.recordType === "PAYROLL_ENTRY"));
 
@@ -160,16 +178,24 @@ try {
   const emSupD = await auditDetail(emToken, supRel);
   ok("S7 shared supplier directory visible to scoped auditor", emSupD.status === 200 && emSupD.body?.detail?.record?.id === 1, `HTTP ${emSupD.status}`);
 
-  // A non-auditor worker gets nothing.
-  const workerToken = await login("comfort.agbenyega@gomina360.com", "GoMina@User13");
+  // A non-auditor worker gets nothing. Comfort holds a demo grant in this
+  // dataset, so pick a worker with no active grant at all (deterministic:
+  // Akua Donkor, worker on business 1).
+  const noGrant = await q1(`SELECT u.email, u.id FROM users u
+    WHERE u.role='WORKER' AND u.is_active=true AND u.email LIKE '%gomina360.com'
+      AND NOT EXISTS (SELECT 1 FROM audit_assignments a WHERE a.user_id=u.id AND a.is_active=true)
+    ORDER BY u.id LIMIT 1`);
+  const workerToken = await login(noGrant?.email || "akua.donkor@gomina360.com", `GoMina@User${noGrant?.id || 10}`);
   const wk = await auditList(workerToken);
-  ok("S8 non-granted worker still blocked (403)", wk.status === 403, `HTTP ${wk.status}`);
+  ok("S8 non-granted worker still blocked (403)", wk.status === 403, `${noGrant?.email}: HTTP ${wk.status}`);
 } finally {
   // ══ cleanup ══
   await q(`DELETE FROM transactions WHERE id = $1`, [txId]);
   await q(`DELETE FROM inventory_items WHERE id = $1`, [invId]);
   await q(`DELETE FROM asset_audit_logs WHERE id = $1`, [astActId]);
   await q(`DELETE FROM record_deletion_logs WHERE id = $1`, [delId]);
+  // NOTE: the healed Emmanuel grant STAYS — it is canonical demo data (the
+  // ACCESS tab demo + verify-live D3 expect it), not a suite fixture.
   await client.end();
 }
 

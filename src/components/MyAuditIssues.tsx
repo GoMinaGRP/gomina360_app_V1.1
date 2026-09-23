@@ -118,7 +118,7 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-y-auto p-5 space-y-4" data-testid="myi-root">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88dvh] overflow-y-auto p-5 space-y-4" data-testid="myi-root" role="dialog" aria-modal="true">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg">
             <Flag className="w-5 h-5 text-white" />
@@ -130,7 +130,7 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
               Respond with a note and photo evidence, send it back for review, or mark the correction complete.
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200" data-testid="myi-close"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close my audit issues" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200" data-testid="myi-close"><X className="w-4 h-4" /></button>
         </div>
 
         {notice && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs px-4 py-2.5" data-testid="myi-notice">{notice}</div>}

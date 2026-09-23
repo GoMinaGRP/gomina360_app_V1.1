@@ -15,7 +15,7 @@
 // Every mutation also writes an immutable audit_trail row.
 
 import { NextResponse } from "next/server";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
 import {
   users,
@@ -1134,6 +1134,40 @@ async function loadFullRecord(recordType: string, recordSource: string | null, r
         if (b) rel.push({ key: `OPERATION_LOG:poultry_feed_batches:${b.id}`, recordType: "OPERATION_LOG", recordSource: "poultry_feed_batches", recordId: b.id, ref: b.batchNumber, title: `${b.formulationName} — ${b.actualOutputKg} kg`, detail: `Status ${b.status}`, module: "OPERATIONS", businessId: b.businessId, branchCode: null, date: tsDay(b.createdAt), amountGhs: null, status: b.status, imageCount: 0 });
       }
       return { record: r, photos: (r as any).photo ? [String((r as any).photo)] : [], related: related(rel) };
+    }
+    case "CHECKLIST": {
+      // Daily checklist entries are first-class auditable records (they are
+      // what gets flagged most) — the drawer shows the complete entry and
+      // links the assignee's other tasks from the same day for context.
+      const r = await first(await db.select().from(checklistEntries).where(eq(checklistEntries.id, recordId)));
+      if (!r) return null;
+      const rel: RelatedRow[] = [];
+      if (r.assignedToUserId != null || r.assignedToName) {
+        const sameDay = r.assignedToUserId != null
+          ? await db.select().from(checklistEntries).where(and(eq(checklistEntries.checklistDate, r.checklistDate), eq(checklistEntries.assignedToUserId, r.assignedToUserId), ne(checklistEntries.id, r.id))).limit(8)
+          : await db.select().from(checklistEntries).where(and(eq(checklistEntries.checklistDate, r.checklistDate), eq(checklistEntries.assignedToName, r.assignedToName), ne(checklistEntries.id, r.id))).limit(8);
+        for (const x of sameDay) rel.push({
+          key: `CHECKLIST:checklist_entries:${x.id}`, recordType: "CHECKLIST", recordSource: "checklist_entries", recordId: x.id,
+          ref: `CHK-${x.checklistDate}-${x.id}`, title: `${x.taskLabel} — ${x.checklistDate}${x.isCompleted ? "" : " · INCOMPLETE"}`,
+          detail: `${x.category || "GENERAL"} · ${x.isCompleted ? `done by ${x.completedByName || "staff"}` : "pending completion"}`,
+          module: "OPERATIONS", businessId: x.businessId, branchCode: branchOf(x.businessId, x.branchCode),
+          date: day10(x.checklistDate), amountGhs: null, status: x.isCompleted ? "COMPLETED" : "PENDING", imageCount: 0,
+        });
+      }
+      return { record: r, photos: [], related: related(rel) };
+    }
+    case "CCTV_CAMERA": {
+      // Camera config is auditable (status/maintenance history) but device
+      // credentials NEVER leave the server — password redacted and any
+      // user:pass pair embedded in the stream URL masked, matching the GET
+      // API's redaction rule.
+      const r = await first(await db.select().from(cctvCameras).where(eq(cctvCameras.id, recordId)));
+      if (!r) return null;
+      const record: any = { ...r, password: "[redacted]" };
+      if (typeof record.streamUrl === "string" && record.streamUrl) {
+        record.streamUrl = record.streamUrl.replace(/(:\/\/[^:/@\s]+):([^@/\s]+)@/, "$1:[redacted]@");
+      }
+      return { record, photos: [], related: [] };
     }
     default:
       return null;
