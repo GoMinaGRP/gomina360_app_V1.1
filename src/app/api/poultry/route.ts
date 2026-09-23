@@ -19,6 +19,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
@@ -266,7 +267,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create expense transaction for feed PURCHASE
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId,
@@ -392,7 +393,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create expense transaction for health costs
       if (healthCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId,
@@ -609,7 +610,7 @@ export async function POST(request: NextRequest) {
 
         // Production → Finance linkage.
         if (revenue > 0) {
-          const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+          const trxNum = nextTrxNumber();
           await db.insert(transactions).values({
             transactionNumber: trxNum,
             businessId,
@@ -699,7 +700,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create revenue transaction when production includes sales revenue
       if (revenue > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         let desc = "Poultry production";
         if (eggs > 0) desc += ` — ${eggs} eggs collected`;
         if (soldEggs > 0) desc += `, ${soldEggs} sold`;

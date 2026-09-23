@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * POST /api/branch-unit — operations API for auto-provisioned business units
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
     const branchCode = data.branchCode || biz.code;
     const branchName = data.branchName || biz.name;
     const today = new Date().toISOString().split("T")[0];
-    const trxNum = () => `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const trxNum = () => nextTrxNumber();
 
     // ── RESTOCK (receive purchased stock) ───────────────────────────
     // Increments the inventory item, refreshes its status + cost price, and —

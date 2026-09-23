@@ -231,7 +231,12 @@ export const recordDeletionLogs = pgTable("record_deletion_logs", {
 export const businesses = pgTable("businesses", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  code: text("code").notNull().unique(), // e.g. POULTRY-01, BLOCK-01
+  // Unit code (e.g. POULTRY-01) — UNIQUE PER ORGANIZATION, not globally:
+  // sequential numbering restarts inside each independent Owner/Organization
+  // (a second org's first Poultry unit is also POULTRY-01). Enforced by the
+  // composite unique index below; every code-based lookup resolves the
+  // caller's accessible match (see /api/logs/[code] and the QR scanner).
+  code: text("code").notNull(),
   category: text("category").notNull(), // 'Poultry Farm', 'Block Factory', 'Aquaculture', 'Livestock', 'Restaurant & Food', 'Electronic Shop', 'Car Wash', 'Hardware Store'
   branchLocation: text("branch_location").notNull(), // human-readable summary line
   // Standardized Ghana location (Region → District/MMDA → Town)
@@ -292,7 +297,11 @@ export const businesses = pgTable("businesses", {
   // Tenant scope: which organization (Owner) this business belongs to.
   ownerId: integer("owner_id").references(() => organizations.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [
+  // Tenant-scoped uniqueness: (organization, code). NULL ownerId (legacy
+  // pre-multi-owner rows) falls back to the shared legacy namespace.
+  uniqueIndex("businesses_owner_code_unique").on(t.ownerId, t.code),
+]);
 
 // Service areas / localities a Business (branch unit) delivers to. Every
 // unit defines its OWN list — different branches serve different areas. An
@@ -361,6 +370,29 @@ export const companySettings = pgTable("company_settings", {
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Persistent one-time system markers + business-deletion tombstones.
+ *
+ *  Two jobs:
+ *  1. ONE-TIME SEED/REPAIR FLAGS — the boot seeder records which idempotent
+ *     migrations (e.g. the HARDWARE-01 flagship provisioning) have already
+ *     run on THIS database, so a migration never re-runs after the OWNER
+ *     intentionally removed its output (deleted units must stay deleted —
+ *     the seeder must never "repair" an owner decision away).
+ *  2. DELETION TOMBSTONES — every permanently deleted business code is
+ *     recorded here (`deleted_business:<CODE>`), making OWNER deletion
+ *     final against any auto-provisioning path, today or in the future.
+ *
+ *  Reads/writes are resilient: a database that has not yet received the
+ *  table (pre-migration) treats every marker as absent and every write as
+ *  a no-op, so deletion can never fail because the marker table is missing.
+ */
+export const systemMarkers = pgTable("system_markers", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  value: text("value"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 /** Group-wide customer support information (single live row, id=1) — shown to
@@ -519,7 +551,7 @@ export const employeeHistory = pgTable("employee_history", {
 // asset values into business + branch dashboards, reports and analytics.
 export const assets = pgTable("assets", {
   id: serial("id").primaryKey(),
-  assetCode: text("asset_code").notNull().unique().default(""), // unique enterprise asset code (required)
+  assetCode: text("asset_code").notNull().default(""), // unique PER BUSINESS asset code (required)
   name: text("name").notNull(),
   description: text("description"), // detailed notes/specs about the asset
   businessId: integer("business_id").notNull(), // parent business (required)
@@ -544,7 +576,12 @@ export const assets = pgTable("assets", {
   qrCode: text("qr_code"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
-  uniqueIndex("assets_qr_code_unique").on(t.qrCode),
+  // Asset codes number PER BUSINESS (each unit's registry starts at
+  // BRANCH-AST-0001); QR tags are unique per business for the same reason —
+  // two independent organizations may both own a POULTRY-01 unit with its
+  // own AST-0001 asset. Scanners resolve the caller's accessible match.
+  uniqueIndex("assets_qr_code_unique").on(t.businessId, t.qrCode),
+  uniqueIndex("assets_business_asset_code_unique").on(t.businessId, t.assetCode),
 ]);
 
 // 7b. Complete Asset & Equipment audit log + approval workflow
@@ -609,8 +646,10 @@ export const inventoryItems = pgTable("inventory_items", {
   registeredAt: timestamp("registered_at").defaultNow(),
 }, (t) => [
   uniqueIndex("inventory_items_business_sku_unique").on(t.businessId, t.sku),
-  // Globally unique QR across the whole group — NULLs (legacy rows) may repeat.
-  uniqueIndex("inventory_items_qr_code_unique").on(t.qrCode),
+  // QR tags unique PER BUSINESS — independent organizations may share unit
+  // codes, so the same label value can exist in two tenants' registries.
+  // NULLs (unset QRs) may repeat.
+  uniqueIndex("inventory_items_qr_code_unique").on(t.businessId, t.qrCode),
   index("inventory_items_business_id_idx").on(t.businessId)
 ]);
 

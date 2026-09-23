@@ -253,7 +253,7 @@ export default function PoultryFarmModule({
   const branchInventory = inventory.filter((i) => i.businessId === bizId);
   const branchAssets = assets.filter((a) => a.businessId === bizId);
   const branchEmployees = employees.filter((e) => e.businessId === bizId);
-  const branchCustomers = customers.filter((c) => c.businessId === bizId || c.businessId === null);
+  const branchCustomers = customers.filter((c) => c.businessId === bizId);
   const branchTrx = filteredTransactions;
   const revenue = branchTrx.filter((t) => t.type === "INCOME").reduce((s, t) => s + (t.amountGhs || 0), 0);
   const expenses = branchTrx.filter((t) => t.type === "EXPENSE").reduce((s, t) => s + (t.amountGhs || 0), 0);

@@ -502,6 +502,15 @@ try {
         where n.nspname = 'public' and t.relkind = 'r'`,
     );
     for (const { table_name } of tables.rows) {
+      // Tables legitimately exist without an `id` column (natural-key tables
+      // like system_markers); pg_get_serial_sequence raises for those —
+      // skip them instead of failing the whole migration.
+      const hasId = await client.query(
+        `select 1 from information_schema.columns
+          where table_schema = 'public' and table_name = $1 and column_name = 'id'`,
+        [table_name],
+      );
+      if (!hasId.rowCount) continue;
       const seq = await client.query(`select pg_get_serial_sequence($1, 'id') as s`, [`public.${table_name}`]);
       const s = seq.rows[0]?.s;
       if (s) {
@@ -516,6 +525,26 @@ try {
       }
     }
   }
+
+  // ── Org-scoped identifier uniqueness ─────────────────────────────────────
+  // Unit codes, asset codes and QR labels number PER TENANT (per
+  // organization / per business): independent organizations may both run a
+  // POULTRY-01 unit with its own AST-0001 registry and QR tags. Legacy
+  // deployments enforced GLOBAL uniqueness — drop those and install the
+  // composite forms (existing data is globally unique, so this is a pure
+  // widening: every existing row remains valid).
+  await client.query(`drop index if exists public.businesses_code_unique`);
+  await client.query(`drop index if exists public.businesses_code_key`);
+  await client.query(`drop index if exists public.assets_asset_code_unique`);
+  await client.query(`drop index if exists public.assets_asset_code_key`);
+  // Same NAME as the old global QR indexes but new (business_id, …) columns —
+  // drop first so the recreate below wins even if it already existed.
+  await client.query(`drop index if exists public.assets_qr_code_unique`);
+  await client.query(`drop index if exists public.inventory_items_qr_code_unique`);
+  await client.query(`create unique index if not exists businesses_owner_code_unique on public.businesses (owner_id, code)`);
+  await client.query(`create unique index if not exists assets_business_asset_code_unique on public.assets (business_id, asset_code)`);
+  await client.query(`create unique index if not exists assets_qr_code_unique on public.assets (business_id, qr_code)`);
+  await client.query(`create unique index if not exists inventory_items_qr_code_unique on public.inventory_items (business_id, qr_code)`);
 
   // Multi-owner runtime tools (used by dev-tooling/multiowner-verify.mjs):
   await client.query(`create or replace function gomina_org_of_business(bid integer)

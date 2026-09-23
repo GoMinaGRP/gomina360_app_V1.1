@@ -110,8 +110,10 @@ export default function WorkerDashboard({
   const branchInventory = inventory.filter(
     (inv) => inv.businessId === businessInfo?.id
   );
+  // Business-isolated CRM: only this unit's own customers (shared legacy
+  // rows belong to the enterprise, not to this unit's count).
   const branchCustomers = customers.filter(
-    (c) => c.businessId === businessInfo?.id || c.businessId === null
+    (c) => c.businessId === businessInfo?.id
   );
 
   // ─── Cart helpers ───

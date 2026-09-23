@@ -19,6 +19,7 @@ import {
   setUserPassword,
   UNAUTHENTICATED,
   FORBIDDEN,
+  bustSessionCache,
 } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 
@@ -359,6 +360,7 @@ export async function PATCH(request: Request) {
           .update(userSessions)
           .set({ endedAt: new Date(), endReason: action === "SUSPEND" ? "ORG_SUSPENDED" : "ORG_DELETED" })
           .where(inArray(userSessions.userId, memberIds));
+        bustSessionCache();
       }
       if (action === "DELETE_ORGANIZATION" && memberIds.length) {
         // Deactivate every member account — platform access fully revoked.

@@ -50,12 +50,15 @@ export default function NotificationBell({
   }, [currentUser?.id, onSummary]);
 
   useEffect(() => {
-    load();
     // Visibility-aware polling: a hidden tab gets ZERO polling requests
     // (previous behaviour: one /api/notifications call every 20 s even while
     // backgrounded — a fleet of forgotten tabs is a constant server load).
     // The 30 s cadence runs only whilst visible; returning to the tab always
     // fetches immediately, so no notification is ever missed.
+    // syncVisibility() alone drives the initial fetch: a VISIBLE tab gets
+    // exactly ONE immediate load (this used to fire load() and then
+    // syncVisibility() — two identical /api/notifications requests on every
+    // mount/remount), a hidden tab none until it becomes visible.
     let t: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!t) t = setInterval(load, 30_000); };
     const stop = () => { if (t) { clearInterval(t); t = null; } };
