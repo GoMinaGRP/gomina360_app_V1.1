@@ -16,6 +16,9 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzePoultry } from "@/lib/poultryAnalytics";
 import PoultryAnalyticsAlerts from "./PoultryAnalyticsAlerts";
 import PoultryGrowthAnalytics from "./PoultryGrowthAnalytics";
+import PoultryBenchmarkPanel from "./PoultryBenchmarkPanel";
+import PoultryBenchmarkManager from "./PoultryBenchmarkManager";
+import { computeBenchmarkAlerts, type BenchmarkResult } from "@/lib/poultryBenchmarking";
 import PoultryFeedMill from "./PoultryFeedMill";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
@@ -94,6 +97,11 @@ export default function PoultryFarmModule({
   const [checklists, setChecklists] = useState<any[]>([]);
   // Master Product List (poultry_products) — production types incl. user-added
   const [products, setProducts] = useState<any[]>([]);
+  // Benchmarking — owner-managed profiles + the flock the dashboard benchmarks
+  const [benchmarkProfiles, setBenchmarkProfiles] = useState<any[]>([]);
+  const [benchFlockId, setBenchFlockId] = useState<number | null>(null);
+  const [showBenchManager, setShowBenchManager] = useState(false);
+  const [benchResult, setBenchResult] = useState<BenchmarkResult | null>(null);
 
   // AI Knowledge
   const [kbQuery, setKbQuery] = useState("");
@@ -105,6 +113,11 @@ export default function PoultryFarmModule({
 
   const bizId = businessInfo?.id;
   const today = new Date().toISOString().split("T")[0];
+  // Benchmark profile editing gate — same rule the Feed Mill uses for its
+  // powerful operations (OWNER / GM / records-authorized manager).
+  const benchCanManage =
+    currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER" ||
+    currentUser?.canManageRecords === true;
 
   const refresh = useCallback(async () => {
     if (!bizId) return;
@@ -119,6 +132,7 @@ export default function PoultryFarmModule({
         setProduction(d.production || []);
         setProducts(d.products || []);
         setWeightLogs(d.weightLogs || []);
+        setBenchmarkProfiles(d.benchmarkProfiles || []);
       }
       // Daily checklists come from the unified enterprise checklist engine
       // (same row shape: checklistDate, isCompleted, completedByName/Role/At).
@@ -557,7 +571,9 @@ export default function PoultryFarmModule({
             <Stat label="Net Profit" value={formatMoney(netProfit, currentCurrency, true)} sub={`Rev ${formatMoney(revenue, currentCurrency, true)}`} color={netProfit >= 0 ? "emerald" : "rose"} icon={Wallet} />
           </div>
 
-          {/* Smart Analytics & Alerts */}
+          {/* Smart Analytics & Alerts — benchmark findings ride the same alert
+              surface (single alert panel, no duplicate UI) and compliance
+              blends into the health score with capped influence. */}
           {(() => {
             const analysis = analyzePoultry({
               flocks: filteredFlocks,
@@ -570,20 +586,47 @@ export default function PoultryFarmModule({
               transactions: branchTrx,
               currentCurrency,
             });
+            const benchAlerts = computeBenchmarkAlerts(benchResult);
+            const benchIds = new Set(benchAlerts.map((a) => a.id));
+            const mergedAlerts = [...analysis.alerts.filter((a) => !benchIds.has(a.id)), ...benchAlerts];
+            const compliance = benchResult?.scorecard.compliancePct;
+            const blendedScore =
+              compliance != null && benchResult?.hasAnyBenchmark
+                ? Math.round(analysis.healthScore * 0.85 + compliance * 0.15)
+                : analysis.healthScore;
             const hasData =
               filteredFlocks.length + filteredFeedLogs.length + filteredWaterLogs.length +
               filteredHealthRecords.length + filteredProduction.length > 0;
             return (
               <PoultryAnalyticsAlerts
-                alerts={analysis.alerts}
+                alerts={mergedAlerts}
                 metrics={analysis.metrics}
-                healthScore={analysis.healthScore}
+                healthScore={blendedScore}
                 statusColor={analysis.statusColor}
                 currency={currentCurrency}
                 hasData={hasData}
               />
             );
           })()}
+
+          {/* Flock Performance Benchmarking — age-matched actual vs profile
+              target vs comparable historical flocks, with variance chips,
+              an A–D scorecard and a close-out projection. */}
+          <PoultryBenchmarkPanel
+            businessId={bizId}
+            flocks={flocks}
+            feedLogs={feedLogs}
+            healthRecords={healthRecords}
+            production={production}
+            weightLogs={weightLogs}
+            profiles={benchmarkProfiles}
+            currentCurrency={currentCurrency}
+            benchFlockId={benchFlockId}
+            onBenchFlockChange={setBenchFlockId}
+            onManage={() => setShowBenchManager(true)}
+            onBenchmarks={setBenchResult}
+            canManage={benchCanManage}
+          />
 
           {/* Production & Growth Analytics — daily weight/growth vs target,
               feed, FCR, mortality, broiler output, lay targets & more, with
@@ -595,6 +638,7 @@ export default function PoultryFarmModule({
             healthRecords={healthRecords}
             production={production}
             weightLogs={weightLogs}
+            benchmarkProfiles={benchmarkProfiles}
             currentUserName={currentUser?.name}
             currentUserRole={currentUser?.role}
             onRefresh={refresh}
@@ -1316,11 +1360,24 @@ export default function PoultryFarmModule({
         testid="poultry-expense"
       />
 
+      {/* Benchmark profile manager drawer (opened from the Benchmark
+          Performance panel / setup card). */}
+      {showBenchManager && (
+        <PoultryBenchmarkManager
+          businessId={bizId}
+          flocks={flocks}
+          currentUserName={currentUser?.name}
+          currentUserRole={currentUser?.role}
+          canManage={benchCanManage}
+          onClose={() => setShowBenchManager(false)}
+          onRefresh={() => { refresh(); onRefreshData(); }}
+        />
+      )}
 
       {/* ══════════ FORMS ══════════ */}
       {showForm && (
         <PoultryForm
-          type={showForm} flocks={flocks} inventory={branchInventory} products={products} busy={busy} error={err}
+          type={showForm} flocks={flocks} inventory={branchInventory} products={products} profiles={benchmarkProfiles} busy={busy} error={err}
           onClose={() => { setShowForm(null); setErr(""); }}
           onSubmit={submit}
         />
@@ -1374,7 +1431,7 @@ function BatchSelect({ flocks, f, set }: any) {
   );
 }
 
-function PoultryForm({ type, flocks, inventory = [], products = [], busy, error, onClose, onSubmit }: any) {
+function PoultryForm({ type, flocks, inventory = [], products = [], profiles = [], busy, error, onClose, onSubmit }: any) {
   const [f, setF] = useState<any>({
     birdType: "LAYERS", status: "ACTIVE", feedType: "LAYER_MASH", entryType: "CONSUMPTION",
     sourceType: "BOREHOLE", isTreated: false, recordType: "VACCINATION", outcome: "MONITORING",
@@ -1431,6 +1488,25 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
               <FormField f={f} set={set} label="Cost / Bird (GH₵)" k="costPerBirdGhs" t="number" step="0.01" />
             </div>
             <FormField f={f} set={set} label="Source Hatchery" k="sourceHatchery" placeholder="e.g. Akate Farms Hatchery" />
+            <label className="block col-span-2">
+              <span className="block text-[10px] text-slate-500 mb-1">Benchmark profile (optional)</span>
+              <select
+                data-testid="poultry-form-benchmark"
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-emerald-500"
+                value={f.benchmarkProfileId ?? ""}
+                onChange={(e) => set("benchmarkProfileId", e.target.value === "" ? null : e.target.value)}
+              >
+                <option value="">Auto — match by bird type / breed</option>
+                {(profiles || [])
+                  .filter((p: any) => (p.status || "ACTIVE") === "ACTIVE" && (!p.birdType || p.birdType === (f.birdType || "LAYERS")))
+                  .map((p: any) => (
+                    <option key={p.id} value={p.id}>{p.name}{p.isDefault ? " (default)" : ""}</option>
+                  ))}
+              </select>
+              <span className="block text-[9px] text-slate-500 mt-1">
+                Pin this flock to a specific performance target — leave on Auto to follow the default profile for its bird type.
+              </span>
+            </label>
           </>)}
 
           {type === "FEED" && (<>

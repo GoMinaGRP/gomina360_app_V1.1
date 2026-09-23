@@ -10,6 +10,7 @@ import {
   poultryChecklists,
   poultryProducts,
   poultryWeightLogs,
+  poultryBenchmarkProfiles,
   businesses,
   transactions,
 } from "@/db/schema";
@@ -56,6 +57,18 @@ function slugify(name: string): string {
   );
 }
 
+/** Benchmark profile reference for a flock: null/"" → auto-match (null).
+ *  Returns the profile id when it belongs to the business, else null. */
+async function resolveProfileId(raw: any, businessId: number): Promise<number | null> {
+  const id = Number(raw);
+  if (!id) return null;
+  const [profile] = await db
+    .select({ id: poultryBenchmarkProfiles.id })
+    .from(poultryBenchmarkProfiles)
+    .where(and(eq(poultryBenchmarkProfiles.id, id), eq(poultryBenchmarkProfiles.businessId, businessId)));
+  return profile ? profile.id : null;
+}
+
 /**
  * GET /api/poultry?businessId=1
  * Returns every dataset for the Poultry Farm Management module,
@@ -84,7 +97,7 @@ export async function GET(request: NextRequest) {
     const scope = <T extends { businessId: any }>(table: any) =>
       db.select().from(table).where(eq(table.businessId, bizId));
 
-    const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs] =
+    const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs, benchmarkProfiles] =
       await Promise.all([
         scope(poultryFlocks),
         scope(poultryFeedLogs),
@@ -93,6 +106,7 @@ export async function GET(request: NextRequest) {
         scope(poultryProduction),
         scope(poultryChecklists),
         scope(poultryWeightLogs),
+        scope(poultryBenchmarkProfiles),
       ]);
 
     // Master Product List — every production type lives here. It starts EMPTY
@@ -118,6 +132,8 @@ export async function GET(request: NextRequest) {
       weightLogs: weightLogs.sort(sortByIdDesc),
       checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       products: products.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
+      benchmarkProfiles: benchmarkProfiles.sort((a: any, b: any) =>
+        Number(!!b.isDefault) - Number(!!a.isDefault) || (b.id || 0) - (a.id || 0)),
     });
   } catch (error: any) {
     console.error("GET /api/poultry error:", error);
@@ -180,6 +196,15 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      const benchmarkProfileId = data.benchmarkProfileId != null && data.benchmarkProfileId !== ""
+        ? await resolveProfileId(data.benchmarkProfileId, businessId)
+        : null;
+      if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "" && !benchmarkProfileId) {
+        return NextResponse.json(
+          { success: false, error: "Benchmark profile not found for this business." },
+          { status: 404 },
+        );
+      }
       const [row] = await db
         .insert(poultryFlocks)
         .values({
@@ -203,6 +228,7 @@ export async function POST(request: NextRequest) {
           sourceHatchery: data.sourceHatchery || null,
           costPerBirdGhs: Number(data.costPerBirdGhs) || 0,
           status: data.status || "ACTIVE",
+          benchmarkProfileId,
           notes: data.notes || null,
           createdByName: data.createdByName || "Farm Staff",
           createdByRole: data.createdByRole || null,
@@ -843,6 +869,18 @@ export async function PATCH(request: NextRequest) {
           { status: 400 }
         );
       }
+      let benchmarkProfileId: number | null | undefined = undefined;
+      if (data?.benchmarkProfileId !== undefined) {
+        benchmarkProfileId = data.benchmarkProfileId === null || data.benchmarkProfileId === ""
+          ? null
+          : await resolveProfileId(data.benchmarkProfileId, existingFlock.businessId);
+        if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "" && !benchmarkProfileId) {
+          return NextResponse.json(
+            { success: false, error: "Benchmark profile not found for this business." },
+            { status: 404 },
+          );
+        }
+      }
       const [row] = await db
         .update(poultryFlocks)
         .set({
@@ -850,6 +888,7 @@ export async function PATCH(request: NextRequest) {
             data?.currentCount !== undefined ? Number(data.currentCount) : undefined,
           ageWeeks: data?.ageWeeks !== undefined ? Number(data.ageWeeks) : undefined,
           status: data?.status || undefined,
+          benchmarkProfileId,
           notes: data?.notes ?? undefined,
         })
         .where(eq(poultryFlocks.id, Number(id)))

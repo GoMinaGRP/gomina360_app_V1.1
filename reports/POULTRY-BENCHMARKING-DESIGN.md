@@ -1,6 +1,6 @@
 # Poultry Flock Performance Benchmarking — Design & Integration Recommendation
 
-**Status: DESIGN ONLY — awaiting approval. No implementation has started.**
+**Status: IMPLEMENTED (2026-09-22) — see `reports/POULTRY-BENCHMARKING-IMPLEMENTATION.md` for the delivered system, usage instructions and test results. This document is the approved design.**
 **Date: 2026-09-22 · Scope: Poultry module (`POULTRY-*` businesses) · Author: Arena agent**
 
 ---

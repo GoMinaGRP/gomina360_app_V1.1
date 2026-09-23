@@ -1094,6 +1094,9 @@ export const poultryFlocks = pgTable("poultry_flocks", {
   sourceHatchery: text("source_hatchery"),
   costPerBirdGhs: doublePrecision("cost_per_bird_ghs").default(0),
   status: text("status").notNull().default("ACTIVE"), // ACTIVE, SOLD, CULLED, CLOSED
+  // Benchmarking: explicit profile override. NULL = auto-match a profile by
+  // bird type (+ breed when the profile narrows to one).
+  benchmarkProfileId: integer("benchmark_profile_id"),
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
@@ -1238,6 +1241,41 @@ export const poultryWeightLogs = pgTable("poultry_weight_logs", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ═══ P-BENCHMARK. Flock Performance Benchmarking (sub-module of the Poultry farm) ═══
+// Owner-managed benchmark PROFILES: age-keyed target curves per metric
+// (body weight, ADG, FCR, mortality, feed intake, lay %, egg weight, feed
+// cost/kg gain, cost/bird). Profiles are compared age-matched against the
+// live flock AND against comparable historical flocks (p25/median/p75 band).
+// Curves live as one JSONB payload per profile (read-as-a-whole, never
+// queried point-wise — same pattern as feed-mill formulationSnapshot).
+// Built-in breed-standard curves in src/lib/poultryPerformance.ts remain
+// the fallback when no profile resolves, so existing charts never change
+// behaviour for farms that never configure benchmarking.
+export const poultryBenchmarkProfiles = pgTable("poultry_benchmark_profiles", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  name: text("name").notNull(),
+  birdType: text("bird_type").notNull(), // LAYERS, BROILERS, COCKERELS, TURKEYS, GUINEA_FOWL
+  breed: text("breed"), // optional narrowing, e.g. "Cobb 500"
+  source: text("source").notNull().default("MANUAL"), // MANUAL | TEMPLATE | FARM_HISTORY
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE | ARCHIVED
+  isDefault: boolean("is_default").notNull().default(false),
+  // Variance tolerance bands (per-metric overrides live inside `curves`):
+  toleranceWarnPct: doublePrecision("tolerance_warn_pct").notNull().default(5),
+  toleranceCritPct: doublePrecision("tolerance_crit_pct").notNull().default(10),
+  // { METRIC_KEY: { by: "ageDays"|"ageWeeks", unit, warnPct?, critPct?, points: [[age, value], …] },
+  //   _meta: { marketAgeDays?, livePricePerKgGhs? } }
+  curves: jsonb("curves").notNull().default({}),
+  notes: text("notes"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // ═══ P-FEED-MILL. Feed Production & Milling (sub-module of the Poultry farm) ═══
