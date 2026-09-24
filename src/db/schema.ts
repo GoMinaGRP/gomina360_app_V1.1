@@ -2724,6 +2724,16 @@ export const checklistTemplates = pgTable("checklist_templates", {
   assignedToRole: text("assigned_to_role"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+  // ── Poultry stage-plan metadata (additive, nullable: every legacy row and
+  //    every non-poultry business keeps working untouched). origin separates
+  //    the versioned system stage plan (upsertable by the engine) from
+  //    Owner-added custom items (never touched by system updates).
+  origin: text("origin").default("CUSTOM"), // 'STAGE_PLAN' | 'CUSTOM'
+  birdType: text("bird_type"), // 'BROILERS' | 'LAYERS' | null (any poultry flock)
+  stageKeys: jsonb("stage_keys").$type<string[] | null>(), // null = every stage of the bird type
+  frequency: text("frequency").default("DAILY"), // DAILY | WEEKLY | MONTHLY | STAGE_ONCE
+  priority: text("priority").default("ROUTINE"), // ROUTINE | CRITICAL
+  houseScoped: boolean("house_scoped").default(false), // once per business+date, not per flock
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
 });
@@ -2747,6 +2757,18 @@ export const checklistEntries = pgTable("checklist_entries", {
   completedByRole: text("completed_by_role"),
   completedAt: timestamp("completed_at"),
   notes: text("notes"),
+  // ── Poultry stage-plan context (additive, nullable). Entries are
+  //    self-describing snapshots: flock, bird type, stage and age at
+  //    materialization, so compliance analytics and the audit view never
+  //    have to re-derive history from today's flock state.
+  flockId: integer("flock_id"),
+  batchNumber: text("batch_number"),
+  birdType: text("bird_type"),
+  stageKey: text("stage_key"),
+  stageLabel: text("stage_label"),
+  ageDays: integer("age_days"),
+  frequency: text("frequency"),
+  priority: text("priority"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

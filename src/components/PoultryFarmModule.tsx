@@ -761,7 +761,7 @@ export default function PoultryFarmModule({
                   <th className="px-4 py-3">Genetics</th><th className="px-4 py-3">Supplier</th>
                   <th className="px-4 py-3">House</th><th className="px-4 py-3 text-right">Placed</th>
                   <th className="px-4 py-3 text-right">Live</th><th className="px-4 py-3 text-right">Mortality</th>
-                  <th className="px-4 py-3 text-right">Age</th><th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-right">Age / Stage</th><th className="px-4 py-3 text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/60">
@@ -787,7 +787,26 @@ export default function PoultryFarmModule({
                           {f.mortalityTotal} ({mRate.toFixed(1)}%)
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-300">{f.ageWeeks}w</td>
+                      <td className="px-4 py-3 text-right">
+                        {f.stage ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                              f.stage.phase === "PRODUCTION" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                              : f.stage.phase === "MARKET" ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                              : f.stage.phase === "CLOSEOUT" ? "bg-rose-500/15 text-rose-300 border-rose-500/40"
+                              : f.stage.phase === "PRE_PLACEMENT" ? "bg-slate-600/30 text-slate-200 border-slate-500/50"
+                              : "bg-cyan-500/15 text-cyan-300 border-cyan-500/40"
+                            }`}>{f.stage.label}</span>
+                            <span className="text-[10px] text-slate-400">
+                              {f.birdType === "LAYERS" ? `Wk ${f.stage.ageWeeks}` : `Day ${f.stage.ageDays}`}
+                              {f.stage.marketEtaDays != null && f.stage.marketEtaDays > 0 && f.stage.phase === "REARING"
+                                ? ` · ${f.stage.marketEtaDays}d to market` : ""}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">{f.ageWeeks}w</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           f.status === "ACTIVE" ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-700 text-slate-300"}`}>
@@ -1245,6 +1264,7 @@ export default function PoultryFarmModule({
           employees={employees}
           currentUser={currentUser}
           accent="emerald"
+          supportsStages
           onChanged={() => { refresh(); onRefreshData?.(); }}
         />
       )}

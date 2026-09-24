@@ -46,6 +46,7 @@ import {
 } from "./schema";
 import { and, sql, eq } from "drizzle-orm";
 import { provisionBusiness, ensureCarWashServiceCatalogue } from "@/lib/businessProvisioning";
+import { ensureStagePlanTemplates } from "@/lib/checklistGen";
 import { getSystemMarker, setSystemMarker, isDeletedBusiness } from "@/lib/systemMarkers";
 
 /** Auto Car Wash service catalogue for the seeded WASH-01 unit. Idempotent:
@@ -303,6 +304,17 @@ async function seedDatabaseInner() {
     await ensureFlagshipMasterLists();
     return;
   }
+
+  // 0. Organization #1 must exist BEFORE any business row: businesses carry
+  // owner_id → organizations.id (FK). On the normal path the build-time
+  // migration's backfill already created org 1, but a plain
+  // push-then-boot bootstrap (no migrate pass) would fail every business
+  // insert with a foreign-key violation. Idempotent, mirrors the migration.
+  await db.execute(sql`
+    insert into organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
+    select 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
+    where not exists (select 1 from organizations where id = 1)
+  `);
 
   // 1. Insert 7 Businesses
   const insertedBusinesses = await db
@@ -1852,6 +1864,14 @@ async function seedDatabaseInner() {
     chkEntry("MORTALITY_SWEEP", "2026-08-22", false),
     chkEntry("BIOSECURITY_FOOTBATH", "2026-08-22", false),
   ]);
+
+  // 12f-b. Poultry age/stage plan — the flagship POULTRY-01 demo runs the
+  // stage-based checklist out of the box: the Owner's 5 customized demo
+  // tasks above stay (origin CUSTOM, business-level) and the full system
+  // stage plan (broiler day-based + layer week-based) is seeded alongside.
+  // The two dated demo days above keep their original shape — history is
+  // never rewritten; the stage plan only materializes from now on.
+  await ensureStagePlanTemplates(1, "POULTRY-01");
 
   // ─────────────────────────────────────────────────────────────────────────
   // Standardized Ghana location normalization (Region → District/MMDA → Town)

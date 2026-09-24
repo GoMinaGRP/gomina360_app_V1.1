@@ -21,6 +21,8 @@ import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { stageOfFlock } from "@/lib/poultryStages";
+import { resolveProfile, BENCHMARK_TEMPLATES } from "@/lib/poultryBenchmarking";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
@@ -122,9 +124,21 @@ export async function GET(request: NextRequest) {
 
     const sortByIdDesc = (a: any, b: any) => (b.id || 0) - (a.id || 0);
 
+    // Attach each flock's production stage (derived from arrivalDate + the
+    // resolved benchmark profile) so the module can show stage chips and the
+    // daily checklist can be reviewed flock by flock. Response-only — nothing
+    // is persisted on the flock row.
+    const todayLocal = new Date().toLocaleDateString("en-CA");
+    const profilePool = [...(benchmarkProfiles as any[]), ...BENCHMARK_TEMPLATES];
+    const flocksOut = (flocks as any[]).map((f) => {
+      const { profile } = resolveProfile(f, profilePool);
+      const stage = stageOfFlock(f, todayLocal, profile);
+      return { ...f, stage };
+    });
+
     return NextResponse.json({
       success: true,
-      flocks: flocks.sort(sortByIdDesc),
+      flocks: flocksOut.sort(sortByIdDesc),
       feedLogs: feedLogs.sort(sortByIdDesc),
       waterLogs: waterLogs.sort(sortByIdDesc),
       healthRecords: healthRecords.sort(sortByIdDesc),

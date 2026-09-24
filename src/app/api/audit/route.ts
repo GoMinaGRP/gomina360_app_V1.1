@@ -429,11 +429,14 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   for (const c of chk) {
     const hasActivity = !!c.isCompleted || !!c.notes || !!c.completedByName;
     if (!hasActivity) continue;
+    const stagePrefix = (c as any).batchNumber
+      ? `Flock ${c.batchNumber}${(c as any).stageLabel ? ` · ${(c as any).stageLabel}` : ""}${(c as any).ageDays != null ? ` · day ${c.ageDays}` : ""} · `
+      : "";
     push({
       key: `CHECKLIST:checklist_entries:${c.id}`, recordType: "CHECKLIST", recordSource: "checklist_entries", recordId: c.id,
       ref: `CHK-${c.checklistDate}-${c.id}`,
-      title: `${c.taskLabel} — ${c.checklistDate}${c.isCompleted ? "" : " · INCOMPLETE"}`,
-      detail: `${c.category || "GENERAL"} · assigned to ${c.assignedToName || "unassigned"}${c.isCompleted ? ` · done by ${c.completedByName || "staff"}${c.completedAt ? ` at ${new Date(c.completedAt as any).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}` : " · pending completion"}${c.notes ? ` · ${c.notes}` : ""}`,
+      title: `${c.taskLabel} — ${c.checklistDate}${c.isCompleted ? "" : " · INCOMPLETE"}${String((c as any).priority || "").toUpperCase() === "CRITICAL" ? " · CRITICAL" : ""}`,
+      detail: `${stagePrefix}${c.category || "GENERAL"} · assigned to ${c.assignedToName || "unassigned"}${c.isCompleted ? ` · done by ${c.completedByName || "staff"}${c.completedAt ? ` at ${new Date(c.completedAt as any).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}` : " · pending completion"}${c.notes ? ` · ${c.notes}` : ""}`,
       module: "OPERATIONS", businessId: c.businessId, branchCode: branchOf(c.businessId, c.branchCode),
       workerName: c.completedByName || c.assignedToName, workerUserId: c.assignedToUserId ?? null,
       date: day10(c.checklistDate), amountGhs: null, status: c.isCompleted ? "COMPLETED" : "PENDING",

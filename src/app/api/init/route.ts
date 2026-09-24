@@ -4,7 +4,7 @@ import { readInitSnapshot, brandingVersionOf } from "@/lib/initSnapshot";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { getSessionInfo, accessibleBusinessIds, filterByAccess } from "@/lib/auth";
 import { BUSINESS_TYPES } from "@/lib/businessTypes";
-import { ensureTodayFor } from "@/lib/checklistGen";
+import { ensureTodayFor, sweepOverdueCritical } from "@/lib/checklistGen";
 import { compressJsonBody } from "@/lib/httpGzip";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
@@ -108,6 +108,13 @@ export async function GET(request: Request) {
       } catch (e) {
         console.error("[checklistGen] ensureTodayFor failed (continuing without generation):", (e as any)?.message || e);
       }
+      // Overdue-critical sweep: incomplete CRITICAL tasks for today past the
+      // cutoff hour (default 18:00, per-business configurable) notify the
+      // managers + assignees — once per business+date (recordRef-deduped).
+      // Fire-and-forget: never blocks the init payload.
+      sweepOverdueCritical(bids).catch((e) => {
+        console.error("[checklistGen] overdue sweep failed (continuing):", (e as any)?.message || e);
+      });
     }
 
     // ── Data fetch: ONE multi-statement round trip ───────────────────────

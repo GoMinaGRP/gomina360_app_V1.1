@@ -8,7 +8,19 @@ import {
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { ensureTemplates, generateEntriesForDate } from "@/lib/checklistGen";
+import {
+  ensureTemplates,
+  generateEntriesForDate,
+  ensureStagePlanTemplates,
+  disableStagePlanTemplates,
+  sweepOverdueCritical,
+  overdueCutoffHourFor,
+  isPoultryCategory,
+} from "@/lib/checklistGen";
+import { stageKeysOfBirdType, isStagePlanBirdType } from "@/lib/poultryStages";
+import { setSystemMarker } from "@/lib/systemMarkers";
+import { auditLog } from "@/lib/audit";
+import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 
 // Roles allowed to manage checklist templates and generate daily checklists.
@@ -103,6 +115,21 @@ export async function POST(request: NextRequest) {
       if (templates.some((t: any) => t.taskKey === taskKey)) {
         return NextResponse.json({ success: false, error: `"${taskKey}" already exists in this checklist` }, { status: 409 });
       }
+      // Optional stage-plan scoping for custom items (poultry businesses):
+      // birdType + stageKeys + frequency + priority make the item materialize
+      // per flock instead of once per business.
+      const birdType = isStagePlanBirdType(data.birdType) ? String(data.birdType).toUpperCase() : null;
+      let stageKeys: string[] | null = null;
+      if (Array.isArray(data.stageKeys)) {
+        const valid = birdType
+          ? stageKeysOfBirdType(birdType)
+          : [...stageKeysOfBirdType("BROILERS"), ...stageKeysOfBirdType("LAYERS")];
+        stageKeys = data.stageKeys.map(String).filter((k: any) => valid.includes(k));
+      }
+      const frequency = ["DAILY", "WEEKLY", "MONTHLY", "STAGE_ONCE"].includes(String(data.frequency || "").toUpperCase())
+        ? String(data.frequency).toUpperCase()
+        : "DAILY";
+      const priority = String(data.priority || "").toUpperCase() === "CRITICAL" ? "CRITICAL" : "ROUTINE";
       const maxSort = Math.max(0, ...templates.map((t: any) => t.sortOrder || 0));
       const [row] = await db
         .insert(checklistTemplates)
@@ -114,6 +141,12 @@ export async function POST(request: NextRequest) {
           category: data.category || "GENERAL",
           sortOrder: maxSort + 1,
           isActive: true,
+          origin: "CUSTOM",
+          birdType,
+          stageKeys: stageKeys && stageKeys.length ? stageKeys : null,
+          frequency,
+          priority,
+          houseScoped: birdType == null && stageKeys == null ? false : !!data.houseScoped,
           assignedToUserId: data.assignedToUserId ? Number(data.assignedToUserId) : null,
           assignedToName: data.assignedToName || null,
           assignedToRole: data.assignedToRole || null,
@@ -122,6 +155,45 @@ export async function POST(request: NextRequest) {
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
+    }
+
+    // ── STAGE_PLAN: Owner opt-in / opt-out for the poultry age/stage plan ─
+    if (entity === "STAGE_PLAN") {
+      const action = String(data.action || "").toLowerCase();
+      if (action !== "enable" && action !== "disable") {
+        return NextResponse.json({ success: false, error: "action must be 'enable' or 'disable'" }, { status: 400 });
+      }
+      if (!isPoultryCategory(biz?.category)) {
+        return NextResponse.json({ success: false, error: "The stage plan is only available for Poultry Farm businesses" }, { status: 400 });
+      }
+      if (action === "enable") {
+        const rows = await ensureStagePlanTemplates(businessId, branchCode, { reactivate: true });
+        if (data.cutoffHour !== undefined) {
+          const h = Number(data.cutoffHour);
+          if (Number.isFinite(h) && h >= 0 && h <= 23) {
+            await setSystemMarker(`checklist:overdueCutoffHour:${businessId}`, String(Math.trunc(h)));
+          }
+        }
+        // Materialize today immediately so the Owner sees the plan live.
+        const todayLocal = new Date().toLocaleDateString("en-CA");
+        const entries = await generateEntriesForDate(businessId, branchCode || biz?.code || null, todayLocal, biz?.code, biz?.category);
+        return NextResponse.json({
+          success: true,
+          stagePlan: "enabled",
+          templates: rows.filter((t: any) => t.origin === "STAGE_PLAN").length,
+          entriesToday: entries.length,
+          cutoffHour: await overdueCutoffHourFor(businessId),
+        });
+      }
+      const deactivated = await disableStagePlanTemplates(businessId);
+      return NextResponse.json({ success: true, stagePlan: "disabled", deactivated });
+    }
+
+    // ── SWEEP: manual overdue-critical run (same engine /api/init uses) ──
+    if (entity === "SWEEP") {
+      const cutoffHour = data.cutoffHour !== undefined ? Number(data.cutoffHour) : undefined;
+      const res = await sweepOverdueCritical([businessId], Number.isFinite(cutoffHour as number) ? { cutoffHour: Math.trunc(cutoffHour as number) } : undefined);
+      return NextResponse.json({ success: true, sweep: res });
     }
 
     // ── GENERATE: build the checklist for a date from ACTIVE templates ─
@@ -175,6 +247,25 @@ export async function PATCH(request: NextRequest) {
         })
         .where(eq(checklistEntries.id, Number(id)))
         .returning();
+      // Critical completions are audit-trail events (food-safety-grade tasks:
+      // withdrawal compliance, temperature checks, mortality sweeps…).
+      if (nowCompleted && String(existing.priority || "").toUpperCase() === "CRITICAL") {
+        const stageTxt = existing.stageLabel
+          ? ` · ${existing.stageLabel}${existing.ageDays != null ? ` (day ${existing.ageDays})` : ""}`
+          : "";
+        auditLog(
+          __authSession.user,
+          "CHECKLIST_CRITICAL_DONE",
+          "Daily Checklist",
+          existing.taskLabel,
+          "CHECKLIST",
+          existing.id,
+          existing.businessId,
+          existing.branchCode,
+          `Critical task completed${existing.batchNumber ? ` for flock ${existing.batchNumber}` : ""}${stageTxt} by ${data?.completedByName || "Staff"}`,
+          (await ownerOrgOfBusiness(existing.businessId).catch(() => null)) ?? null
+        ).catch(() => {});
+      }
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -209,6 +300,31 @@ export async function PATCH(request: NextRequest) {
           assignedToUserId: data.assignedToUserId !== undefined ? (data.assignedToUserId ? Number(data.assignedToUserId) : null) : existing.assignedToUserId,
           assignedToName: data.assignedToName !== undefined ? data.assignedToName : existing.assignedToName,
           assignedToRole: data.assignedToRole !== undefined ? data.assignedToRole : existing.assignedToRole,
+          // Stage-plan metadata is Owner-editable too (priority, frequency,
+          // scope) — the template row IS the customization surface.
+          priority: data.priority !== undefined
+            ? (String(data.priority).toUpperCase() === "CRITICAL" ? "CRITICAL" : "ROUTINE")
+            : existing.priority,
+          frequency: data.frequency !== undefined
+            ? (["DAILY", "WEEKLY", "MONTHLY", "STAGE_ONCE"].includes(String(data.frequency).toUpperCase())
+                ? String(data.frequency).toUpperCase()
+                : existing.frequency)
+            : existing.frequency,
+          stageKeys: data.stageKeys !== undefined
+            ? (Array.isArray(data.stageKeys)
+                ? (() => {
+                    const bt = String(data.birdType ?? existing.birdType ?? "").toUpperCase();
+                    const valid = bt === "BROILERS" || bt === "LAYERS"
+                      ? stageKeysOfBirdType(bt)
+                      : [...stageKeysOfBirdType("BROILERS"), ...stageKeysOfBirdType("LAYERS")];
+                    const picked = data.stageKeys.map(String).filter((k: any) => valid.includes(k));
+                    return picked.length ? picked : null;
+                  })()
+                : null)
+            : existing.stageKeys,
+          birdType: data.birdType !== undefined
+            ? (isStagePlanBirdType(data.birdType) ? String(data.birdType).toUpperCase() : null)
+            : existing.birdType,
           updatedAt: new Date(),
         })
         .where(eq(checklistTemplates.id, Number(id)))

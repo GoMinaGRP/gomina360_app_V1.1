@@ -1094,6 +1094,7 @@ export async function importBusinessBackup(
       templateId: remapFk("checklistTemplates", r.templateId),
       assignedToUserId: remapUserId(r.assignedToUserId),
       completedByRole: r.completedByRole,
+      flockId: remapFk("poultryFlocks", r.flockId),
     }),
     scenarioSimulations: (r) => ({
       targetBusinessId: newBusinessId,
