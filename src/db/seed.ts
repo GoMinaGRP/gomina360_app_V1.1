@@ -1923,5 +1923,26 @@ async function seedDatabaseInner() {
   await ensureWashFlagshipCatalogue();
   await ensureFlagshipMasterLists();
 
+  // ── Organization #1 + memberships ────────────────────────────────────────
+  // Multi-tenant access resolves every user's business scope through
+  // organization membership. On a fresh bootstrap the build-time migration
+  // runs BEFORE this seeder creates the users, so its org backfill finds
+  // nobody — without this ensure the first login 403s everywhere ("You do
+  // not have access to that business") until a migration is re-run. This
+  // mirrors the migration's backfill and is fully idempotent.
+  await db.execute(sql`
+    insert into organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
+    select 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
+    where not exists (select 1 from organizations where id = 1)
+  `);
+  await db.execute(sql`update users set primary_org_id = 1 where primary_org_id is null`);
+  await db.execute(sql`update users set is_super_admin = true where id = 1 and (is_super_admin is distinct from true)`);
+  await db.execute(sql`
+    insert into organization_members (organization_id, user_id, role_in_org, is_primary)
+    select 1, id, case when role = 'OWNER' then 'OWNER' else 'MEMBER' end, true from users
+    on conflict (organization_id, user_id) do nothing
+  `);
+  await db.execute(sql`update organizations set owner_user_id = 1 where id = 1 and owner_user_id is null`);
+
   console.log("GoMina 360 Command Center database seeding completed successfully!");
 }
