@@ -14,6 +14,7 @@ import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * Hardware & Building Materials store API.
@@ -39,7 +40,7 @@ async function bookRevenue(
 ) {
   const now = new Date();
   await db.insert(transactions).values({
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+    transactionNumber: nextTrxNumber(now),
     businessId,
     branchCode,
     branchName,
@@ -70,7 +71,7 @@ async function bookExpense(
 ) {
   const now = new Date();
   await db.insert(transactions).values({
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+    transactionNumber: nextTrxNumber(now),
     businessId,
     branchCode,
     branchName,
@@ -134,6 +135,10 @@ export async function POST(request: NextRequest) {
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
+    // Mutations (orders, purchases, deliveries) change stock, finance and
+    // dashboard payloads — drop the shared /api/init snapshot cache so the
+    // UI's post-save refresh reads fresh data instead of a ≤2.5 s stale copy.
+    ttlInvalidate("init");
     const body = await request.json();
     const { entity, data } = body;
     const businessId = Number(data?.businessId);
@@ -326,6 +331,8 @@ export async function PATCH(request: NextRequest) {
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
+    // Status progressions re-shape stock + finance + dashboards — see POST.
+    ttlInvalidate("init");
     const body = await request.json();
     const { entity, id, data } = body;
     if (!entity || !id) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { businesses, userBusinessAccess, users, organizationMembers } from "@/db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   CATEGORY_ICON,
   nextBusinessCode,
@@ -82,13 +82,24 @@ export async function POST(request: Request) {
       );
     }
 
-    const all = await db.select({ code: businesses.code }).from(businesses);
+    // Sequential codes number WITHIN the creator's organization (tenant
+    // scoping): a second independent organization's first Poultry unit is
+    // also POULTRY-01 — never a continuation of another org's sequence.
+    // DB-level uniqueness is per organization (businesses_owner_code_unique);
+    // org-less legacy creators keep the shared legacy namespace.
+    const orgCodeRows = await db
+      .select({ code: businesses.code })
+      .from(businesses)
+      .where(session.orgId != null ? eq(businesses.ownerId, session.orgId) : isNull(businesses.ownerId));
+    const orgCodes = orgCodeRows.map((b) => b.code);
 
     // Pretty sequential code per category (BLOCK-02, WASH-02, …). If the caller
-    // supplied a code that is already taken, fall back to the next free one.
-    let resolvedCode = code && !all.some((b) => b.code === code)
+    // supplied a code that is already taken (within this organization), fall
+    // back to the next free one. A code used by a DIFFERENT organization is
+    // legal — that is the entire point of per-org numbering.
+    let resolvedCode = code && !orgCodes.includes(code)
       ? code
-      : nextBusinessCode(all.map((b) => b.code), resolvedCategory);
+      : nextBusinessCode(orgCodes, resolvedCategory);
 
     // Standardized Ghana location: Region → District/MMDA → Town.
     // branchLocation is a derived human-readable summary line.

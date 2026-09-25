@@ -34,11 +34,13 @@ import {
   Wifi,
   Settings2,
   CalendarClock,
+  Stethoscope,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
+  | "ADVISOR"
   | "POULTRY-01"
   | "BLOCK-01"
   | "AQUA-01"
@@ -101,6 +103,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
+  const isFarmAdvisor = currentUser?.role === "FARM_ADVISOR";
   const isExecutive =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
   const isSuperAdmin = !!currentUser?.isSuperAdmin;
@@ -163,6 +166,15 @@ export default function Sidebar({
               data-testid={`sidebar-chip-granted-${biz.code}`}
             >
               GRANTED
+            </span>
+          )}
+          {isFarmAdvisor && accessible && (
+            <span
+              className="text-[8px] font-black text-teal-300 bg-teal-500/15 border border-teal-500/40 px-1 py-0.5 rounded shrink-0"
+              title="Read-only monitoring granted by the OWNER"
+              data-testid={`sidebar-chip-advisor-${biz.code}`}
+            >
+              MONITOR
             </span>
           )}
           {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
@@ -284,6 +296,30 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Top section: Farm Advisor Console (FARM_ADVISOR role only) — the
+          advisor's cross-unit home screen. */}
+      {isFarmAdvisor && (
+        <div className="p-2 sm:p-3 border-b border-slate-800">
+          <button
+            onClick={() => selectTab("ADVISOR")}
+            data-testid="advisor-console-tab"
+            className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
+              activeTab === "ADVISOR"
+                ? "bg-gradient-to-r from-teal-600 to-emerald-700 text-white shadow-lg shadow-teal-900/30 font-bold"
+                : "hover:bg-slate-800/80 text-slate-200"
+            }`}
+          >
+            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+              <Stethoscope className={`w-4 h-4 ${activeTab === "ADVISOR" ? "text-white" : "text-teal-400"}`} />
+              <span>Advisor Console</span>
+            </div>
+            <span className="hidden sm:inline text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-bold border border-teal-500/30">
+              MONITOR
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Top section: Executive Command Center (Owner / General Manager only) */}
       {isExecutive && (
         <div className="p-2 sm:p-3 border-b border-slate-800">
@@ -363,6 +399,8 @@ export default function Sidebar({
                 : `Owned by ${organizations.find((o) => String(o.id) === orgLens)?.name || "this Owner"} (${businesses.length})`
             : isExecutive
             ? `${businesses.length} Ghana Businesses`
+            : isFarmAdvisor
+            ? `My Farm Units (${businesses.filter(isAccessible).length})`
             : businesses.filter(isAccessible).length > 1
             ? `My Branches (${businesses.filter(isAccessible).length})`
             : "My Branch"}
@@ -797,6 +835,27 @@ export default function Sidebar({
             >
               <Sliders className="w-4 h-4 text-teal-400" />
               <span>Scenario Planning</span>
+            </button>
+            )}
+
+            {/* OWNER / GENERAL_MANAGER: Farm Advisor access & guidance console */}
+            {isExecutive && (
+            <button
+              onClick={() => selectTab("ADVISOR")}
+              data-testid="sidebar-advisor-manage"
+              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "ADVISOR"
+                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                <Stethoscope className="w-4 h-4 text-teal-400" />
+                <span>Farm Advisors</span>
+              </div>
+              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">
+                ACCESS
+              </span>
             </button>
             )}
 

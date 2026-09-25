@@ -292,7 +292,7 @@ async function main() {
   console.log("· tenant isolation …");
   await q(`insert into organizations (id, name, slug) values (2, 'Rival Logistics Co', 'rival-logistics-co') on conflict (id) do nothing`);
   await q(`insert into businesses (name, code, category, owner_id, branch_location, region, manager_name, contact_phone, initial_capital_ghs, monthly_target_revenue_ghs, status)
-           values ('Rival Transport', 'TRANSPORT-02', 'Transportation', 2, 'Tema', 'Greater Accra', 'Rival Boss', '+233 20 000 0002', 50000, 20000, 'ACTIVE') on conflict (code) do nothing`);
+           values ('Rival Transport', 'TRANSPORT-02', 'Transportation', 2, 'Tema', 'Greater Accra', 'Rival Boss', '+233 20 000 0002', 50000, 20000, 'ACTIVE') on conflict (owner_id, code) do nothing`);
   const org2Biz = (await q(`select id from businesses where owner_id=2 and code='TRANSPORT-02'`)).rows[0];
   ql(!!org2Biz, "second-org transport business exists (fixture)", `#${org2Biz?.id}`);
   // org-2's own tracker vehicle — must never leak into org-1 payloads

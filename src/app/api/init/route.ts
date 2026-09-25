@@ -1,44 +1,21 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import {
-  users,
-  businesses,
-  businessMetrics,
-  customers,
-  suppliers,
-  employees,
-  assets,
-  inventoryItems,
-  transactions,
-  creditSales,
-  poultryLogs,
-  blockFactoryLogs,
-  aquacultureLogs,
-  livestockLogs,
-  restaurantLogs,
-  electronicsLogs,
-  carWashLogs,
-  hardwareLogs,
-  aiInsights,
-  scenarioSimulations,
-  integrations,
-  checklistTemplates,
-  checklistEntries,
-  companySettings,
-} from "@/db/schema";
-import { seedDatabase } from "@/db/seed";
-import { eq, inArray, or } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { readInitSnapshot, brandingVersionOf } from "@/lib/initSnapshot";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
-import { getSessionInfo, accessibleBusinessIds, filterByAccess } from "@/lib/auth";
-import { organizations, organizationMembers } from "@/db/schema";
-import { allowedBusinessTypesOfOrg } from "@/lib/businessTypes";
-import { ensureTodayFor } from "@/lib/checklistGen";
+import { getSessionInfo, accessibleBusinessIds, filterByAccess, isFarmAdvisor, advisorSectionsMap } from "@/lib/auth";
+import { canViewSection, anySectionAllowed, farmModuleOfBusiness } from "@/lib/advisorSections";
+import { BUSINESS_TYPES } from "@/lib/businessTypes";
+import { ensureTodayFor, sweepOverdueCritical } from "@/lib/checklistGen";
+import { compressJsonBody } from "@/lib/httpGzip";
+import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 
 /** The first request in each process runs the seed-if-empty check; after a
  *  successful pass the DB is non-empty (seed only ADDS rows) so later
  *  requests skip the extra SELECT + advisory lock entirely. A failed check
- *  leaves the flag false so the next request retries. */
+ *  leaves the flag false so the next request retries. The seed module is
+ *  imported dynamically so a serverless cold start does not pay for its
+ *  ~1.9k-line bundle on the common (already-seeded) path. */
 let seedCheckedThisProcess = false;
 
 /** 2.5 s per-viewer snapshot of the fully-scoped bootstrap payload. Session
@@ -46,8 +23,15 @@ let seedCheckedThisProcess = false;
  *  embeds user id + role + org list + accessible business ids, so viewers can
  *  never see another tenant's rows. Any mutation route that already
  *  invalidates the menu also invalidates "init"; everything else goes stale
- *  for at most 2.5 s (dashboard refreshes are user-driven and infrequent). */
+ *  for at most 2.5 s (dashboard refreshes are user-driven and infrequent).
+ *  The cached entry stores BOTH the raw JSON and its gzip form so a cache hit
+ *  never re-compresses 100+ KB. */
 const INIT_TTL_MS = 2_500;
+
+interface InitCacheEntry {
+  raw: string;
+  gz: Buffer | null;
+}
 
 function initCacheKey(session: any, allowed: number[] | null): string {
   const me = session.user;
@@ -65,6 +49,7 @@ export async function GET(request: Request) {
     // Run seed if database is empty (once per process — the check itself is a
     // DB round trip that used to run on EVERY dashboard load).
     if (!seedCheckedThisProcess) {
+      const { seedDatabase } = await import("@/db/seed");
       await seedDatabase();
       seedCheckedThisProcess = true;
     }
@@ -79,13 +64,27 @@ export async function GET(request: Request) {
       );
     }
     const me = session.user;
-    const allowed = await accessibleBusinessIds(me); // null ⇒ Super Admin (all)
+    const allowed = await accessibleBusinessIds(me, session.orgIds); // null ⇒ Super Admin (all)
     const cacheKey = initCacheKey(session, allowed);
-    const cachedPayload = ttlGet<string>(cacheKey);
-    if (cachedPayload !== undefined) {
-      return new Response(cachedPayload, {
+    const cached = ttlGet<InitCacheEntry>(cacheKey);
+    if (cached !== undefined) {
+      const acceptsGzip = /\bgzip\b/i.test(request.headers.get("accept-encoding") || "");
+      if (cached.gz && acceptsGzip) {
+        return new Response(new Uint8Array(cached.gz), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+            "Content-Encoding": "gzip",
+            "Content-Length": String(cached.gz.length),
+            Vary: "Accept-Encoding",
+            "X-Init-Cache": "hit",
+          },
+        });
+      }
+      return new Response(cached.raw, {
         status: 200,
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "hit" },
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "hit", Vary: "Accept-Encoding" },
       });
     }
 
@@ -94,27 +93,15 @@ export async function GET(request: Request) {
     // Rows whose tenant is carried in .ownerId (shared/global tables):
     // Super Admin ⇒ all; everyone else ⇒ only their own organization(s).
     const inMyOrg = (ownerId: any) => me.isSuperAdmin || myOrgs.includes(Number(ownerId));
-
-    // ── Data fetch: ONE parallel batch with SQL-level pre-scoping.
-    // Before, this was 24+ SEQUENTIAL round trips of full-table dumps that
-    // were filtered only in JavaScript. Now:
-    //  • every independent read fires concurrently (one round trip of latency
-    //    instead of twenty+), and
-    //  • non-Super-Admin reads are narrowed in SQL by the access scope
-    //    (far fewer rows cross the wire as the platform grows).
-    // The JavaScript scoping below remains the final enforcement layer —
-    // semantics are identical; this is a pure access-path optimization.
-    // The Super Admin keeps full-table reads by design (D4: sees everything).
     const bids: number[] | null = allowed === null ? null : allowed.length ? allowed : [-1];
     const orgScope: number[] | null = me.isSuperAdmin ? null : myOrgs.length ? myOrgs : [-1];
-    const inBids = (col: any) => (bids ? inArray(col, bids) : undefined);
 
     // Daily-checklist convergence (M6): every scoped business ALWAYS has its
     // daily checklist for today before the payload below is assembled, so the
     // Command Center compliance panel and every module reflect the live plan
-    // instead of an empty day. Idempotent; ~1 tiny query in steady state, real
-    // inserts only on the first init of the day per business.
-    // Run before the parallel select so this response already carries the rows.
+    // instead of an empty day. Idempotent; ONE round trip in steady state
+    // (business list + distinct-today check together), real inserts only on
+    // the first init of the day per business.
     if (!bids || bids[0] !== -1) {
       const todayLocal = new Date().toLocaleDateString("en-CA");
       try {
@@ -122,95 +109,37 @@ export async function GET(request: Request) {
       } catch (e) {
         console.error("[checklistGen] ensureTodayFor failed (continuing without generation):", (e as any)?.message || e);
       }
+      // Overdue-critical sweep: incomplete CRITICAL tasks for today past the
+      // cutoff hour (default 18:00, per-business configurable) notify the
+      // managers + assignees — once per business+date (recordRef-deduped).
+      // Fire-and-forget: never blocks the init payload.
+      sweepOverdueCritical(bids).catch((e) => {
+        console.error("[checklistGen] overdue sweep failed (continuing):", (e as any)?.message || e);
+      });
     }
-    const inOrgScope = (col: any) => (orgScope ? inArray(col, orgScope) : undefined);
-    const execMemberQ = isExecutive && !me.isSuperAdmin
-      ? db.select({ userId: organizationMembers.userId })
-          .from(organizationMembers)
-          .where(inArray(organizationMembers.organizationId, myOrgs.length ? myOrgs : [-1]))
-      : Promise.resolve([]);
 
-    const [
-      allBusinesses,
-      allMetrics,
-      allUsers,
-      allCustomers,
-      allSuppliers,
-      allEmployees,
-      allAssets,
-      allInventory,
-      allTransactions,
-      allCreditSales,
-      allAiInsights,
-      allScenarios,
-      allIntegrations,
-      allChecklistTemplates,
-      allChecklistEntries,
-      poultry,
-      blockFactory,
-      aquaculture,
-      livestock,
-      restaurant,
-      electronics,
-      carWash,
-      hardware,
-      memberRows0,
-    ] = await Promise.all([
-      bids
-        ? db.select().from(businesses).where(inArray(businesses.id, bids)).orderBy(businesses.id)
-        : db.select().from(businesses).orderBy(businesses.id),
-      db.select().from(businessMetrics).where(inBids(businessMetrics.businessId)),
-      // users stay small and directory-wide (executives/member visibility logic below);
-      // sensitive fields are stripped before returning.
-      db.select().from(users).orderBy(users.id),
-      // customers: business-stamped rows follow the business scope; untyped rows
-      // follow the owner's org — narrow to the union, JS refines below.
-      db.select().from(customers).where(
-        bids
-          ? orgScope
-            ? or(inArray(customers.businessId, bids), inArray(customers.ownerId, orgScope))
-            : inArray(customers.businessId, bids)
-          : undefined
-      ),
-      db.select().from(suppliers).where(inOrgScope(suppliers.ownerId)),
-      db.select().from(employees).where(inBids(employees.businessId)),
-      db.select().from(assets).where(inBids(assets.businessId)),
-      db.select().from(inventoryItems).where(inBids(inventoryItems.businessId)),
-      db.select().from(transactions).where(inBids(transactions.businessId)),
-      db.select().from(creditSales).where(inBids(creditSales.businessId)),
-      db.select().from(aiInsights).where(
-        bids
-          ? orgScope
-            ? or(inArray(aiInsights.businessId, bids), inArray(aiInsights.ownerId, orgScope))
-            : inArray(aiInsights.businessId, bids)
-          : undefined
-      ),
-      db.select().from(scenarioSimulations).where(
-        bids
-          ? orgScope
-            ? or(inArray(scenarioSimulations.targetBusinessId, bids), inArray(scenarioSimulations.ownerId, orgScope))
-            : inArray(scenarioSimulations.targetBusinessId, bids)
-          : undefined
-      ),
-      db.select().from(integrations).where(inOrgScope(integrations.ownerId)),
-      db.select().from(checklistTemplates).where(inBids(checklistTemplates.businessId)),
-      db.select().from(checklistEntries).where(inBids(checklistEntries.businessId)),
-      db.select().from(poultryLogs).where(inBids(poultryLogs.businessId)),
-      db.select().from(blockFactoryLogs).where(inBids(blockFactoryLogs.businessId)),
-      db.select().from(aquacultureLogs).where(inBids(aquacultureLogs.businessId)),
-      db.select().from(livestockLogs).where(inBids(livestockLogs.businessId)),
-      db.select().from(restaurantLogs).where(inBids(restaurantLogs.businessId)),
-      db.select().from(electronicsLogs).where(inBids(electronicsLogs.businessId)),
-      db.select().from(carWashLogs).where(inBids(carWashLogs.businessId)),
-      db.select().from(hardwareLogs).where(inBids(hardwareLogs.businessId)),
-      execMemberQ,
-    ]);
+    // ── Data fetch: ONE multi-statement round trip ───────────────────────
+    // 24 parallel selects + 4 sequential follow-ups used to fan out over the
+    // pool (with PG_POOL_MAX=2 on serverless that is 12+ latency waves on a
+    // remote database). readInitSnapshot concatenates every read into a
+    // single simple-protocol batch: one connection, one round trip, same rows
+    // and identical scoping. The JavaScript filtering below remains the final
+    // enforcement layer — semantics are identical to the previous access path.
+    const orgIdForSettings = me.isSuperAdmin ? (session.orgId ?? 1) : (session.orgId ?? myOrgs[0] ?? null);
+    const snap = await readInitSnapshot({
+      bids,
+      orgScope,
+      selfUserId: Number(me.id) || 0,
+      execMemberOrgs: isExecutive && !me.isSuperAdmin ? (myOrgs.length ? myOrgs : [-1]) : null,
+      orgIdForSettings,
+      isSuperAdmin: !!me.isSuperAdmin,
+    });
 
     // ── Scope everything to the user's accessible businesses ────────────
     const scopedBusinesses =
       allowed === null
-        ? allBusinesses
-        : allBusinesses.filter((b) => allowed.includes(b.id));
+        ? snap.businesses
+        : snap.businesses.filter((b) => allowed.includes(b.id));
     // Login users visible to this user: executives get the full directory;
     // managers/workers see only accounts sharing their accessible businesses.
     // Sensitive auth fields are NEVER exposed.
@@ -220,13 +149,14 @@ export async function GET(request: Request) {
     };
     // User directory: Super Admin ⇒ everyone; org executives ⇒ members of
     // their OWN organization(s) only; others ⇒ same-business accounts.
+    // (The snapshot's SQL already pre-narrows to exactly these sets.)
     let execMemberIds: Set<number> | null = null;
     if (isExecutive && !me.isSuperAdmin) {
-      execMemberIds = new Set((memberRows0 as any[]).map((m) => Number(m.userId)));
+      execMemberIds = new Set(snap.execMemberIds);
     }
     const scopedUsers = (isExecutive
-      ? (me.isSuperAdmin ? allUsers : allUsers.filter((u) => u.id === me.id || execMemberIds!.has(u.id)))
-      : allUsers.filter(
+      ? (me.isSuperAdmin ? snap.users : snap.users.filter((u) => u.id === me.id || execMemberIds!.has(u.id)))
+      : snap.users.filter(
           (u) =>
             u.id === me.id ||
             (u.assignedBusinessId != null && allowed!.includes(Number(u.assignedBusinessId)))
@@ -237,8 +167,8 @@ export async function GET(request: Request) {
     // un-targeted ("all businesses") ones belong to the owner's organization.
     const scopedScenarios =
       allowed === null
-        ? allScenarios
-        : allScenarios.filter(
+        ? snap.scenarios
+        : snap.scenarios.filter(
             (s: any) =>
               (s.targetBusinessId != null && allowed.includes(Number(s.targetBusinessId))) ||
               (s.targetBusinessId == null && inMyOrg(s.ownerId))
@@ -246,7 +176,7 @@ export async function GET(request: Request) {
 
     // Credit sales (branch-isolated) + per-customer credit position, so the
     // CRM shows who owes what without another round-trip.
-    const scopedCreditSales = filterByAccess(allCreditSales, allowed);
+    const scopedCreditSales = filterByAccess(snap.creditSales, allowed);
     const creditByCustomer = new Map<number, { count: number; total: number; outstanding: number }>();
     for (const cs of scopedCreditSales) {
       if (cs.customerId == null) continue;
@@ -266,79 +196,194 @@ export async function GET(request: Request) {
       };
     };
 
-    // Per-organization settings: the fallback company logo resolves from the
-    // caller's OWN organization (Super Admin ⇒ their primary org).
-    const orgIdForSettings = me.isSuperAdmin ? (session.orgId ?? 1) : (session.orgId ?? myOrgs[0] ?? null);
-    const companyLogoRow = orgIdForSettings != null
-      ? (await db.select().from(companySettings).where(eq(companySettings.organizationId, orgIdForSettings)))[0]
-      : null;
-    // Current organization context for the UI (null only for orphan users).
-    const myOrgRow = orgIdForSettings != null
-      ? (await db.select().from(organizations).where(eq(organizations.id, orgIdForSettings)))[0]
-      : null;
-    // Super Admin platform view: the organization directory for the admin console.
-    const orgDirectory = me.isSuperAdmin ? await db.select().from(organizations).orderBy(organizations.id) : [];
-
     // Allowed Business Types of the caller's organization (drives both the UI
     // category pickers and the server-side creation gate). Super Admin ⇒ all.
-    const allowedBizTypes = await allowedBusinessTypesOfOrg(me.isSuperAdmin ? null : orgIdForSettings);
+    // Folded into the snapshot read — no extra round trip.
+    const restricted = orgIdForSettings != null ? snap.bizTypesRestricted === true : false;
+    const typeKeys = restricted ? snap.bizTypeKeys : BUSINESS_TYPES.map((t) => t.key);
+    const allowedBizTypes = {
+      restricted,
+      labelsAndKeys: typeKeys.map((k) => ({
+        key: k,
+        label: BUSINESS_TYPES.find((t) => t.key === k)?.label ?? k,
+      })),
+    };
 
     const payload = {
       success: true,
       accessibleBusinessIds: allowed,
       isSuperAdmin: !!me.isSuperAdmin,
-      organization: myOrgRow ? { id: myOrgRow.id, name: myOrgRow.name, slug: myOrgRow.slug, status: myOrgRow.status } : null,
-      organizations: orgDirectory.map((o) => ({ id: o.id, name: o.name, slug: o.slug, status: o.status, createdAt: o.createdAt })),
+      organization: snap.myOrgRow
+        ? { id: snap.myOrgRow.id, name: snap.myOrgRow.name, slug: snap.myOrgRow.slug, status: snap.myOrgRow.status }
+        : null,
+      organizations: snap.orgDirectory.map((o: any) => ({ id: o.id, name: o.name, slug: o.slug, status: o.status, createdAt: o.created_at ?? o.createdAt })),
       allowedBusinessTypes: {
         restricted: allowedBizTypes.restricted,
         types: allowedBizTypes.labelsAndKeys,
       },
       businesses: scopedBusinesses,
-      companyLogo: companyLogoRow?.companyLogo || null,
-      metrics: filterByAccess(allMetrics, allowed),
+      // Logos moved off the hot path: the payload carries a content-hashed
+      // brandingVersion; /api/branding serves the actual images with ETag +
+      // browser caching (and the client keeps a localStorage copy), so a
+      // 50-100 KB base64 crest is no longer re-downloaded on EVERY dashboard
+      // bootstrap and after EVERY save.
+      brandingVersion: brandingVersionOf(snap),
+      companyLogo: null,
+      metrics: filterByAccess(snap.metrics, allowed),
       users: scopedUsers,
-      customers: (allowed === null ? allCustomers : allCustomers.filter(
-        (c: any) => (c.businessId == null ? inMyOrg(c.ownerId) : allowed.includes(Number(c.businessId)))
-      )).map(withCredit),
+      customers: (allowed === null
+        ? snap.customers
+        : snap.customers.filter(
+            (c: any) => (c.businessId == null ? inMyOrg(c.ownerId) : allowed.includes(Number(c.businessId)))
+          )
+      ).map(withCredit),
       creditSales: scopedCreditSales,
-      suppliers: allSuppliers.filter((s: any) => inMyOrg(s.ownerId)), // per-organization supplier directory
-      employees: filterByAccess(allEmployees, allowed),
-      assets: filterByAccess(allAssets, allowed),
+      suppliers: snap.suppliers.filter((s: any) => inMyOrg(s.ownerId)), // per-organization supplier directory
+      employees: filterByAccess(snap.employees, allowed),
+      assets: filterByAccess(snap.assets, allowed),
       // Slim transport: the `photos[]` arrays (N× base64 data URLs per row —
       // the single heaviest column family in this payload) never leave the
       // server on dashboard bootstrap. `photo` (the one thumbnail the UI
       // actually renders) stays, and `photoCount` preserves the "N photos"
       // indicator. Full photos still ship in the dedicated detail endpoints.
-      inventory: filterByAccess(allInventory, allowed).map((item: any) => {
+      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => {
         const { photos, ...rest } = item;
         return { ...rest, photoCount: Array.isArray(photos) ? photos.length : 0 };
       }),
-      transactions: filterByAccess(allTransactions, allowed),
-      aiInsights: (allowed === null ? allAiInsights : allAiInsights.filter(
-        (i: any) => (i.businessId == null ? inMyOrg(i.ownerId) : allowed.includes(Number(i.businessId)))
-      )),
+      transactions: filterByAccess(snap.transactions, allowed),
+      aiInsights: (allowed === null
+        ? snap.aiInsights
+        : snap.aiInsights.filter(
+            (i: any) => (i.businessId == null ? inMyOrg(i.ownerId) : allowed.includes(Number(i.businessId)))
+          )
+      ),
       scenarios: scopedScenarios,
-      integrations: allIntegrations.filter((i: any) => inMyOrg(i.ownerId)),
+      integrations: snap.integrations.filter((i: any) => inMyOrg(i.ownerId)),
       checklists: {
-        templates: filterByAccess(allChecklistTemplates, allowed),
-        entries: filterByAccess(allChecklistEntries, allowed),
+        templates: filterByAccess(snap.checklistTemplates, allowed),
+        entries: filterByAccess(snap.checklistEntries, allowed),
       },
       specializedLogs: {
-        poultry: filterByAccess(poultry, allowed),
-        blockFactory: filterByAccess(blockFactory, allowed),
-        aquaculture: filterByAccess(aquaculture, allowed),
-        livestock: filterByAccess(livestock, allowed),
-        restaurant: filterByAccess(restaurant, allowed),
-        electronics: filterByAccess(electronics, allowed),
-        carWash: filterByAccess(carWash, allowed),
-        hardware: filterByAccess(hardware, allowed),
+        poultry: filterByAccess(snap.specializedLogs.poultry, allowed),
+        blockFactory: filterByAccess(snap.specializedLogs.blockFactory, allowed),
+        aquaculture: filterByAccess(snap.specializedLogs.aquaculture, allowed),
+        livestock: filterByAccess(snap.specializedLogs.livestock, allowed),
+        restaurant: filterByAccess(snap.specializedLogs.restaurant, allowed),
+        electronics: filterByAccess(snap.specializedLogs.electronics, allowed),
+        carWash: filterByAccess(snap.specializedLogs.carWash, allowed),
+        hardware: filterByAccess(snap.specializedLogs.hardware, allowed),
       },
     };
-    const body = JSON.stringify(payload);
-    ttlSet(cacheKey, body, INIT_TTL_MS);
-    return new Response(body, {
+
+    // ── Farm Advisor payload slimming (data minimization) ────────────────
+    // An invited advisor monitors farm OPERATIONS — never finance, HR, the
+    // user directory or storefront management. The full snapshot above is
+    // already business-scoped; this post-filter removes every dataset the
+    // advisor must not receive before a single byte crosses the wire, so
+    // hidden tabs can never be reconstructed from the API payload. (The
+    // middleware additionally default-denies their direct API calls.)
+    if (isFarmAdvisor(me)) {
+      const selfOnly = (payload.users || []).filter((u: any) => Number(u.id) === Number(me.id));
+      (payload as any).users = selfOnly;
+      (payload as any).customers = [];
+      (payload as any).creditSales = [];
+      (payload as any).suppliers = [];
+      (payload as any).employees = [];
+      (payload as any).assets = [];
+      (payload as any).transactions = [];
+      (payload as any).scenarios = [];
+      (payload as any).integrations = [];
+      // Inventory: keep stock LEVELS (feed availability matters to an
+      // advisor) but strip every cost/price field — pricing is business data.
+      (payload as any).inventory = (payload.inventory || []).map((item: any) => {
+        const { costPriceGhs, sellingPriceGhs, ...rest } = item;
+        return rest;
+      });
+      // Metrics: keep the operational shape (period, growth, risk) but never
+      // the financial rollups (revenue / expenses / profit / ROI / cash flow).
+      (payload as any).metrics = (payload.metrics || []).map((m: any) => ({
+        ...m,
+        revenueGhs: 0,
+        expensesGhs: 0,
+        netProfitGhs: 0,
+        roiPercent: 0,
+        cashFlowGhs: 0,
+        assetsValueGhs: 0,
+        inventoryValueGhs: 0,
+      }));
+
+      // ── Per-section visibility (OWNER-controlled per farm unit) ──────
+      // advisorSectionsMap: businessId → section list (null = all). It both
+      // drives the UI tab filter AND strips every denied dataset here, so a
+      // hidden section can never be reconstructed from this payload.
+      const secMap = await advisorSectionsMap(me);
+      (payload as any).advisorSections = secMap;
+      const bizRowsAll: any[] = payload.businesses || [];
+      const moduleOfBiz = (bid: any): string | null => {
+        const biz = bizRowsAll.find((b: any) => Number(b.id) === Number(bid));
+        return farmModuleOfBusiness(biz || null);
+      };
+      const rowsOfModulePermitted = (rows: any[], logModule: string): any[] =>
+        (rows || []).filter((r: any) => {
+          const bid = r.businessId ?? r.business_id;
+          const mod = moduleOfBiz(bid);
+          if (mod !== logModule) return true; // other modules untouched
+          return anySectionAllowed(secMap[Number(bid)] ?? null, mod);
+        });
+      // Operations logs: an advisor with zero permitted sections of a module
+      // gets none of that module's log bucket.
+      (payload as any).specializedLogs = {
+        ...payload.specializedLogs,
+        poultry: rowsOfModulePermitted(payload.specializedLogs.poultry, "POULTRY"),
+        aquaculture: rowsOfModulePermitted(payload.specializedLogs.aquaculture, "AQUA"),
+        livestock: rowsOfModulePermitted(payload.specializedLogs.livestock, "LIVESTOCK"),
+      };
+      // Inventory levels: only for units whose inventory-ish section is on
+      // (Poultry → INVENTORY, Livestock → OPERATIONS; the aqua module has no
+      // inventory surface, so aqua stock never ships to advisors).
+      (payload as any).inventory = (payload.inventory || []).filter((item: any) => {
+        const mod = moduleOfBiz(item.businessId);
+        if (mod === "POULTRY") return canViewSection(secMap[Number(item.businessId)] ?? null, "INVENTORY");
+        if (mod === "LIVESTOCK") return canViewSection(secMap[Number(item.businessId)] ?? null, "OPERATIONS");
+        if (mod === "AQUA") return false;
+        return true; // non-farm granted units keep (already price-stripped) levels
+      });
+      // Checklist templates & entries: the checklist is a per-section surface
+      // (Poultry → CHECKLIST, Aquaculture → HEALTH, Livestock → OPERATIONS).
+      const checklistAllowed = (r: any): boolean => {
+        const mod = moduleOfBiz(r.businessId ?? r.business_id);
+        const key = mod === "POULTRY" ? "CHECKLIST" : mod === "AQUA" ? "HEALTH" : mod === "LIVESTOCK" ? "OPERATIONS" : null;
+        if (!key) return true;
+        return canViewSection(secMap[Number(r.businessId ?? r.business_id)] ?? null, key);
+      };
+      (payload as any).checklists = {
+        templates: (payload.checklists?.templates || []).filter(checklistAllowed),
+        entries: (payload.checklists?.entries || []).filter(checklistAllowed),
+      };
+    }
+
+    const raw = JSON.stringify(payload);
+    const gz =
+      /\bgzip\b/i.test(request.headers.get("accept-encoding") || "") && raw.length >= 1024
+        ? gzipSync(Buffer.from(raw, "utf8"))
+        : null;
+    ttlSet(cacheKey, { raw, gz }, INIT_TTL_MS);
+    if (gz) {
+      return new Response(new Uint8Array(gz), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "Content-Encoding": "gzip",
+          "Content-Length": String(gz.length),
+          Vary: "Accept-Encoding",
+          "X-Init-Cache": "miss",
+        },
+      });
+    }
+    return new Response(raw, {
       status: 200,
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "miss" },
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "miss", Vary: "Accept-Encoding" },
     });
   } catch (error: any) {
     console.error("Error in /api/init:", error);

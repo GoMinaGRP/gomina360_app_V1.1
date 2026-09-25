@@ -76,6 +76,8 @@ const sessionMax0 = (await q1("SELECT COALESCE(max(id),0) m FROM user_sessions")
 // Baseline counts captured at suite start — user data evolves between runs
 // (the owner manages auditor grants / issues himself), so the forensics
 // gate compares against THIS baseline, not hardcoded numbers.
+const trailMax0 = Number((await q1("SELECT COALESCE(max(id),0) m FROM audit_trail")).m);
+const notifMax0 = Number((await q1("SELECT COALESCE(max(id),0) m FROM notifications")).m);
 const base0 = await q1("SELECT (SELECT count(*) FROM audit_reviews) rev, (SELECT count(*) FROM audit_issue_updates) thr, (SELECT count(*) FROM notifications) nof, (SELECT count(*) FROM audit_trail) trl, (SELECT count(*) FROM transactions) txn, (SELECT count(*) FROM payroll_runs) runs, (SELECT count(*) FROM audit_assignments) grants");
 let ISSUE_ID = null;
 let TEST_GRANT_ID = null;
@@ -242,13 +244,20 @@ try {
   // deposit-slip issue). They verify environment state, not app behavior;
   // when the fixture set is absent from this environment (legacy restore
   // targets a superseded business lineup), report absence instead of failing.
-  const fixturesPresent = Number(f.runs_paid) > 0 || !!emanGrant;
+  // The payroll family is what D2 asserts, so IT gates strict mode — the
+  // auditor grants alone must not (verify-audit-records legitimately heals
+  // Emmanuel's demo grant in every environment).
+  const fixturesPresent = Number(f.runs_paid) > 0;
+  const grantsPresent = !!emanGrant || !!comfortGrant;
   if (fixturesPresent) {
     ok("D2 restored payroll runs all PAID (4)", Number(f.runs_paid) === 4 && Number(f.att) === 11, `paid=${f.runs_paid} att=${f.att}`);
+  } else {
+    ok("D2 restored payroll runs all PAID (4)", true, `fixture-absent in this environment (paid=${f.runs_paid} att=${f.att})`);
+  }
+  if (grantsPresent) {
     ok("D3 Emmanuel's restored grant active + Comfort's grant present", emanGrant?.is_active === true && !!comfortGrant,
       `emmanuel=${emanGrant?.is_active} comfort=${JSON.stringify(comfortGrant?.modules)}`);
   } else {
-    ok("D2 restored payroll runs all PAID (4)", true, `fixture-absent in this environment (paid=${f.runs_paid} att=${f.att})`);
     ok("D3 Emmanuel's restored grant active + Comfort's grant intact", true, `fixture-absent in this environment (emmanuel=${emanGrant?.is_active})`);
   }
   ok("D4 seeded issue & its seeded notification intact (owner may progress it)", !!seededIssue &&
@@ -265,8 +274,8 @@ try {
     await client.query(`DELETE FROM notifications WHERE issue_id = ANY($1::int[])`, [testIds]);
     await client.query(`DELETE FROM audit_reviews WHERE id = ANY($1::int[])`, [testIds]);
   }
-  await client.query(`DELETE FROM audit_trail WHERE reason LIKE 'TEST%' OR detail LIKE '%TEST%' OR target_label LIKE 'TEST%'`);
-  await client.query(`DELETE FROM notifications WHERE title LIKE 'TEST%' OR body LIKE '%TEST%'`);
+  await client.query(`DELETE FROM audit_trail WHERE id > $1 AND (reason LIKE 'TEST%' OR detail LIKE '%TEST%' OR target_label LIKE 'TEST%')`, [trailMax0]);
+  await client.query(`DELETE FROM notifications WHERE id > $1 AND (title LIKE 'TEST%' OR body LIKE '%TEST%')`, [notifMax0]);
   const seededIds = globalThis.__seededChecklistIds || [];
   if (seededIds.length) await client.query(`DELETE FROM checklist_entries WHERE id = ANY($1::int[])`, [seededIds]);
   await client.query(`DELETE FROM checklist_entries WHERE task_label LIKE 'TEST Live — %'`);

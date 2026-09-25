@@ -87,7 +87,13 @@ export function computeFishPerformance(
     feedLogs,
     harvests,
     weightLogs,
-  }: { batches: any[]; feedLogs: any[]; harvests: any[]; weightLogs?: any[] },
+    weightTargetG,
+  }: {
+    batches: any[]; feedLogs: any[]; harvests: any[]; weightLogs?: any[];
+    /** Optional benchmark-profile target override (g at age) — falls back to
+     *  the built-in species standard when it returns null. */
+    weightTargetG?: (batch: any, ageDays: number) => number | null;
+  },
   filters: FishPerfFilters,
 ): FishPerfResult {
   const batchById = new Map((batches || []).map((b) => [b.id, b]));
@@ -127,7 +133,10 @@ export function computeFishPerformance(
     const age = batch?.hatchDate ? ageDaysBetween(batch.hatchDate, w.recordedDate) : null;
     const e = byDate.get(w.recordedDate) || { w: [], t: [] };
     e.w.push(w.avgWeightG);
-    if (age != null) e.t.push(speciesTargetG(w.species || batch?.species, age));
+    if (age != null) {
+      const t = batch && weightTargetG ? weightTargetG(batch, age) : null;
+      e.t.push(t ?? speciesTargetG(w.species || batch?.species, age));
+    }
     byDate.set(w.recordedDate, e);
   }
   const growthTrend = [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))
@@ -143,7 +152,8 @@ export function computeFishPerformance(
     const wk = Math.floor(age / 7);
     const e = byAge.get(wk) || { w: [], t: [] };
     e.w.push(w.avgWeightG);
-    e.t.push(speciesTargetG(w.species || batch.species, age));
+    const tBench = weightTargetG ? weightTargetG(batch, age) : null;
+    e.t.push(tBench ?? speciesTargetG(w.species || batch.species, age));
     byAge.set(wk, e);
   }
   const weightByAge = [...byAge.entries()].sort((a, b) => a[0] - b[0])

@@ -98,8 +98,12 @@ async function dropEmptyDatabase() {
 // ── Boot all scenarios sequentially (keeps sandbox memory sane) ─────────────
 console.log("── Failure-mode matrix (Vercel simulations) ──");
 
-// 3011 — VERCEL=1, DATABASE_URL missing entirely
-const m3011 = await bootAndProbe(3011, { VERCEL: "1" }, async (base) => {
+// 3011 — VERCEL=1, DATABASE_URL missing entirely. DATABASE_URL is set to an
+// EMPTY string on purpose: Next.js loads the repo's local .env (written by
+// bootstrap-install.sh for the dev sandbox) into process.env, and an explicit
+// empty value both suppresses that leak and is treated by src/db/index.ts as
+// "not configured" — exactly the deployment mistake this probe simulates.
+const m3011 = await bootAndProbe(3011, { VERCEL: "1", DATABASE_URL: "" }, async (base) => {
   const health = await healthProbe(base);
   const login = await fetch(`${base}/api/auth/login`, {
     method: "POST", headers: { "content-type": "application/json" },

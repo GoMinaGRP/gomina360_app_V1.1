@@ -17,7 +17,7 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  role: text("role").notNull(), // 'OWNER', 'GENERAL_MANAGER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'SUPERVISOR', 'WORKER'
+  role: text("role").notNull(), // 'OWNER', 'GENERAL_MANAGER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'SUPERVISOR', 'WORKER', 'FARM_ADVISOR' (external read-only farm monitor — access flows exclusively through advisor_assignments)
   assignedBusinessId: integer("assigned_business_id"), // null = All businesses (Owner/Executive); required for WORKER & BRANCH_MANAGER
   phone: text("phone").notNull(),
   avatarUrl: text("avatar_url"),
@@ -231,7 +231,12 @@ export const recordDeletionLogs = pgTable("record_deletion_logs", {
 export const businesses = pgTable("businesses", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  code: text("code").notNull().unique(), // e.g. POULTRY-01, BLOCK-01
+  // Unit code (e.g. POULTRY-01) — UNIQUE PER ORGANIZATION, not globally:
+  // sequential numbering restarts inside each independent Owner/Organization
+  // (a second org's first Poultry unit is also POULTRY-01). Enforced by the
+  // composite unique index below; every code-based lookup resolves the
+  // caller's accessible match (see /api/logs/[code] and the QR scanner).
+  code: text("code").notNull(),
   category: text("category").notNull(), // 'Poultry Farm', 'Block Factory', 'Aquaculture', 'Livestock', 'Restaurant & Food', 'Electronic Shop', 'Car Wash', 'Hardware Store'
   branchLocation: text("branch_location").notNull(), // human-readable summary line
   // Standardized Ghana location (Region → District/MMDA → Town)
@@ -292,7 +297,11 @@ export const businesses = pgTable("businesses", {
   // Tenant scope: which organization (Owner) this business belongs to.
   ownerId: integer("owner_id").references(() => organizations.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [
+  // Tenant-scoped uniqueness: (organization, code). NULL ownerId (legacy
+  // pre-multi-owner rows) falls back to the shared legacy namespace.
+  uniqueIndex("businesses_owner_code_unique").on(t.ownerId, t.code),
+]);
 
 // Service areas / localities a Business (branch unit) delivers to. Every
 // unit defines its OWN list — different branches serve different areas. An
@@ -361,6 +370,29 @@ export const companySettings = pgTable("company_settings", {
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Persistent one-time system markers + business-deletion tombstones.
+ *
+ *  Two jobs:
+ *  1. ONE-TIME SEED/REPAIR FLAGS — the boot seeder records which idempotent
+ *     migrations (e.g. the HARDWARE-01 flagship provisioning) have already
+ *     run on THIS database, so a migration never re-runs after the OWNER
+ *     intentionally removed its output (deleted units must stay deleted —
+ *     the seeder must never "repair" an owner decision away).
+ *  2. DELETION TOMBSTONES — every permanently deleted business code is
+ *     recorded here (`deleted_business:<CODE>`), making OWNER deletion
+ *     final against any auto-provisioning path, today or in the future.
+ *
+ *  Reads/writes are resilient: a database that has not yet received the
+ *  table (pre-migration) treats every marker as absent and every write as
+ *  a no-op, so deletion can never fail because the marker table is missing.
+ */
+export const systemMarkers = pgTable("system_markers", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  value: text("value"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 /** Group-wide customer support information (single live row, id=1) — shown to
@@ -519,7 +551,7 @@ export const employeeHistory = pgTable("employee_history", {
 // asset values into business + branch dashboards, reports and analytics.
 export const assets = pgTable("assets", {
   id: serial("id").primaryKey(),
-  assetCode: text("asset_code").notNull().unique().default(""), // unique enterprise asset code (required)
+  assetCode: text("asset_code").notNull().default(""), // unique PER BUSINESS asset code (required)
   name: text("name").notNull(),
   description: text("description"), // detailed notes/specs about the asset
   businessId: integer("business_id").notNull(), // parent business (required)
@@ -544,7 +576,12 @@ export const assets = pgTable("assets", {
   qrCode: text("qr_code"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
-  uniqueIndex("assets_qr_code_unique").on(t.qrCode),
+  // Asset codes number PER BUSINESS (each unit's registry starts at
+  // BRANCH-AST-0001); QR tags are unique per business for the same reason —
+  // two independent organizations may both own a POULTRY-01 unit with its
+  // own AST-0001 asset. Scanners resolve the caller's accessible match.
+  uniqueIndex("assets_qr_code_unique").on(t.businessId, t.qrCode),
+  uniqueIndex("assets_business_asset_code_unique").on(t.businessId, t.assetCode),
 ]);
 
 // 7b. Complete Asset & Equipment audit log + approval workflow
@@ -609,8 +646,10 @@ export const inventoryItems = pgTable("inventory_items", {
   registeredAt: timestamp("registered_at").defaultNow(),
 }, (t) => [
   uniqueIndex("inventory_items_business_sku_unique").on(t.businessId, t.sku),
-  // Globally unique QR across the whole group — NULLs (legacy rows) may repeat.
-  uniqueIndex("inventory_items_qr_code_unique").on(t.qrCode),
+  // QR tags unique PER BUSINESS — independent organizations may share unit
+  // codes, so the same label value can exist in two tenants' registries.
+  // NULLs (unset QRs) may repeat.
+  uniqueIndex("inventory_items_qr_code_unique").on(t.businessId, t.qrCode),
   index("inventory_items_business_id_idx").on(t.businessId)
 ]);
 
@@ -1055,6 +1094,9 @@ export const poultryFlocks = pgTable("poultry_flocks", {
   sourceHatchery: text("source_hatchery"),
   costPerBirdGhs: doublePrecision("cost_per_bird_ghs").default(0),
   status: text("status").notNull().default("ACTIVE"), // ACTIVE, SOLD, CULLED, CLOSED
+  // Benchmarking: explicit profile override. NULL = auto-match a profile by
+  // bird type (+ breed when the profile narrows to one).
+  benchmarkProfileId: integer("benchmark_profile_id"),
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
@@ -1199,6 +1241,41 @@ export const poultryWeightLogs = pgTable("poultry_weight_logs", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ═══ P-BENCHMARK. Flock Performance Benchmarking (sub-module of the Poultry farm) ═══
+// Owner-managed benchmark PROFILES: age-keyed target curves per metric
+// (body weight, ADG, FCR, mortality, feed intake, lay %, egg weight, feed
+// cost/kg gain, cost/bird). Profiles are compared age-matched against the
+// live flock AND against comparable historical flocks (p25/median/p75 band).
+// Curves live as one JSONB payload per profile (read-as-a-whole, never
+// queried point-wise — same pattern as feed-mill formulationSnapshot).
+// Built-in breed-standard curves in src/lib/poultryPerformance.ts remain
+// the fallback when no profile resolves, so existing charts never change
+// behaviour for farms that never configure benchmarking.
+export const poultryBenchmarkProfiles = pgTable("poultry_benchmark_profiles", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  name: text("name").notNull(),
+  birdType: text("bird_type").notNull(), // LAYERS, BROILERS, COCKERELS, TURKEYS, GUINEA_FOWL
+  breed: text("breed"), // optional narrowing, e.g. "Cobb 500"
+  source: text("source").notNull().default("MANUAL"), // MANUAL | TEMPLATE | FARM_HISTORY
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE | ARCHIVED
+  isDefault: boolean("is_default").notNull().default(false),
+  // Variance tolerance bands (per-metric overrides live inside `curves`):
+  toleranceWarnPct: doublePrecision("tolerance_warn_pct").notNull().default(5),
+  toleranceCritPct: doublePrecision("tolerance_crit_pct").notNull().default(10),
+  // { METRIC_KEY: { by: "ageDays"|"ageWeeks", unit, warnPct?, critPct?, points: [[age, value], …] },
+  //   _meta: { marketAgeDays?, livePricePerKgGhs? } }
+  curves: jsonb("curves").notNull().default({}),
+  notes: text("notes"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // ═══ P-FEED-MILL. Feed Production & Milling (sub-module of the Poultry farm) ═══
@@ -1540,6 +1617,11 @@ export const aquacultureBatches = pgTable("aquaculture_batches", {
   avgWeightGrams: doublePrecision("avg_weight_grams").default(0),
   targetHarvestDate: text("target_harvest_date"),
   status: text("status").notNull().default("GROWING"), // GROWING, HARVESTED, SOLD, CULLED
+  // Benchmarking: explicit profile override. NULL = auto-match a profile by
+  // species (+ strain when the profile narrows to one).
+  benchmarkProfileId: integer("benchmark_profile_id"),
+  // Stocking cost basis for production-cost benchmarking (GH₵ per fingerling).
+  costPerFingerlingGhs: doublePrecision("cost_per_fingerling_ghs").default(0),
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -1850,6 +1932,36 @@ export const aquacultureWeightLogs = pgTable("aquaculture_weight_logs", {
   notes: text("notes"),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// A5c. Fish Benchmark Performance Profiles — the aquaculture adaptation of
+// the poultry benchmark system: age-based target curves (avg weight, SGR,
+// FCR, feeding rate, survival, stocking density, feed & production costs)
+// the dashboard compares every batch against, age-matched, alongside bands
+// from the farm's own historical batches.
+export const aquacultureBenchmarkProfiles = pgTable("aquaculture_benchmark_profiles", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  ownerId: integer("owner_id"), // tenant scope (organizations.id)
+  name: text("name").notNull(),
+  species: text("species").notNull(), // VOLTA_TILAPIA, AFRICAN_CATFISH, RED_TILAPIA, …
+  strain: text("strain"), // optional narrowing, e.g. "Akosombo strain"
+  source: text("source").notNull().default("MANUAL"), // MANUAL | TEMPLATE | FARM_HISTORY
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE | ARCHIVED
+  isDefault: boolean("is_default").notNull().default(false),
+  // Variance tolerance bands (per-metric overrides live inside `curves`):
+  toleranceWarnPct: doublePrecision("tolerance_warn_pct").notNull().default(5),
+  toleranceCritPct: doublePrecision("tolerance_crit_pct").notNull().default(10),
+  // { METRIC_KEY: { by: "ageDays"|"ageWeeks", unit, warnPct?, critPct?, points: [[age, value], …] },
+  //   _meta: { harvestAgeDays?, livePricePerKgGhs? } }
+  curves: jsonb("curves").notNull().default({}),
+  notes: text("notes"),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // A6. Daily Tasks / Checklist for Aquaculture
@@ -2647,6 +2759,21 @@ export const checklistTemplates = pgTable("checklist_templates", {
   assignedToRole: text("assigned_to_role"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+  // ── Poultry stage-plan metadata (additive, nullable: every legacy row and
+  //    every non-poultry business keeps working untouched). origin separates
+  //    the versioned system stage plan (upsertable by the engine) from
+  //    Owner-added custom items (never touched by system updates).
+  origin: text("origin").default("CUSTOM"), // 'STAGE_PLAN' | 'CUSTOM'
+  birdType: text("bird_type"), // 'BROILERS' | 'LAYERS' | null (any poultry flock)
+  stageKeys: jsonb("stage_keys").$type<string[] | null>(), // null = every stage of the bird type
+  frequency: text("frequency").default("DAILY"), // DAILY | WEEKLY | MONTHLY | STAGE_ONCE
+  priority: text("priority").default("ROUTINE"), // ROUTINE | CRITICAL
+  houseScoped: boolean("house_scoped").default(false), // once per business+date, not per flock
+  // ── Per-flock plan rows (flock lifecycle checklists): when a flock has its
+  //    own plan, these rows REPLACE the system stage plan for that flock
+  //    only — one flock's customization can never alter another flock, the
+  //    system plan, or the saved template it was copied from.
+  flockId: integer("flock_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
 });
@@ -2670,7 +2797,58 @@ export const checklistEntries = pgTable("checklist_entries", {
   completedByRole: text("completed_by_role"),
   completedAt: timestamp("completed_at"),
   notes: text("notes"),
+  // ── Poultry stage-plan context (additive, nullable). Entries are
+  //    self-describing snapshots: flock, bird type, stage and age at
+  //    materialization, so compliance analytics and the audit view never
+  //    have to re-derive history from today's flock state.
+  flockId: integer("flock_id"),
+  batchNumber: text("batch_number"),
+  birdType: text("bird_type"),
+  stageKey: text("stage_key"),
+  stageLabel: text("stage_label"),
+  ageDays: integer("age_days"),
+  frequency: text("frequency"),
+  priority: text("priority"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// 7b-2. Saved reusable flock-plan templates — snapshots of a customized plan
+//       the Owner can apply to any new flock. Items are self-contained task
+//       definitions (taskKey, taskLabel, category, stageKeys, frequency,
+//       priority, houseScoped), so applying a template never links back to
+//       the flock it came from.
+export const checklistPlanTemplates = pgTable("checklist_plan_templates", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  name: text("name").notNull(),
+  birdType: text("bird_type").notNull(), // BROILERS | LAYERS
+  items: jsonb("items").$type<any[]>().notNull().default([]),
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+// 7b-3. Per-flock plan state — which plan each flock runs and how it started.
+//       source: 'SYSTEM' (recommended stage plan, no private rows) |
+//       'TEMPLATE' (copied from a saved reusable template) | 'CUSTOM'
+//       (forked/customized for this flock).
+export const checklistFlockPlans = pgTable("checklist_flock_plans", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  flockId: integer("flock_id").notNull().unique(),
+  batchNumber: text("batch_number"),
+  source: text("source").notNull().default("SYSTEM"), // SYSTEM | TEMPLATE | CUSTOM
+  planTemplateId: integer("plan_template_id"),
+  planTemplateName: text("plan_template_name"),
+  startedByName: text("started_by_name"),
+  startedByRole: text("started_by_role"),
+  startedAt: timestamp("started_at").defaultNow(),
+  updatedByName: text("updated_by_name"),
+  updatedByRole: text("updated_by_role"),
+  updatedAt: timestamp("updated_at"),
 });
 
 // 7c. Daily Notes — free-form end-of-day notes workers file under the Daily
@@ -2710,6 +2888,117 @@ export const businessInsights = pgTable("business_insights", {
   categoryTrends: jsonb("category_trends").notNull().default({}), // {CATEGORY: totalMentions}
   history: jsonb("history").notNull().default([]), // [{date,summary,severity,issues[],noteCount}] newest first, capped
   updatedAt: timestamp("updated_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// 7e. Farm Advisor / Resource Person — external professional (role
+//     FARM_ADVISOR) invited by the OWNER to remotely monitor farm operations
+//     read-only and file notes / observations / recommendations / follow-ups.
+//     Access is granted PER BUSINESS UNIT through advisor_assignments (with
+//     optional expiry) — never through the staff grant tables — and every
+//     note lifecycle step is mirrored in an immutable advisor_note_updates
+//     thread plus the shared audit_trail, mirroring the proven audit-issue
+//     pattern (record linking, immutable conversation, escalation).
+export const ADVISOR_NOTE_CATEGORIES = [
+  "GROWTH",
+  "FEED_NUTRITION",
+  "HEALTH_DISEASE",
+  "MORTALITY",
+  "WATER_QUALITY",
+  "BIOSECURITY",
+  "STOCKING",
+  "ENVIRONMENT",
+  "MANAGEMENT",
+  "MARKET_TIMING",
+  "GENERAL",
+] as const;
+
+export const ADVISOR_NOTE_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+
+/** Follow-up lifecycle: OPEN → IN_PROGRESS → ADDRESSED → CLOSED (terminal).
+ *  Nothing is ever hard-deleted — a withdrawn note is closed with a note. */
+export const ADVISOR_FOLLOWUP_STATUSES = ["OPEN", "IN_PROGRESS", "ADDRESSED", "CLOSED"] as const;
+export const ADVISOR_FOLLOWUP_OPEN_STATUSES = ["OPEN", "IN_PROGRESS"] as const;
+
+/** OWNER-controlled advisor grants. One row per (advisor, business unit).
+ *  `validUntil` (YYYY-MM-DD) auto-revokes the grant — occasional visitors
+ *  should not keep standing access forever; expired == revoked. The FARM_
+ *  ADVISOR role reads access ONLY from this table (intersected with the
+ *  advisor's own organization) — see accessibleBusinessIds() in lib/auth. */
+export const advisorAssignments = pgTable("advisor_assignments", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(), // the advisor (users.role = FARM_ADVISOR)
+  userName: text("user_name").notNull(),
+  userRole: text("user_role").notNull().default("FARM_ADVISOR"),
+  businessId: integer("business_id").notNull(), // farm unit being monitored
+  branchCode: text("branch_code"), // null = every branch of the unit
+  scopeNote: text("scope_note"), // e.g. "Growth & health review only"
+  // OWNER-chosen per-section visibility for this unit — null = ALL sections
+  // (legacy default), [] = none, otherwise a list of catalog keys from
+  // src/lib/advisorSections.ts (POULTRY_/AQUA_/LIVESTOCK_ catalogs). Enforced
+  // server-side in /api/poultry, /api/aquaculture, /api/checklists and
+  // /api/init (denied datasets never leave the server) and mirrored in the
+  // read-only module UIs (tabs + panels). Grant/revoke is OWNER-only.
+  sections: jsonb("sections").$type<string[] | null>(),
+  validUntil: text("valid_until"), // YYYY-MM-DD; null = no expiry
+  isActive: boolean("is_active").notNull().default(true),
+  grantedByUserId: integer("granted_by_user_id").notNull(),
+  grantedByName: text("granted_by_name").notNull(),
+  grantedByRole: text("granted_by_role").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** An advisor observation / recommendation. Linked to the farm unit + the
+ *  farm day + optionally a flock/batch and any record (checklist entry, feed
+ *  log, weight sample…). Analyzed by the shared GoMina AI engine on creation
+ *  and cross-checked against the flock's benchmark KPIs (aiCorroboration). */
+export const advisorNotes = pgTable("advisor_notes", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  noteDate: text("note_date").notNull(), // YYYY-MM-DD (farm day the note is about)
+  flockId: integer("flock_id"), // poultry_flocks.id (optional)
+  batchId: integer("batch_id"), // aquaculture_batches.id (optional)
+  recordType: text("record_type"), // optional link: CHECKLIST_ENTRY | POULTRY_FEED_LOG | POULTRY_WEIGHT_LOG | AQUA_FEED_LOG | AQUA_WATER_LOG | AQUA_HARVEST | DAILY_NOTE
+  recordSource: text("record_source"),
+  recordId: integer("record_id"),
+  recordRef: text("record_ref"), // snapshot so the link survives edits
+  recordTitle: text("record_title"),
+  category: text("category").notNull().default("GENERAL"), // ADVISOR_NOTE_CATEGORIES
+  priority: text("priority").notNull().default("MEDIUM"), // LOW | MEDIUM | HIGH | CRITICAL
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  photo: text("photo"), // optional evidence photo (data URL)
+  followUpStatus: text("follow_up_status").notNull().default("OPEN"), // ADVISOR_FOLLOWUP_STATUSES
+  followUpDueDate: text("follow_up_due_date"), // YYYY-MM-DD
+  // ── GoMina AI analysis snapshot (same shape as daily notes) ──
+  aiSummary: text("ai_summary"),
+  aiIssues: jsonb("ai_issues").default([]), // [{category,label,severity,matches[]}]
+  aiSeverity: text("ai_severity").default("INFO"), // INFO | WATCH | URGENT
+  aiFlags: jsonb("ai_flags").default([]),
+  // Deterministic benchmark-KPI cross-check result (no LLM): verdict + lines.
+  aiCorroboration: jsonb("ai_corroboration"),
+  authorUserId: integer("author_user_id"),
+  authorName: text("author_name").notNull(),
+  authorRole: text("author_role").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Immutable per-note conversation: who did what, when, notes & evidence,
+ *  with the status transition each step caused (audit_issue_updates twin). */
+export const advisorNoteUpdates = pgTable("advisor_note_updates", {
+  id: serial("id").primaryKey(),
+  noteId: integer("note_id").notNull(), // advisor_notes.id
+  actorUserId: integer("actor_user_id").notNull(),
+  actorName: text("actor_name").notNull(),
+  actorRole: text("actor_role").notNull(),
+  action: text("action").notNull(), // ADD | EDIT | RESPOND | STATUS_CHANGE
+  statusFrom: text("status_from"),
+  statusTo: text("status_to"),
+  note: text("note"),
+  photo: text("photo"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

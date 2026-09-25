@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   ShoppingCart,
@@ -936,7 +937,16 @@ function OrderInner() {
       {/* ══ Amazon-style header: logo · search · HELP · track · cart ══ */}
       <header className="bg-[#131921] text-white sticky top-0 z-40 shadow-lg" data-testid="oo-header">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2.5 pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <a href="/order" className="flex items-center gap-2 shrink-0" data-testid="oo-logo">
+          {/* GoMina 360 logo — one click straight to the app's Login page
+              (the storefront's parent brand home). Anonymous customers land
+              on the sign-in screen; signed-in staff land on their dashboard. */}
+          <Link
+            href="/"
+            className="flex items-center gap-2 shrink-0"
+            data-testid="oo-logo"
+            aria-label="GoMina 360 — go to the Login page"
+            title="Go to the GoMina 360 Login page"
+          >
             <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center font-black text-white text-sm shadow">
               360
             </span>
@@ -944,7 +954,7 @@ function OrderInner() {
               <span className="block text-sm font-black">GoMina 360</span>
               <span className="block text-[9px] text-emerald-300">Official store · live stock</span>
             </span>
-          </a>
+          </Link>
           <div className="order-3 sm:order-2 basis-full sm:basis-auto sm:flex-1 min-w-0">
             <div className="relative">
               <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />

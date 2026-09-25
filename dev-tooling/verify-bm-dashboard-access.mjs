@@ -116,17 +116,17 @@ async function sectionA(cookies) {
     JSON.stringify(baseline.bmScopeIds));
 
   const selfGrant = await api(cookies.bm, "/api/users", {
-    method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [8] }),
+    method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [globalThis.HW_ID] }),
   });
   ok("A2 a Branch Manager cannot grant himself extra businesses (403)",
     selfGrant.status === 403, `${selfGrant.status}`);
 
   const grant = await api(cookies.owner, "/api/users", {
-    method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [8] }),
+    method: "PATCH", body: JSON.stringify({ userId: BM.id, extraAccessIds: [globalThis.HW_ID] }),
   });
   const uba = (await pg.query(`SELECT business_id FROM user_business_access WHERE user_id=$1 ORDER BY business_id`, [BM.id])).rows.map((r) => r.business_id);
   ok("A3 OWNER grants the BM an extra branch via API (uba row = HARDWARE-01)",
-    grant.status === 200 && JSON.stringify(uba) === JSON.stringify([8]),
+    grant.status === 200 && JSON.stringify(uba) === JSON.stringify([globalThis.HW_ID]),
     `${grant.status} ${JSON.stringify(uba)}`);
 
   const initAfter = await api(cookies.bm, "/api/init");
@@ -134,7 +134,7 @@ async function sectionA(cookies) {
   const bizIds = (initAfter.json?.businesses || []).map((b) => b.id).sort((a, b) => a - b);
   const invNames = (initAfter.json?.inventory || []).map((i) => i.name).join("|");
   ok("A4 granted BM scope widens to primary + granted branch (init + businesses)",
-    JSON.stringify(scope) === JSON.stringify([1, 8]) && JSON.stringify(bizIds) === JSON.stringify([1, 8]),
+    JSON.stringify(scope) === JSON.stringify([1, globalThis.HW_ID]) && JSON.stringify(bizIds) === JSON.stringify([1, globalThis.HW_ID]),
     `scope=${JSON.stringify(scope)} biz=${JSON.stringify(bizIds)}`);
   ok("A4b the granted branch's data actually flows (hardware inventory visible)",
     /Cement/i.test(invNames), invNames.slice(0, 120));
@@ -167,7 +167,7 @@ async function sectionB(browser, cookies) {
   await sleep(1400);
   const uba = (await pg.query(`SELECT business_id FROM user_business_access WHERE user_id=$1`, [BM.id])).rows.map((r) => r.business_id);
   ok("B2 console checkbox grant lands server-side (uba = HARDWARE-01)",
-    JSON.stringify(uba) === JSON.stringify([8]), JSON.stringify(uba));
+    JSON.stringify(uba) === JSON.stringify([globalThis.HW_ID]), JSON.stringify(uba));
   await ctxO.close();
 }
 
@@ -275,6 +275,10 @@ async function cleanup() {
 
 (async () => {
   await pg.connect();
+  // HARDWARE-01's business id is NOT stable across environments (a delete +
+  // re-provision cycle gives it a new serial id) — always resolve it live.
+  const HW_ID = Number((await pg.query(`SELECT id FROM businesses WHERE code = 'HARDWARE-01'`)).rows[0]?.id);
+  globalThis.HW_ID = HW_ID;
   baseline.sessMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM user_sessions`)).rows[0].m;
   baseline.counts = (await pg.query(`SELECT
       (SELECT count(*)::int FROM businesses) b, (SELECT count(*)::int FROM users) u,

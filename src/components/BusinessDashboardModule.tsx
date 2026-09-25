@@ -569,7 +569,7 @@ export default function BusinessDashboardModule({
                 <Row k="Assets registered" v={`${branchAssets.length} (${formatMoney(branchAssets.reduce((s, a) => s + (a.currentValueGhs || 0), 0), currentCurrency, true)})`} />
                 <Row k="Initial capital" v={formatMoney(businessInfo?.initialCapitalGhs || 0, currentCurrency)} />
                 <Row k="Monthly revenue target" v={formatMoney(businessInfo?.monthlyTargetRevenueGhs || 0, currentCurrency)} />
-                <Row k="CRM customers (enterprise)" v={`${customers.length}`} />
+                <Row k="CRM customers (this unit)" v={`${customers.filter((c: any) => Number(c.businessId) === Number(businessInfo?.id)).length}`} />
               </div>
             </Card>
 

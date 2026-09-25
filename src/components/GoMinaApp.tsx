@@ -26,6 +26,7 @@ import EnterpriseUserPanel from "./EnterpriseUserPanel";
 import PlatformAdminPanel from "./PlatformAdminPanel";
 import EnterpriseFinanceView from "./EnterpriseFinanceView";
 import AuditCommandCenter from "./AuditCommandCenter";
+import AdvisorConsole from "./AdvisorConsole";
 import NotificationBell from "./NotificationBell";
 import NotificationSettingsModal from "./NotificationSettingsModal";
 import PushNotifications from "./PushNotifications";
@@ -49,6 +50,7 @@ import { installSessionBridge, setSessionToken, clearSessionToken } from "@/lib/
 import { businessManageIdsOf } from "@/lib/permissions";
 import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
+import { readCachedBranding, fetchBranding, withBranding } from "@/lib/brandingCache";
 
 export default function GoMinaApp() {
   const [loading, setLoading] = useState(true);
@@ -82,6 +84,10 @@ export default function GoMinaApp() {
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [integrations, setIntegrations] = useState<any[]>([]);
   const [checklistData, setChecklistData] = useState<{ templates: any[]; entries: any[] }>({ templates: [], entries: [] });
+  // Farm Advisor per-section visibility: businessId → section list (null =
+  // all). Present only in advisor sessions (stripped from everyone else's
+  // /api/init payload); drives the read-only modules' tab/panel filtering.
+  const [advisorSections, setAdvisorSections] = useState<Record<string, string[] | null>>({});
   const [specializedLogs, setSpecializedLogs] = useState<Record<string, any[]>>({
     poultry: [],
     blockFactory: [],
@@ -95,6 +101,16 @@ export default function GoMinaApp() {
 
   // UI States
   const [activeTab, setActiveTab] = useState<ActiveTab>("COMMAND_CENTER");
+
+  // Unit codes are unique PER ORGANIZATION, not globally — a super admin
+  // spanning two organizations can see two POULTRY-01 units. Remember which
+  // business a card click actually opened so code-keyed tab lookups prefer
+  // it over the first same-code match.
+  const lastOpenedBizIdRef = useRef<number | null>(null);
+  const handleSelectTab = (tab: ActiveTab, bizId?: number | null) => {
+    if (bizId) lastOpenedBizIdRef.current = Number(bizId);
+    setActiveTab(tab);
+  };
   const [currentCurrency, setCurrentCurrency] = useState<CurrencyCode>("GHS");
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
@@ -260,11 +276,25 @@ export default function GoMinaApp() {
         // A healthy response must clear any previously displayed error —
         // otherwise a stale notice would keep covering the working app.
         setError(null);
-        setBusinesses(data.businesses || []);
+        // Branding (company crest + business logos) rides its own versioned
+        // channel: the payload carries a content hash, /api/branding serves
+        // the blobs with ETag + browser caching, and this localStorage mirror
+        // makes the common path (logos unchanged) ZERO extra network. A
+        // version mismatch (logo uploaded) triggers exactly one fetch.
+        const brandingVersion = typeof data.brandingVersion === "string" ? data.brandingVersion : null;
+        const cachedBranding = readCachedBranding(brandingVersion);
+        setBusinesses((data.businesses || []).map((b: any) => withBranding(b, cachedBranding)));
         // Server-vetted access scope (null ⇒ OWNER/unrestricted) — drives the
         // sidebar's granted-branch dashboard chips.
         setAccessibleIds(Array.isArray(data.accessibleBusinessIds) ? data.accessibleBusinessIds : null);
-        setCompanyLogo(data.companyLogo || null);
+        setCompanyLogo(cachedBranding?.companyLogo || null);
+        if (brandingVersion && !cachedBranding) {
+          fetchBranding().then((b) => {
+            if (!b) return;
+            setCompanyLogo(b.companyLogo || null);
+            setBusinesses((prev: any[]) => prev.map((x: any) => withBranding(x, b)));
+          });
+        }
         setMetrics(data.metrics || []);
         setUsersList(data.users || []);
         // Keep the signed-in user object in sync with freshly fetched rows
@@ -299,6 +329,7 @@ export default function GoMinaApp() {
         setScenarios(data.scenarios || []);
         setIntegrations(data.integrations || []);
         setChecklistData(data.checklists || { templates: [], entries: [] });
+        setAdvisorSections(data.advisorSections || {});
         setSpecializedLogs(
           data.specializedLogs || {
             poultry: [],
@@ -428,7 +459,7 @@ export default function GoMinaApp() {
   // The pending tab is consumed by the role-landing effect below (the single
   // place that decides the landing workspace whenever the user loads).
 
-  // 10 minutes without any real user interaction (mouse/keyboard/touch/
+  // 24 hours without any real user interaction (mouse/keyboard/touch/
   // scroll) ends the session exactly like a manual sign-out, with a clear
   // explanation on the sign-in screen.
   const handleIdleLogout = useCallback(async () => {
@@ -447,7 +478,7 @@ export default function GoMinaApp() {
     setSignedIn(false);
     setCurrentUser(null);
     setActiveTab("COMMAND_CENTER");
-    setLoginNotice("You were signed out automatically after 10 minutes of inactivity. Sign in again to continue.");
+    setLoginNotice("You were signed out automatically after 24 hours of inactivity. Sign in again to continue.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -633,6 +664,39 @@ export default function GoMinaApp() {
     const isExecutive =
       currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
     const isBranchManager = currentUser?.role === "BRANCH_MANAGER";
+
+    // ── Farm Advisor workspace ─────────────────────────────────────────
+    // The external advisor sees exactly two things: their Advisor Console
+    // and the farm units the OWNER granted them (rendered by the SAME
+    // module dispatch as everyone else, in read-only advisor mode). Any
+    // other tab — including deep links to executive surfaces — falls back
+    // to the console, so the advisor's workspace is a closed sandbox.
+    if (currentUser?.role === "FARM_ADVISOR") {
+      const unitTab = scopedBusinesses.some((b: any) => b?.code === activeTab);
+      if (activeTab === "ADVISOR" || !unitTab) {
+        return (
+          <AdvisorConsole
+            mode="advisor"
+            currentUser={currentUser}
+            businesses={scopedBusinesses}
+            onSelectTab={(code) => handleSelectTab(code as ActiveTab)}
+          />
+        );
+      }
+      // unit tab → fall through to the shared module dispatch below
+    } else if (activeTab === "ADVISOR") {
+      // OWNER / GENERAL_MANAGER: the Farm Advisor access & guidance console.
+      // (Delegated managers reach it only with the canManageUsers grant —
+      // the API enforces that; other roles see the restricted notice.)
+      return (
+        <AdvisorConsole
+          mode={isExecutive || currentUser?.canManageUsers ? "manage" : "advisor"}
+          currentUser={currentUser}
+          businesses={scopedBusinesses}
+          onSelectTab={(code) => handleSelectTab(code as ActiveTab)}
+        />
+      );
+    }
 
     // Supervisor & Auditor Control Center — ASSIGNMENT-ONLY: takes precedence
     // over the WORKER / BRANCH_MANAGER workspace interception, because ANY
@@ -879,6 +943,7 @@ export default function GoMinaApp() {
           usersList={scopedUsers}
           businesses={scopedBusinesses}
           onRefreshData={refreshAllData}
+          onOpenFarmAdvisors={() => setActiveTab("ADVISOR")}
         />
       );
     }
@@ -900,7 +965,7 @@ export default function GoMinaApp() {
           organizations={orgDirectory}
           orgLens={orgLens}
           lensOrgName={activeLensOrgName}
-          onSelectTab={setActiveTab}
+          onSelectTab={handleSelectTab}
           onOpenNewBusinessModal={() => setIsNewBusinessModalOpen(true)}
           onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
           onOpenUserAccess={() => setIsUserAccessOpen(true)}
@@ -947,7 +1012,8 @@ export default function GoMinaApp() {
       Logistics: "TRANSPORT",
     };
     const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT"];
-    const tabBiz = scopedBusinesses.find((b) => b.code === activeTab);
+    const tabCandidates = scopedBusinesses.filter((b) => b.code === activeTab);
+    const tabBiz = tabCandidates.find((b) => b.id === lastOpenedBizIdRef.current) ?? tabCandidates[0];
     if (tabBiz) {
       const bizInfo = tabBiz;
       const bizMetric = liveMetrics.find((m) => m.businessId === bizInfo?.id);
@@ -971,6 +1037,12 @@ export default function GoMinaApp() {
             businesses={scopedBusinesses}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
+            isAdvisorView={currentUser?.role === "FARM_ADVISOR"}
+            advisorSections={
+              currentUser?.role === "FARM_ADVISOR"
+                ? (advisorSections[String(bizInfo.id)] ?? null)
+                : undefined
+            }
           />
         );
       }
@@ -1043,6 +1115,12 @@ export default function GoMinaApp() {
             employees={scopedEmployees}
             currentCurrency={currentCurrency}
             onRefreshData={refreshAllData}
+            isAdvisorView={currentUser?.role === "FARM_ADVISOR"}
+            advisorSections={
+              currentUser?.role === "FARM_ADVISOR"
+                ? (advisorSections[String(bizInfo.id)] ?? null)
+                : undefined
+            }
           />
         );
       }
@@ -1133,6 +1211,12 @@ export default function GoMinaApp() {
             transactions={scopedTransactions}
             inventory={scopedInventory}
             customers={scopedCustomers}
+            isAdvisorView={currentUser?.role === "FARM_ADVISOR"}
+            advisorSections={
+              currentUser?.role === "FARM_ADVISOR"
+                ? (advisorSections[String(bizInfo.id)] ?? null)
+                : undefined
+            }
           />
         );
       }
@@ -1171,7 +1255,7 @@ export default function GoMinaApp() {
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshData={refreshAllData}
-          onSelectTab={setActiveTab}
+          onSelectTab={handleSelectTab}
         />
       );
     }
@@ -1299,7 +1383,7 @@ export default function GoMinaApp() {
           <span>Initializing GoMina 360 Command Center...</span>
         </div>
         <p className="text-xs text-slate-500 max-w-sm text-center">
-          Loading consolidated Q1 financial records across 7 Ghanaian enterprise units...
+          Securely loading your workspace — businesses, finance and operations data…
         </p>
       </div>
     );
@@ -1392,6 +1476,17 @@ export default function GoMinaApp() {
               // anything branch-scoped opens that unit's dashboard.
               const t = String(n?.type || "");
               if (t.startsWith("AUDIT")) { setActiveTab("AUDIT"); return; }
+              // Advisor note events: the advisor lands on their console;
+              // staff land on the unit's dashboard (the notes panel lives there).
+              if (t.startsWith("ADVISOR")) {
+                if (currentUser?.role === "FARM_ADVISOR") { setActiveTab("ADVISOR"); return; }
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  setActiveTab(n.branchCode as ActiveTab);
+                  return;
+                }
+                setActiveTab("ADVISOR");
+                return;
+              }
               if (
                 t === "ONLINE_ORDER_RECEIVED" ||
                 t === "ORDER_TRACKING_STATUS" ||
@@ -1449,7 +1544,7 @@ export default function GoMinaApp() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
           activeTab={activeTab}
-          onSelectTab={setActiveTab}
+          onSelectTab={handleSelectTab}
           businesses={scopedBusinesses}
           currentUser={currentUser}
           auditEligible={auditEligible}
@@ -1497,7 +1592,8 @@ export default function GoMinaApp() {
               Owner/Organization is announced on the dashboard itself. */}
           {isSuperAdminUser && activeTab !== "COMMAND_CENTER" &&
             (() => {
-              const openBiz = scopedBusinesses.find((b: any) => b.code === activeTab);
+              const openCandidates = scopedBusinesses.filter((b: any) => b.code === activeTab);
+              const openBiz = openCandidates.find((b: any) => b.id === lastOpenedBizIdRef.current) ?? openCandidates[0];
               if (!openBiz) return null;
               const oId = Number(openBiz.ownerId ?? 1);
               const org = orgDirectory.find((o) => Number(o.id) === oId);
@@ -1545,8 +1641,8 @@ export default function GoMinaApp() {
             Branch, Section & Page everywhere in the app. */}
         <ContextNavigator
           activeTab={activeTab}
-          onSelectTab={(t) => {
-            setActiveTab(t);
+          onSelectTab={(t, bizId) => {
+            handleSelectTab(t, bizId);
             setContextNavOpen(false);
           }}
           businesses={scopedBusinesses}
@@ -1595,7 +1691,7 @@ export default function GoMinaApp() {
       {/* Service-worker registration + subscription re-sync (no UI). */}
       <PushNotifications currentUser={currentUser} />
 
-      {/* 10-minute inactivity auto-logout (no UI). */}
+      {/* 24-hour inactivity auto-logout (no UI). */}
       <IdleLogout active={signedIn && !!currentUser} onIdle={handleIdleLogout} />
 
       {/* Self-service password change for the signed-in user (any role). */}

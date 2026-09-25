@@ -140,14 +140,18 @@ try {
   ];
   let allFit = true;
   const badPages = [];
+  const absent = [];
   for (const [label, name] of pages) {
     const clicked = await clickText(label);
+    if (!clicked) { absent.push(name); continue; } // business absent (e.g. the
+    // Owner deleted the unit — deletion is final by design) → page N/A here
     await sleep(2400);
     const res = await noOverflow();
     const offs = res.ok ? [] : await offenders();
-    if (!clicked || !res.ok) { allFit = false; badPages.push(`${name}${clicked ? "" : " (missing)"} sw=${res.sw} ${offs.join(",")}`); }
+    if (!res.ok) { allFit = false; badPages.push(`${name} sw=${res.sw} ${offs.join(",")}`); }
   }
-  ok("C1 all 15 module pages fit 375px (no h-overflow)", allFit, badPages.slice(0, 4).join(" | ") || "clean");
+  ok("C1 all present module pages fit 375px (no h-overflow)", allFit,
+    badPages.slice(0, 4).join(" | ") || `clean${absent.length ? ` (absent: ${absent.join(", ")})` : ""}`);
   await shot("phone-transactions");
   // back to command center for a stable screenshot
   await clickText("Command Center");

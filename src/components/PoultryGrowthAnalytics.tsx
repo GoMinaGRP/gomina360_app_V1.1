@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Activity, Bird, Egg, Wheat, TrendingUp, TrendingDown, HeartPulse,
   Target, Sliders, RotateCcw, Scale, X, Save,
@@ -13,6 +13,11 @@ import {
   computePoultryPerformance,
   type PoultryPerfFilters,
 } from "@/lib/poultryPerformance";
+import {
+  computeBenchmarks,
+  type BenchmarkMetricKey,
+  type BenchmarkSeriesRow,
+} from "@/lib/poultryBenchmarking";
 
 interface Props {
   businessId: number;
@@ -22,6 +27,10 @@ interface Props {
   production: any[];
   /** Daily bird/egg weighing logs (poultry_weight_logs). */
   weightLogs: any[];
+  /** Benchmark profiles (poultry_benchmark_profiles) — drives the
+   *  actual-vs-target-vs-history overlays when one resolves for the
+   *  scoped flock. */
+  benchmarkProfiles?: any[];
   currentUserName?: string;
   currentUserRole?: string;
   /** Called after a weight record is saved so the parent refetches. */
@@ -29,6 +38,9 @@ interface Props {
   /** Parent dashboard quick filters (date range + product type). */
   dateFilter: string;
   productFilter: string;
+  /** Weight recording is a manager action — false hides the record button
+   *  (FARM_ADVISOR is strictly read-only; the API 403s them regardless). */
+  canRecord?: boolean;
 }
 
 const TT = { backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 };
@@ -63,11 +75,13 @@ function ChartCard({
  */
 export default function PoultryGrowthAnalytics({
   businessId, flocks, feedLogs, healthRecords, production, weightLogs = [],
-  currentUserName, currentUserRole, onRefresh, dateFilter, productFilter,
+  benchmarkProfiles = [], currentUserName, currentUserRole, onRefresh, dateFilter, productFilter,
+  canRecord = true,
 }: Props) {
   const [batch, setBatch] = useState("ALL");
   const [flockId, setFlockId] = useState<number | null>(null);
   const [branch, setBranch] = useState("ALL");
+  const [showBand, setShowBand] = useState(true);
 
   // ── Daily weight recording (bird + egg) ──────────────────────────────
   const [weighOpen, setWeighOpen] = useState(false);
@@ -145,6 +159,126 @@ export default function PoultryGrowthAnalytics({
     [flocks, feedLogs, healthRecords, production, weightLogs, filters],
   );
 
+  // ── Benchmarking overlays ────────────────────────────────────────────
+  // When the scope resolves to ONE flock (flock picked, single-flock batch,
+  // or a single flock in the product-filtered scope) and a benchmark
+  // profile / comparable history exists, charts gain:
+  //   • the PROFILE target line (replacing the built-in breed curve),
+  //   • the farm-history p25–p75 band + median (past flocks at same age).
+  // Multi-flock scopes keep today's rendering exactly (suite-stable).
+  const bench = useMemo(() => {
+    let focus: any = null;
+    if (flockId != null) focus = flocks.find((x) => x.id === flockId);
+    else if (batch !== "ALL") focus = flocks.find((x) => x.batchNumber === batch) || null;
+    else {
+      const pool =
+        productFilter === "EGGS" ? flocks.filter((x) => x.birdType === "LAYERS")
+        : productFilter === "BROILERS" ? flocks.filter((x) => x.birdType === "BROILERS")
+        : flocks;
+      if (pool.length === 1) focus = pool[0];
+    }
+    if (!focus) return null;
+    const res = computeBenchmarks({
+      flock: focus, profiles: benchmarkProfiles, flocks,
+      feedLogs, healthRecords, production, weightLogs,
+    });
+    return res?.hasAnyBenchmark ? res : null;
+  }, [flockId, batch, productFilter, flocks, benchmarkProfiles, feedLogs, healthRecords, production, weightLogs]);
+
+  /** Per-metric age-keyed lookup: metric → "W4" → series row. */
+  const benchByAge = useMemo(() => {
+    const m = new Map<string, Map<string, BenchmarkSeriesRow>>();
+    for (const [key, rows] of Object.entries(bench?.series || {})) {
+      const byAge = new Map<string, BenchmarkSeriesRow>();
+      for (const r of (rows as BenchmarkSeriesRow[]) || []) byAge.set(r.age, r);
+      m.set(key, byAge);
+    }
+    return m;
+  }, [bench]);
+
+  /** Nearest-week lookup for a benchmark metric series value. */
+  const benchWeekVal = useCallback((metric: BenchmarkMetricKey, week: number, field: "target" | "histMedian"): number | null => {
+    const rows = (bench?.series || {})[metric];
+    if (!rows?.length) return null;
+    let best: BenchmarkSeriesRow | null = null;
+    for (const r of rows) {
+      if (r.week <= week) best = r;
+      else break;
+    }
+    if (!best) best = rows[0];
+    return (best as any)[field] ?? null;
+  }, [bench]);
+
+  const focusArrival = bench?.flock?.arrivalDate as string | undefined;
+  const weekOfDate = useCallback((date: string) => {
+    if (!focusArrival) return null;
+    const d = Math.floor((new Date(date).getTime() - new Date(focusArrival).getTime()) / 86400000);
+    return d < 0 ? null : Math.floor(d / 7);
+  }, [focusArrival]);
+
+  /** weightByAge rows merged with the benchmark series (age-keyed). */
+  const weightByAgeBench = useMemo((): any[] => {
+    if (!bench) return perf.weightByAge;
+    const byAge = benchByAge.get("BODY_WEIGHT_KG");
+    if (!byAge) return perf.weightByAge;
+    const rows = perf.weightByAge.map((r) => {
+      const b = byAge.get(r.age);
+      return {
+        ...r,
+        targetKg: b?.target != null ? b.target : r.targetKg,
+        histMedian: b?.histMedian ?? null,
+        histP25: b?.histP25 ?? null,
+        histP75: b?.histP75 ?? null,
+      };
+    });
+    // include curve-coverage weeks that have no actual data yet
+    const have = new Set(rows.map((r) => r.age));
+    const maxWeek = Math.ceil((bench.actuals.ageDays + 7) / 7);
+    const extra = [...byAge.values()]
+      .filter((b) => !have.has(b.age) && b.week <= maxWeek)
+      .sort((a, b) => a.week - b.week)
+      .map((b) => ({
+        age: b.age, avgWeightKg: null as any,
+        targetKg: b.target ?? null, histMedian: b.histMedian ?? null,
+        histP25: b.histP25 ?? null, histP75: b.histP75 ?? null,
+      }));
+    return [...rows, ...extra];
+  }, [bench, perf.weightByAge, benchByAge]);
+
+  const fcrBench = useMemo(() =>
+    bench ? perf.fcrTrend.map((r) => {
+      const wk = weekOfDate(r.date);
+      return {
+        ...r,
+        benchTarget: wk != null ? benchWeekVal("FCR", wk, "target") : null,
+        histMedian: wk != null ? benchWeekVal("FCR", wk, "histMedian") : null,
+      };
+    }) : perf.fcrTrend, [bench, perf.fcrTrend, weekOfDate, benchWeekVal]);
+
+  const mortalityBench = useMemo(() =>
+    bench ? perf.mortalityDaily.map((r) => {
+      const wk = weekOfDate(r.date);
+      return {
+        ...r,
+        benchTarget: wk != null ? benchWeekVal("MORTALITY_CUM_PCT", wk, "target") : null,
+        histMedian: wk != null ? benchWeekVal("MORTALITY_CUM_PCT", wk, "histMedian") : null,
+      };
+    }) : perf.mortalityDaily, [bench, perf.mortalityDaily, weekOfDate, benchWeekVal]);
+
+  const layBench = useMemo(() =>
+    bench ? perf.layTrend.map((r) => ({
+      ...r,
+      histMedian: weekOfDate(r.date) != null ? benchWeekVal("LAY_PCT", weekOfDate(r.date)!, "histMedian") : null,
+    })) : perf.layTrend, [bench, perf.layTrend, weekOfDate, benchWeekVal]);
+
+  const eggWeightBench = useMemo(() =>
+    bench ? perf.eggWeightDaily.map((r) => ({
+      ...r,
+      histMedian: weekOfDate(r.date) != null ? benchWeekVal("EGG_WEIGHT_G", weekOfDate(r.date)!, "histMedian") : null,
+    })) : perf.eggWeightDaily, [bench, perf.eggWeightDaily, weekOfDate, benchWeekVal]);
+
+  const benchHasBand = !!bench?.history?.length;
+
   const batchOptions = useMemo(
     () => [...new Set(flocks.map((f) => f.batchNumber).filter(Boolean))].sort(),
     [flocks],
@@ -193,9 +327,29 @@ export default function PoultryGrowthAnalytics({
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {bench && (
+            <div className="flex items-center gap-2" data-testid="poa-bench-chip">
+              <span className="px-2 py-1 rounded-md bg-cyan-500/10 border border-cyan-500/40 text-cyan-300 text-[10px] font-bold">
+                Benchmark: {bench.profile ? bench.profile.name : "farm history"}
+              </span>
+              {benchHasBand && (
+                <label className="flex items-center gap-1 text-[10px] text-slate-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    data-testid="poa-band-toggle"
+                    checked={showBand}
+                    onChange={(e) => setShowBand(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  vs history
+                </label>
+              )}
+            </div>
+          )}
           <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
             {perf.growthTrend.length + perf.feedDaily.length + perf.fcrTrend.length + perf.mortalityDaily.length + perf.broilerDaily.length + perf.layTrend.length + perf.eggDaily.length + perf.eggWeightDaily.length + perf.biomassDaily.length} series points
           </div>
+          {canRecord && (
           <button
             onClick={openWeigh}
             data-testid="poa-record-weight"
@@ -203,6 +357,7 @@ export default function PoultryGrowthAnalytics({
           >
             <Scale className="w-3.5 h-3.5" /> Record Daily Weight
           </button>
+          )}
         </div>
       </div>
 
@@ -275,15 +430,18 @@ export default function PoultryGrowthAnalytics({
 
         {/* 2 — Average weight by flock age */}
         <ChartCard title="Average Weight by Age (weekly)" icon={Bird} tid="poa-chart-weight-age">
-          {perf.weightByAge.length > 0 ? (
+          {weightByAgeBench.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <ComposedChart data={perf.weightByAge}>
+              <ComposedChart data={weightByAgeBench}>
                 <XAxis dataKey="age" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis stroke="#94a3b8" style={{ fontSize: 9 }} tickFormatter={(v: number) => `${v}kg`} />
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
+                {showBand && <Line type="monotone" dataKey="histP25" name="Farm history p25 (kg)" stroke="#64748b" strokeWidth={1} strokeDasharray="1 3" dot={false} />}
+                {showBand && <Line type="monotone" dataKey="histP75" name="Farm history p75 (kg)" stroke="#64748b" strokeWidth={1} strokeDasharray="1 3" dot={false} />}
+                {showBand && <Line type="monotone" dataKey="histMedian" name="Farm median (kg)" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" dot={false} />}
                 <Bar dataKey="avgWeightKg" name="Actual (kg)" fill="#06b6d4" radius={[4, 4, 0, 0]} />
-                <Line type="monotone" dataKey="targetKg" name="Target (kg)" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                <Line type="monotone" dataKey="targetKg" name={bench ? "Benchmark target (kg)" : "Target (kg)"} stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           ) : <Empty tid="poa-empty-weight-age">No age-bucketed weights yet.</Empty>}
@@ -303,15 +461,17 @@ export default function PoultryGrowthAnalytics({
           ) : <Empty tid="poa-empty-feed">No feed consumption entries in this scope.</Empty>}
         </ChartCard>
 
-        {/* 4 — FCR trend */}
+        {/* 4 — FCR trend (+ benchmark target) */}
         <ChartCard title="Feed Conversion Ratio (FCR)" icon={Sliders} tid="poa-chart-fcr">
-          {perf.fcrTrend.length > 0 ? (
+          {fcrBench.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <LineChart data={perf.fcrTrend}>
+              <LineChart data={fcrBench}>
                 <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis stroke="#94a3b8" style={{ fontSize: 9 }} domain={[0, "auto"]} />
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
+                {showBand && <Line type="monotone" dataKey="histMedian" name="Farm median" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" dot={false} />}
+                {bench && <Line type="monotone" dataKey="benchTarget" name="Benchmark target" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />}
                 <Line type="monotone" dataKey="fcr" name="FCR (kg feed / kg gain)" stroke="#06b6d4" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
@@ -321,14 +481,16 @@ export default function PoultryGrowthAnalytics({
         {/* 5 — Mortality rate trend */}
         <ChartCard title="Mortality Rate Trend" icon={HeartPulse} tid="poa-chart-mortality"
         >
-          {perf.mortalityDaily.length > 0 ? (
+          {mortalityBench.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <LineChart data={perf.mortalityDaily}>
+              <LineChart data={mortalityBench}>
                 <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis yAxisId="l" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis yAxisId="r" orientation="right" stroke="#fda4af" style={{ fontSize: 9 }} tickFormatter={(v: number) => `${v}%`} />
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
+                {showBand && <Line yAxisId="r" type="monotone" dataKey="histMedian" name="Farm median cum %" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" dot={false} />}
+                {bench && <Line yAxisId="r" type="monotone" dataKey="benchTarget" name="Benchmark cum %" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />}
                 <Line yAxisId="l" type="monotone" dataKey="deaths" name="Deaths / day" stroke="#fb7185" strokeWidth={2} dot={{ r: 3 }} />
                 <Line yAxisId="r" type="monotone" dataKey="cumMortPct" name="Cumulative %" stroke="#fbbf24" strokeWidth={2} dot={false} />
               </LineChart>
@@ -354,13 +516,14 @@ export default function PoultryGrowthAnalytics({
 
         {/* 7 — Lay: target vs actual */}
         <ChartCard title="Production Targets vs Actual (Lay %)" icon={Target} tid="poa-chart-targets">
-          {perf.layTrend.length > 0 ? (
+          {layBench.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <LineChart data={perf.layTrend}>
+              <LineChart data={layBench}>
                 <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis stroke="#94a3b8" style={{ fontSize: 9 }} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
+                {showBand && <Line type="monotone" dataKey="histMedian" name="Farm median %" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" dot={false} />}
                 <Line type="monotone" dataKey="layPct" name="Actual lay %" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="targetPct" name="Target lay %" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
               </LineChart>
@@ -384,15 +547,16 @@ export default function PoultryGrowthAnalytics({
 
         {/* 9 — Average egg weight vs standard, linked to daily collection */}
         <ChartCard title="Average Egg Weight (g) vs Egg Output" icon={Scale} tid="poa-chart-eggweight">
-          {perf.eggWeightDaily.length > 0 ? (
+          {eggWeightBench.length > 0 ? (
             <ResponsiveContainer width="100%" height={210}>
-              <ComposedChart data={perf.eggWeightDaily}>
+              <ComposedChart data={eggWeightBench}>
                 <XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <YAxis yAxisId="l" stroke="#94a3b8" style={{ fontSize: 9 }} tickFormatter={(v: number) => `${v}g`} />
                 <YAxis yAxisId="r" orientation="right" stroke="#94a3b8" style={{ fontSize: 9 }} />
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Bar yAxisId="r" dataKey="eggs" name="Eggs collected" fill="#10b981" radius={[4, 4, 0, 0]} />
+                {showBand && <Line yAxisId="l" type="monotone" dataKey="histMedian" name="Farm median (g)" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 3" dot={false} />}
                 <Line yAxisId="l" type="monotone" dataKey="avgG" name="Avg egg weight (g)" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
                 <Line yAxisId="l" type="monotone" dataKey="targetG" name="Standard (g)" stroke="#06b6d4" strokeWidth={2} strokeDasharray="5 4" dot={false} />
               </ComposedChart>

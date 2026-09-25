@@ -1,61 +1,22 @@
+// The pure registry + helpers live in the client-safe businessTypeKeys
+// module; this server-side half re-exports them unchanged for every
+// existing "@/lib/businessTypes" import and adds the DB-backed allowlist.
 import { db } from "@/db";
 import { organizations, organizationBusinessTypes } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import {
+  BUSINESS_TYPES,
+  businessTypeKeyOf,
+  businessTypeLabelOf,
+  FARM_BUSINESS_TYPE_KEYS,
+  isFarmBusinessCategory,
+  type BusinessTypeDef,
+} from "./businessTypeKeys";
 
-/**
- * Canonical business-type registry — the vocabulary of the per-Owner
- * "Allowed Business Types" permission.
- *
- * Business categories historically live as free text on `businesses.category`
- * (seeded canonical strings). Every known spelling/synonym normalises to a
- * stable key so an allowlist survives label tweaks. Unknown categories keep a
- * derived CUSTOM-* key: unrestricted orgs pass them through (back-compat),
- * restricted orgs must have them granted explicitly.
- */
-export type BusinessTypeDef = {
-  key: string;
-  label: string; // canonical storefront label
-  aliases: string[];
-};
-
-const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-
-export const BUSINESS_TYPES: BusinessTypeDef[] = [
-  { key: "POULTRY_FARM", label: "Poultry Farm", aliases: ["poultry", "poultryfarm", "eggs", "broilers"] },
-  { key: "BLOCK_FACTORY", label: "Block Factory", aliases: ["blockfactory", "blocks", "blockmoulding", "concrete"] },
-  { key: "AQUACULTURE", label: "Aquaculture", aliases: ["aquaculture", "fishfarm", "fish", "tilapia", "catfish"] },
-  { key: "LIVESTOCK", label: "Livestock", aliases: ["livestock", "cattle", "smallruminants"] },
-  { key: "RESTAURANT_FOOD", label: "Restaurant & Food", aliases: ["restaurantfood", "restaurant", "food", "fooddrinks", "restaurantandfood"] },
-  { key: "ELECTRONIC_SHOP", label: "Electronic Shop", aliases: ["electronicshop", "electronics", "electronicsshop", "electronicsstore", "tech"] },
-  { key: "CAR_WASH", label: "Car Wash", aliases: ["carwash", "autowash", "carwashing"] },
-  { key: "HARDWARE_STORE", label: "Hardware Store", aliases: ["hardwarestore", "hardware", "hardwarebuildingmaterials"] },
-  { key: "TELECOM_DIGITAL", label: "Telecom & Digital Services", aliases: ["telecomdigitalservices", "telecom", "telecomdigital", "momoairtimedata"] },
-  { key: "TRANSPORTATION", label: "Transportation", aliases: ["transportation", "transport", "logistics", "fleet", "haulage", "trucking"] },
-];
+export { BUSINESS_TYPES, businessTypeKeyOf, businessTypeLabelOf, FARM_BUSINESS_TYPE_KEYS, isFarmBusinessCategory };
+export type { BusinessTypeDef };
 
 const byKey = new Map(BUSINESS_TYPES.map((t) => [t.key, t]));
-const byAlias = new Map<string, BusinessTypeDef>();
-for (const t of BUSINESS_TYPES) {
-  byAlias.set(norm(t.key), t);
-  byAlias.set(norm(t.label), t);
-  for (const a of t.aliases) byAlias.set(norm(a), t);
-}
-
-/** Resolve a free-text category to its canonical business-type key. */
-export function businessTypeKeyOf(category: string | null | undefined): string {
-  const c = (category || "").trim();
-  if (!c) return "OTHER";
-  const hit = byAlias.get(norm(c));
-  if (hit) return hit.key;
-  // Future/unknown type: stable derived key so it can still be granted.
-  const slug = c.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "OTHER";
-  return slug;
-}
-
-export function businessTypeLabelOf(category: string | null | undefined): string {
-  const def = byAlias.get(norm(category || ""));
-  return def ? def.label : (category || "Other");
-}
 
 export type AllowedBusinessTypes = {
   restricted: boolean;

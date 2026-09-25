@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Egg, Wheat, Droplets, HeartPulse, Boxes, Factory,
   Wallet, ClipboardCheck, BookOpen, Plus, X, CheckCircle, Circle,
   Search, TrendingUp, TrendingDown, AlertTriangle, Bird, Activity,
-  Building2, Loader2, Filter, Package,
+  Building2, Loader2, Filter, Package, Lock,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -16,12 +16,18 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzePoultry } from "@/lib/poultryAnalytics";
 import PoultryAnalyticsAlerts from "./PoultryAnalyticsAlerts";
 import PoultryGrowthAnalytics from "./PoultryGrowthAnalytics";
+import PoultryBenchmarkPanel from "./PoultryBenchmarkPanel";
+import PoultryBenchmarkManager from "./PoultryBenchmarkManager";
+import { computeBenchmarkAlerts, type BenchmarkResult } from "@/lib/poultryBenchmarking";
 import PoultryFeedMill from "./PoultryFeedMill";
 import DailyChecklistPanel from "./DailyChecklistPanel";
+import FlockPlanEditor from "./FlockPlanEditor";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
+import AdvisorNotesPanel from "./AdvisorNotesPanel";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { canViewSection } from "@/lib/advisorSections";
 
 interface Props {
   currentUser: any;
@@ -35,6 +41,14 @@ interface Props {
   businesses: any[];
   currentCurrency: CurrencyCode;
   onRefreshData: () => void;
+  /** FARM_ADVISOR read-only mode: every recording affordance is hidden (the
+   *  API 403s mutations regardless — this is the friendly UI half). */
+  isAdvisorView?: boolean;
+  /** The advisor's OWNER-chosen section list for THIS unit (null = all
+   *  sections; only meaningful together with isAdvisorView). Tabs and
+   *  dashboard panels not on the list are hidden — and their datasets are
+   *  already stripped server-side by /api/poultry. */
+  advisorSections?: string[] | null;
 }
 
 type Tab =
@@ -69,7 +83,21 @@ const DEFAULT_TASKS = [
 export default function PoultryFarmModule({
   currentUser, businessInfo, businessMetrics, inventory, customers,
   transactions, assets, employees, businesses, currentCurrency, onRefreshData,
+  isAdvisorView = false,
+  advisorSections = null,
 }: Props) {
+  // ── Advisor per-section visibility ────────────────────────────────────
+  // Owner-picked allowlist for this unit (null = all). Non-advisors always
+  // pass. Mirrors the server-side stripping in GET /api/poultry.
+  const sec = (key: string) => !isAdvisorView || canViewSection(advisorSections, key);
+  const TAB_SECTION: Record<string, string> = {
+    DASHBOARD: "DASHBOARD", FLOCKS: "FLOCKS", FEED: "FEED", FEED_MILL: "FEED",
+    WATER: "WATER", HEALTH: "HEALTH", PRODUCTION: "PRODUCTION", INVENTORY: "INVENTORY",
+    FINANCE: "DASHBOARD", CHECKLIST: "CHECKLIST", AI_KNOWLEDGE: "AI_KNOWLEDGE",
+  };
+  const visibleTabs = TABS.filter(
+    (t) => (!isAdvisorView || !["FEED_MILL", "FINANCE"].includes(t.key)) && sec(TAB_SECTION[t.key] || t.key)
+  );
   const [tab, setTab] = useState<Tab>("DASHBOARD");
   const [dashDateFilter, setDashDateFilter] = useState<string>("ALL"); // "ALL", "TODAY", "LAST_7", "LAST_30"
   const [dashProductFilter, setDashProductFilter] = useState<string>("ALL"); // "ALL", "EGGS", "BROILERS"
@@ -92,8 +120,18 @@ export default function PoultryFarmModule({
   // Daily bird/egg weighing logs (growth analysis)
   const [weightLogs, setWeightLogs] = useState<any[]>([]);
   const [checklists, setChecklists] = useState<any[]>([]);
+  // Per-flock lifecycle checklist plans (poultry stage mode)
+  const [checklistTemplates, setChecklistTemplates] = useState<any[]>([]);
+  const [flockPlans, setFlockPlans] = useState<any[]>([]);
+  const [planTemplates, setPlanTemplates] = useState<any[]>([]);
+  const [planFlockId, setPlanFlockId] = useState<number | null>(null);
   // Master Product List (poultry_products) — production types incl. user-added
   const [products, setProducts] = useState<any[]>([]);
+  // Benchmarking — owner-managed profiles + the flock the dashboard benchmarks
+  const [benchmarkProfiles, setBenchmarkProfiles] = useState<any[]>([]);
+  const [benchFlockId, setBenchFlockId] = useState<number | null>(null);
+  const [showBenchManager, setShowBenchManager] = useState(false);
+  const [benchResult, setBenchResult] = useState<BenchmarkResult | null>(null);
 
   // AI Knowledge
   const [kbQuery, setKbQuery] = useState("");
@@ -105,6 +143,11 @@ export default function PoultryFarmModule({
 
   const bizId = businessInfo?.id;
   const today = new Date().toISOString().split("T")[0];
+  // Benchmark profile editing gate — same rule the Feed Mill uses for its
+  // powerful operations (OWNER / GM / records-authorized manager).
+  const benchCanManage =
+    currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER" ||
+    currentUser?.canManageRecords === true;
 
   const refresh = useCallback(async () => {
     if (!bizId) return;
@@ -119,17 +162,31 @@ export default function PoultryFarmModule({
         setProduction(d.production || []);
         setProducts(d.products || []);
         setWeightLogs(d.weightLogs || []);
+        setBenchmarkProfiles(d.benchmarkProfiles || []);
       }
       // Daily checklists come from the unified enterprise checklist engine
       // (same row shape: checklistDate, isCompleted, completedByName/Role/At).
       const cRes = await fetch(`/api/checklists?businessId=${bizId}`);
       const cD = await cRes.json();
-      if (cD.success) setChecklists(cD.entries || []);
+      if (cD.success) {
+        setChecklists(cD.entries || []);
+        setChecklistTemplates(cD.templates || []);
+        setFlockPlans(cD.flockPlans || []);
+        setPlanTemplates(cD.planTemplates || []);
+      }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [bizId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Advisor section filter: never stay parked on (or deep-link into) a tab
+  // the Owner did not grant — fall back to the first permitted tab.
+  useEffect(() => {
+    if (!visibleTabs.length || visibleTabs.some((t) => t.key === tab)) return;
+    setTab(visibleTabs[0].key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdvisorView, JSON.stringify(advisorSections)]);
 
   const searchKB = useCallback(async () => {
     setKbLoading(true);
@@ -253,7 +310,7 @@ export default function PoultryFarmModule({
   const branchInventory = inventory.filter((i) => i.businessId === bizId);
   const branchAssets = assets.filter((a) => a.businessId === bizId);
   const branchEmployees = employees.filter((e) => e.businessId === bizId);
-  const branchCustomers = customers.filter((c) => c.businessId === bizId || c.businessId === null);
+  const branchCustomers = customers.filter((c) => c.businessId === bizId);
   const branchTrx = filteredTransactions;
   const revenue = branchTrx.filter((t) => t.type === "INCOME").reduce((s, t) => s + (t.amountGhs || 0), 0);
   const expenses = branchTrx.filter((t) => t.type === "EXPENSE").reduce((s, t) => s + (t.amountGhs || 0), 0);
@@ -423,7 +480,10 @@ export default function PoultryFarmModule({
     </div>
   );
 
-  const AddBtn = ({ onClick, label }: any) => (
+  // Advisor read-only mode: every "add / record" affordance collapses — the
+  // API rejects advisor mutations anyway; the UI simply never offers them.
+  const AddBtn = ({ onClick, label }: any) =>
+    isAdvisorView ? null : (
     <button onClick={onClick} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow">
       <Plus className="w-3.5 h-3.5" /> {label}
     </button>
@@ -441,9 +501,16 @@ export default function PoultryFarmModule({
             <Egg className="w-6 h-6 text-emerald-400" />
           </div>
           <div>
-            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
-              POULTRY FARM MANAGEMENT
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
+                POULTRY FARM MANAGEMENT
+              </span>
+              {isAdvisorView && (
+                <span className="px-2.5 py-0.5 rounded-full bg-teal-500/15 text-teal-300 text-[10px] font-black border border-teal-500/40" data-testid="poultry-advisor-readonly-chip">
+                  ADVISOR · READ-ONLY
+                </span>
+              )}
+            </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-white mt-1">{businessInfo?.name}</h2>
             <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
               <Building2 className="w-3 h-3" />
@@ -452,7 +519,7 @@ export default function PoultryFarmModule({
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          {sec("DASHBOARD") && (<div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs" data-testid="poultry-header-stats">
             <div className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-center">
               <div className="text-slate-400 text-[10px]">Live Birds</div>
               <div className="text-sm font-extrabold text-emerald-400">{totalBirds.toLocaleString()}</div>
@@ -469,20 +536,35 @@ export default function PoultryFarmModule({
               <div className="text-slate-400 text-[10px]">Checklist</div>
               <div className="text-sm font-extrabold text-purple-400">{checklistPct}%</div>
             </div>
-          </div>
+          </div>)}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl">
-        {TABS.map((t) => (
+      {/* Advisor with zero permitted sections: the Owner granted the unit but
+          no section of it — everything (tabs AND datasets) stays locked. */}
+      {isAdvisorView && visibleTabs.length === 0 && (
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/80 p-10 text-center" data-testid="poultry-advisor-no-sections">
+          <Lock className="w-10 h-10 text-slate-500 mx-auto mb-3" />
+          <p className="text-sm font-bold text-slate-200">No sections enabled for this unit</p>
+          <p className="text-xs text-slate-400 mt-1">
+            The farm owner has not enabled any section of this poultry unit for your advisor access yet.
+          </p>
+        </div>
+      )}
+
+      {/* Tabs — the advisor never sees the Feed Mill (formulation costs) or
+          the Finance report (transactions); those are business-sensitive. */}
+      <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl" data-testid="poultry-tab-bar">
+        {visibleTabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
-              tab === t.key ? "bg-emerald-600 text-white shadow" : "text-slate-300 hover:bg-slate-700/70"}`}>
+              tab === t.key ? "bg-emerald-600 text-white shadow" : "text-slate-300 hover:bg-slate-700/70"}`}
+            data-testid={`poultry-tab-${t.key}`}>
             <t.icon className="w-4 h-4" />
             <span className="text-[10px] leading-none lg:leading-normal lg:text-xs">{t.label}</span>
           </button>
         ))}
+        {!isAdvisorView && (
         <button
           data-testid="poultry-open-expense"
           onClick={() => setShowExpenseForm(true)}
@@ -490,6 +572,7 @@ export default function PoultryFarmModule({
         >
           <Wallet className="w-4 h-4" /><span className="text-[10px] leading-none lg:leading-normal lg:text-xs">Record Expense</span>
         </button>
+        )}
         <AiSectionGuide moduleKey="POULTRY" section={tab} businessInfo={businessInfo} />
       </div>
 
@@ -557,7 +640,9 @@ export default function PoultryFarmModule({
             <Stat label="Net Profit" value={formatMoney(netProfit, currentCurrency, true)} sub={`Rev ${formatMoney(revenue, currentCurrency, true)}`} color={netProfit >= 0 ? "emerald" : "rose"} icon={Wallet} />
           </div>
 
-          {/* Smart Analytics & Alerts */}
+          {/* Smart Analytics & Alerts — benchmark findings ride the same alert
+              surface (single alert panel, no duplicate UI) and compliance
+              blends into the health score with capped influence. */}
           {(() => {
             const analysis = analyzePoultry({
               flocks: filteredFlocks,
@@ -570,24 +655,54 @@ export default function PoultryFarmModule({
               transactions: branchTrx,
               currentCurrency,
             });
+            const benchAlerts = computeBenchmarkAlerts(benchResult);
+            const benchIds = new Set(benchAlerts.map((a) => a.id));
+            const mergedAlerts = [...analysis.alerts.filter((a) => !benchIds.has(a.id)), ...benchAlerts];
+            const compliance = benchResult?.scorecard.compliancePct;
+            const blendedScore =
+              compliance != null && benchResult?.hasAnyBenchmark
+                ? Math.round(analysis.healthScore * 0.85 + compliance * 0.15)
+                : analysis.healthScore;
             const hasData =
               filteredFlocks.length + filteredFeedLogs.length + filteredWaterLogs.length +
               filteredHealthRecords.length + filteredProduction.length > 0;
-            return (
+            return sec("ALERTS") ? (
               <PoultryAnalyticsAlerts
-                alerts={analysis.alerts}
+                alerts={mergedAlerts}
                 metrics={analysis.metrics}
-                healthScore={analysis.healthScore}
+                healthScore={blendedScore}
                 statusColor={analysis.statusColor}
                 currency={currentCurrency}
                 hasData={hasData}
               />
-            );
+            ) : null;
           })()}
+
+          {/* Flock Performance Benchmarking — age-matched actual vs profile
+              target vs comparable historical flocks, with variance chips,
+              an A–D scorecard and a close-out projection. */}
+          {sec("BENCHMARK") && (
+          <PoultryBenchmarkPanel
+            businessId={bizId}
+            flocks={flocks}
+            feedLogs={feedLogs}
+            healthRecords={healthRecords}
+            production={production}
+            weightLogs={weightLogs}
+            profiles={benchmarkProfiles}
+            currentCurrency={currentCurrency}
+            benchFlockId={benchFlockId}
+            onBenchFlockChange={setBenchFlockId}
+            onManage={() => setShowBenchManager(true)}
+            onBenchmarks={setBenchResult}
+            canManage={benchCanManage}
+          />
+          )}
 
           {/* Production & Growth Analytics — daily weight/growth vs target,
               feed, FCR, mortality, broiler output, lay targets & more, with
               Batch / Flock / Branch scoping on top of the dashboard filters */}
+          {sec("GROWTH") && (
           <PoultryGrowthAnalytics
             businessId={bizId}
             flocks={flocks}
@@ -595,12 +710,15 @@ export default function PoultryFarmModule({
             healthRecords={healthRecords}
             production={production}
             weightLogs={weightLogs}
+            benchmarkProfiles={benchmarkProfiles}
             currentUserName={currentUser?.name}
             currentUserRole={currentUser?.role}
             onRefresh={refresh}
             dateFilter={dashDateFilter}
             productFilter={dashProductFilter}
+            canRecord={!isAdvisorView}
           />
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card title="Egg Production Trend" icon={Egg}>
@@ -703,6 +821,15 @@ export default function PoultryFarmModule({
               ))}
             </div>
           </Card>
+
+          {/* Advisor Notes & Guidance — the advisor's write surface and the
+              staff's guidance inbox, right on the farm dashboard. */}
+          <AdvisorNotesPanel
+            businessId={bizId}
+            businessName={businessInfo?.name}
+            currentUser={currentUser}
+            flocks={flocks.filter((f: any) => String(f.status || "ACTIVE") === "ACTIVE")}
+          />
         </div>
       )}
 
@@ -717,7 +844,7 @@ export default function PoultryFarmModule({
                   <th className="px-4 py-3">Genetics</th><th className="px-4 py-3">Supplier</th>
                   <th className="px-4 py-3">House</th><th className="px-4 py-3 text-right">Placed</th>
                   <th className="px-4 py-3 text-right">Live</th><th className="px-4 py-3 text-right">Mortality</th>
-                  <th className="px-4 py-3 text-right">Age</th><th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-right">Age / Stage</th><th className="px-4 py-3 text-center">Checklist Plan</th><th className="px-4 py-3 text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/60">
@@ -743,7 +870,52 @@ export default function PoultryFarmModule({
                           {f.mortalityTotal} ({mRate.toFixed(1)}%)
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-300">{f.ageWeeks}w</td>
+                      <td className="px-4 py-3 text-right">
+                        {f.stage ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                              f.stage.phase === "PRODUCTION" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                              : f.stage.phase === "MARKET" ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                              : f.stage.phase === "CLOSEOUT" ? "bg-rose-500/15 text-rose-300 border-rose-500/40"
+                              : f.stage.phase === "PRE_PLACEMENT" ? "bg-slate-600/30 text-slate-200 border-slate-500/50"
+                              : "bg-cyan-500/15 text-cyan-300 border-cyan-500/40"
+                            }`}>{f.stage.label}</span>
+                            <span className="text-[10px] text-slate-400">
+                              {f.birdType === "LAYERS" ? `Wk ${Math.floor(Math.max(0, f.stage.ageDays || 0) / 7) + 1}` : `Day ${(f.stage.ageDays ?? 0) + 1}`}
+                              {f.stage.marketEtaDays != null && f.stage.marketEtaDays > 0 && f.stage.phase === "REARING"
+                                ? ` · ${f.stage.marketEtaDays}d to market` : ""}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">{f.ageWeeks}w</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {(() => {
+                          const ps = flockPlans.find((p: any) => Number(p.flockId) === Number(f.id));
+                          const hasCustom = checklistTemplates.some((t: any) => t.flockId != null && Number(t.flockId) === Number(f.id));
+                          const effSrc = hasCustom ? "CUSTOM" : String(ps?.source || "SYSTEM").toUpperCase();
+                          return (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
+                                effSrc === "CUSTOM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                                : effSrc === "TEMPLATE" ? "bg-purple-500/15 text-purple-300 border-purple-500/40"
+                                : "bg-cyan-500/15 text-cyan-300 border-cyan-500/40"}`}
+                                title={effSrc === "TEMPLATE" ? `From saved template: ${ps?.planTemplateName || ""}` : undefined}
+                                data-testid={`flock-plan-badge-${f.id}`}>
+                                {effSrc === "CUSTOM" ? "CUSTOMIZED" : effSrc === "TEMPLATE" ? "TEMPLATE" : "RECOMMENDED"}
+                              </span>
+                              {(currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER" || currentUser?.role === "BRANCH_MANAGER") && (
+                                <button onClick={() => setPlanFlockId(Number(f.id))}
+                                  data-testid={`flock-plan-open-${f.id}`}
+                                  className="px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 hover:text-white text-[9px] font-bold">
+                                  Plan…
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           f.status === "ACTIVE" ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-700 text-slate-300"}`}>
@@ -753,7 +925,7 @@ export default function PoultryFarmModule({
                     </tr>
                   );
                 })}
-                {flocks.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">No flocks registered yet.</td></tr>}
+                {flocks.length === 0 && <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-400">No flocks registered yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -970,9 +1142,11 @@ export default function PoultryFarmModule({
 
           <Card title="Production Records" icon={Egg} action={
             <div className="flex items-center gap-2">
+              {!isAdvisorView && (
               <button onClick={() => setShowForm("SALE")} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow">
                 <Plus className="w-3.5 h-3.5" /> Record Sale
               </button>
+              )}
               <AddBtn onClick={() => setShowForm("PRODUCTION")} label="Log Production" />
             </div>
           }>
@@ -1034,7 +1208,9 @@ export default function PoultryFarmModule({
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Stat label="Inventory Items" value={branchInventory.length} icon={Boxes} color="cyan" />
-            <Stat label="Stock Value" value={formatMoney(inventoryValue, currentCurrency, true)} color="emerald" />
+            {!isAdvisorView && (
+              <Stat label="Stock Value" value={formatMoney(inventoryValue, currentCurrency, true)} color="emerald" />
+            )}
             <Stat label="Low / Out of Stock" value={branchInventory.filter((i) => i.status !== "IN_STOCK").length} color="amber" />
             <Stat label="Feed Stock (kg)" value={feedStockKg.toFixed(0)} color="purple" icon={Wheat} />
           </div>
@@ -1044,8 +1220,11 @@ export default function PoultryFarmModule({
                 <thead className="bg-slate-900/90 text-slate-400 uppercase font-semibold text-[10px]">
                   <tr>
                     <th className="px-4 py-3">SKU / Item</th><th className="px-4 py-3">Category</th>
-                    <th className="px-4 py-3 text-right">Qty</th><th className="px-4 py-3 text-right">Cost</th>
+                    <th className="px-4 py-3 text-right">Qty</th>
+                    {!isAdvisorView && (<>
+                    <th className="px-4 py-3 text-right">Cost</th>
                     <th className="px-4 py-3 text-right">Selling</th><th className="px-4 py-3 text-right">Value</th>
+                    </>)}
                     <th className="px-4 py-3 text-center">Status</th>
                   </tr>
                 </thead>
@@ -1058,9 +1237,11 @@ export default function PoultryFarmModule({
                       </td>
                       <td className="px-4 py-3 text-slate-300">{i.category}</td>
                       <td className="px-4 py-3 text-right font-bold text-white">{i.quantity?.toLocaleString()} {i.unit}</td>
+                      {!isAdvisorView && (<>
                       <td className="px-4 py-3 text-right text-slate-400">{formatMoney(i.costPriceGhs, currentCurrency)}</td>
                       <td className="px-4 py-3 text-right text-emerald-400 font-bold">{formatMoney(i.sellingPriceGhs, currentCurrency)}</td>
                       <td className="px-4 py-3 text-right text-cyan-400">{formatMoney((i.quantity || 0) * (i.costPriceGhs || 0), currentCurrency, true)}</td>
+                      </>)}
                       <td className="px-4 py-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
                           i.status === "IN_STOCK" ? "bg-emerald-500/20 text-emerald-400"
@@ -1201,6 +1382,7 @@ export default function PoultryFarmModule({
           employees={employees}
           currentUser={currentUser}
           accent="emerald"
+          supportsStages
           onChanged={() => { refresh(); onRefreshData?.(); }}
         />
       )}
@@ -1316,15 +1498,50 @@ export default function PoultryFarmModule({
         testid="poultry-expense"
       />
 
+      {/* Benchmark profile manager drawer (opened from the Benchmark
+          Performance panel / setup card). */}
+      {showBenchManager && (
+        <PoultryBenchmarkManager
+          businessId={bizId}
+          flocks={flocks}
+          currentUserName={currentUser?.name}
+          currentUserRole={currentUser?.role}
+          canManage={benchCanManage}
+          onClose={() => setShowBenchManager(false)}
+          onRefresh={() => { refresh(); onRefreshData(); }}
+        />
+      )}
 
       {/* ══════════ FORMS ══════════ */}
       {showForm && (
         <PoultryForm
-          type={showForm} flocks={flocks} inventory={branchInventory} products={products} busy={busy} error={err}
+          type={showForm} flocks={flocks} inventory={branchInventory} products={products} profiles={benchmarkProfiles} busy={busy} error={err}
+          planTemplates={planTemplates}
+          canManagePlans={currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER" || currentUser?.role === "BRANCH_MANAGER"}
           onClose={() => { setShowForm(null); setErr(""); }}
           onSubmit={submit}
         />
       )}
+
+      {/* Per-flock checklist plan editor (Owner & managers) */}
+      {planFlockId != null && bizId != null && (() => {
+        const pf = flocks.find((x: any) => Number(x.id) === Number(planFlockId));
+        if (!pf) return null;
+        return (
+          <FlockPlanEditor
+            businessId={bizId}
+            branchCode={businessInfo?.code}
+            flock={pf}
+            templates={checklistTemplates}
+            planState={flockPlans.find((p: any) => Number(p.flockId) === Number(pf.id))}
+            planTemplates={planTemplates}
+            currentUser={currentUser}
+            employees={employees}
+            onClose={() => setPlanFlockId(null)}
+            onChanged={() => { refresh(); onRefreshData?.(); }}
+          />
+        );
+      })()}
 
       <ConfirmActionModal
         open={!!confirmEntry && !!confirmView}
@@ -1374,7 +1591,7 @@ function BatchSelect({ flocks, f, set }: any) {
   );
 }
 
-function PoultryForm({ type, flocks, inventory = [], products = [], busy, error, onClose, onSubmit }: any) {
+function PoultryForm({ type, flocks, inventory = [], products = [], profiles = [], planTemplates = [], canManagePlans = false, busy, error, onClose, onSubmit }: any) {
   const [f, setF] = useState<any>({
     birdType: "LAYERS", status: "ACTIVE", feedType: "LAYER_MASH", entryType: "CONSUMPTION",
     sourceType: "BOREHOLE", isTreated: false, recordType: "VACCINATION", outcome: "MONITORING",
@@ -1401,6 +1618,16 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
       const flock = flocks.find((x: any) => x.batchNumber === data.batchNumber);
       if (flock) data.flockId = flock.id;
     }
+    // Lifecycle checklist plan selection (Owner/manager) — the poultry API
+    // applies it atomically right after the flock is created.
+    const planMode = String(data.checklistPlanMode || "RECOMMENDED").toUpperCase();
+    if (type === "FLOCKS" && (planMode === "TEMPLATE" || planMode === "CUSTOMIZE")) {
+      data.checklistPlan = planMode === "TEMPLATE"
+        ? { mode: "TEMPLATE", planTemplateId: data.checklistPlanTemplateId ? Number(data.checklistPlanTemplateId) : null }
+        : { mode: "CUSTOMIZE" };
+    }
+    delete data.checklistPlanMode;
+    delete data.checklistPlanTemplateId;
     onSubmit(entities[type], data);
   };
 
@@ -1431,6 +1658,65 @@ function PoultryForm({ type, flocks, inventory = [], products = [], busy, error,
               <FormField f={f} set={set} label="Cost / Bird (GH₵)" k="costPerBirdGhs" t="number" step="0.01" />
             </div>
             <FormField f={f} set={set} label="Source Hatchery" k="sourceHatchery" placeholder="e.g. Akate Farms Hatchery" />
+            <label className="block col-span-2">
+              <span className="block text-[10px] text-slate-500 mb-1">Benchmark profile (optional)</span>
+              <select
+                data-testid="poultry-form-benchmark"
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-emerald-500"
+                value={f.benchmarkProfileId ?? ""}
+                onChange={(e) => set("benchmarkProfileId", e.target.value === "" ? null : e.target.value)}
+              >
+                <option value="">Auto — match by bird type / breed</option>
+                {(profiles || [])
+                  .filter((p: any) => (p.status || "ACTIVE") === "ACTIVE" && (!p.birdType || p.birdType === (f.birdType || "LAYERS")))
+                  .map((p: any) => (
+                    <option key={p.id} value={p.id}>{p.name}{p.isDefault ? " (default)" : ""}</option>
+                  ))}
+              </select>
+              <span className="block text-[9px] text-slate-500 mt-1">
+                Pin this flock to a specific performance target — leave on Auto to follow the default profile for its bird type.
+              </span>
+            </label>
+            {canManagePlans && (f.birdType === "BROILERS" || f.birdType === "LAYERS") && (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-3 space-y-2" data-testid="flock-plan-picker">
+                <div className="text-[10px] font-bold text-cyan-200 uppercase tracking-wide">Lifecycle checklist plan</div>
+                <div className="space-y-1.5">
+                  {[
+                    { v: "RECOMMENDED", t: "Recommended GoMina plan", d: "Age-matched tasks auto-schedule from Day/Week 1 through closeout — broilers by day, layers by week." },
+                    { v: "TEMPLATE", t: "Start from a saved template", d: "Apply one of your reusable custom plan templates to this flock." },
+                    { v: "CUSTOMIZE", t: "Customize now (copy of recommended)", d: "Copy the recommended plan into this flock and edit tasks, timing, priority and assignments — other flocks are never affected." },
+                  ].map((o) => (
+                    <label key={o.v} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer text-xs ${
+                      (f.checklistPlanMode || "RECOMMENDED") === o.v ? "border-cyan-500/60 bg-cyan-500/10" : "border-slate-700 bg-slate-900/50 hover:border-slate-600"}`}>
+                      <input type="radio" name="checklistPlanMode" className="mt-0.5 accent-cyan-500"
+                        checked={(f.checklistPlanMode || "RECOMMENDED") === o.v}
+                        onChange={() => set("checklistPlanMode", o.v)} />
+                      <span>
+                        <span className="block font-bold text-slate-200">{o.t}</span>
+                        <span className="block text-[9px] text-slate-500">{o.d}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {(f.checklistPlanMode || "RECOMMENDED") === "TEMPLATE" && (
+                  <select
+                    data-testid="flock-plan-template-select"
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none focus:border-emerald-500"
+                    value={f.checklistPlanTemplateId ?? ""}
+                    onChange={(e) => set("checklistPlanTemplateId", e.target.value === "" ? null : e.target.value)}>
+                    <option value="">Choose a saved template…</option>
+                    {(planTemplates || [])
+                      .filter((t: any) => !t.birdType || t.birdType === f.birdType)
+                      .map((t: any) => (
+                        <option key={t.id} value={t.id}>{t.name} ({(t.items || []).length} tasks){t.createdByName ? ` · by ${t.createdByName}` : ""}</option>
+                      ))}
+                  </select>
+                )}
+                <p className="text-[9px] text-slate-500">
+                  The plan runs continuously from placement to closeout and auto-advances with age — it never restarts. You can customize or reset it any time from the Flocks tab.
+                </p>
+              </div>
+            )}
           </>)}
 
           {type === "FEED" && (<>

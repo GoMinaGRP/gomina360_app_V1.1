@@ -13,6 +13,7 @@ import {
   computeFishPerformance,
   type FishPerfFilters,
 } from "@/lib/fishPerformance";
+import { fishWeightTargetG, resolveFishProfile } from "@/lib/fishBenchmarking";
 
 interface Props {
   businessId: number;
@@ -21,9 +22,16 @@ interface Props {
   feedLogs: any[];
   harvests: any[];
   weightLogs: any[];
+  /** Benchmark profiles (aquaculture_benchmark_profiles) — when one resolves
+   *  for a batch, its curve replaces the built-in species standard on the
+   *  growth charts (fallback: species standard, as before). */
+  benchmarkProfiles?: any[];
   currentUserName?: string;
   currentUserRole?: string;
   onRefresh?: () => void;
+  /** Weight sampling is a manager action — false hides the record button
+   *  (FARM_ADVISOR is strictly read-only; the API 403s them regardless). */
+  canRecord?: boolean;
 }
 
 const TT = { backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 };
@@ -62,7 +70,7 @@ const speciesLabel = (s: string) => (s || "").replace(/_/g, " ");
  */
 export default function FishGrowthAnalytics({
   businessId, ponds, batches, feedLogs, harvests, weightLogs = [],
-  currentUserName, onRefresh,
+  benchmarkProfiles, currentUserName, onRefresh, canRecord = true,
 }: Props) {
   const [batch, setBatch] = useState("ALL");
   const [pond, setPond] = useState<number | null>(null);
@@ -75,9 +83,23 @@ export default function FishGrowthAnalytics({
     [dateFilter, batch, pond, species, branch],
   );
 
+  // When a benchmark profile resolves for a batch, its weight curve overrides
+  // the built-in species standard on the target lines.
+  const weightTargetG = useMemo(
+    () => (benchmarkProfiles?.length ? (b: any, ageDays: number) => fishWeightTargetG(b, benchmarkProfiles, ageDays) : undefined),
+    [benchmarkProfiles],
+  );
+  const benchActive = useMemo(
+    () =>
+      (benchmarkProfiles || []).some((p) => (p.status || "ACTIVE") === "ACTIVE") &&
+      (batches || []).some((b) => resolveFishProfile(b, benchmarkProfiles).profile != null),
+    [batches, benchmarkProfiles],
+  );
+  const targetLineName = benchActive ? "Benchmark target (g)" : "Species standard (g)";
+
   const perf = useMemo(
-    () => computeFishPerformance({ batches, feedLogs, harvests, weightLogs }, filters),
-    [batches, feedLogs, harvests, weightLogs, filters],
+    () => computeFishPerformance({ batches, feedLogs, harvests, weightLogs, weightTargetG }, filters),
+    [batches, feedLogs, harvests, weightLogs, weightTargetG, filters],
   );
 
   const batchOptions = useMemo(
@@ -192,6 +214,7 @@ export default function FishGrowthAnalytics({
           <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
             {perf.growthTrend.length + perf.feedDaily.length + perf.survivalByBatch.length + perf.harvestDaily.length + perf.biomassDaily.length} series points
           </div>
+          {canRecord && (
           <button
             onClick={openWeigh}
             data-testid="fga-record-weight"
@@ -199,6 +222,7 @@ export default function FishGrowthAnalytics({
           >
             <Scale className="w-3.5 h-3.5" /> Record Fish Weight
           </button>
+          )}
         </div>
       </div>
 
@@ -276,7 +300,7 @@ export default function FishGrowthAnalytics({
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Line type="monotone" dataKey="avgWeightG" name="Sampled weight (g)" stroke="#22d3ee" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="targetG" name="Species standard (g)" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                <Line type="monotone" dataKey="targetG" name={targetLineName} stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : <Empty tid="fga-empty-growth">No weight samples in this scope — use Record Fish Weight to start tracking growth.</Empty>}
@@ -292,7 +316,7 @@ export default function FishGrowthAnalytics({
                 <Tooltip contentStyle={TT} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Bar dataKey="avgWeightG" name="Sampled (g)" fill="#22d3ee" radius={[4, 4, 0, 0]} />
-                <Line type="monotone" dataKey="targetG" name="Standard (g)" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                <Line type="monotone" dataKey="targetG" name={targetLineName} stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           ) : <Empty tid="fga-empty-weight-age">No age-bucketed samples yet.</Empty>}

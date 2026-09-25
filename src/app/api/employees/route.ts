@@ -9,7 +9,7 @@ import {
   payrollEntries,
   payrollAttendance,
 } from "@/db/schema";
-import { eq, inArray, desc, sql } from "drizzle-orm";
+import { eq, and, inArray, desc, sql } from "drizzle-orm";
 import {
   getSessionInfo,
   accessibleBusinessIds,
@@ -65,10 +65,14 @@ const TRACKED: [string, string][] = [
 
 const empNo = (n: number) => `EMP-${String(n).padStart(4, "0")}`;
 
-async function nextEmployeeNo(): Promise<string> {
+/** Next staff number for a unit — EMP-0001… numbered PER BUSINESS (each
+ *  unit's own staff roster), never a continuation of another organization's
+ *  or another unit's sequence. */
+async function nextEmployeeNo(businessId: number): Promise<string> {
   const rows = await db
     .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-    .from(employees);
+    .from(employees)
+    .where(eq(employees.businessId, businessId));
   const max = Number(rows[0]?.v) || 0;
   return empNo(max + 1);
 }
@@ -288,12 +292,15 @@ export async function POST(request: Request) {
     // Employee number: use the given one if free, else auto-generate.
     let employeeNo = String(d.employeeNo || "").trim().toUpperCase();
     if (employeeNo) {
-      const dupe = await db.select({ id: employees.id }).from(employees).where(eq(employees.employeeNo, employeeNo));
+      const dupe = await db
+        .select({ id: employees.id })
+        .from(employees)
+        .where(and(eq(employees.employeeNo, employeeNo), eq(employees.businessId, Number(businessId))));
       if (dupe.length) {
-        return NextResponse.json({ success: false, error: `Employee ID ${employeeNo} is already in use.` }, { status: 409 });
+        return NextResponse.json({ success: false, error: `Employee ID ${employeeNo} is already in use at this unit.` }, { status: 409 });
       }
     } else {
-      employeeNo = await nextEmployeeNo();
+      employeeNo = await nextEmployeeNo(Number(businessId));
     }
 
     const [row] = await db
@@ -378,7 +385,10 @@ export async function PATCH(request: Request) {
     if (d.employeeNo !== undefined) {
       const no = String(d.employeeNo || "").trim().toUpperCase();
       if (no && no !== existing.employeeNo) {
-        const dupe = await db.select({ id: employees.id }).from(employees).where(eq(employees.employeeNo, no));
+        const dupe = await db
+          .select({ id: employees.id })
+          .from(employees)
+          .where(and(eq(employees.employeeNo, no), eq(employees.businessId, existing.businessId)));
         if (dupe.length) return NextResponse.json({ success: false, error: `Employee ID ${no} is already in use.` }, { status: 409 });
         updates.employeeNo = no;
         changes.push({ field: "employeeNo", label: "Employee ID", oldV: existing.employeeNo, newV: no });

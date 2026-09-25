@@ -97,8 +97,13 @@ async function main() {
   check("normal owner/staff: no isSuperAdmin flag leak", initGm.body.users?.every((u) => !(u.id === gm.user.id) || u.isSuperAdmin !== true) ?? true);
 
   // 7 — crests available for org identity visuals (best effort: at least one
-  //     business OR company logo exists after restore-branding)
-  check("at least one business crest available for org avatars", businesses.some((b) => b.logo) || !!init.body.companyLogo);
+  //     business OR company logo exists after restore-branding). Since the
+  //     init-payload slimming, logo BLOBS live on /api/branding (init carries
+  //     only their md5 brandingVersion) — probe that endpoint.
+  const branding = await get(kwame.token, "/api/branding");
+  const brandBiz = branding.body?.businesses || {};
+  check("at least one business crest available for org avatars",
+    Object.values(brandBiz).some((b) => b && b.logo) || !!branding.body?.companyLogo);
 
   console.log(`\n====== RESULT: ${pass} passed, ${fail} failed ======`);
   if (fail) { console.log("FAILURES:", fails.join(" | ")); process.exit(1); }

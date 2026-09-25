@@ -38,6 +38,9 @@ const TYPE_CATEGORY: Record<string, PushCategory> = {
   AUDIT_ISSUE_RESOLVED: "approvals",
   AUDIT_ISSUE_VERIFIED: "approvals",
   AUDIT_ISSUE_RESPONSE: "messages",
+  ADVISOR_NOTE_ADDED: "alerts",
+  ADVISOR_NOTE_RESPONSE: "messages",
+  ADVISOR_FOLLOWUP_STATUS: "tasks",
 };
 
 export function categoryForType(type: string): PushCategory {
@@ -52,6 +55,12 @@ export function categoryForType(type: string): PushCategory {
 export function urlForNotification(type: string, opts?: { branchCode?: string | null; issueId?: number | null }): string {
   const t = String(type || "").toUpperCase();
   if (t.startsWith("AUDIT")) return "/?tab=AUDIT";
+  if (t.startsWith("ADVISOR")) {
+    // Advisor note events: staff land on the unit's dashboard; the advisor's
+    // own console carries their cross-unit follow-ups.
+    if (t === "ADVISOR_NOTE_ADDED" && opts?.branchCode) return `/?tab=${encodeURIComponent(opts.branchCode)}`;
+    return "/?tab=ADVISOR";
+  }
   if (t === "ONLINE_ORDER_RECEIVED" || t === "ORDER_TRACKING_STATUS" || t === "ORDER_ASSIGNED") return "/?tab=TRACKING";
   if (opts?.branchCode) return `/?tab=${encodeURIComponent(opts.branchCode)}`;
   return "/?tab=TRACKING";

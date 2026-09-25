@@ -153,6 +153,8 @@ const TABLES: Record<string, TableRef> = {
   // Checklists & notes
   checklistTemplates: { table: schema.checklistTemplates, fkBusinessId: "businessId" },
   checklistEntries: { table: schema.checklistEntries, fkBusinessId: "businessId" },
+  checklistPlanTemplates: { table: schema.checklistPlanTemplates, fkBusinessId: "businessId" },
+  checklistFlockPlans: { table: schema.checklistFlockPlans, fkBusinessId: "businessId" },
   dailyNotes: { table: schema.dailyNotes, fkBusinessId: "businessId" },
   businessInsights: { table: schema.businessInsights, fkBusinessId: "businessId" },
   // Audit center
@@ -444,6 +446,9 @@ export interface ImportOptions {
   nameOverride?: string;
   /** Desired code prefix; if omitted uses the original category prefix */
   codeOverride?: string;
+  /** Target organization (tenant) for the imported unit — codes number and
+   *  uniqueness-check within this org (per-org sequential numbering). */
+  ownerId?: number | null;
 }
 
 export interface ImportResult {
@@ -480,13 +485,18 @@ export async function importBusinessBackup(
   const srcBiz = backupJson.tables.businesses[0];
   const category = srcBiz.category || source.category;
 
-  // 1. Determine the new business code (avoid collisions).
-  const allCodes = (await db.select({ code: schema.businesses.code }).from(schema.businesses))
-    .map((r) => r.code);
+  // 1. Determine the new business code. Numbering and collision checks are
+  //    scoped to the TARGET organization: sequential codes restart per org
+  //    (a second org's first Poultry unit is POULTRY-01 too); DB uniqueness
+  //    is (owner_id, code).
+  const orgCodeRows = opts.ownerId != null
+    ? await db.select({ code: schema.businesses.code }).from(schema.businesses).where(eq(schema.businesses.ownerId, opts.ownerId))
+    : await db.select({ code: schema.businesses.code }).from(schema.businesses).where(isNull(schema.businesses.ownerId));
+  const orgCodes = orgCodeRows.map((r) => r.code);
   const prefix = CATEGORY_PREFIX[category] || "BIZ";
-  let newCode = opts.codeOverride && !allCodes.includes(opts.codeOverride)
+  let newCode = opts.codeOverride && !orgCodes.includes(opts.codeOverride)
     ? opts.codeOverride
-    : nextBusinessCode(allCodes, category);
+    : nextBusinessCode(orgCodes, category);
 
   // 2. Insert the new business row. We do NOT copy the original id (serial
   //    gives us a fresh id) nor the globally-unique code.
@@ -520,6 +530,7 @@ export async function importBusinessBackup(
       customerHelpPhone: srcBiz.customerHelpPhone ?? null,
       momoNumber: srcBiz.momoNumber ?? null,
       momoName: srcBiz.momoName ?? null,
+      ownerId: opts.ownerId ?? null,
     })
     .returning();
   const newBusinessId = newBiz.id;
@@ -919,7 +930,7 @@ export async function importBusinessBackup(
     "telecomLines", "telecomTxns", "telecomWifiPackages", "telecomVouchers",
     "telecomActivities",
     "cctvCameras",
-    "checklistTemplates", "checklistEntries",
+    "checklistTemplates", "checklistEntries", "checklistPlanTemplates", "checklistFlockPlans",
     "dailyNotes", "businessInsights",
     "aiInsights",
     "auditAssignments", "auditReviews", "auditTrail",
@@ -1085,6 +1096,11 @@ export async function importBusinessBackup(
       templateId: remapFk("checklistTemplates", r.templateId),
       assignedToUserId: remapUserId(r.assignedToUserId),
       completedByRole: r.completedByRole,
+      flockId: remapFk("poultryFlocks", r.flockId),
+    }),
+    checklistFlockPlans: (r) => ({
+      flockId: remapFk("poultryFlocks", r.flockId),
+      planTemplateId: remapFk("checklistPlanTemplates", r.planTemplateId),
     }),
     scenarioSimulations: (r) => ({
       targetBusinessId: newBusinessId,

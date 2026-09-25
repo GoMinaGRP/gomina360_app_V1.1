@@ -156,7 +156,7 @@ export default function SharedEnterpriseModule({
   };
   const resetSharedForm = () => {
     setName("");
-    setTypeOrCategory("GENERAL");
+    setTypeOrCategory(moduleType === "CUSTOMERS" ? "WHOLESALE" : "GENERAL");
     setPhone("+233 24 100 2000");
     setEmail("contact@domain.gh");
     setAmountGhs(5000);
@@ -363,6 +363,22 @@ export default function SharedEnterpriseModule({
               phone: editingRecord.phone,
               email: editingRecord.email,
               paymentTerms: editingRecord.paymentTerms,
+            },
+          }
+        : moduleType === "CUSTOMERS"
+        ? {
+            entityType: "CUSTOMERS",
+            id: editingRecord.id,
+            actorUserId: currentUser?.id,
+            data: {
+              name: editingRecord.name,
+              type: editingRecord.type,
+              phone: editingRecord.phone,
+              email: editingRecord.email,
+              address: editingRecord.address,
+              region: editingRecord.region,
+              district: editingRecord.district,
+              town: editingRecord.town,
             },
           }
         : moduleType === "INVENTORY"
@@ -984,6 +1000,19 @@ export default function SharedEnterpriseModule({
     // Other shared records
     let entityType = "customer";
     let data: any = { name, phone, email };
+    if (moduleType === "CUSTOMERS") {
+      // Business-isolated CRM: every customer belongs to exactly one unit —
+      // the OWNER picks it in the form; branch users default to their own
+      // assignment server-side. The chosen Client Type is honoured (was
+      // silently ignored pre-fix — every customer landed as WHOLESALE).
+      data = {
+        name,
+        type: typeOrCategory || "WHOLESALE",
+        phone,
+        email,
+        businessId: Number(businessId),
+      };
+    }
 
     if (moduleType === "SUPPLIERS") {
       entityType = "supplier";
@@ -1495,6 +1524,9 @@ export default function SharedEnterpriseModule({
               } else {
                 resetSharedForm();
                 ensureInvBranch();
+                if (moduleType === "CUSTOMERS" && !businesses.some((b: any) => String(b.id) === String(businessId))) {
+                  setBusinessId(String(businesses[0]?.id ?? ""));
+                }
                 setShowModal(true);
               }
             }}
@@ -1930,10 +1962,12 @@ export default function SharedEnterpriseModule({
                 <tr>
                   <th className="px-4 py-3">Customer Name</th>
                   <th className="px-4 py-3">Client Type</th>
+                  <th className="px-4 py-3">Business / Unit</th>
                   <th className="px-4 py-3">Phone & Email</th>
                   <th className="px-4 py-3">Location (Region · District · Town)</th>
                   <th className="px-4 py-3 text-right">Total Spent</th>
                   <th className="px-4 py-3 text-right">Loyalty Points</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/60">
@@ -1946,6 +1980,17 @@ export default function SharedEnterpriseModule({
                       <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
                         {c.type}
                       </span>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {c.businessId != null ? (
+                        <span className="text-slate-300">
+                          {businesses.find((b: any) => Number(b.id) === Number(c.businessId))?.name || `Unit #${c.businessId}`}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-300 text-[10px] font-semibold" title="Legacy record shared across the Owner's units">
+                          Shared — all units
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-slate-300">
                       <div>{c.phone}</div>
@@ -1964,6 +2009,7 @@ export default function SharedEnterpriseModule({
                     <td className="px-4 py-3.5 text-right font-semibold text-amber-300">
                       {c.loyaltyPoints} pts
                     </td>
+                    <RecordActions r={c} prefix="customer" />
                   </tr>
                 ))}
               </tbody>
@@ -3003,6 +3049,28 @@ export default function SharedEnterpriseModule({
                 </>
               ) : (
                 <>
+                  {moduleType === "CUSTOMERS" && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">
+                        Business / Unit <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        value={businessId}
+                        onChange={(e) => setBusinessId(e.target.value)}
+                        data-testid="cust-business-select"
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                      >
+                        {businesses.map((b: any) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name} ({b.code})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Customer records are isolated per business — the client is visible only on this unit.
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">
                       Name / Title
@@ -3010,12 +3078,31 @@ export default function SharedEnterpriseModule({
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Shoprite Ghana, John Deere Tractor..."
+                      placeholder={moduleType === "CUSTOMERS" ? "e.g. Shoprite Ghana, Nana Kwame..." : "e.g. Shoprite Ghana, John Deere Tractor..."}
                       value={name}
                       onChange={(e) => setName(e.target.value)}
+                      data-testid={moduleType === "CUSTOMERS" ? "cust-name" : undefined}
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                     />
                   </div>
+                  {moduleType === "CUSTOMERS" ? (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">
+                        Client Type
+                      </label>
+                      <select
+                        value={typeOrCategory || "WHOLESALE"}
+                        onChange={(e) => setTypeOrCategory(e.target.value)}
+                        data-testid="cust-type-select"
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                      >
+                        <option value="WHOLESALE">WHOLESALE</option>
+                        <option value="RETAIL">RETAIL</option>
+                        <option value="CORPORATE">CORPORATE</option>
+                        <option value="DISTRIBUTOR">DISTRIBUTOR</option>
+                      </select>
+                    </div>
+                  ) : (
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">
                       Category / Type
@@ -3027,6 +3114,7 @@ export default function SharedEnterpriseModule({
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                     />
                   </div>
+                  )}
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">
                       Phone Number
@@ -3076,7 +3164,7 @@ export default function SharedEnterpriseModule({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
             <h3 className="text-lg font-bold text-white">
-              Edit {moduleType === "TRANSACTIONS" ? "Transaction" : moduleType === "SUPPLIERS" ? "Supplier" : moduleType === "INVENTORY" ? "Stock Item" : "Employee"} —{" "}
+              Edit {moduleType === "TRANSACTIONS" ? "Transaction" : moduleType === "SUPPLIERS" ? "Supplier" : moduleType === "INVENTORY" ? "Stock Item" : moduleType === "CUSTOMERS" ? "Customer" : "Employee"} —{" "}
               <span className="text-indigo-300">{recordLabel(editingRecord)}</span>
             </h3>
             <form onSubmit={submitRecordEdit} className="space-y-3" data-testid="record-edit-form">
@@ -3129,6 +3217,68 @@ export default function SharedEnterpriseModule({
                     <input type="text" data-testid="edit-trx-description" value={editingRecord.description || ""}
                       onChange={(e) => setEditingRecord({ ...editingRecord, description: e.target.value })}
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                  </div>
+                </>
+              ) : moduleType === "CUSTOMERS" ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Customer Name</label>
+                    <input type="text" data-testid="edit-customer-name" value={editingRecord.name || ""}
+                      onChange={(e) => setEditingRecord({ ...editingRecord, name: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Client Type</label>
+                      <select value={editingRecord.type || "WHOLESALE"}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, type: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm">
+                        <option value="WHOLESALE">WHOLESALE</option>
+                        <option value="RETAIL">RETAIL</option>
+                        <option value="CORPORATE">CORPORATE</option>
+                        <option value="DISTRIBUTOR">DISTRIBUTOR</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Phone</label>
+                      <input type="text" value={editingRecord.phone || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, phone: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Email</label>
+                      <input type="text" value={editingRecord.email || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, email: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Address</label>
+                      <input type="text" value={editingRecord.address || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, address: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Region</label>
+                      <input type="text" value={editingRecord.region || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, region: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">District</label>
+                      <input type="text" value={editingRecord.district || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, district: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Town</label>
+                      <input type="text" value={editingRecord.town || ""}
+                        onChange={(e) => setEditingRecord({ ...editingRecord, town: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    </div>
                   </div>
                 </>
               ) : moduleType === "SUPPLIERS" ? (

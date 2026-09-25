@@ -10,15 +10,28 @@ import {
   poultryChecklists,
   poultryProducts,
   poultryWeightLogs,
+  poultryBenchmarkProfiles,
   businesses,
   transactions,
 } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { stockIn, stockOut, ensureInventoryItem } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { advisorSectionsForBusiness } from "@/lib/auth";
+import { canViewSection } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
+import { nextTrxNumber } from "@/lib/idNumbers";
+import { stageOfFlock } from "@/lib/poultryStages";
+import {
+  isPoultryCategory,
+  forkFlockPlan,
+  applyPlanTemplateToFlock,
+  generateEntriesForDate,
+} from "@/lib/checklistGen";
+import { checklistPlanTemplates } from "@/db/schema";
+import { resolveProfile, BENCHMARK_TEMPLATES } from "@/lib/poultryBenchmarking";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
@@ -55,6 +68,18 @@ function slugify(name: string): string {
   );
 }
 
+/** Benchmark profile reference for a flock: null/"" → auto-match (null).
+ *  Returns the profile id when it belongs to the business, else null. */
+async function resolveProfileId(raw: any, businessId: number): Promise<number | null> {
+  const id = Number(raw);
+  if (!id) return null;
+  const [profile] = await db
+    .select({ id: poultryBenchmarkProfiles.id })
+    .from(poultryBenchmarkProfiles)
+    .where(and(eq(poultryBenchmarkProfiles.id, id), eq(poultryBenchmarkProfiles.businessId, businessId)));
+  return profile ? profile.id : null;
+}
+
 /**
  * GET /api/poultry?businessId=1
  * Returns every dataset for the Poultry Farm Management module,
@@ -83,7 +108,7 @@ export async function GET(request: NextRequest) {
     const scope = <T extends { businessId: any }>(table: any) =>
       db.select().from(table).where(eq(table.businessId, bizId));
 
-    const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs] =
+    const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs, benchmarkProfiles] =
       await Promise.all([
         scope(poultryFlocks),
         scope(poultryFeedLogs),
@@ -92,6 +117,7 @@ export async function GET(request: NextRequest) {
         scope(poultryProduction),
         scope(poultryChecklists),
         scope(poultryWeightLogs),
+        scope(poultryBenchmarkProfiles),
       ]);
 
     // Master Product List — every production type lives here. It starts EMPTY
@@ -107,16 +133,41 @@ export async function GET(request: NextRequest) {
 
     const sortByIdDesc = (a: any, b: any) => (b.id || 0) - (a.id || 0);
 
+    // ── Farm Advisor section visibility (OWNER-controlled per unit) ───────
+    // Denied datasets are stripped HERE — a hidden tab can never be
+    // reconstructed from the API payload. null sections = all (legacy).
+    const advisorSecs = await advisorSectionsForBusiness(session.user, bizId);
+    const view = (key: string) => canViewSection(advisorSecs, key);
+
+    // Attach each flock's production stage (derived from arrivalDate + the
+    // resolved benchmark profile) so the module can show stage chips and the
+    // daily checklist can be reviewed flock by flock. Response-only — nothing
+    // is persisted on the flock row.
+    const todayLocal = new Date().toLocaleDateString("en-CA");
+    const profilePool = [...(benchmarkProfiles as any[]), ...BENCHMARK_TEMPLATES];
+    const flocksOut = (flocks as any[]).map((f) => {
+      const { profile } = resolveProfile(f, profilePool);
+      const stage = stageOfFlock(f, todayLocal, profile);
+      return { ...f, stage };
+    });
+
     return NextResponse.json({
       success: true,
-      flocks: flocks.sort(sortByIdDesc),
-      feedLogs: feedLogs.sort(sortByIdDesc),
-      waterLogs: waterLogs.sort(sortByIdDesc),
-      healthRecords: healthRecords.sort(sortByIdDesc),
-      production: production.sort(sortByIdDesc),
-      weightLogs: weightLogs.sort(sortByIdDesc),
-      checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
-      products: products.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
+      flocks: view("FLOCKS") ? flocksOut.sort(sortByIdDesc) : [],
+      feedLogs: view("FEED") ? feedLogs.sort(sortByIdDesc) : [],
+      waterLogs: view("WATER") ? waterLogs.sort(sortByIdDesc) : [],
+      healthRecords: view("HEALTH") ? healthRecords.sort(sortByIdDesc) : [],
+      production: view("PRODUCTION") ? production.sort(sortByIdDesc) : [],
+      weightLogs: view("GROWTH") ? weightLogs.sort(sortByIdDesc) : [],
+      checklists: view("CHECKLIST") ? checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)) : [],
+      products: view("INVENTORY") ? products.sort((a: any, b: any) => (a.id || 0) - (a.id || 0)) : [],
+      benchmarkProfiles: view("BENCHMARK")
+        ? benchmarkProfiles.sort((a: any, b: any) =>
+            Number(!!b.isDefault) - Number(!!a.isDefault) || (b.id || 0) - (a.id || 0))
+        : [],
+      // Echo the resolved section list so the read-only UI can filter tabs
+      // without a second round-trip (non-advisors get null = unrestricted).
+      advisorSections: advisorSecs,
     });
   } catch (error: any) {
     console.error("GET /api/poultry error:", error);
@@ -179,6 +230,15 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      const benchmarkProfileId = data.benchmarkProfileId != null && data.benchmarkProfileId !== ""
+        ? await resolveProfileId(data.benchmarkProfileId, businessId)
+        : null;
+      if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "" && !benchmarkProfileId) {
+        return NextResponse.json(
+          { success: false, error: "Benchmark profile not found for this business." },
+          { status: 404 },
+        );
+      }
       const [row] = await db
         .insert(poultryFlocks)
         .values({
@@ -202,6 +262,7 @@ export async function POST(request: NextRequest) {
           sourceHatchery: data.sourceHatchery || null,
           costPerBirdGhs: Number(data.costPerBirdGhs) || 0,
           status: data.status || "ACTIVE",
+          benchmarkProfileId,
           notes: data.notes || null,
           createdByName: data.createdByName || "Farm Staff",
           createdByRole: data.createdByRole || null,
@@ -212,7 +273,59 @@ export async function POST(request: NextRequest) {
         `${initialCount.toLocaleString()} ${row.birdType}${row.breed ? ` (${row.breed})` : ""} arrived${row.houseName ? ` into ${row.houseName}` : ""}`,
         (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
       ).catch((e: any) => console.error("[poultry] audit failed:", e));
-      return NextResponse.json({ success: true, item: row });
+
+      // ── Lifecycle checklist plan selection (Owner/manager only) ─────
+      // On create/start the Owner picks: recommended system plan (default,
+      // no action needed), a saved custom template, or forks the
+      // recommended plan for immediate per-flock customization.
+      const role = String(session.user.role || "").toUpperCase();
+      const planMode = String(data.checklistPlan?.mode || "").toUpperCase();
+      const MANAGE = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+      let checklistPlanApplied: string | null = null;
+      if (
+        isPoultryCategory(biz?.category) &&
+        MANAGE.includes(role) &&
+        (planMode === "TEMPLATE" || planMode === "CUSTOMIZE")
+      ) {
+        const actor = { id: (session.user as any).id, name: (session.user as any).name || null, role };
+        try {
+          if (planMode === "TEMPLATE") {
+            const planTemplateId = Number(data.checklistPlan.planTemplateId);
+            const [tpl] = planTemplateId
+              ? await db.select().from(checklistPlanTemplates).where(eq(checklistPlanTemplates.id, planTemplateId))
+              : [];
+            if (tpl && Number(tpl.businessId) === businessId) {
+              await applyPlanTemplateToFlock(
+                businessId,
+                branchCode,
+                row,
+                { id: Number(tpl.id), name: String(tpl.name), items: (tpl.items as any[]) || [] },
+                actor
+              );
+              checklistPlanApplied = `template:${tpl.name}`;
+              await auditLog(session.user, "POULTRY_FLOCK_PLAN_APPLIED", "Flock Checklist Plan",
+                `${row.batchNumber} → ${tpl.name}`, "POULTRY_FLOCK", row.id, businessId, branchCode,
+                `Flock ${row.batchNumber} started with saved plan template "${tpl.name}" by ${actor.name || "manager"}`,
+                (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+              ).catch(() => {});
+            }
+          } else {
+            const res = await forkFlockPlan(businessId, branchCode, row, actor);
+            checklistPlanApplied = `customize:${res.created}`;
+            await auditLog(session.user, "POULTRY_FLOCK_PLAN_FORKED", "Flock Checklist Plan",
+              `${row.batchNumber} (${row.birdType})`, "POULTRY_FLOCK", row.id, businessId, branchCode,
+              `Flock ${row.batchNumber} started with a customized copy of the recommended plan (${res.created} items) by ${actor.name || "manager"}`,
+              (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+            ).catch(() => {});
+          }
+          // Materialize today's entries for the new flock right away.
+          const todayLocal = new Date().toLocaleDateString("en-CA");
+          await generateEntriesForDate(businessId, branchCode, todayLocal, biz?.code, biz?.category);
+        } catch (e: any) {
+          console.error("[poultry] checklist plan apply failed:", e);
+        }
+      }
+      return NextResponse.json({ success: true, item: row, checklistPlanApplied });
     }
 
     // ── FEED ───────────────────────────────────────────────────────
@@ -266,7 +379,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create expense transaction for feed PURCHASE
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId,
@@ -392,7 +505,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create expense transaction for health costs
       if (healthCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId,
@@ -609,7 +722,7 @@ export async function POST(request: NextRequest) {
 
         // Production → Finance linkage.
         if (revenue > 0) {
-          const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+          const trxNum = nextTrxNumber();
           await db.insert(transactions).values({
             transactionNumber: trxNum,
             businessId,
@@ -699,7 +812,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create revenue transaction when production includes sales revenue
       if (revenue > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         let desc = "Poultry production";
         if (eggs > 0) desc += ` — ${eggs} eggs collected`;
         if (soldEggs > 0) desc += `, ${soldEggs} sold`;
@@ -842,6 +955,18 @@ export async function PATCH(request: NextRequest) {
           { status: 400 }
         );
       }
+      let benchmarkProfileId: number | null | undefined = undefined;
+      if (data?.benchmarkProfileId !== undefined) {
+        benchmarkProfileId = data.benchmarkProfileId === null || data.benchmarkProfileId === ""
+          ? null
+          : await resolveProfileId(data.benchmarkProfileId, existingFlock.businessId);
+        if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "" && !benchmarkProfileId) {
+          return NextResponse.json(
+            { success: false, error: "Benchmark profile not found for this business." },
+            { status: 404 },
+          );
+        }
+      }
       const [row] = await db
         .update(poultryFlocks)
         .set({
@@ -849,6 +974,7 @@ export async function PATCH(request: NextRequest) {
             data?.currentCount !== undefined ? Number(data.currentCount) : undefined,
           ageWeeks: data?.ageWeeks !== undefined ? Number(data.ageWeeks) : undefined,
           status: data?.status || undefined,
+          benchmarkProfileId,
           notes: data?.notes ?? undefined,
         })
         .where(eq(poultryFlocks.id, Number(id)))

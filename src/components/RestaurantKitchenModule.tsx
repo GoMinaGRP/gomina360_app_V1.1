@@ -348,7 +348,7 @@ export default function RestaurantKitchenModule({
     </div>
   );
 
-  if (loading) return <div className="p-10 text-center text-slate-400 text-sm">Loading Mina Heritage Kitchen…</div>;
+  if (loading) return <div className="p-10 text-center text-slate-400 text-sm">Loading {businessInfo?.name ? `${businessInfo.name}…` : "Kitchen workspace…"}</div>;
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100">
@@ -683,7 +683,7 @@ export default function RestaurantKitchenModule({
             </Card>
             <Card title="Customers" icon={Users}>
               <div className="p-4 space-y-2">
-                {(branchCustomers.length ? branchCustomers : customers).slice(0, 6).map((c) => (
+                {branchCustomers.slice(0, 6).map((c) => (
                   <div key={c.id} className="flex justify-between text-xs p-2.5 rounded-lg bg-slate-900/70 border border-slate-700"><span className="text-slate-200 font-semibold">{c.name}</span><span className="text-slate-400">{c.type} • {formatMoney(c.totalSpentGhs || 0, currentCurrency, true)}</span></div>
                 ))}
               </div>

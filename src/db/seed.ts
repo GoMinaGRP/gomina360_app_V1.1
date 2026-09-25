@@ -44,13 +44,15 @@ import {
   checklistTemplates,
   checklistEntries,
 } from "./schema";
-import { sql, eq } from "drizzle-orm";
+import { and, sql, eq } from "drizzle-orm";
 import { provisionBusiness, ensureCarWashServiceCatalogue } from "@/lib/businessProvisioning";
+import { ensureStagePlanTemplates } from "@/lib/checklistGen";
+import { getSystemMarker, setSystemMarker, isDeletedBusiness } from "@/lib/systemMarkers";
 
 /** Auto Car Wash service catalogue for the seeded WASH-01 unit. Idempotent:
  *  the provisioning helper is a no-op once any services exist for the unit. */
 async function ensureWashFlagshipCatalogue() {
-  const [wash] = await db.select().from(businesses).where(eq(businesses.code, "WASH-01"));
+  const [wash] = await db.select().from(businesses).where(and(eq(businesses.code, "WASH-01"), eq(businesses.ownerId, 1)));
   if (!wash) return;
   const created = await ensureCarWashServiceCatalogue({
     id: wash.id,
@@ -72,7 +74,7 @@ async function ensureWashFlagshipCatalogue() {
  */
 async function ensureFlagshipMasterLists() {
   // ── Block Factory: original production master types (BLOCK-01) ────────
-  const [block] = await db.select().from(businesses).where(eq(businesses.code, "BLOCK-01"));
+  const [block] = await db.select().from(businesses).where(and(eq(businesses.code, "BLOCK-01"), eq(businesses.ownerId, 1)));
   if (block) {
     const existing = await db.select().from(blockTypes).where(eq(blockTypes.businessId, block.id));
     if (existing.length === 0) {
@@ -90,7 +92,7 @@ async function ensureFlagshipMasterLists() {
   }
 
   // ── Poultry Farm: the two system products (POULTRY-01) ────────────────
-  const [poultry] = await db.select().from(businesses).where(eq(businesses.code, "POULTRY-01"));
+  const [poultry] = await db.select().from(businesses).where(and(eq(businesses.code, "POULTRY-01"), eq(businesses.ownerId, 1)));
   if (poultry) {
     const existing = await db.select().from(poultryProducts).where(eq(poultryProducts.businessId, poultry.id));
     if (existing.length === 0) {
@@ -119,7 +121,7 @@ async function ensureFlagshipMasterLists() {
   }
 
   // ── Restaurant & Kitchen: signature menu (FOOD-01) ────────────────────
-  const [food] = await db.select().from(businesses).where(eq(businesses.code, "FOOD-01"));
+  const [food] = await db.select().from(businesses).where(and(eq(businesses.code, "FOOD-01"), eq(businesses.ownerId, 1)));
   if (food) {
     const existing = await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.businessId, food.id));
     if (existing.length === 0) {
@@ -142,57 +144,140 @@ async function ensureFlagshipMasterLists() {
 }
 
 /**
- * Hardware & Building Materials flagship unit. Runs on EVERY seed pass —
+ * Hardware & Building Materials flagship unit. ONE-TIME provisioning:
  * fresh databases get it right after the seven core branches, and
- * pre-existing databases are repaired forward when the type is introduced.
- * Idempotent: no-ops once HARDWARE-01 exists, so OWNER edits (rename,
- * manager, capital) are never clobbered on later boots.
+ * pre-existing databases that predate the business type are repaired
+ * forward exactly once. The pass is recorded in `system_markers`
+ * ("hardware_flagship") and never runs again — most importantly, an OWNER
+ * deletion of HARDWARE-01 is final: the tombstone written by the DELETE
+ * route (`deleted_business:HARDWARE-01`) plus this marker guarantee the
+ * seeder can never resurrect a unit the OWNER removed from Manage Units
+ * (the exact bug where deleted hardware units reappeared on every reboot).
  */
 async function ensureHardwareFlagship() {
-  const existing = await db.select().from(businesses).where(eq(businesses.code, "HARDWARE-01"));
-  if (existing.length > 0) return;
-  const [biz] = await db
-    .insert(businesses)
-    .values({
-      name: "GoMina Hardware & Building Materials Depot",
-      code: "HARDWARE-01",
-      category: "Hardware Store",
-      branchLocation: "Asokwa Industrial Area, Kumasi",
-      region: "Ashanti",
-      managerName: "Kwadwo Boateng",
-      contactPhone: "+233 20 880 4567",
-      status: "ACTIVE",
-      initialCapitalGhs: 320000,
-      monthlyTargetRevenueGhs: 180000,
-      iconName: "HardHat",
-      ownerId: 1,
+  // Owner deleted it → it stays deleted. Forever.
+  if (await isDeletedBusiness("HARDWARE-01")) return;
+  // This database already had its one-time hardware pass → never re-run.
+  if ((await getSystemMarker("hardware_flagship")) !== null) return;
+
+  const existing = await db.select().from(businesses).where(and(eq(businesses.code, "HARDWARE-01"), eq(businesses.ownerId, 1)));
+  let biz = existing[0];
+  let repaired = false;
+  if (!biz) {
+    const [row] = await db
+      .insert(businesses)
+      .values({
+        name: "GoMina Hardware & Building Materials Depot",
+        code: "HARDWARE-01",
+        category: "Hardware Store",
+        branchLocation: "Asokwa Industrial Area, Kumasi",
+        region: "Ashanti",
+        managerName: "Kwadwo Boateng",
+        contactPhone: "+233 20 880 4567",
+        status: "ACTIVE",
+        initialCapitalGhs: 320000,
+        monthlyTargetRevenueGhs: 180000,
+        iconName: "HardHat",
+        ownerId: 1,
+      })
+      .returning();
+    biz = row;
+    // Recovery/demo seed: zero-based metrics, the full daily-checklist
+    // template set AND the Hardware starter inventory kit. The kit cost is
+    // booked as a REAL expense transaction (see provisionBusiness), so every
+    // dashboard figure is backed by a manageable ledger record.
+    await provisionBusiness(
+      {
+        id: biz.id,
+        code: biz.code,
+        name: biz.name,
+        category: biz.category,
+        initialCapitalGhs: biz.initialCapitalGhs,
+      },
+      { starterKit: true },
+    );
+    // General Manager visibility sweep — mirrors the core-branch grants, so
+    // the GM can open the new unit from day one (revocable in Users & Access).
+    await db.execute(sql`
+      INSERT INTO user_business_access (user_id, business_id, created_by_user_id)
+      SELECT 2, ${biz.id}, 1
+      WHERE EXISTS (SELECT 1 FROM users WHERE id = 2 AND role = 'GENERAL_MANAGER')
+        AND NOT EXISTS (
+          SELECT 1 FROM user_business_access g
+          WHERE g.user_id = 2 AND g.business_id = ${biz.id}
+        )
+    `);
+    console.log("Hardware flagship unit provisioned: HARDWARE-01");
+  } else {
+    // Pre-fix database: the unit exists from the old one-time provisioning.
+    // Repair its starter-kit bookkeeping so the ledger backs the dashboards
+    // (the old code folded the kit cost into business_metrics with no
+    // transaction — expenses with zero postings, impossible to manage).
+    repaired = await repairHardwareStarterKitLedger(biz.id);
+    if (repaired) console.log("HARDWARE-01 starter-kit expense reconciled into the ledger.");
+  }
+
+  // The pass has now run on this database — never provision it again.
+  await setSystemMarker("hardware_flagship", new Date().toISOString());
+  return repaired;
+}
+
+/**
+ * Legacy repair (one-time, hardware flagship only): convert the folded
+ * starter-kit metrics of the OLD provisioning into a real expense
+ * transaction. Before the fix, provisionBusiness(starterKit) added the kit
+ * cost to business_metrics (expenses / net profit / cash flow) WITHOUT
+ * booking a transaction — dashboards and the Finance report showed
+ * "GH₵86,850 expenses · 0 postings": a figure that existed nowhere as a
+ * manageable record.
+ *
+ * Math (keeps every displayed total identical):
+ *   foldAmount = metric.expensesGhs − Σ real EXPENSE transactions of the unit
+ * When foldAmount > 0 we book it as one real expense transaction and remove
+ * it from the metrics row. liveMetrics (metric baseline + live ledger rows)
+ * then produces exactly the same dashboard totals — except now every cedi
+ * is a record the OWNER can see, audit and export.
+ */
+async function repairHardwareStarterKitLedger(businessId: number): Promise<boolean> {
+  const [metric] = await db
+    .select()
+    .from(businessMetrics)
+    .where(eq(businessMetrics.businessId, businessId));
+  if (!metric) return false;
+
+  const txns = await db.select().from(transactions).where(eq(transactions.businessId, businessId));
+  const bookedExpenses = txns
+    .filter((t: any) => t.type === "EXPENSE")
+    .reduce((s: number, t: any) => s + (Number(t.amountGhs) || 0), 0);
+  const foldAmount = Math.round(((Number(metric.expensesGhs) || 0) - bookedExpenses) * 100) / 100;
+  if (foldAmount <= 0.5) return false; // already ledger-backed (or nothing folded)
+
+  const now = new Date();
+  await db.insert(transactions).values({
+    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+    businessId,
+    branchCode: "HARDWARE-01",
+    branchName: "GoMina Hardware & Building Materials Depot",
+    type: "EXPENSE",
+    category: "Opening Stock — Starter Kit",
+    amountGhs: foldAmount,
+    paymentMethod: "BANK_TRANSFER",
+    description: `Opening stock investment — hardware starter kit (${foldAmount.toLocaleString()} at cost), converted from the seeded baseline into the live ledger`,
+    date: now.toISOString().split("T")[0],
+    createdAt: now,
+    status: "COMPLETED",
+    recordedBy: "System (opening stock)",
+    recordedByRole: "SYSTEM",
+  });
+  await db
+    .update(businessMetrics)
+    .set({
+      expensesGhs: Math.max(0, (Number(metric.expensesGhs) || 0) - foldAmount),
+      netProfitGhs: (Number(metric.netProfitGhs) || 0) + foldAmount,
+      cashFlowGhs: (Number(metric.cashFlowGhs) || 0) + foldAmount,
     })
-    .returning();
-  // Recovery/demo seed: zero-based metrics, the full daily-checklist template
-  // set AND the Hardware starter inventory kit (starterKit is seed-only —
-  // units created from the live app start completely clean per owner policy).
-  await provisionBusiness(
-    {
-      id: biz.id,
-      code: biz.code,
-      name: biz.name,
-      category: biz.category,
-      initialCapitalGhs: biz.initialCapitalGhs,
-    },
-    { starterKit: true },
-  );
-  // General Manager visibility sweep — mirrors the core-branch grants, so the
-  // GM can open the new unit from day one (revocable in Users & Access).
-  await db.execute(sql`
-    INSERT INTO user_business_access (user_id, business_id, created_by_user_id)
-    SELECT 2, ${biz.id}, 1
-    WHERE EXISTS (SELECT 1 FROM users WHERE id = 2 AND role = 'GENERAL_MANAGER')
-      AND NOT EXISTS (
-        SELECT 1 FROM user_business_access g
-        WHERE g.user_id = 2 AND g.business_id = ${biz.id}
-      )
-  `);
-  console.log("Hardware flagship unit provisioned: HARDWARE-01");
+    .where(eq(businessMetrics.id, metric.id));
+  return true;
 }
 
 export async function seedDatabase() {
@@ -219,6 +304,17 @@ async function seedDatabaseInner() {
     await ensureFlagshipMasterLists();
     return;
   }
+
+  // 0. Organization #1 must exist BEFORE any business row: businesses carry
+  // owner_id → organizations.id (FK). On the normal path the build-time
+  // migration's backfill already created org 1, but a plain
+  // push-then-boot bootstrap (no migrate pass) would fail every business
+  // insert with a foreign-key violation. Idempotent, mirrors the migration.
+  await db.execute(sql`
+    insert into organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
+    select 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
+    where not exists (select 1 from organizations where id = 1)
+  `);
 
   // 1. Insert 7 Businesses
   const insertedBusinesses = await db
@@ -1769,6 +1865,14 @@ async function seedDatabaseInner() {
     chkEntry("BIOSECURITY_FOOTBATH", "2026-08-22", false),
   ]);
 
+  // 12f-b. Poultry age/stage plan — the flagship POULTRY-01 demo runs the
+  // stage-based checklist out of the box: the Owner's 5 customized demo
+  // tasks above stay (origin CUSTOM, business-level) and the full system
+  // stage plan (broiler day-based + layer week-based) is seeded alongside.
+  // The two dated demo days above keep their original shape — history is
+  // never rewritten; the stage plan only materializes from now on.
+  await ensureStagePlanTemplates(1, "POULTRY-01");
+
   // ─────────────────────────────────────────────────────────────────────────
   // Standardized Ghana location normalization (Region → District/MMDA → Town)
   // Applied to every module so location data is consistent and reportable.
@@ -1838,6 +1942,27 @@ async function seedDatabaseInner() {
   await ensureHardwareFlagship();
   await ensureWashFlagshipCatalogue();
   await ensureFlagshipMasterLists();
+
+  // ── Organization #1 + memberships ────────────────────────────────────────
+  // Multi-tenant access resolves every user's business scope through
+  // organization membership. On a fresh bootstrap the build-time migration
+  // runs BEFORE this seeder creates the users, so its org backfill finds
+  // nobody — without this ensure the first login 403s everywhere ("You do
+  // not have access to that business") until a migration is re-run. This
+  // mirrors the migration's backfill and is fully idempotent.
+  await db.execute(sql`
+    insert into organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
+    select 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
+    where not exists (select 1 from organizations where id = 1)
+  `);
+  await db.execute(sql`update users set primary_org_id = 1 where primary_org_id is null`);
+  await db.execute(sql`update users set is_super_admin = true where id = 1 and (is_super_admin is distinct from true)`);
+  await db.execute(sql`
+    insert into organization_members (organization_id, user_id, role_in_org, is_primary)
+    select 1, id, case when role = 'OWNER' then 'OWNER' else 'MEMBER' end, true from users
+    on conflict (organization_id, user_id) do nothing
+  `);
+  await db.execute(sql`update organizations set owner_user_id = 1 where id = 1 and owner_user_id is null`);
 
   console.log("GoMina 360 Command Center database seeding completed successfully!");
 }

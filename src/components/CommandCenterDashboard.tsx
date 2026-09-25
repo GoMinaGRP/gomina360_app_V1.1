@@ -50,7 +50,7 @@ interface CommandCenterDashboardProps {
   transactions: any[];
   inventory: any[];
   currentCurrency: CurrencyCode;
-  onSelectTab: (tab: ActiveTab) => void;
+  onSelectTab: (tab: ActiveTab, bizId?: number | null) => void;
   onOpenNewBusinessModal: () => void;
   onOpenManageBusinesses?: () => void;
   onOpenUserAccess?: () => void;
@@ -1040,7 +1040,7 @@ export default function CommandCenterDashboard({
                 return (
                   <tr
                     key={biz.id ?? `g-${idx}`}
-                    onClick={() => !isGroup && biz.code && onSelectTab(biz.code as ActiveTab)}
+                    onClick={() => !isGroup && biz.code && onSelectTab(biz.code as ActiveTab, biz.id)}
                     className={`hover:bg-slate-700/50 transition group ${
                       isGroup ? "cursor-default" : "cursor-pointer"
                     }`}
@@ -1105,7 +1105,7 @@ export default function CommandCenterDashboard({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onSelectTab(biz.code as ActiveTab);
+                            onSelectTab(biz.code as ActiveTab, biz.id);
                           }}
                           className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-semibold transition inline-flex items-center space-x-1"
                         >
