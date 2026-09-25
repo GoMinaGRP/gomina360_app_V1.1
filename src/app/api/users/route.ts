@@ -20,6 +20,7 @@ import {
 import { backfillUserNotifications, businessIdsForUser } from "@/lib/notify";
 import crypto from "crypto";
 import { apiError } from "@/lib/apiError";
+import { ADVISOR_FORCED_FLAGS, ADVISOR_ROLE, canManageAdvisors as mayManageAdvisors } from "@/lib/advisorAccess";
 
 const stripSecret = (u: any) => {
   const {
@@ -110,6 +111,7 @@ export async function POST(request: Request) {
       canManageUsers,
       canManageCctv,
       canManageAuditors,
+      canManageAdvisors,
       canManageOnline,
       canCreateBusiness,
       canViewFinance,
@@ -128,6 +130,15 @@ export async function POST(request: Request) {
 
     const isOwner = me.role === "OWNER";
     const isBranchManager = me.role === "BRANCH_MANAGER";
+    // External Farm Advisor accounts: only the OWNER (or a manager the OWNER
+    // gave the canManageAdvisors delegation) may mint them. They are created
+    // with ZERO access — visibility comes solely from advisor_assignments.
+    if (role === ADVISOR_ROLE && !mayManageAdvisors(me)) {
+      return FORBIDDEN("Only the OWNER can create Farm Advisor accounts.");
+    }
+    if (!!canManageAdvisors && !isOwner) {
+      return FORBIDDEN("Only the OWNER can delegate Farm Advisor management.");
+    }
     // OWNER-delegated user administrator: manager (branch or general) trusted
     // to run Users & Access strictly within the branches they can access.
     const isDelegatedMgr =
@@ -287,6 +298,14 @@ export async function POST(request: Request) {
           isOwner && ["GENERAL_MANAGER", "BRANCH_MANAGER"].includes(role)
             ? Boolean(canManageUsers ?? false)
             : false,
+        // Farm-Advisor management delegation — OWNER-granted, managers only.
+        canManageAdvisors:
+          isOwner && ["GENERAL_MANAGER", "BRANCH_MANAGER"].includes(role)
+            ? Boolean(canManageAdvisors ?? false)
+            : false,
+        // An ADVISOR can never hold ANY management permission: clamp them all
+        // server-side, last, so a crafted request body cannot elevate them.
+        ...(role === ADVISOR_ROLE ? ADVISOR_FORCED_FLAGS : {}),
       })
       .returning();
 
@@ -366,6 +385,7 @@ export async function PATCH(request: Request) {
       canManageUsers,
       canManageCctv,
       canManageAuditors,
+      canManageAdvisors,
       canManageOnline,
       canCreateBusiness,
       canViewFinance,
@@ -398,6 +418,12 @@ export async function PATCH(request: Request) {
 
     const isOwner = me.role === "OWNER";
     const isGM = me.role === "GENERAL_MANAGER";
+    if (role === ADVISOR_ROLE && !mayManageAdvisors(me)) {
+      return FORBIDDEN("Only the OWNER can assign the Farm Advisor role.");
+    }
+    if (canManageAdvisors !== undefined && !isOwner) {
+      return FORBIDDEN("Only the OWNER can delegate Farm Advisor management.");
+    }
     const isBM = me.role === "BRANCH_MANAGER";
     const isDelegatedMgr =
       !isOwner && !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
@@ -611,6 +637,16 @@ export async function PATCH(request: Request) {
           isOwner && businessManageIds !== undefined
             ? cleanIdList(businessManageIds)
             : targetUser.businessManageIds,
+        // Farm-Advisor management delegation: OWNER-only, managers only.
+        canManageAdvisors:
+          isOwner && canManageAdvisors !== undefined
+            ? ["GENERAL_MANAGER", "BRANCH_MANAGER"].includes(role ?? targetUser.role)
+              ? Boolean(canManageAdvisors)
+              : false
+            : targetUser.canManageAdvisors,
+        // An ADVISOR account (whether it already was one or is being turned
+        // into one) can never carry a management permission — clamp last.
+        ...((role ?? targetUser.role) === ADVISOR_ROLE ? ADVISOR_FORCED_FLAGS : {}),
       })
       .where(eq(users.id, Number(userId)))
       .returning();

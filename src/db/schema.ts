@@ -66,6 +66,11 @@ export const users = pgTable("users", {
   // accessible businesses. The OWNER always controls every Auditor
   // permission group-wide. Grant/revoke is OWNER-only.
   canManageAuditors: boolean("can_manage_auditors").default(false),
+  // OWNER-granted Farm-Advisor delegation: lets a manager invite, scope and
+  // revoke external Farm Advisor / Resource Person access — strictly inside
+  // the businesses they can access. The OWNER always controls every Advisor
+  // grant group-wide. Grant/revoke is OWNER-only.
+  canManageAdvisors: boolean("can_manage_advisors").default(false),
   // OWNER-granted Online Storefront & Delivery Areas management: the user may
   // open Manage Businesses → Online and control the storefront switches,
   // service areas/localities, pickup locations and customer help / MoMo
@@ -2484,6 +2489,11 @@ export const auditReviews = pgTable("audit_reviews", {
   branchCode: text("branch_code"),
   workerName: text("worker_name"), // employee/recorder the record belongs to
   action: text("action").notNull(), // VERIFIED | FLAGGED | COMMENT | CORRECTION_REQUESTED
+  /** Where the issue came from: AUDIT (auditor review — the default and the
+   *  historical meaning of every existing row) or ADVISORY (escalated from an
+   *  external Farm Advisor note). Audit KPIs filter on AUDIT so advisory
+   *  follow-ups never distort compliance statistics. */
+  origin: text("origin").notNull().default("AUDIT"),
   status: text("status").notNull().default("INFO"), // FLAGGED | UNDER_REVIEW | CORRECTION_REQUIRED | RESOLVED | VERIFIED | INFO (OPEN = legacy FLAGGED)
   /** Priority the auditor assigns when flagging: LOW | MEDIUM | HIGH | CRITICAL.
    *  Carried into every bell notification and drives escalation: branch
@@ -3119,4 +3129,170 @@ export const transportTrackerViolations = pgTable("transport_tracker_violations"
   notifiedManagerUserIds: jsonb("notified_manager_user_ids").default(sql`'[]'::jsonb`),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+});
+
+// ── 21. EXTERNAL FARM ADVISOR / RESOURCE PERSON ───────────────────────────
+// An Advisor is an OUTSIDE professional (vet, nutritionist, extension
+// officer) the Owner invites to monitor the farm remotely and advise. The
+// account is created with role = "ADVISOR": it carries NO implicit access to
+// anything and NO write capability anywhere in the platform (enforced
+// centrally in lib/advisorAccess.ts + lib/auth.ts). Everything an advisor may
+// see comes from an explicit, Owner-controlled grant row below; the only rows
+// an advisor may ever create are their own notes/replies/visits.
+
+/** Read scopes an Owner may switch on per grant. COSTS / PHOTOS_CCTV are OFF
+ *  by default (money and camera imagery are never handed out implicitly).
+ *  FINANCE, payroll, employees, customers, suppliers, users & access and
+ *  settings are deliberately NOT expressible here — they are out of scope for
+ *  the advisor role by design. */
+export const ADVISOR_SCOPES = [
+  "DASHBOARD",
+  "FLOCKS",
+  "DAILY_OPS",
+  "DAILY_NOTES",
+  "FEED_WATER",
+  "GROWTH_FCR",
+  "MORTALITY_HEALTH",
+  "PRODUCTION",
+  "BENCHMARK",
+  "ALERTS",
+  "INVENTORY_LEVELS",
+  "PHOTOS_CCTV",
+] as const;
+export type AdvisorScope = (typeof ADVISOR_SCOPES)[number];
+
+/** Scopes switched on when the Owner grants access without customising. */
+export const ADVISOR_DEFAULT_SCOPES: AdvisorScope[] = [
+  "DASHBOARD", "FLOCKS", "DAILY_OPS", "DAILY_NOTES", "FEED_WATER",
+  "GROWTH_FCR", "MORTALITY_HEALTH", "PRODUCTION", "BENCHMARK", "ALERTS",
+  "INVENTORY_LEVELS",
+];
+
+export const ADVISOR_NOTE_TYPES = [
+  "OBSERVATION", "RECOMMENDATION", "FOLLOW_UP", "VISIT_REPORT", "RISK",
+] as const;
+
+/** Advisory note lifecycle (deliberately mirrors the audit vocabulary):
+ *  SUBMITTED → ACKNOWLEDGED → IN_PROGRESS → DONE → CLOSED. Withdrawn notes
+ *  keep their row (withdrawn_at) — advice is never hard-deleted. */
+export const ADVISOR_NOTE_STATUSES = [
+  "SUBMITTED", "ACKNOWLEDGED", "IN_PROGRESS", "DONE", "CLOSED",
+] as const;
+
+/** Owner-controlled Advisor access grant — the ONLY thing that gives an
+ *  advisor visibility. Shaped after audit_assignments so the console, the
+ *  revocation path and the audit trail all behave identically. */
+export const advisorAssignments = pgTable("advisor_assignments", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),         // the advisor (users.id, role ADVISOR)
+  userName: text("user_name").notNull(),        // snapshot
+  businessId: integer("business_id").notNull(), // farm/unit advised
+  branchCode: text("branch_code"),              // null = every branch of the unit
+  scopes: jsonb("scopes").notNull().$type<string[]>(),   // ADVISOR_SCOPES subset
+  flockIds: jsonb("flock_ids").$type<number[]>(),        // null/[] = all flocks of the unit
+  showCosts: boolean("show_costs").notNull().default(false),  // money visibility
+  canExport: boolean("can_export").notNull().default(false),  // export own reports
+  startsOn: text("starts_on"),                  // YYYY-MM-DD (null = immediately)
+  endsOn: text("ends_on"),                      // YYYY-MM-DD engagement end (null = open)
+  isActive: boolean("is_active").notNull().default(true),
+  note: text("note"),
+  grantedByUserId: integer("granted_by_user_id").notNull(),
+  grantedByName: text("granted_by_name").notNull(),
+  grantedByRole: text("granted_by_role").notNull(),
+  ownerId: integer("owner_id"),                 // tenant scope (organizations.id)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** The advisor's professional record: observations, recommendations,
+ *  follow-ups, visit reports and risks — linked to farm + flock + date and,
+ *  optionally, to the exact underlying record (same linkage convention as
+ *  audit_reviews). Every note is analysed by the existing GoMina AI daily-notes
+ *  engine; the analysis snapshot is stored in the ai_* columns (identical
+ *  shape to daily_notes) and folded into business_insights. */
+export const advisorNotes = pgTable("advisor_notes", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  flockId: integer("flock_id"),
+  batchNumber: text("batch_number"),
+  visitId: integer("visit_id"),                 // advisor_visits.id
+  noteType: text("note_type").notNull().default("OBSERVATION"), // ADVISOR_NOTE_TYPES
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  observationDate: text("observation_date").notNull(), // YYYY-MM-DD farm day
+  priority: text("priority").notNull().default("MEDIUM"), // LOW|MEDIUM|HIGH|CRITICAL
+  category: text("category"),                   // optional taxonomy hint
+  // Record linkage (audit_reviews convention)
+  recordType: text("record_type"),
+  recordSource: text("record_source"),
+  recordId: integer("record_id"),
+  recordRef: text("record_ref"),
+  recordTitle: text("record_title"),
+  photos: jsonb("photos").$type<string[]>().default([]),
+  // Follow-up / accountability
+  requiresAction: boolean("requires_action").notNull().default(false),
+  dueDate: text("due_date"),
+  assignedUserId: integer("assigned_user_id"),
+  assignedUserName: text("assigned_user_name"),
+  assignedUserRole: text("assigned_user_role"),
+  status: text("status").notNull().default("SUBMITTED"),
+  linkedIssueId: integer("linked_issue_id"),    // audit_reviews.id when escalated
+  // Outcome / adoption tracking
+  acknowledgedByUserId: integer("acknowledged_by_user_id"),
+  acknowledgedByName: text("acknowledged_by_name"),
+  acknowledgedAt: timestamp("acknowledged_at"),
+  closedByUserId: integer("closed_by_user_id"),
+  closedByName: text("closed_by_name"),
+  closedAt: timestamp("closed_at"),
+  closureNote: text("closure_note"),
+  // GoMina AI analysis snapshot (same columns as daily_notes)
+  aiSummary: text("ai_summary"),
+  aiIssues: jsonb("ai_issues").default([]),
+  aiSeverity: text("ai_severity").default("INFO"), // INFO | WATCH | URGENT
+  aiFlags: jsonb("ai_flags").default([]),
+  authorUserId: integer("author_user_id").notNull(),
+  authorName: text("author_name").notNull(),
+  authorRole: text("author_role").notNull(),
+  ownerId: integer("owner_id"),                 // tenant scope
+  withdrawnAt: timestamp("withdrawn_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Append-only conversation on an advisory note (Owner/managers reply, the
+ *  advisor answers). Status transitions are recorded here too, so the note
+ *  carries its own immutable history exactly like audit_issue_updates. */
+export const advisorNoteReplies = pgTable("advisor_note_replies", {
+  id: serial("id").primaryKey(),
+  noteId: integer("note_id").notNull(),
+  actorUserId: integer("actor_user_id").notNull(),
+  actorName: text("actor_name").notNull(),
+  actorRole: text("actor_role").notNull(),
+  action: text("action").notNull(), // REPLY | ACKNOWLEDGE | START | DONE | CLOSE | WITHDRAW | ESCALATE
+  statusFrom: text("status_from"),
+  statusTo: text("status_to"),
+  body: text("body"),
+  photo: text("photo"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Visit / engagement header: groups notes into a visit report and gives the
+ *  Owner a "last visited · next visit" fact plus a reminder trigger. */
+export const advisorVisits = pgTable("advisor_visits", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  advisorUserId: integer("advisor_user_id").notNull(),
+  advisorName: text("advisor_name").notNull(),
+  visitType: text("visit_type").notNull().default("ON_SITE"), // ON_SITE | REMOTE
+  plannedDate: text("planned_date"),
+  actualDate: text("actual_date"),
+  durationMins: integer("duration_mins"),
+  summary: text("summary"),
+  aiDigest: jsonb("ai_digest"),                 // advisorAi digest snapshot
+  status: text("status").notNull().default("PLANNED"), // PLANNED | COMPLETED | MISSED
+  ownerId: integer("owner_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });

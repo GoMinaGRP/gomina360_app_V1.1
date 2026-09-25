@@ -16,6 +16,8 @@ import {
 import { eq, desc, and } from "drizzle-orm";
 import { stockIn, stockOut, ensureInventoryItem } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { advisorGrantFor, isAdvisor } from "@/lib/advisorAccess";
+import { scopeFarmDataToGrant } from "@/lib/advisorServer";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -107,15 +109,25 @@ export async function GET(request: NextRequest) {
 
     const sortByIdDesc = (a: any, b: any) => (b.id || 0) - (a.id || 0);
 
+    // External Farm Advisor: narrow every collection to the granted branch and
+    // flocks and strip money unless the grant enables COSTS. The module UI is
+    // shared, so this projection — not the client — decides what is visible.
+    let out: any = { flocks, feedLogs, waterLogs, healthRecords, production, weightLogs, checklistEntries: checklists };
+    if (isAdvisor(session.user)) {
+      const grant = await advisorGrantFor(session.user, bizId);
+      if (!grant) return FORBIDDEN("Your advisory access to this farm is not active.");
+      out = scopeFarmDataToGrant(out, grant);
+    }
+
     return NextResponse.json({
       success: true,
-      flocks: flocks.sort(sortByIdDesc),
-      feedLogs: feedLogs.sort(sortByIdDesc),
-      waterLogs: waterLogs.sort(sortByIdDesc),
-      healthRecords: healthRecords.sort(sortByIdDesc),
-      production: production.sort(sortByIdDesc),
-      weightLogs: weightLogs.sort(sortByIdDesc),
-      checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
+      flocks: out.flocks.sort(sortByIdDesc),
+      feedLogs: out.feedLogs.sort(sortByIdDesc),
+      waterLogs: out.waterLogs.sort(sortByIdDesc),
+      healthRecords: out.healthRecords.sort(sortByIdDesc),
+      production: out.production.sort(sortByIdDesc),
+      weightLogs: out.weightLogs.sort(sortByIdDesc),
+      checklists: (out.checklistEntries ?? checklists).sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       products: products.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
     });
   } catch (error: any) {

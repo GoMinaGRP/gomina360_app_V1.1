@@ -34,6 +34,7 @@ import {
   Wifi,
   Settings2,
   CalendarClock,
+  Stethoscope,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -61,6 +62,7 @@ export type ActiveTab =
   | "USERS_MANAGE"
   | "SALES_CENTER"
   | "BRANCH_ASSETS"
+  | "ADVISORY"
   // Allows any dynamically created business code (new branch units)
   | (string & {});
 
@@ -698,6 +700,35 @@ export default function Sidebar({
             </div>
             <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold">
               QA
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Farm Advisory — external resource persons (vets, extension officers,
+          nutritionists). Visible to the OWNER and to managers the OWNER
+          authorised (canManageAdvisors); the advisors themselves get their
+          own dedicated read-only workspace, not this shell. */}
+      {(currentUser?.role === "OWNER" || currentUser?.canManageAdvisors) && (
+        <div className="px-3 py-2">
+          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            Expert Advisory
+          </div>
+          <button
+            onClick={() => selectTab("ADVISORY")}
+            data-testid="advisory-tab"
+            className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+              activeTab === "ADVISORY"
+                ? "bg-gradient-to-r from-cyan-500/20 to-sky-500/20 text-cyan-300 font-bold border-l-2 border-cyan-400"
+                : "hover:bg-slate-800/70 text-slate-300"
+            }`}
+          >
+            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+              <Stethoscope className="w-4 h-4 text-cyan-400" />
+              <span>Farm Advisory</span>
+            </div>
+            <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold">
+              EXPERT
             </span>
           </button>
         </div>

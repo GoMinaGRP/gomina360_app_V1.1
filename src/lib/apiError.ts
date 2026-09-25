@@ -42,6 +42,12 @@ export function isInternalErrorMessage(msg: string): boolean {
  */
 export function apiError(error: unknown, fallbackStatus = 500) {
   const msg = (error as any)?.message ?? String(error ?? "");
+  // Deliberate access-control errors (e.g. the read-only Advisor gate) carry
+  // their own HTTP status and a user-facing message — surface them verbatim.
+  const status = (error as any)?.status;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return NextResponse.json({ success: false, error: msg || "Not permitted." }, { status });
+  }
   const code = (error as any)?.code ?? null; // pg populates SQLSTATE here
 
   // Postgres SQLSTATE (5-char class) or known-internal phrasing → sanitize.

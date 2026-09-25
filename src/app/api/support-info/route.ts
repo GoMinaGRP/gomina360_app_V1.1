@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { customerSupportInfo } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Group-wide CUSTOMER SUPPORT information — the content of the storefront's
@@ -139,6 +140,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (error: any) {
+    if (typeof (error as any)?.status === "number") return apiError(error);
     console.error("POST /api/support-info error:", error);
     return NextResponse.json(
       { success: false, error: error.message || "Could not save support information." },

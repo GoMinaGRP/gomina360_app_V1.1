@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 
-const ROLES = ["GENERAL_MANAGER", "BRANCH_MANAGER", "ACCOUNTANT", "SUPERVISOR", "WORKER"];
+const ROLES = ["GENERAL_MANAGER", "BRANCH_MANAGER", "ACCOUNTANT", "SUPERVISOR", "WORKER", "ADVISOR"];
 const ROLE_LABEL: Record<string, string> = {
   OWNER: "Owner",
   GENERAL_MANAGER: "General Manager",
@@ -22,6 +22,7 @@ const ROLE_LABEL: Record<string, string> = {
   ACCOUNTANT: "Accountant",
   SUPERVISOR: "Supervisor",
   WORKER: "Worker",
+  ADVISOR: "Farm Advisor (external, read-only)",
 };
 
 interface Props {
@@ -65,6 +66,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   const [canManageExpenses, setCanManageExpenses] = useState(false);
   const [canManageCctv, setCanManageCctv] = useState(false);
   const [canManageAuditors, setCanManageAuditors] = useState(false);
+  const [canManageAdvisors, setCanManageAdvisors] = useState(false);
   const [canManageOnline, setCanManageOnline] = useState(false);
   const [canCreateBusiness, setCanCreateBusiness] = useState(false);
   const [canViewFinance, setCanViewFinance] = useState(false);
@@ -185,6 +187,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
     setCanManageExpenses(Boolean(u.canManageExpenses));
     setCanManageCctv(Boolean(u.canManageCctv));
     setCanManageAuditors(Boolean(u.canManageAuditors));
+    setCanManageAdvisors(Boolean(u.canManageAdvisors));
     setCanManageOnline(Boolean(u.canManageOnline));
     setCanCreateBusiness(Boolean(u.canCreateBusiness));
     setCanViewFinance(Boolean(u.canViewFinance));
@@ -214,6 +217,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           canManageExpenses: isOwner ? canManageExpenses : undefined,
           canManageCctv: isOwner ? canManageCctv : undefined,
           canManageAuditors: isOwner ? canManageAuditors : undefined,
+          canManageAdvisors: isOwner ? canManageAdvisors : undefined,
           canManageOnline: isOwner ? canManageOnline : undefined,
           canCreateBusiness: isOwner ? canCreateBusiness : undefined,
           canViewFinance: isOwner ? canViewFinance : undefined,
@@ -261,6 +265,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           canManageExpenses: isOwner ? canManageExpenses : undefined,
           canManageCctv: isOwner ? canManageCctv : undefined,
           canManageAuditors: isOwner ? canManageAuditors : undefined,
+          canManageAdvisors: isOwner ? canManageAdvisors : undefined,
           canManageOnline: isOwner ? canManageOnline : undefined,
           canCreateBusiness: isOwner ? canCreateBusiness : undefined,
           canViewFinance: isOwner ? canViewFinance : undefined,
@@ -447,6 +452,15 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           )}
           {isOwner && (role === "BRANCH_MANAGER" || role === "GENERAL_MANAGER") && (
             <Toggle label="Manage auditor access (Audit & Review)" value={canManageAuditors} onChange={setCanManageAuditors} testid="perm-auditors" tint="teal" />
+          )}
+          {isOwner && (role === "BRANCH_MANAGER" || role === "GENERAL_MANAGER") && (
+            <Toggle
+              label="Manage Farm Advisor access (grant, scope & revoke external advisors)"
+              value={canManageAdvisors}
+              onChange={setCanManageAdvisors}
+              testid="perm-advisors"
+              tint="cyan"
+            />
           )}
           {isOwner && (role === "BRANCH_MANAGER" || role === "GENERAL_MANAGER") && (
             <Toggle

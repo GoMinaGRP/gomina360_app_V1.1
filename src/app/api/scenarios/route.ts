@@ -11,10 +11,10 @@ import { apiError } from "@/lib/apiError";
 export async function GET(request: Request) {
   // Session required: projections carry strategic financial data (enterprise
   // revenue, margins, asset base). Previously readable anonymously.
-  const session = await getSessionInfo(request);
-  ttlInvalidate("init");
-  if (!session) return UNAUTHENTICATED();
   try {
+    const session = await getSessionInfo(request);
+    ttlInvalidate("init");
+    if (!session) return UNAUTHENTICATED();
     let rows = await db
       .select()
       .from(scenarioSimulations)

@@ -3,6 +3,12 @@ import { eq, and, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { users, userSessions, userBusinessAccess, organizationMembers, organizations, businesses } from "@/db/schema";
 import { businessManageIdsOf } from "./permissions";
+import {
+  ADVISOR_ROLE,
+  assertRequestAllowedForActor,
+  advisorBusinessIds,
+  isAdvisor,
+} from "./advisorAccess";
 
 /**
  * GoMina 360 authentication & access control.
@@ -249,6 +255,13 @@ export async function getSessionInfo(request: Request): Promise<SessionInfo | nu
     organizationIds: orgIds,
     orgId: primaryOrgId,
   };
+  // ── Central read-only gate (external Farm Advisor) ────────────────────
+  // Every authenticated route resolves its session here, so this single call
+  // blocks EVERY write attempt by a read-only actor — including routes that
+  // only check business access, and routes written in the future. Throws
+  // ReadOnlyActorError ⇒ apiError() renders 403.
+  assertRequestAllowedForActor(user, request);
+
   return { sessionId: row.session.id, user, orgId: primaryOrgId, orgIds, isSuperAdmin: superAdmin };
 }
 
@@ -262,6 +275,14 @@ export async function accessibleBusinessIds(user: any): Promise<number[] | null>
   const orgIds = await resolveUserOrgIds(user);
   const orgBizIds = await businessIdsOfOrgs(orgIds);
   if (user.role === "OWNER") return orgBizIds; // org-scoped, never global
+  // External Farm Advisor: access comes ONLY from live advisor_assignments
+  // grants (engagement window + isActive), intersected with the organization.
+  if (isAdvisor(user)) {
+    const advisorIds = await advisorBusinessIds(user);
+    if (orgIds.length === 0) return advisorIds;
+    const orgSet = new Set(orgBizIds);
+    return advisorIds.filter((id) => orgSet.has(id));
+  }
   const ids = new Set<number>();
   if (user.assignedBusinessId) ids.add(Number(user.assignedBusinessId));
   for (const m of businessManageIdsOf(user)) ids.add(m); // manage ⇒ access

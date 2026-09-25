@@ -85,6 +85,7 @@ try {
     ["can_manage_users", "boolean default false"],
     ["can_manage_cctv", "boolean default false"],
     ["can_manage_auditors", "boolean default false"],
+    ["can_manage_advisors", "boolean default false"],
     ["can_manage_online", "boolean default false"],
     ["can_create_business", "boolean default false"],
     ["can_view_finance", "boolean default false"],
@@ -320,6 +321,124 @@ try {
              (select count(*) > 0 from public.${table_name}))`,
         );
       }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // External Farm Advisor / Resource Person (additive, idempotent).
+  // Read-only outside professional: access exists ONLY through the grant rows
+  // below, and the only rows an advisor may create are their own notes,
+  // replies and visits. No existing table is rewritten.
+  // ──────────────────────────────────────────────────────────────────────────────
+  await client.query(`create table if not exists public.advisor_assignments (
+      id serial primary key,
+      user_id integer not null,
+      user_name text not null,
+      business_id integer not null,
+      branch_code text,
+      scopes jsonb not null default '[]'::jsonb,
+      flock_ids jsonb,
+      show_costs boolean not null default false,
+      can_export boolean not null default false,
+      starts_on text,
+      ends_on text,
+      is_active boolean not null default true,
+      note text,
+      granted_by_user_id integer not null,
+      granted_by_name text not null,
+      granted_by_role text not null,
+      owner_id integer,
+      created_at timestamp default now(),
+      updated_at timestamp default now()
+    )`);
+  await client.query(`create table if not exists public.advisor_notes (
+      id serial primary key,
+      business_id integer not null,
+      branch_code text,
+      flock_id integer,
+      batch_number text,
+      visit_id integer,
+      note_type text not null default 'OBSERVATION',
+      title text not null,
+      body text not null,
+      observation_date text not null,
+      priority text not null default 'MEDIUM',
+      category text,
+      record_type text,
+      record_source text,
+      record_id integer,
+      record_ref text,
+      record_title text,
+      photos jsonb default '[]'::jsonb,
+      requires_action boolean not null default false,
+      due_date text,
+      assigned_user_id integer,
+      assigned_user_name text,
+      assigned_user_role text,
+      status text not null default 'SUBMITTED',
+      linked_issue_id integer,
+      acknowledged_by_user_id integer,
+      acknowledged_by_name text,
+      acknowledged_at timestamp,
+      closed_by_user_id integer,
+      closed_by_name text,
+      closed_at timestamp,
+      closure_note text,
+      ai_summary text,
+      ai_issues jsonb default '[]'::jsonb,
+      ai_severity text default 'INFO',
+      ai_flags jsonb default '[]'::jsonb,
+      author_user_id integer not null,
+      author_name text not null,
+      author_role text not null,
+      owner_id integer,
+      withdrawn_at timestamp,
+      created_at timestamp default now(),
+      updated_at timestamp default now()
+    )`);
+  await client.query(`create table if not exists public.advisor_note_replies (
+      id serial primary key,
+      note_id integer not null,
+      actor_user_id integer not null,
+      actor_name text not null,
+      actor_role text not null,
+      action text not null,
+      status_from text,
+      status_to text,
+      body text,
+      photo text,
+      created_at timestamp default now()
+    )`);
+  await client.query(`create table if not exists public.advisor_visits (
+      id serial primary key,
+      business_id integer not null,
+      branch_code text,
+      advisor_user_id integer not null,
+      advisor_name text not null,
+      visit_type text not null default 'ON_SITE',
+      planned_date text,
+      actual_date text,
+      duration_mins integer,
+      summary text,
+      ai_digest jsonb,
+      status text not null default 'PLANNED',
+      owner_id integer,
+      created_at timestamp default now(),
+      updated_at timestamp default now()
+    )`);
+  for (const [tbl, col] of [
+    ["advisor_assignments", "user_id"], ["advisor_assignments", "business_id"],
+    ["advisor_notes", "business_id"], ["advisor_notes", "flock_id"], ["advisor_notes", "author_user_id"],
+    ["advisor_note_replies", "note_id"], ["advisor_visits", "business_id"],
+  ]) {
+    await client.query(`create index if not exists ${tbl}_${col}_idx on public.${tbl} (${col})`);
+  }
+  // Advisory follow-ups reuse the audit issue pipeline; origin keeps compliance
+  // KPIs clean (every pre-existing row is, correctly, an AUDIT row).
+  {
+    const t = await client.query("select to_regclass('public.audit_reviews') as name");
+    if (t.rows[0]?.name) {
+      await client.query(`alter table public.audit_reviews add column if not exists origin text not null default 'AUDIT'`);
     }
   }
 

@@ -16,6 +16,8 @@ import IntegrationsHubView from "./IntegrationsHubView";
 import NewBusinessModal from "./NewBusinessModal";
 import ManageBusinessesModal from "./ManageBusinessesModal";
 import UserAccessConsole from "./UserAccessConsole";
+import AdvisorWorkspace from "./AdvisorWorkspace";
+import AdvisoryConsole from "./AdvisoryConsole";
 import CustomerSupportModal from "./CustomerSupportModal";
 import ChangePasswordModal from "./ChangePasswordModal";
 import ProfilePhotoModal from "./ProfilePhotoModal";
@@ -872,6 +874,27 @@ export default function GoMinaApp() {
     }
 
     // OWNER & GENERAL_MANAGER: Enterprise User Directory & Transfer Hub
+    // Farm Advisory console — OWNER (or a manager the OWNER authorised):
+    // grant/scope/revoke advisor access, read the advisory digest and work
+    // the advisor's notes. Advisors themselves never reach this shell.
+    if (activeTab === "ADVISORY") {
+      if (!(currentUser?.role === "OWNER" || currentUser?.canManageAdvisors)) {
+        return (
+          <div className="p-6 text-sm text-slate-400" data-testid="advisory-denied">
+            Farm Advisory is managed by the business owner.
+          </div>
+        );
+      }
+      return (
+        <AdvisoryConsole
+          currentUser={currentUser}
+          businesses={scopedBusinesses}
+          users={scopedUsers}
+          onChanged={refreshAllData}
+        />
+      );
+    }
+
     if (activeTab === "USERS_MANAGE") {
       return (
         <EnterpriseUserPanel
@@ -1310,6 +1333,23 @@ export default function GoMinaApp() {
     return <LoginScreen onSuccess={handleLoginSuccess} notice={loginNotice} />;
   }
 
+  // ADVISOR role: a dedicated, strictly read-only workspace. No sidebar, no
+  // enterprise modules, no finance — only the farms the OWNER granted, and
+  // the advisory tools (notes, visits, AI digest). Server-side enforcement
+  // (lib/auth.ts + /api/advisor*) is the real boundary; this is the UI half.
+  if (String(currentUser.role).toUpperCase() === "ADVISOR") {
+    return (
+      <>
+        <AdvisorWorkspace
+          currentUser={currentUser}
+          businesses={businesses}
+          onLogout={handleLogout}
+        />
+        <IdleLogout active onIdle={handleIdleLogout} />
+      </>
+    );
+  }
+
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white p-6">
@@ -1392,6 +1432,7 @@ export default function GoMinaApp() {
               // anything branch-scoped opens that unit's dashboard.
               const t = String(n?.type || "");
               if (t.startsWith("AUDIT")) { setActiveTab("AUDIT"); return; }
+              if (t.startsWith("ADVISOR")) { setActiveTab("ADVISORY"); return; }
               if (
                 t === "ONLINE_ORDER_RECEIVED" ||
                 t === "ORDER_TRACKING_STATUS" ||

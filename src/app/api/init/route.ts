@@ -34,6 +34,7 @@ import { getSessionInfo, accessibleBusinessIds, filterByAccess } from "@/lib/aut
 import { organizations, organizationMembers } from "@/db/schema";
 import { allowedBusinessTypesOfOrg } from "@/lib/businessTypes";
 import { ensureTodayFor } from "@/lib/checklistGen";
+import { isAdvisor, projectInitForAdvisor, resolveAdvisorGrants } from "@/lib/advisorAccess";
 
 /** The first request in each process runs the seed-if-empty check; after a
  *  successful pass the DB is non-empty (seed only ADDS rows) so later
@@ -49,13 +50,21 @@ let seedCheckedThisProcess = false;
  *  for at most 2.5 s (dashboard refreshes are user-driven and infrequent). */
 const INIT_TTL_MS = 2_500;
 
-function initCacheKey(session: any, allowed: number[] | null): string {
+function initCacheKey(session: any, allowed: number[] | null, advisorGrants: any[] | null): string {
   const me = session.user;
   const scope = JSON.stringify({
     u: me.id,
     r: me.role,
     o: me.organizationIds || [],
     b: allowed === null ? "ALL" : [...allowed].sort((a, b) => a - b),
+    // An advisor's payload depends entirely on their LIVE grants, so the
+    // exact grant fingerprint is part of the key: revoking a grant, changing
+    // its scopes or flipping cost visibility can never be served from cache.
+    a: advisorGrants
+      ? advisorGrants
+          .map((g) => [g.businessId, g.branchCode || "", (g.scopes || []).join("|"), (g.flockIds || []).join("|"), g.showCosts ? 1 : 0, g.canExport ? 1 : 0, g.startsOn || "", g.endsOn || ""].join(":"))
+          .sort()
+      : null,
   });
   return `init:v1:${me.id}:${createHash("sha1").update(scope).digest("base64url").slice(0, 12)}`;
 }
@@ -80,7 +89,8 @@ export async function GET(request: Request) {
     }
     const me = session.user;
     const allowed = await accessibleBusinessIds(me); // null ⇒ Super Admin (all)
-    const cacheKey = initCacheKey(session, allowed);
+    const advisorGrants = isAdvisor(me) ? await resolveAdvisorGrants(me) : null;
+    const cacheKey = initCacheKey(session, allowed, advisorGrants);
     const cachedPayload = ttlGet<string>(cacheKey);
     if (cachedPayload !== undefined) {
       return new Response(cachedPayload, {
@@ -334,7 +344,15 @@ export async function GET(request: Request) {
         hardware: filterByAccess(hardware, allowed),
       },
     };
-    const body = JSON.stringify(payload);
+    // ── External Farm Advisor projection (data minimisation) ────────────
+    // Finance, HR and commercial collections are removed HERE, on the server,
+    // and money fields are stripped unless the grant enables COSTS — so they
+    // never reach an advisor's browser under any circumstance.
+    const finalPayload = advisorGrants
+      ? projectInitForAdvisor(payload, advisorGrants, Number(me.id))
+      : payload;
+
+    const body = JSON.stringify(finalPayload);
     ttlSet(cacheKey, body, INIT_TTL_MS);
     return new Response(body, {
       status: 200,

@@ -5,6 +5,7 @@ import { users, userSessions, businesses, userBusinessAccess, organizationMember
 import { desc, eq, inArray } from "drizzle-orm";
 import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, resolveUserOrgIds, UNAUTHENTICATED } from "@/lib/auth";
 import { auditLog } from "@/lib/audit";
+import { apiError } from "@/lib/apiError";
 
 /**
  * Signed-In Staff console — who is signed in right now, from where, since
@@ -322,6 +323,7 @@ export async function GET(request: NextRequest) {
       staff,
     });
   } catch (e: any) {
+    if (typeof (e as any)?.status === "number") return apiError(e);
     console.error("staff-access GET error", e);
     return NextResponse.json({ success: false, error: e?.message || "Failed to load staff access" }, { status: 500 });
   }
@@ -448,6 +450,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });
   } catch (e: any) {
+    if (typeof (e as any)?.status === "number") return apiError(e);
     console.error("staff-access POST error", e);
     return NextResponse.json({ success: false, error: e?.message || "Failed to update staff access" }, { status: 500 });
   }

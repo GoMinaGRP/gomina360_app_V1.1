@@ -38,6 +38,14 @@ const TYPE_CATEGORY: Record<string, PushCategory> = {
   AUDIT_ISSUE_RESOLVED: "approvals",
   AUDIT_ISSUE_VERIFIED: "approvals",
   AUDIT_ISSUE_RESPONSE: "messages",
+  // External Farm Advisor
+  ADVISOR_ACCESS_GRANTED: "approvals",
+  ADVISOR_ACCESS_REVOKED: "approvals",
+  ADVISOR_NOTE_NEW: "alerts",
+  ADVISOR_NOTE_REPLY: "messages",
+  ADVISOR_NOTE_STATUS: "tasks",
+  ADVISOR_VISIT_SUMMARY: "reports",
+  ADVISOR_DIGEST_READY: "reports",
 };
 
 export function categoryForType(type: string): PushCategory {
@@ -52,6 +60,7 @@ export function categoryForType(type: string): PushCategory {
 export function urlForNotification(type: string, opts?: { branchCode?: string | null; issueId?: number | null }): string {
   const t = String(type || "").toUpperCase();
   if (t.startsWith("AUDIT")) return "/?tab=AUDIT";
+  if (t.startsWith("ADVISOR")) return "/?tab=ADVISORY";
   if (t === "ONLINE_ORDER_RECEIVED" || t === "ORDER_TRACKING_STATUS" || t === "ORDER_ASSIGNED") return "/?tab=TRACKING";
   if (opts?.branchCode) return `/?tab=${encodeURIComponent(opts.branchCode)}`;
   return "/?tab=TRACKING";

@@ -6,8 +6,10 @@ import { eq, desc } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const session = await getSessionInfo(request);
+    if (!session) return UNAUTHENTICATED();
     const rows = await db
       .select()
       .from(integrations)

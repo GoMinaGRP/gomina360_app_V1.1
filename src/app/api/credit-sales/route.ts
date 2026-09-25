@@ -404,6 +404,7 @@ export async function GET(request: NextRequest) {
     );
   } catch (error: any) {
     console.error("GET /api/credit-sales error:", error);
+    if (Number(error?.status) >= 400 && Number(error?.status) < 500) return apiError(error);
     return NextResponse.json({ success: false, error: "Could not load credit sales." }, { status: 500 });
   }
 }
