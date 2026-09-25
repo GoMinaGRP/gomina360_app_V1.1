@@ -392,6 +392,19 @@ export function bustSessionCache(): void {
   sessionCache.clear();
 }
 
+/** Drop ONE memoised session resolution — used right after the heartbeat
+ *  parks a session (revokedAt) with a direct UPDATE that bypasses this
+ *  cache. Without this, the parked session's ≤5 s cache entry keeps serving
+ *  getSessionInfo hits, so the user's next REAL request never re-resolves
+ *  from the DB and the automatic un-park never fires — presence would stay
+ *  stuck on IDLE for up to 5 s (or forever on repeated beats). Targeted:
+ *  other viewers' entries are never disturbed. */
+export function bustSessionCacheBySessionId(sessionId: number): void {
+  for (const [k, v] of sessionCache) {
+    if (v?.info?.sessionId === Number(sessionId)) sessionCache.delete(k);
+  }
+}
+
 /** Business ids a user may access. Returns null ⇒ unrestricted (Super Admin).
  *  Org OWNER ⇒ every business of their organization(s). Everyone else ⇒
  *  primary assignment ∪ extra-access grants ∪ managed units, always

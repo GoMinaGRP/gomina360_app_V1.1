@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { userSessions } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
-import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { getSessionInfo, UNAUTHENTICATED, bustSessionCacheBySessionId } from "@/lib/auth";
 
 /**
  * Session presence heartbeat — drives the live ONLINE chip in the
@@ -39,6 +39,15 @@ export async function POST(request: NextRequest) {
       .update(userSessions)
       .set(values)
       .where(and(eq(userSessions.id, session.sessionId), isNull(userSessions.endedAt)));
+
+    if (!active) {
+      // The park happened with a direct UPDATE, so this session's ≤5 s
+      // micro-cache entry is now stale. Drop it (only this session's entry)
+      // so the user's very next real request re-resolves from the DB and
+      // the automatic un-park in getSessionInfo fires immediately —
+      // presence can never stick on IDLE for someone demonstrably active.
+      bustSessionCacheBySessionId(session.sessionId);
+    }
 
     return NextResponse.json({ success: true, online: active });
   } catch (e: any) {
