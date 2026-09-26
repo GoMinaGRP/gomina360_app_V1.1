@@ -1,67 +1,72 @@
-# Audit & Review → Records: Today / History split
+# Audit & Review → Records: 7-day day-grouping + History
 
-**Date:** 2026-09-26 · **Component:** `src/components/AuditCommandCenter.tsx` ·
-**Verification:** `dev-tooling/verify-audit-history.mjs` (21/21 green, phone + desktop)
+**Date:** 2026-09-26 · **Components:** `src/components/AuditCommandCenter.tsx`,
+`src/app/api/audit/route.ts` · **Verification:** `dev-tooling/verify-audit-history.mjs`
+(28/28 green, phone + desktop, production build)
 
-## The problem
+## The behavior
 
-The Records tab loaded the newest 250 records of the whole audit universe and
-rendered them in one flat list. On a day-to-day basis an auditor only needs
-**today's** activity, but months of older records drowned it out.
-
-## The behavior now
-
-| Section | What it shows | Default |
+| Zone | What it shows | Default |
 |---|---|---|
-| **Today's activities** (📅 CalendarClock header) | Every record whose `date` is the current local day, newest first | **Always visible — the default view** |
-| **History / Previous records** (collapsible, History icon chevron) | Everything older, in the same card/table layout as before | **Collapsed** — one tap to open, one to hide |
+| **Day groups — last 7 days** | One section per calendar day: **Today**, **Yesterday**, then dated groups (`Wed 23 Sep 2026`). Days are ordered newest-first; **within each day the most recent activity comes first**, and **every record carries a clear date + time stamp** (`2026-09-26 · 15:40`). | **Always visible — the default view** |
+| **History / Previous records** (collapsible) | Everything older than 7 days, same card/table layouts, full audit action set | **Collapsed** — one tap to open |
 
 * **Nothing is deleted and nothing is hidden from reach.** The History toggle
-  shows a live count (`N records`) of everything older that matches the current
-  filters; opening it renders every one of them with the full audit action set.
-* **The search box and every filter above the list govern BOTH sections** —
-  e.g. searching an old transaction's number finds it inside History while
-  Today correctly shows "no records".
+  shows a live count of every older record matching the current filters;
+  opening it renders them all.
+* **Search + every filter govern both zones** — searching an old record's
+  number surfaces it inside History while the day groups correctly show
+  "no activities in the last 7 days".
 * **Load older records** — the API caps each `/api/audit` response at 250
-  records. With History open, a "Load older records (previous 250)" button
-  appears whenever more history exists for the current filters; it pages
-  backwards through time (each request passes `to=<oldest date loaded>`, which
-  the API applies inclusively) until an "End of history for these filters"
-  note appears. Before this change, records beyond the first 250 were simply
-  unreachable from the UI.
-* Changing any filter/resetting the list resets the incremental paging state
-  so History always reflects the active filter set.
-* Both layouts (wide table at `lg+`, cards below) render inside BOTH sections,
-  so phone, tablet and desktop all get the split.
+  records; with History open, "Load older records (previous 250)" pages
+  backwards (each request passes `to=<oldest date loaded>`, inclusive) until
+  "End of history for these filters" appears.
+* Both layouts (wide table at `lg+`, cards below) render inside every day
+  group and History, so phone, tablet and desktop all get the grouping.
 
-## Implementation notes
+## Time stamps — where the time comes from
 
-* `todaysRecords` / `historyRecords` are derived from the same payload
-  (`r.date.slice(0,10)` vs the browser's local day via
-  `toLocaleDateString("en-CA")`), deduped by record key.
-* `loadOlderRecords()` re-fetches `/api/audit` with the current filters plus
-  `to=<oldest history date>` and appends the non-today batch; a batch shorter
-  than 250 marks the end (`olderDone`).
-* New testids: `aud-today-section`, `aud-today-count`, `aud-history-section`,
-  `aud-history-toggle`, `aud-history-count`, `aud-history-body`,
-  `aud-history-load-more`, `aud-history-end`. All pre-existing testids
-  (`aud-rec-row-*`, `aud-f-*`, …) are unchanged.
+The Records list previously only had a day per record. `/api/audit` now
+returns `at` — the exact event timestamp (ISO) — for every source that has
+one: transactions (`created_at`), inventory (`registered_at`), assets
+(`recorded_at`), CCTV, payroll runs, attendance, checklists (`completed_at`),
+feed-mill/QC batches (`created_at` / `tested_at`), asset activities, employee
+history, deletions and access activities.
 
-## Verification — `verify-audit-history.mjs` (21 checks)
+**Honesty rule:** `at` is only set when the timestamp falls on the *same
+calendar day* as the record's business date — a backdated transaction created
+today never shows a misleading time; date-only sources (hire dates, livestock/
+restaurant/electronics/car-wash shift logs without a timestamp column) show
+the bare date. Sorting inside a day: `at` descending, then record id.
 
-Seeds a today-dated transaction, ones dated 3 and 40 days back, plus a
-260-row older batch, then on phone 375px and desktop 1440px:
+## Verification — `verify-audit-history.mjs` (28 checks)
 
-H1–H3 today section renders, count, all rows dated today · H4–H6 History
-collapsed by default with a live count, old fixtures absent while collapsed ·
-H7–H9 opening History reveals old fixtures, no today records inside, no
-duplicates · H10–H11 search narrows History and empties Today · H12 type
-filter applies to both sections · H13–H14 load-more pages through the
-250-cap until the end-of-history note (all 260+ old rows reachable) · H15–H16
-collapse hides rows again, no overflow · H17–H20 desktop: classic tables in
-both sections · H21 zero page errors. Every seeded row is purged afterwards.
+Seeds transactions with **exact clock times** (today 09:15 + 15:40,
+yesterday 11:22, 3 days ago 08:05, 8 days ago, 40 days ago) plus a 260-row
+older batch, then on phone 390px and desktop 1440px:
+
+G1–G4 Today / Yesterday / 3-days-ago groups render; no group for 8-days-ago ·
+G5 within Today the 15:40 record renders above the 09:15 one · G6 day groups
+ordered newest day first · G7–G10 stamps show `HH:MM` on the fixtures and on
+every transaction row in the day groups · G11–G15 History collapsed by
+default with a live count, 8-day fixture absent from the day groups,
+revealed on open, no 7-day records inside · G16–G17 search finds the 40-day
+fixture in History and empties the day groups · G18 type filter applies to
+both zones · G19–G20 load-more pages through the 250-cap to the end ·
+G21–G22 collapse + no phone overflow · G23–G27 desktop: classic tables in
+the day groups and History, time stamp in the table row, 40-day fixture
+reachable via load-more · G28 zero page errors. All seeded rows are purged.
 
 **Known API characteristic (pre-existing, unchanged):** each source table is
-fetched with its own id-window (e.g. newest 240 transactions) as a performance
-guard; the audit universe the API exposes is fully reachable through the new
+fetched with its own id-window (e.g. newest 240 transactions) as a
+performance guard; everything the API exposes is reachable through the
 paging.
+
+## Recovery hardening (found while re-verifying)
+
+A full sandbox rebuild (fresh DB reseed) left `suppliers.owner_id` NULL,
+which made the per-organization supplier/customer detail check in
+`/api/audit` 403 for scoped auditors (`verify-audit-records` S7). Fixed by
+running the idempotent `dev-tooling/migrate-multiowner.mjs` tenant backfill
+after reseed — and `dev-tooling/recover.sh` now runs it automatically as
+part of recovery.

@@ -248,6 +248,13 @@ export type AuditRecordRow = {
   workerName: string | null;
   workerUserId?: number | null; // login account behind the record, when known (issue routing)
   date: string;
+  /** Exact event timestamp (ISO) when the source row carries one that falls
+   *  on the SAME calendar day as `date` — powers the within-day
+   *  newest-first ordering and the HH:MM stamp on every record. Empty for
+   *  date-only sources (hire dates, ops logs without a timestamp) and for
+   *  backdated rows whose creation time belongs to another day, so no
+   *  misleading time is ever shown. */
+  at?: string | null;
   amountGhs: number | null;
   status: string | null;
   /** Number of photos/attachments on the underlying record (for the Records
@@ -257,6 +264,18 @@ export type AuditRecordRow = {
 
 const day10 = (v: any) => String(v ?? "").slice(0, 10);
 const tsDay = (v: any) => (v ? new Date(v).toISOString().slice(0, 10) : "");
+/** Best-effort ISO timestamp of a row's creation/event time ("" when absent). */
+const tsIso = (v: any): string => {
+  if (!v) return "";
+  const d = v instanceof Date ? v : new Date(v);
+  return isNaN(d.getTime()) ? "" : d.toISOString();
+};
+/** `at` for an audit row: the event timestamp, but only when it falls on the
+ *  record's own business day (see AuditRecordRow.at). */
+const atOf = (date: string, ts: any): string => {
+  const iso = tsIso(ts);
+  return iso && day10(date) === iso.slice(0, 10) ? iso : "";
+};
 
 let codeOfCache: Map<number, string> = new Map();
 async function codeOf(): Promise<Map<number, string>> {
@@ -283,7 +302,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: t.transactionNumber, title: `${t.type} · ${t.category} — GH₵ ${Number(t.amountGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
       detail: `${t.paymentMethod} · ${t.date} · ${t.description}${t.recordedBy ? ` · by ${t.recordedBy}` : ""}`,
       module: "FINANCE", businessId: t.businessId, branchCode: branchOf(t.businessId, t.branchCode),
-      workerName: t.recordedBy, date: day10(t.date) || tsDay(t.createdAt), amountGhs: t.amountGhs, status: t.status || "COMPLETED",
+      workerName: t.recordedBy, date: day10(t.date) || tsDay(t.createdAt), at: atOf(day10(t.date) || tsDay(t.createdAt), t.createdAt), amountGhs: t.amountGhs, status: t.status || "COMPLETED",
       imageCount: receipts,
     });
   }
@@ -297,7 +316,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: i.sku, title: `${i.name} — ${i.quantity} ${i.unit}`,
       detail: `${i.category} · ${i.quantity} ${i.unit} in stock · cost GH₵ ${Number(i.costPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · sell GH₵ ${Number(i.sellingPriceGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · min ${i.minStockThreshold} ${i.unit}${i.expiryDate ? ` · expires ${i.expiryDate}` : ""}${photoCount > 0 ? ` · ${photoCount} photo(s)` : ""}${i.registeredByName ? ` · registered by ${i.registeredByName}` : ""}`,
       module: "INVENTORY", businessId: i.businessId, branchCode: branchOf(i.businessId, i.branchCode),
-      workerName: i.registeredByName, date: tsDay(i.registeredAt), amountGhs: i.sellingPriceGhs, status: i.status || "IN_STOCK",
+      workerName: i.registeredByName, date: tsDay(i.registeredAt), at: tsIso(i.registeredAt), amountGhs: i.sellingPriceGhs, status: i.status || "IN_STOCK",
       imageCount: photoCount,
     });
   }
@@ -310,7 +329,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `EMP-${e.id}`, title: `${e.name} — ${e.role}`,
       detail: `Salary GH₵ ${Number(e.salaryGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · hired ${e.hireDate} · ${e.branch}`,
       module: "EMPLOYEES", businessId: e.businessId, branchCode: codeMap.get(e.businessId) || null,
-      workerName: e.name, date: day10(e.hireDate), amountGhs: e.salaryGhs, status: e.status || "ACTIVE",
+      workerName: e.name, date: day10(e.hireDate), at: "", amountGhs: e.salaryGhs, status: e.status || "ACTIVE",
       imageCount: e.photo ? 1 : 0,
     });
   }
@@ -332,6 +351,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       detail: r.notes || `Created by ${r.createdByName}`,
       module: "PAYROLL", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode),
       workerName: r.createdByName, date: day10(r.createdAt ? (r.createdAt as any).toISOString?.() ?? r.createdAt : r.period + "-01"),
+      at: r.createdAt ? tsIso(r.createdAt) : "",
       amountGhs: agg.net, status: r.status,
     });
   }
@@ -344,7 +364,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `ATT-${a.id}`, title: `${a.employeeName} · ${a.date} · ${a.status}${a.leaveType ? ` (${a.leaveType})` : ""}`,
       detail: `${a.hoursWorked}h worked · ${a.overtimeHours}h OT${a.note ? ` · ${a.note}` : ""}`,
       module: "ATTENDANCE", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode),
-      workerName: a.employeeName, date: day10(a.date), amountGhs: null, status: a.status,
+      workerName: a.employeeName, date: day10(a.date), at: atOf(day10(a.date), (a as any).createdAt), amountGhs: null, status: a.status,
     });
   }
 
@@ -356,7 +376,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`,
       detail: `Purchased GH₵ ${Number(a.purchasePriceGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location} · next maintenance ${a.nextMaintenanceDate}${a.description ? ` · ${a.description}` : ""}${Array.isArray(a.assetImages) && a.assetImages.length ? ` · ${a.assetImages.length} image(s)` : ""}`,
       module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode),
-      workerName: a.recorderName, date: tsDay(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition,
+      workerName: a.recorderName, date: tsDay(a.recordedAt), at: tsIso(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition,
       imageCount: Array.isArray(a.assetImages) ? a.assetImages.length : 0,
     });
   }
@@ -369,16 +389,16 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `CAM-${c.id}`, title: `${c.name} — ${c.brand} · ${c.cameraType}`,
       detail: `${c.location} · ${c.connectionType}${c.lastTestResult ? ` · last test: ${c.lastTestResult}` : ""}`,
       module: "CCTV", businessId: c.businessId, branchCode: branchOf(c.businessId, c.branchCode),
-      workerName: c.createdByName, date: tsDay(c.createdAt), amountGhs: null, status: c.status,
+      workerName: c.createdByName, date: tsDay(c.createdAt), at: tsIso(c.createdAt), amountGhs: null, status: c.status,
     });
   }
 
   // OPERATIONS — daily operations / production logs per business line
-  const opsPush = (src: string, id: number, businessId: number, ref: string, title: string, detail: string, worker: string | null, date: string) =>
+  const opsPush = (src: string, id: number, businessId: number, ref: string, title: string, detail: string, worker: string | null, date: string, at: string = "") =>
     push({
       key: `OPERATION_LOG:${src}:${id}`, recordType: "OPERATION_LOG", recordSource: src, recordId: id,
       ref, title, detail, module: "OPERATIONS", businessId, branchCode: branchOf(businessId, null),
-      workerName: worker, date: day10(date), amountGhs: null, status: "LOGGED",
+      workerName: worker, date: day10(date), at: atOf(day10(date), at), amountGhs: null, status: "LOGGED",
     });
   for (const l of await db.select().from(livestockLogs).orderBy(desc(livestockLogs.id)).limit(120))
     opsPush("livestock_logs", l.id, l.businessId, l.tagNumber, `${l.animalType} ${l.tagNumber} — ${l.weightKg}kg`, `Breed ${l.breed} · vaccination ${l.vaccinationStatus}${l.pregnantStatus ? " · pregnant" : ""}`, null, l.recordedDate);
@@ -389,34 +409,34 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   for (const l of await db.select().from(carWashLogs).orderBy(desc(carWashLogs.id)).limit(120))
     opsPush("car_wash_logs", l.id, l.businessId, `SHIFT-${l.shiftDate}-${l.id}`, `Car wash shift ${l.shiftDate} — ${l.vehiclesWashed} vehicles`, `Revenue GH₵ ${l.totalRevenueGhs} · chemicals ${l.chemicalUsedLiters}L`, null, l.recordedDate || l.shiftDate);
   for (const l of await db.select().from(hardwareLogs).orderBy(desc(hardwareLogs.id)).limit(120))
-    opsPush("hardware_logs", l.id, l.businessId, l.receiveNoteNumber, `${l.itemName} × ${l.quantityReceived} ${l.unit}`, `Supplier ${l.supplierName} · condition ${l.condition}`, l.receivedBy, l.recordedDate);
+    opsPush("hardware_logs", l.id, l.businessId, l.receiveNoteNumber, `${l.itemName} × ${l.quantityReceived} ${l.unit}`, `Supplier ${l.supplierName} · condition ${l.condition}`, l.receivedBy, l.recordedDate, tsIso((l as any).createdAt));
   // POULTRY — closes the "poultry records flagged ✅" hole: feeding,
   // production, health, and the full feed-mill chain (formulas → batches →
   // QC) are auditable records like every other operations log.
   for (const l of await db.select().from(poultryFeedLogs).orderBy(desc(poultryFeedLogs.id)).limit(120))
-    opsPush("poultry_feed_logs", l.id, l.businessId, `FDL-${l.id}`, `Poultry feeding — ${l.feedType} × ${l.quantityKg} kg`, `Source ${l.sourceType || "PURCHASED"}${l.batchNumber ? ` · from batch ${l.batchNumber}` : ""}`, l.recordedByName || null, l.recordedDate);
+    opsPush("poultry_feed_logs", l.id, l.businessId, `FDL-${l.id}`, `Poultry feeding — ${l.feedType} × ${l.quantityKg} kg`, `Source ${l.sourceType || "PURCHASED"}${l.batchNumber ? ` · from batch ${l.batchNumber}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
   for (const l of await db.select().from(poultryProduction).orderBy(desc(poultryProduction.id)).limit(120))
-    opsPush("poultry_production", l.id, l.businessId, `PP-${l.id}`, `Poultry production — ${l.productionType}${l.eggsCollected ? ` · ${l.eggsCollected} eggs` : ""}${l.birdsHarvested ? ` · ${l.birdsHarvested} birds` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.layPercentage ? ` · lay ${l.layPercentage}%` : ""}${l.fcr ? ` · FCR ${l.fcr}` : ""}`, l.recordedByName || null, l.recordedDate);
+    opsPush("poultry_production", l.id, l.businessId, `PP-${l.id}`, `Poultry production — ${l.productionType}${l.eggsCollected ? ` · ${l.eggsCollected} eggs` : ""}${l.birdsHarvested ? ` · ${l.birdsHarvested} birds` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.layPercentage ? ` · lay ${l.layPercentage}%` : ""}${l.fcr ? ` · FCR ${l.fcr}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
   for (const l of await db.select().from(poultryHealthRecords).orderBy(desc(poultryHealthRecords.id)).limit(120))
-    opsPush("poultry_health_records", l.id, l.businessId, `PHR-${l.id}`, `Poultry health — ${l.recordType}${l.diseaseOrCondition ? ` · ${l.diseaseOrCondition}` : ""}${l.mortalityCount ? ` · ${l.mortalityCount} dead` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.vaccineOrDrug ? ` · ${l.vaccineOrDrug}` : ""}${l.nextDueDate ? ` · next due ${l.nextDueDate}` : ""}`, l.recordedByName || null, l.recordedDate);
+    opsPush("poultry_health_records", l.id, l.businessId, `PHR-${l.id}`, `Poultry health — ${l.recordType}${l.diseaseOrCondition ? ` · ${l.diseaseOrCondition}` : ""}${l.mortalityCount ? ` · ${l.mortalityCount} dead` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.vaccineOrDrug ? ` · ${l.vaccineOrDrug}` : ""}${l.nextDueDate ? ` · next due ${l.nextDueDate}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
   for (const f of await db.select().from(poultryFeedFormulations).orderBy(desc(poultryFeedFormulations.id)).limit(80))
-    opsPush("poultry_feed_formulations", f.id, f.businessId, f.formulationNo, `Feed formula — ${f.name} (${f.feedType}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+    opsPush("poultry_feed_formulations", f.id, f.businessId, f.formulationNo, `Feed formula — ${f.name} (${f.feedType}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
   for (const b of await db.select().from(poultryFeedBatches).orderBy(desc(poultryFeedBatches.id)).limit(120))
-    opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+    opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
   for (const q of await db.select().from(poultryFeedQcChecks).orderBy(desc(poultryFeedQcChecks.id)).limit(120))
-    opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+    opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "", tsIso(q.testedAt));
   // FISH FEED MILL — same chain for the aquaculture mill (formulas → batches → QC).
   for (const f of await db.select().from(fishFeedFormulations).orderBy(desc(fishFeedFormulations.id)).limit(80))
-    opsPush("fish_feed_formulations", f.id, f.businessId, f.formulationNo, `Fish feed formula — ${f.name} (${f.species} · ${f.feedClass} ${f.feedStage}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+    opsPush("fish_feed_formulations", f.id, f.businessId, f.formulationNo, `Fish feed formula — ${f.name} (${f.species} · ${f.feedClass} ${f.feedStage}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
   for (const b of await db.select().from(fishFeedBatches).orderBy(desc(fishFeedBatches.id)).limit(120))
-    opsPush("fish_feed_batches", b.id, b.businessId, b.batchNumber, `Fish feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+    opsPush("fish_feed_batches", b.id, b.businessId, b.batchNumber, `Fish feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
   for (const q of await db.select().from(fishFeedQcChecks).orderBy(desc(fishFeedQcChecks.id)).limit(120))
-    opsPush("fish_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Fish feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.floatPct != null ? ` · ${q.floatPct}% float` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "");
+    opsPush("fish_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Fish feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.floatPct != null ? ` · ${q.floatPct}% float` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "", tsIso(q.testedAt));
   // BLOCK FACTORY — MIXING chain (recipes → mixer batches).
   for (const f of await db.select().from(blockMixFormulations).orderBy(desc(blockMixFormulations.id)).limit(80))
-    opsPush("block_mix_formulations", f.id, f.businessId, f.formulationNo, `Mix recipe — ${f.name} (${f.blockType}) v${f.version || 1}`, `Batch ${f.batchSizeKg} kg${f.waterCementRatio ? ` · w/c ${f.waterCementRatio}` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "");
+    opsPush("block_mix_formulations", f.id, f.businessId, f.formulationNo, `Mix recipe — ${f.name} (${f.blockType}) v${f.version || 1}`, `Batch ${f.batchSizeKg} kg${f.waterCementRatio ? ` · w/c ${f.waterCementRatio}` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
   for (const b of await db.select().from(blockMixBatches).orderBy(desc(blockMixBatches.id)).limit(120))
-    opsPush("block_mix_batches", b.id, b.businessId, b.mixBatchNumber, `Mix batch — ${b.formulationName || "recipe"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.slumpMm != null ? ` · slump ${b.slumpMm} mm` : ""}${b.costPerKgGhs ? ` · GH₵ ${(b.costPerKgGhs).toFixed(2)}/kg` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "");
+    opsPush("block_mix_batches", b.id, b.businessId, b.mixBatchNumber, `Mix batch — ${b.formulationName || "recipe"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.slumpMm != null ? ` · slump ${b.slumpMm} mm` : ""}${b.costPerKgGhs ? ` · GH₵ ${(b.costPerKgGhs).toFixed(2)}/kg` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
 
   // OPERATIONS — daily checklist tasks: one auditable row per dated task
   // completion (or pending/incomplete task), linked to the assigned worker's
@@ -440,7 +460,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       detail: `${stagePrefix}${c.category || "GENERAL"} · assigned to ${c.assignedToName || "unassigned"}${c.isCompleted ? ` · done by ${c.completedByName || "staff"}${c.completedAt ? ` at ${new Date(c.completedAt as any).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}` : " · pending completion"}${c.notes ? ` · ${c.notes}` : ""}`,
       module: "OPERATIONS", businessId: c.businessId, branchCode: branchOf(c.businessId, c.branchCode),
       workerName: c.completedByName || c.assignedToName, workerUserId: c.assignedToUserId ?? null,
-      date: day10(c.checklistDate), amountGhs: null, status: c.isCompleted ? "COMPLETED" : "PENDING",
+      date: day10(c.checklistDate), at: atOf(day10(c.checklistDate), c.completedAt), amountGhs: null, status: c.isCompleted ? "COMPLETED" : "PENDING",
     });
   }
 
@@ -456,7 +476,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: act.assetCode || `AST-${act.assetId}`, title: `Asset ${act.assetCode || `AST-${act.assetId}`} — ${act.action}`,
       detail: `${act.status}${act.requestedByName ? ` · requested by ${act.requestedByName}` : ""}${act.approvedByName ? ` · approved by ${act.approvedByName}` : ""}${act.resolvedAt ? ` · resolved ${tsDay(act.resolvedAt)}` : ""}`,
       module: "ASSETS", businessId: ast.businessId, branchCode: branchOf(ast.businessId, ast.branchCode),
-      workerName: act.requestedByName, date: tsDay(act.createdAt), amountGhs: ast.currentValueGhs, status: act.status,
+      workerName: act.requestedByName, date: tsDay(act.createdAt), at: tsIso(act.createdAt), amountGhs: ast.currentValueGhs, status: act.status,
     });
   }
 
@@ -468,7 +488,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `EMP-${h.employeeId}`, title: `${h.summary}`,
       detail: `${h.field ? `${h.field}: ` : ""}${h.oldValue ? `${h.oldValue} → ` : ""}${h.newValue || ""}${h.changedByName ? ` · by ${h.changedByName}` : ""}`,
       module: "EMPLOYEES", businessId: h.businessId, branchCode: codeMap.get(h.businessId) || null,
-      workerName: h.changedByName, date: tsDay(h.createdAt), amountGhs: null, status: h.action,
+      workerName: h.changedByName, date: tsDay(h.createdAt), at: tsIso(h.createdAt), amountGhs: null, status: h.action,
     });
   }
 
@@ -486,7 +506,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `DEL-${d.id}`, title: `${d.recordLabel} — deleted`,
       detail: `Deleted by ${d.deletedByName} (${d.deletedByRole}) · reason: ${d.reason}`,
       module: mod, businessId: Number(snap.businessId) || 0, branchCode: branchOf(Number(snap.businessId) || 0, snap.branchCode),
-      workerName: d.deletedByName, date: tsDay(d.createdAt), amountGhs: snap.amountGhs ?? null, status: "DELETED",
+      workerName: d.deletedByName, date: tsDay(d.createdAt), at: tsIso(d.createdAt), amountGhs: snap.amountGhs ?? null, status: "DELETED",
       imageCount: Array.isArray(snap.photos) ? snap.photos.length : snap.photo ? 1 : Array.isArray(snap.assetImages) ? snap.assetImages.length : 0,
     });
   }
@@ -506,7 +526,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref: `ACT-${t.id}`, title: `${t.action} — ${t.targetLabel}`,
       detail: `${t.actorName} (${t.actorRole})${t.reason ? ` · ${t.reason}` : ""}${t.detail ? ` · ${t.detail}` : ""}`,
       module: "USERS", businessId: t.businessId ?? 0, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
-      workerName: t.actorName, date: tsDay(t.createdAt), amountGhs: null, status: "LOGGED",
+      workerName: t.actorName, date: tsDay(t.createdAt), at: tsIso(t.createdAt), amountGhs: null, status: "LOGGED",
     });
   }
 
@@ -724,7 +744,7 @@ export async function GET(request: Request) {
     }
     let recordsOut = records.map((r) => ({ ...r, reviewState: stateOf.get(r.key) || "UNREVIEWED" }));
     if (fStatus) recordsOut = recordsOut.filter((r) => r.reviewState === fStatus);
-    recordsOut.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.recordId - a.recordId);
+    recordsOut.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.at || "").localeCompare(a.at || "") || b.recordId - a.recordId);
     recordsOut = recordsOut.slice(0, 250);
 
     let grants: any[] = [];

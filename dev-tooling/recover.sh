@@ -48,6 +48,10 @@ if [ "${RESTORE:-1}" = "1" ]; then node dev-tooling/restore-userdata.mjs; fi
 # Replay the live-data safety net (UI-created units/orders/customers — the
 # data no fixture knows about). Idempotent ON CONFLICT (id) DO NOTHING.
 node dev-tooling/restore-livedata.mjs || true
+# Tenant-scope the seeded demo data (suppliers/customers/etc. owner_id, org
+# memberships) — without this the per-organization party-detail checks in
+# /api/audit 403 for scoped auditors right after a fresh reseed.
+node dev-tooling/migrate-multiowner.mjs || true
 # Heal the owner's REAL GoMina crest (business/branch/company logos) if the
 # rebuild rolled the DB back to a snapshot taken before his upload.
 node dev-tooling/restore-branding.mjs

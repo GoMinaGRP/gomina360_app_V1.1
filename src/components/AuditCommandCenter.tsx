@@ -227,15 +227,49 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
   const scope = data?.scope;
   const records: Rec[] = data?.records || [];
-  // Today vs History partition (local calendar day of each record's date).
-  const todayStr = new Date().toLocaleDateString("en-CA");
-  const isToday = (r: Rec) => String(r.date || "").slice(0, 10) === todayStr;
-  const todaysRecords = useMemo(() => records.filter(isToday), [records]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Day grouping: the most recent 7 days (Today, Yesterday, then dated
+  //    groups, newest first; within a day the newest activity first), and
+  //    everything older than 7 days in the collapsible History section.
+  const RECENT_DAYS = 7;
+  const dayKeyOf = (d: Date) => d.toLocaleDateString("en-CA");
+  const todayStr = dayKeyOf(new Date());
+  const dayOf = (r: Rec) => String(r.date || "").slice(0, 10);
+  const recentCutoff = dayKeyOf(new Date(Date.now() - (RECENT_DAYS - 1) * 86400000)); // today − 6 days
+  const isRecent = (r: Rec) => { const d = dayOf(r); return !!d && d >= recentCutoff; };
+  const dayLabel = (ds: string) => {
+    if (ds === todayStr) return "Today";
+    if (ds === dayKeyOf(new Date(Date.now() - 86400000))) return "Yesterday";
+    const d = new Date(`${ds}T00:00:00`);
+    return isNaN(d.getTime()) ? ds : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  };
+  const recentGroups = useMemo(() => {
+    const byDay = new Map<string, Rec[]>();
+    for (const r of records) {
+      if (!isRecent(r)) continue;
+      const arr = byDay.get(dayOf(r)) || [];
+      arr.push(r);
+      byDay.set(dayOf(r), arr);
+    }
+    return [...byDay.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([day, list]) => ({
+        day, label: dayLabel(day),
+        list: [...list].sort((a, b) => (b.at || "").localeCompare(a.at || "") || b.recordId - a.recordId),
+      }));
+  }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
   const historyRecords = useMemo(() => {
-    const inPayload = records.filter((r) => !isToday(r));
+    const inPayload = records.filter((r) => !isRecent(r));
     const seen = new Set(inPayload.map((r) => r.key));
     return [...inPayload, ...olderRecords.filter((r) => !seen.has(r.key))];
   }, [records, olderRecords]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Date + time stamp for a record: "2026-09-26 · 14:35" when the exact
+   *  event time is known (same-day), the bare date otherwise. */
+  const stampOf = (r: Rec) => {
+    const d = dayOf(r) || "—";
+    if (!r.at) return d;
+    const t = new Date(r.at);
+    return isNaN(t.getTime()) ? d : `${d} · ${t.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+  };
   // The API pages at 250 records — when the payload is full there may be
   // more history behind it. Each click walks one 250-page further back.
   const moreHistoryAvailable = records.length >= 250 && !olderDone;
@@ -250,7 +284,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       const res = await fetch(`/api/audit?${p.toString()}`);
       const body = await res.json();
       if (res.ok && body?.records) {
-        const batch = (body.records as Rec[]).filter((r) => !isToday(r));
+        const batch = (body.records as Rec[]).filter((r) => !isRecent(r));
         setOlderRecords((prev) => {
           const seen = new Set(prev.map((r) => r.key));
           return [...prev, ...batch.filter((r) => !seen.has(r.key))];
@@ -632,9 +666,12 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       )}
 
       {/* ── RECORDS ─────────────────────────────────────────────── */}
-      {/* ── RECORDS — Today's activities by default; older records live in
-             the collapsible History section (search + filters above govern
-             both; nothing is deleted, everything stays accessible). ──── */}
+      {/* ── RECORDS — the most recent 7 days grouped by date (Today,
+             Yesterday, then dated groups — newest day first, newest
+             activity first within each day, time stamp on every record).
+             Everything older than 7 days lives in the collapsible History
+             section; the search + filters above govern both parts and
+             nothing is ever deleted. ───────────────────────────────── */}
       {tab === "RECORDS" && (() => {
         const renderWide = (list: Rec[]) => (
         <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-x-auto">
@@ -665,7 +702,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[r.module] || MODULE_TINT.OPERATIONS}`}>{r.module}</span></td>
                     <td className="px-3 py-2.5">{bizName(r.businessId)} · <span className="font-mono text-[10px] text-cyan-300">{r.branchCode || bizCode(r.businessId)}</span></td>
                     <td className="px-3 py-2.5">{r.workerName || <span className="text-slate-600">—</span>}</td>
-                    <td className="px-3 py-2.5 font-mono text-[10px]">{r.date || "—"}</td>
+                    <td className="px-3 py-2.5 font-mono text-[10px]">
+                      <div>{r.date || "—"}</div>
+                      {r.at && (
+                        <div className="text-slate-500" data-testid={`aud-rec-stamp-${r.key}`}>
+                          {new Date(r.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[r.reviewState] || STATE_TINT.UNREVIEWED}`} data-testid={`aud-rec-state-${r.key}`}>{r.reviewState}</span></td>
                     <td className="px-3 py-2.5">{renderActions(r, false)}</td>
                   </tr>
@@ -699,7 +743,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <Images className="w-2.5 h-2.5" />{r.imageCount}
                   </span>
                 )}
-                <span className="ml-auto font-mono text-[10px] text-slate-400">{r.date || "—"}</span>
+                <span className="ml-auto font-mono text-[10px] text-slate-400" data-testid={`aud-rec-stamp-${r.key}`}>{stampOf(r)}</span>
               </div>
               <div>
                 <div className="font-semibold text-slate-100 text-xs">{r.title}</div>
@@ -725,19 +769,27 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
         const renderList = (list: Rec[]) => (isWide ? renderWide(list) : renderNarrow(list));
         return (
         <div className="space-y-4">
-          {/* Today's activities — the default view */}
-          <section data-testid="aud-today-section">
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
-                <CalendarClock className="w-3.5 h-3.5" /> Today's activities
-              </h3>
-              <span className="text-[10px] font-bold text-slate-400" data-testid="aud-today-count">{todaysRecords.length} record{todaysRecords.length === 1 ? "" : "s"}</span>
-              <span className="ml-auto text-[10px] text-slate-500">older records are in History ↓</span>
+          {/* The most recent 7 days — one group per day, newest day first */}
+          {recentGroups.length === 0 && !loading && (
+            <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-8 text-center text-slate-500 text-sm">
+              No activities in the last {RECENT_DAYS} days match the current filters.
             </div>
-            {renderList(todaysRecords)}
-          </section>
+          )}
+          {recentGroups.map((g) => (
+            <section key={g.day} data-testid={`aud-day-${g.day}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                  <CalendarClock className="w-3.5 h-3.5" /> {g.label}
+                </h3>
+                <span className="text-[10px] font-mono text-slate-500">{g.day}</span>
+                <span className="text-[10px] font-bold text-slate-400" data-testid={`aud-day-count-${g.day}`}>{g.list.length} record{g.list.length === 1 ? "" : "s"}</span>
+                <span className="ml-auto text-[10px] text-slate-500">newest first</span>
+              </div>
+              {renderList(g.list)}
+            </section>
+          ))}
 
-          {/* History / Previous records — collapsed by default */}
+          {/* History / Previous records (older than 7 days) — collapsed by default */}
           <section data-testid="aud-history-section">
             <button
               type="button"
@@ -748,6 +800,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
             >
               <History className={`w-4 h-4 text-teal-300 transition-transform ${historyOpen ? "" : "-rotate-90 "}`} />
               <span className="text-xs font-black uppercase tracking-wider text-slate-200">History / Previous records</span>
+              <span className="text-[10px] text-slate-500 hidden sm:inline">older than {RECENT_DAYS} days</span>
               <span className="text-[10px] font-bold text-slate-400" data-testid="aud-history-count">{historyRecords.length} record{historyRecords.length === 1 ? "" : "s"}</span>
               <span className="ml-auto text-[10px] font-bold text-teal-300">{historyOpen ? "Hide" : "Show"}</span>
             </button>
