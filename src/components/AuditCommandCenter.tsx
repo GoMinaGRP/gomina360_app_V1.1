@@ -156,6 +156,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   // partition of the SAME server-filtered list, and "Load older records"
   // pages further back than the API's 250-record page.
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [openDays, setOpenDays] = useState<Record<string, boolean>>({});
   const [olderRecords, setOlderRecords] = useState<Rec[]>([]);
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderDone, setOlderDone] = useState(false);
@@ -267,6 +268,10 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
     const seen = new Set(inPayload.map((r) => r.key));
     return [...inPayload, ...olderRecords.filter((r) => !seen.has(r.key))];
   }, [records, olderRecords]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Day groups: TODAY starts expanded; every previous day starts collapsed.
+   *  Each day toggles independently and the choice survives filter changes. */
+  const isDayOpen = (day: string) => (day === todayStr ? openDays[day] !== false : openDays[day] === true);
+  const toggleDay = (day: string) => setOpenDays((m) => ({ ...m, [day]: !isDayOpen(day) }));
   /** Date + time stamp for a record: "2026-09-26 · 14:35" when the exact
    *  event time is known (same-day), the bare date otherwise. */
   const stampOf = (r: Rec) => {
@@ -674,9 +679,10 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       {/* ── RECORDS — the most recent 7 days grouped by date (Today,
              Yesterday, then dated groups — newest day first, newest
              activity first within each day, time stamp on every record).
-             Everything older than 7 days lives in the collapsible History
-             section; the search + filters above govern both parts and
-             nothing is ever deleted. ───────────────────────────────── */}
+             ONLY TODAY starts expanded; every previous day is collapsible
+             and toggles independently. Everything older than 7 days lives
+             in the collapsible History section; the search + filters above
+             govern all of it and nothing is ever deleted. ────────────── */}
       {tab === "RECORDS" && (() => {
         const renderWide = (list: Rec[]) => (
         <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-x-auto">
@@ -780,19 +786,27 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
               No activities in the last {RECENT_DAYS} days match the current filters.
             </div>
           )}
-          {recentGroups.map((g) => (
+          {recentGroups.map((g) => {
+            const open = isDayOpen(g.day);
+            return (
             <section key={g.day} data-testid={`aud-day-${g.day}`}>
-              <div className="flex items-center gap-2 mb-2">
-                <h3 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
-                  <CalendarClock className="w-3.5 h-3.5" /> {g.label}
-                </h3>
-                <span className="text-[10px] font-mono text-slate-500">{g.day}</span>
+              <button
+                type="button"
+                onClick={() => toggleDay(g.day)}
+                aria-expanded={open}
+                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-700/80 bg-slate-900 hover:border-teal-500/40 transition text-left"
+                data-testid={`aud-day-toggle-${g.day}`}
+              >
+                <CalendarClock className={`w-4 h-4 text-teal-300 transition-transform ${open ? "" : "-rotate-90 "}`} />
+                <span className="text-xs font-black uppercase tracking-wider text-slate-200">{g.label}</span>
+                <span className="text-[10px] font-mono text-slate-500 hidden sm:inline">{g.day}</span>
                 <span className="text-[10px] font-bold text-slate-400" data-testid={`aud-day-count-${g.day}`}>{g.list.length} record{g.list.length === 1 ? "" : "s"}</span>
-                <span className="ml-auto text-[10px] text-slate-500">newest first</span>
-              </div>
-              {renderList(g.list)}
+                <span className="ml-auto text-[10px] font-bold text-teal-300">{open ? "Hide" : "Show"}</span>
+              </button>
+              {open && <div className="mt-2">{renderList(g.list)}</div>}
             </section>
-          ))}
+            );
+          })}
 
           {/* History / Previous records (older than 7 days) — collapsed by default */}
           <section data-testid="aud-history-section">

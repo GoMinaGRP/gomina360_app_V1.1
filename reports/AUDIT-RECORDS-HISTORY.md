@@ -2,13 +2,14 @@
 
 **Date:** 2026-09-26 · **Components:** `src/components/AuditCommandCenter.tsx`,
 `src/app/api/audit/route.ts` · **Verification:** `dev-tooling/verify-audit-history.mjs`
-(32/32 green — phone + desktop + emulated non-UTC viewer, production build)
+(38/38 green — phone + desktop + emulated non-UTC viewer, production build)
 
 ## The behavior
 
 | Zone | What it shows | Default |
 |---|---|---|
-| **Day groups — last 7 days** | One section per calendar day: **Today**, **Yesterday**, then dated groups (`Wed 23 Sep 2026`). Days are ordered newest-first; **within each day the most recent activity comes first**, and **every record carries a clear date + time stamp** (`2026-09-26 · 15:40`). | **Always visible — the default view** |
+| **Today** | Today's records, **newest activity first**, each with a **date + time stamp** (`2026-09-26 · 15:40`) | **Expanded** |
+| **Yesterday + each previous date** (up to 7 days) | One collapsible group per day (`Wed 23 Sep 2026`), newest day first, newest activity first within the day, time stamp on every record | **Collapsed** — each day toggles independently |
 | **History / Previous records** (collapsible) | Everything older than 7 days, same card/table layouts, full audit action set | **Collapsed** — one tap to open |
 
 * **Nothing is deleted and nothing is hidden from reach.** The History toggle
@@ -23,6 +24,16 @@
   "End of history for these filters" appears.
 * Both layouts (wide table at `lg+`, cards below) render inside every day
   group and History, so phone, tablet and desktop all get the grouping.
+
+## Collapsible day groups (2026-09-26, third pass)
+
+Only **Today** starts expanded. **Yesterday and every other previous date**
+are collapsible headers (CalendarClock icon + day label + live record count
++ Show/Hide) and each toggles **independently** — collapsing Today leaves
+Yesterday open, and a day's choice survives filter changes. Ordering is
+untouched: newest day first, newest activity first within each day, date +
+time stamps on every record, and all filters/search still govern every
+group plus History.
 
 ## Time stamps — where the time comes from
 
@@ -86,7 +97,7 @@ fixes landed:
    varied clock times — so Today, Yesterday and every previous date show
    content on a freshly recovered database.
 
-`verify-audit-history.mjs` grew to **32 checks** (G1–G28 + T1–T4).
+`verify-audit-history.mjs` grew to **38 checks** (G1–G28 + C1–C4 collapse checks + T0–T4 timezone checks + G24b).
 
 ## Recovery hardening (found while re-verifying)
 

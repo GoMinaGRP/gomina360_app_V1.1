@@ -124,6 +124,38 @@ try {
     ok("G3 3-days-ago group renders", !!(await page.$(`[data-testid="aud-day-${DAYS.d3}"]`)));
     ok("G4 no group for 8-days-ago (outside the 7-day window)", !(await page.$(`[data-testid="aud-day-${DAYS.d8}"]`)));
 
+    // Collapsible day groups — only Today is expanded by default
+    ok("C1 ONLY Today is expanded by default (rows visible)", await page.evaluate((d) => {
+      const btn = document.querySelector(`[data-testid="aud-day-toggle-${d}"]`);
+      const rows = document.querySelectorAll(`[data-testid="aud-day-${d}"] [data-testid^="aud-rec-row-"]`).length;
+      return btn?.getAttribute("aria-expanded") === "true" && rows > 0;
+    }, DAYS.today));
+    ok("C2 every PREVIOUS day starts collapsed, rendering no rows", await page.evaluate((t) => {
+      const secs = [...document.querySelectorAll('section[data-testid^="aud-day-"]')];
+      return secs.filter((s) => s.getAttribute("data-testid") !== `aud-day-${t}`).every((s) => {
+        const day = s.getAttribute("data-testid").replace("aud-day-", "");
+        const btn = s.querySelector(`[data-testid="aud-day-toggle-${day}"]`);
+        return btn?.getAttribute("aria-expanded") === "false" && s.querySelectorAll('[data-testid^="aud-rec-row-"]').length === 0;
+      });
+    }, DAYS.today));
+    await H.clickTid(`aud-day-toggle-${DAYS.yest}`);
+    await sleep(500);
+    ok("C3 toggling Yesterday opens it and reveals its records", await page.evaluate((d) =>
+      document.querySelector(`[data-testid="aud-day-toggle-${d}"]`)?.getAttribute("aria-expanded") === "true" &&
+      document.querySelectorAll(`[data-testid="aud-day-${d}"] [data-testid^="aud-rec-row-"]`).length > 0, DAYS.yest));
+    // open every remaining day group so the stamp/ordering checks see all rows
+    await page.evaluate(() => { for (const b of document.querySelectorAll('[data-testid^="aud-day-toggle-"]')) { if (b.getAttribute("aria-expanded") !== "true") b.click(); } });
+    await sleep(700);
+    await H.clickTid(`aud-day-toggle-${DAYS.today}`);
+    await sleep(500);
+    const indep = await page.evaluate((t, y) => ({
+      todayRows: document.querySelectorAll(`[data-testid="aud-day-${t}"] [data-testid^="aud-rec-row-"]`).length,
+      yestRows: document.querySelectorAll(`[data-testid="aud-day-${y}"] [data-testid^="aud-rec-row-"]`).length,
+    }), DAYS.today, DAYS.yest);
+    ok("C4 toggles are independent (collapse Today, Yesterday stays open)", indep.todayRows === 0 && indep.yestRows > 0, JSON.stringify(indep));
+    await H.clickTid(`aud-day-toggle-${DAYS.today}`);
+    await sleep(500);
+
     // Newest-first within Today: B (15:40) above A (09:15)
     const order = await page.evaluate((a, b) => {
       const rows = [...document.querySelectorAll('section[data-testid^="aud-day-"] [data-testid^="aud-rec-row-"]')];
@@ -166,7 +198,7 @@ try {
     await H.setTid("aud-f-q", tx40.transaction_number);
     await sleep(1400);
     ok("G16 search finds the 40-day fixture in History", !!(await page.$(`[data-testid="aud-history-body"] [data-testid="aud-rec-row-TRANSACTION:transactions:${tx40.id}"]`)));
-    ok("G17 search empties the 7-day groups", await page.evaluate(() => document.querySelectorAll('section[data-testid^="aud-day-"] [data-testid^="aud-rec-row-"]').length === 0));
+    ok("G17 search empties the 7-day groups entirely (no day sections left)", await page.evaluate(() => document.querySelectorAll('section[data-testid^="aud-day-"]').length === 0));
     await H.setTid("aud-f-q", "");
     await sleep(1400);
 
@@ -217,6 +249,13 @@ try {
     ok("G23 desktop: Today group renders the classic TABLE", layoutToday === "TBODY", layoutToday);
     const stampB = await H.textOf(`aud-rec-stamp-TRANSACTION:transactions:${txB.id}`);
     ok("G24 desktop: time stamp visible in the table row", /15:40/.test(stampB), stampB);
+    ok("G24b desktop: Yesterday starts collapsed and opens to the classic TABLE", await (async () => {
+      const collapsed = await page.$eval(`[data-testid="aud-day-toggle-${DAYS.yest}"]`, (b) => b.getAttribute("aria-expanded") === "false").catch(() => false);
+      await H.clickTid(`aud-day-toggle-${DAYS.yest}`);
+      await sleep(600);
+      const tag = await page.evaluate((d) => document.querySelector(`[data-testid="aud-day-${d}"] [data-testid="aud-rec-rows"]`)?.tagName, DAYS.yest);
+      return collapsed && tag === "TBODY";
+    })());
     ok("G25 desktop: history collapsed by default", !(await page.$('[data-testid="aud-history-body"]')));
     await H.clickTid("aud-history-toggle");
     await H.waitSel('[data-testid="aud-history-body"]');
@@ -250,6 +289,15 @@ try {
     await H.waitSel('[data-testid="aud-root"]');
     await sleep(2500);
 
+    // collapse-state defaults hold for a non-UTC viewer too: only their
+    // local Today is open
+    ok("T0 only the viewer's local Today is expanded by default", await page.evaluate(() => {
+      const secs = [...document.querySelectorAll('section[data-testid^="aud-day-"]')];
+      const open = secs.filter((s) => s.querySelector('[data-testid^="aud-day-toggle-"]')?.getAttribute("aria-expanded") === "true");
+      return open.length === 1 && (open[0].querySelector('[data-testid^="aud-day-toggle-"] span')?.textContent || "").trim() === "Today";
+    }));
+    await page.evaluate(() => { for (const b of document.querySelectorAll('[data-testid^="aud-day-toggle-"]')) { if (b.getAttribute("aria-expanded") !== "true") b.click(); } });
+    await sleep(700);
     const reginaDay = (v) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Regina", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(v));
     const expDayA = reginaDay(txA.created_at);
     const expDayB = reginaDay(txB.created_at);
