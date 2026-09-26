@@ -35,6 +35,7 @@ import {
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import ProductLightbox from "@/components/ProductLightbox";
+import ProductShareMenu from "@/components/ProductShareMenu";
 import WatermarkOverlay from "@/components/WatermarkOverlay";
 import MiniLeafletMap from "@/components/MiniLeafletMap";
 import { businessServesLocation, haversineM } from "@/lib/tracking";
@@ -187,6 +188,11 @@ type ProductCardProps = {
   add: (p: any, delta: number, fromBiz?: any, option?: any) => void;
   setQty: (p: any, qty: number, fromBiz?: any, option?: any) => void;
   onOpenLightbox: (p: any, fromBiz: any, idx: number) => void;
+  /** The product's own business row — drives the stable per-product share
+   *  link (/order?biz=…&p=…). Same object as fromBiz where provided. */
+  shareBiz?: any;
+  /** Deep-link focus ring: a shared-product link highlights its card. */
+  highlight?: boolean;
 };
 
 function optionQtysEqual(a: Record<string, number>, b: Record<string, number>) {
@@ -205,6 +211,8 @@ function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
     prev.add === next.add &&
     prev.setQty === next.setQty &&
     prev.onOpenLightbox === next.onOpenLightbox &&
+    prev.shareBiz === next.shareBiz &&
+    prev.highlight === next.highlight &&
     optionQtysEqual(prev.optionQtys, next.optionQtys)
   );
 }
@@ -218,12 +226,18 @@ const ProductCard = React.memo(function ProductCard({
   add,
   setQty,
   onOpenLightbox,
+  shareBiz,
+  highlight = false,
 }: ProductCardProps) {
   const photos = productPhotos(p);
   return (
       <div
         key={p.id}
-        className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md hover:border-amber-300 transition"
+        className={`bg-white border rounded-xl p-3 flex flex-col shadow-sm hover:shadow-md transition ${
+          highlight
+            ? "border-amber-400 ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-100 shadow-lg"
+            : "border-slate-200 hover:border-amber-300"
+        }`}
         data-testid={`oo-prod-${p.id}`}
       >
         {photos.length > 0 ? (
@@ -294,6 +308,9 @@ const ProductCard = React.memo(function ProductCard({
         </div>
         <div className="mt-1.5 flex items-end justify-between gap-1">
           <div className="text-[17px] font-black text-slate-900 leading-none">{fmtMoney(p.price)}</div>
+          {/* Per-product share — stable deep link through WhatsApp / socials /
+              email / copy (see ProductShareMenu). */}
+          <ProductShareMenu product={{ id: p.id, sku: p.sku, name: p.name }} biz={shareBiz || fromBiz || wmBiz} priceLabel={fmtMoney(p.price)} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
           {p.available >= 10 ? (
@@ -449,8 +466,66 @@ function OrderInner() {
   // correct shop, even from the one-page all-businesses grid. `idx` tracks
   // which of the product's photos the gallery is currently showing.
   const [lightbox, setLightbox] = useState<{ p: any; fromBiz?: any; idx: number } | null>(null);
+  // Shared-product deep link (?p=<productId|sku>): the card is focused,
+  // highlighted and its details lightbox opens once — built by the
+  // per-product Share menu and by QR codes. Stable database ids, so links
+  // survive re-deploys. Resolution happens against the SAME org-scoped menu
+  // payload the storefront renders (no extra surface, no cross-tenant read).
+  const [shareKey, setShareKey] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const shareFocusDone = useRef(false);
 
   const openLightbox = useCallback((lp: any, lb?: any, li = 0) => setLightbox({ p: lp, fromBiz: lb, idx: li }), []);
+
+  // Shared-product deep link (?p=…): once the catalogue is rendered, scroll
+  // the recipient to the exact product card, highlight it and open its
+  // details view (images · name · price · description · ordering options).
+  // Runs ONCE per page load; unknown keys degrade to the normal storefront.
+  useEffect(() => {
+    if (!shareKey || !menu || shareFocusDone.current) return;
+    let target: any = null;
+    let targetBiz: any = null;
+    for (const b of menu as any[]) {
+      for (const pr of b?.products || []) {
+        if (pr && (String(pr.id) === shareKey || String(pr.sku || "") === shareKey)) {
+          target = pr;
+          targetBiz = b;
+          break;
+        }
+      }
+      if (target) break;
+    }
+    if (!target) return; // not in this tenant's catalogue — normal storefront
+    // Make sure the focused single-business view shows the product's shop
+    // (fresh loads already do; this also covers in-session navigations).
+    if (allMode || bizId !== targetBiz.businessId) {
+      if (cartRef.current.length === 0) {
+        setBizId(targetBiz.businessId);
+        setAllMode(false);
+        setCat("ALL");
+        setSearch("");
+      }
+    }
+    let tries = 0;
+    const poll = setInterval(() => {
+      tries += 1;
+      const el = document.querySelector(`[data-testid="oo-prod-${target.id}"]`);
+      if (el) {
+        clearInterval(poll);
+        shareFocusDone.current = true;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightId(target.id);
+        setTimeout(() => setHighlightId((cur) => (cur === target.id ? null : cur)), 8000);
+        // Details view opens a beat after the scroll so the recipient first
+        // sees the product in the context of its shop.
+        setTimeout(() => setLightbox({ p: target, fromBiz: targetBiz, idx: 0 }), 600);
+      } else if (tries > 50) {
+        clearInterval(poll);
+      }
+    }, 100);
+    return () => clearInterval(poll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareKey, menu, bizId, allMode]);
 
   // All images registered for a product (primary photo + extras), as the
   // Amazon-style gallery source. Falls back to the legacy `photo` field.
@@ -462,12 +537,23 @@ function OrderInner() {
         if (data?.success) {
           setMenu(data.businesses || []);
           const wanted = Number(params.get("biz") || 0);
+          // A shared-product link (?p=…) focuses the product's OWN business
+          // (found inside the org-scoped menu payload — tenant-safe), with an
+          // explicit ?biz= still taking precedence for the unit choice.
+          const shareP = params.get("p") || null;
+          setShareKey(shareP);
+          const shareBizId = shareP
+            ? (data.businesses || []).find((b: any) =>
+                (b?.products || []).some((x: any) => x && (String(x.id) === shareP || String(x.sku || "") === shareP)),
+              )?.businessId
+            : undefined;
           const first =
             (wanted && (data.businesses || []).find((b: any) => b.businessId === wanted)?.businessId) ||
+            (shareBizId ?? undefined) ||
             (data.businesses || [])[0]?.businessId ||
             null;
           setBizId(first);
-          setAllMode(!wanted);
+          setAllMode(!(wanted || shareBizId));
         } else {
           setMenuError(data?.error || "Could not load the store.");
         }
@@ -925,6 +1011,8 @@ function OrderInner() {
         add={add}
         setQty={setQty}
         onOpenLightbox={openLightbox}
+        shareBiz={fromBiz || biz}
+        highlight={highlightId === p.id}
       />
     );
   };
