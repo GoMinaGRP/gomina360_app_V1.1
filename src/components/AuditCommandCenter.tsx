@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck, RefreshCw, Flag, MessageSquare, PencilLine, BadgeCheck, History,
   KeyRound, ScrollText, BarChart3, Rows3, X, FileSpreadsheet, UserCheck, Ban, Search, AlertTriangle,
-  ImagePlus, Send, User, Eye, Images, Link2, ArrowLeft,
+  ImagePlus, Send, User, Eye, Images, Link2, ArrowLeft, CalendarClock,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
@@ -68,6 +68,25 @@ const STATE_TINT: Record<string, string> = {
   UNREVIEWED: "text-slate-500 bg-slate-800/60 border-slate-700",
 };
 const ISSUE_STEPS = ["FLAGGED", "UNDER_REVIEW", "CORRECTION_REQUIRED", "RESOLVED", "VERIFIED"] as const;
+
+/** Responsive switch for the dense audit tables. From lg (≥1024px) up the
+ *  classic tables render; below that every list switches to a full card
+ *  layout so the complete record AND all audit actions stay visible and
+ *  reachable on phones and tablets — nothing is ever clipped. Testids are
+ *  identical in both layouts (only one is in the DOM at a time). */
+function useIsWide(minPx = 1024) {
+  // Start "wide" so SSR/hydration match; the effect corrects immediately
+  // (records arrive after the fetch, so no visible flash).
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia(`(min-width: ${minPx}px)`);
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [minPx]);
+  return wide;
+}
 const STEP_LABEL: Record<string, string> = {
   FLAGGED: "Flagged", UNDER_REVIEW: "Under Review", CORRECTION_REQUIRED: "Correction Required", RESOLVED: "Resolved", VERIFIED: "Verified",
   INFO: "Comment", OPEN: "Flagged",
@@ -131,9 +150,21 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const [notice, setNotice] = useState("");
   const [tab, setTab] = useState<"RECORDS" | "ISSUES" | "REPORTS" | "ACCESS" | "LOG">("RECORDS");
   const [filters, setFilters] = useState({ businessId: "", module: "", recordType: "", branchCode: "", worker: "", status: "", q: "", from: "", to: "" });
+  // Records declutter: TODAY's activities show by default; everything older
+  // lives in a collapsible History section (collapsed until asked for). All
+  // historical data stays intact and reachable — the split is a pure view
+  // partition of the SAME server-filtered list, and "Load older records"
+  // pages further back than the API's 250-record page.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [openDays, setOpenDays] = useState<Record<string, boolean>>({});
+  const [olderRecords, setOlderRecords] = useState<Rec[]>([]);
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [olderDone, setOlderDone] = useState(false);
   const [histKey, setHistKey] = useState<string | null>(null);
   const [actionModal, setActionModal] = useState<{ rec: Rec; action: string } | null>(null);
-  const [actionForm, setActionForm] = useState({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" });
+  const [actionForm, setActionForm] = useState({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM", dueDate: "" });
+  // Local-calendar today (YYYY-MM-DD) — drives the issue due/overdue badges.
+  const todayIso = new Date().toLocaleDateString("en-CA");
   const [actError, setActError] = useState("");
   const [verifyModal, setVerifyModal] = useState<Rev | null>(null);
   const [verifyNote, setVerifyNote] = useState("");
@@ -151,6 +182,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const [detailStack, setDetailStack] = useState<Rec[]>([]);
   const [detailData, setDetailData] = useState<any>(null);
   const [detailErr, setDetailErr] = useState("");
+  const isWide = useIsWide();
 
   const bizSource = data?.bizList?.length ? data.bizList : businesses;
   const bizName = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.name || `Business #${id}`, [bizSource]);
@@ -166,6 +198,9 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "Failed to load the audit workspace");
       setData(body);
+      // New filter result → the incremental history paging state starts over.
+      setOlderRecords([]);
+      setOlderDone(false);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -195,6 +230,87 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
   const scope = data?.scope;
   const records: Rec[] = data?.records || [];
+  // ── Day grouping: the most recent 7 days (Today, Yesterday, then dated
+  //    groups, newest first; within a day the newest activity first), and
+  //    everything older than 7 days in the collapsible History section.
+  const RECENT_DAYS = 7;
+  const dayKeyOf = (d: Date) => d.toLocaleDateString("en-CA");
+  const localDayOf = (v: any) => { const d = new Date(v); return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA"); };
+  const todayStr = dayKeyOf(new Date());
+  // A record's calendar day in the VIEWER'S timezone: timestamp-backed
+  // records (r.at set) group by the local day of their event time — so
+  // "Today"/"Yesterday" are the user's actual days even far from UTC —
+  // while business-date records (plain text dates) keep their date.
+  const dayOf = (r: Rec) => (r.at ? localDayOf(r.at) : "") || String(r.date || "").slice(0, 10);
+  const recentCutoff = dayKeyOf(new Date(Date.now() - (RECENT_DAYS - 1) * 86400000)); // today − 6 days
+  const isRecent = (r: Rec) => { const d = dayOf(r); return !!d && d >= recentCutoff; };
+  const dayLabel = (ds: string) => {
+    if (ds === todayStr) return "Today";
+    if (ds === dayKeyOf(new Date(Date.now() - 86400000))) return "Yesterday";
+    const d = new Date(`${ds}T00:00:00`);
+    return isNaN(d.getTime()) ? ds : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  };
+  const recentGroups = useMemo(() => {
+    const byDay = new Map<string, Rec[]>();
+    for (const r of records) {
+      if (!isRecent(r)) continue;
+      const arr = byDay.get(dayOf(r)) || [];
+      arr.push(r);
+      byDay.set(dayOf(r), arr);
+    }
+    return [...byDay.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([day, list]) => ({
+        day, label: dayLabel(day),
+        list: [...list].sort((a, b) => (b.at || "").localeCompare(a.at || "") || b.recordId - a.recordId),
+      }));
+  }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
+  const historyRecords = useMemo(() => {
+    const inPayload = records.filter((r) => !isRecent(r));
+    const seen = new Set(inPayload.map((r) => r.key));
+    return [...inPayload, ...olderRecords.filter((r) => !seen.has(r.key))];
+  }, [records, olderRecords]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Day groups: TODAY starts expanded; every previous day starts collapsed.
+   *  Each day toggles independently and the choice survives filter changes. */
+  const isDayOpen = (day: string) => (day === todayStr ? openDays[day] !== false : openDays[day] === true);
+  const toggleDay = (day: string) => setOpenDays((m) => ({ ...m, [day]: !isDayOpen(day) }));
+  /** Date + time stamp for a record: "2026-09-26 · 14:35" when the exact
+   *  event time is known (same-day), the bare date otherwise. */
+  const stampOf = (r: Rec) => {
+    const d = dayOf(r) || "—";
+    if (!r.at) return d;
+    const t = new Date(r.at);
+    return isNaN(t.getTime()) ? d : `${d} · ${t.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+  };
+  // The API pages at 250 records — when the payload is full there may be
+  // more history behind it. Each click walks one 250-page further back.
+  const moreHistoryAvailable = records.length >= 250 && !olderDone;
+  const loadOlderRecords = useCallback(async () => {
+    const oldest = [...historyRecords].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))[0];
+    if (!oldest?.date) { setOlderDone(true); return; }
+    setOlderLoading(true);
+    try {
+      const p = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => v && k !== "to" && p.set(k, v));
+      p.set("to", String(oldest.date).slice(0, 10)); // exclusive walk backwards
+      const res = await fetch(`/api/audit?${p.toString()}`);
+      const body = await res.json();
+      if (res.ok && body?.records) {
+        const batch = (body.records as Rec[]).filter((r) => !isRecent(r));
+        setOlderRecords((prev) => {
+          const seen = new Set(prev.map((r) => r.key));
+          return [...prev, ...batch.filter((r) => !seen.has(r.key))];
+        });
+        if ((body.records as Rec[]).length < 250) setOlderDone(true);
+      } else {
+        setOlderDone(true);
+      }
+    } catch {
+      setOlderDone(true);
+    } finally {
+      setOlderLoading(false);
+    }
+  }, [filters, historyRecords]); // eslint-disable-line react-hooks/exhaustive-deps
   const reviews: Rev[] = data?.reviews || [];
   const log: any[] = data?.log || [];
   const report = data?.report;
@@ -269,6 +385,44 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
     r.readAsDataURL(file);
   };
 
+  // ── Shared record renderers (used by BOTH the lg table and the <lg card
+  //    layout — identical testids, identical actions, nothing hidden). ──
+  const openAction = (rec: Rec, action: string) => { setActionModal({ rec, action }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM", dueDate: "" }); setActError(""); };
+
+  const renderActions = (r: Rec, labeled: boolean) => (
+    <div className={`flex flex-wrap items-center ${labeled ? "gap-1.5" : "justify-end gap-1"}`}>
+      <button title="Open complete record" aria-label="Open complete record" onClick={() => openRecord(r)} className="flex items-center gap-1.5 p-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/30" data-testid={`aud-open-${r.key}`}><Eye className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">Open</span>}</button>
+      <button title="Review history" aria-label="Review history" onClick={() => setHistKey(histKey === r.key ? null : r.key)} className="flex items-center gap-1.5 p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400" data-testid={`aud-hist-${r.key}`}><History className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">History</span>}</button>
+      <button title="Verify record" aria-label="Verify record" onClick={() => openAction(r, "VERIFIED")} className="flex items-center gap-1.5 p-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30" data-testid={`aud-verify-${r.key}`}><BadgeCheck className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">Verify</span>}</button>
+      <button title="Flag issue" aria-label="Flag issue" onClick={() => openAction(r, "FLAGGED")} className="flex items-center gap-1.5 p-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30" data-testid={`aud-flag-${r.key}`}><Flag className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">Flag</span>}</button>
+      <button title="Request correction" aria-label="Request correction" onClick={() => openAction(r, "CORRECTION_REQUESTED")} className="flex items-center gap-1.5 p-1.5 rounded bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30" data-testid={`aud-correct-${r.key}`}><PencilLine className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">Correct</span>}</button>
+      <button title="Add comment" aria-label="Add comment" onClick={() => openAction(r, "COMMENT")} className="flex items-center gap-1.5 p-1.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300 border border-slate-600" data-testid={`aud-comment-${r.key}`}><MessageSquare className="w-3.5 h-3.5" />{labeled && <span className="text-[10px] font-bold">Comment</span>}</button>
+    </div>
+  );
+
+  const renderHistory = (r: Rec) => (
+    reviewsFor(r).length === 0 ? (
+      <div className="text-[11px] text-slate-500">No reviews yet — this record is unreviewed.</div>
+    ) : (
+      <div className="space-y-2">
+        {reviewsFor(r).map((v: Rev) => (
+          <div key={v.id} className="flex flex-wrap items-center gap-2 text-[11px]">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[v.action]}`}>{v.action}</span>
+            <span className="text-slate-400">{fmtTs(v.createdAt)}</span>
+            <span className="font-bold text-slate-200">{v.reviewerName}</span>
+            <span className="text-slate-500">({v.reviewerRole})</span>
+            {v.reason && <span className="text-amber-300">reason: {v.reason}</span>}
+            {v.comment && <span className="text-slate-400">“{v.comment}”</span>}
+            {v.evidence && <span className="text-cyan-300 break-all">evidence: {v.evidence}</span>}
+            {v.evidencePhoto && <img src={v.evidencePhoto} alt="evidence" className="max-h-10 rounded border border-slate-700" />}
+            {v.assignedUserName && <span className="text-cyan-300">→ {v.assignedUserName}</span>}
+            {v.resolvedByName && <span className="text-emerald-300">verified & closed by {v.resolvedByName} · {fmtTs(v.resolvedAt)} · {v.resolutionNote}</span>}
+          </div>
+        ))}
+      </div>
+    )
+  );
+
   const submitAction = async () => {
     if (!actionModal) return;
     setBusy(true); setActError("");
@@ -282,13 +436,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
           reason: actionForm.reason, comment: actionForm.comment, evidence: actionForm.evidence,
           evidencePhoto: actionForm.photo,
           priority: actionForm.priority,
+          dueDate: actionForm.dueDate || null,
         }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "Review failed");
       const routed = body.assignedTo ? ` Routed to ${body.assignedTo.name}'s dashboard — they were notified.` : actionModal.action === "VERIFIED" || actionModal.action === "COMMENT" ? "" : " No user account matched the record's worker — it stays tracked here.";
       setNotice(`${actionModal.action === "VERIFIED" ? "Record verified" : actionModal.action === "FLAGGED" ? "Issue flagged" : actionModal.action === "CORRECTION_REQUESTED" ? "Correction requested" : "Comment added"} — ${actionModal.rec.ref}. It is on the audit trail.${routed}`);
-      setActionModal(null); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" });
+      setActionModal(null); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM", dueDate: "" });
       await load();
     } catch (e: any) { setActError(e.message); } finally { setBusy(false); }
   };
@@ -426,7 +581,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
           </span>
         )}
         <AiSectionGuide moduleKey="AUDIT" section="DEFAULT" variant="header" />
-        <button onClick={load} disabled={loading} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" data-testid="aud-refresh">
+        <button onClick={load} disabled={loading} aria-label="Refresh audit workspace" title="Refresh" className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" data-testid="aud-refresh">
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
         </button>
       </div>
@@ -524,8 +679,16 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       )}
 
       {/* ── RECORDS ─────────────────────────────────────────────── */}
-      {tab === "RECORDS" && (
-        <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden">
+      {/* ── RECORDS — the most recent 7 days grouped by date (Today,
+             Yesterday, then dated groups — newest day first, newest
+             activity first within each day, time stamp on every record).
+             ONLY TODAY starts expanded; every previous day is collapsible
+             and toggles independently. Everything older than 7 days lives
+             in the collapsible History section; the search + filters above
+             govern all of it and nothing is ever deleted. ────────────── */}
+      {tab === "RECORDS" && (() => {
+        const renderWide = (list: Rec[]) => (
+        <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 text-slate-400 uppercase text-[10px] tracking-wider">
               <tr>
@@ -535,7 +698,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70" data-testid="aud-rec-rows">
-              {records.map((r) => (
+              {list.map((r) => (
                 <React.Fragment key={r.key}>
                   <tr className="text-slate-300 hover:bg-slate-800/40" data-testid={`aud-rec-row-${r.key}`}>
                     <td className="px-4 py-2.5">
@@ -553,54 +716,146 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[r.module] || MODULE_TINT.OPERATIONS}`}>{r.module}</span></td>
                     <td className="px-3 py-2.5">{bizName(r.businessId)} · <span className="font-mono text-[10px] text-cyan-300">{r.branchCode || bizCode(r.businessId)}</span></td>
                     <td className="px-3 py-2.5">{r.workerName || <span className="text-slate-600">—</span>}</td>
-                    <td className="px-3 py-2.5 font-mono text-[10px]">{r.date || "—"}</td>
-                    <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[r.reviewState] || STATE_TINT.UNREVIEWED}`} data-testid={`aud-rec-state-${r.key}`}>{r.reviewState}</span></td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center justify-end gap-1">
-                        <button title="Open complete record" onClick={() => openRecord(r)} className="p-1.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/30" data-testid={`aud-open-${r.key}`}><Eye className="w-3.5 h-3.5" /></button>
-                        <button title="Review history" onClick={() => setHistKey(histKey === r.key ? null : r.key)} className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400" data-testid={`aud-hist-${r.key}`}><History className="w-3.5 h-3.5" /></button>
-                        <button title="Verify record" onClick={() => { setActionModal({ rec: r, action: "VERIFIED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30" data-testid={`aud-verify-${r.key}`}><BadgeCheck className="w-3.5 h-3.5" /></button>
-                        <button title="Flag issue" onClick={() => { setActionModal({ rec: r, action: "FLAGGED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30" data-testid={`aud-flag-${r.key}`}><Flag className="w-3.5 h-3.5" /></button>
-                        <button title="Request correction" onClick={() => { setActionModal({ rec: r, action: "CORRECTION_REQUESTED" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30" data-testid={`aud-correct-${r.key}`}><PencilLine className="w-3.5 h-3.5" /></button>
-                        <button title="Add comment" onClick={() => { setActionModal({ rec: r, action: "COMMENT" }); setActionForm({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" }); setActError(""); }} className="p-1.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300 border border-slate-600" data-testid={`aud-comment-${r.key}`}><MessageSquare className="w-3.5 h-3.5" /></button>
-                      </div>
+                    <td className="px-3 py-2.5 font-mono text-[10px]">
+                      <div>{dayOf(r) || "—"}</div>
+                      {r.at && (
+                        <div className="text-slate-500" data-testid={`aud-rec-stamp-${r.key}`}>
+                          {new Date(r.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}
+                        </div>
+                      )}
                     </td>
+                    <td className="px-3 py-2.5"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[r.reviewState] || STATE_TINT.UNREVIEWED}`} data-testid={`aud-rec-state-${r.key}`}>{r.reviewState}</span></td>
+                    <td className="px-3 py-2.5">{renderActions(r, false)}</td>
                   </tr>
                   {histKey === r.key && (
                     <tr className="bg-slate-950/60">
                       <td colSpan={7} className="px-6 py-3" data-testid={`aud-hist-panel-${r.key}`}>
-                        {reviewsFor(r).length === 0 ? (
-                          <div className="text-[11px] text-slate-500">No reviews yet — this record is unreviewed.</div>
-                        ) : (
-                          <div className="space-y-2">
-                            {reviewsFor(r).map((v: Rev) => (
-                              <div key={v.id} className="flex flex-wrap items-center gap-2 text-[11px]">
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[v.action]}`}>{v.action}</span>
-                                <span className="text-slate-400">{fmtTs(v.createdAt)}</span>
-                                <span className="font-bold text-slate-200">{v.reviewerName}</span>
-                                <span className="text-slate-500">({v.reviewerRole})</span>
-                                {v.reason && <span className="text-amber-300">reason: {v.reason}</span>}
-                                {v.comment && <span className="text-slate-400">“{v.comment}”</span>}
-                                {v.evidence && <span className="text-cyan-300 break-all">evidence: {v.evidence}</span>}
-                                {v.evidencePhoto && <img src={v.evidencePhoto} alt="evidence" className="max-h-10 rounded border border-slate-700" />}
-                                {v.assignedUserName && <span className="text-cyan-300">→ {v.assignedUserName}</span>}
-                                {v.resolvedByName && <span className="text-emerald-300">verified & closed by {v.resolvedByName} · {fmtTs(v.resolvedAt)} · {v.resolutionNote}</span>}
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        {renderHistory(r)}
                       </td>
                     </tr>
                   )}
                 </React.Fragment>
               ))}
-              {records.length === 0 && !loading && (
+              {list.length === 0 && !loading && (
                 <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500 text-sm">No records match the current filters.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+        );
+        const renderNarrow = (list: Rec[]) => (
+
+        <div className="space-y-2" data-testid="aud-rec-rows">
+          {list.map((r) => (
+            <div key={r.key} className="bg-slate-900 border border-slate-700/80 rounded-xl p-3.5 space-y-2.5" data-testid={`aud-rec-row-${r.key}`}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-mono text-[10px] text-cyan-300">{r.ref}</span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${STATE_TINT[r.reviewState] || STATE_TINT.UNREVIEWED}`} data-testid={`aud-rec-state-${r.key}`}>{r.reviewState}</span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${MODULE_TINT[r.module] || MODULE_TINT.OPERATIONS}`}>{r.module}</span>
+                {(r.imageCount || 0) > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 rounded px-1 py-px" data-testid={`aud-rec-photos-${r.key}`}>
+                    <Images className="w-2.5 h-2.5" />{r.imageCount}
+                  </span>
+                )}
+                <span className="ml-auto font-mono text-[10px] text-slate-400" data-testid={`aud-rec-stamp-${r.key}`}>{stampOf(r)}</span>
+              </div>
+              <div>
+                <div className="font-semibold text-slate-100 text-xs">{r.title}</div>
+                <div className="text-[10px] text-slate-500">{r.detail}</div>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                <span className="flex items-center gap-1"><span className="text-slate-600 font-bold uppercase tracking-wider text-[9px]">Biz</span>{bizName(r.businessId)} · <span className="font-mono text-cyan-300">{r.branchCode || bizCode(r.businessId)}</span></span>
+                <span className="flex items-center gap-1"><span className="text-slate-600 font-bold uppercase tracking-wider text-[9px]">Worker</span>{r.workerName || <span className="text-slate-600">—</span>}</span>
+              </div>
+              {renderActions(r, true)}
+              {histKey === r.key && (
+                <div className="rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2.5" data-testid={`aud-hist-panel-${r.key}`}>
+                  {renderHistory(r)}
+                </div>
+              )}
+            </div>
+          ))}
+          {list.length === 0 && !loading && (
+            <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-10 text-center text-slate-500 text-sm">No records match the current filters.</div>
+          )}
+        </div>
+        );
+        const renderList = (list: Rec[]) => (isWide ? renderWide(list) : renderNarrow(list));
+        return (
+        <div className="space-y-4">
+          {/* The most recent 7 days — one group per day, newest day first */}
+          {recentGroups.length === 0 && !loading && (
+            <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-8 text-center text-slate-500 text-sm">
+              No activities in the last {RECENT_DAYS} days match the current filters.
+            </div>
+          )}
+          {recentGroups.map((g) => {
+            const open = isDayOpen(g.day);
+            return (
+            <section key={g.day} data-testid={`aud-day-${g.day}`}>
+              <button
+                type="button"
+                onClick={() => toggleDay(g.day)}
+                aria-expanded={open}
+                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-700/80 bg-slate-900 hover:border-teal-500/40 transition text-left"
+                data-testid={`aud-day-toggle-${g.day}`}
+              >
+                <CalendarClock className={`w-4 h-4 text-teal-300 transition-transform ${open ? "" : "-rotate-90 "}`} />
+                <span className="text-xs font-black uppercase tracking-wider text-slate-200">{g.label}</span>
+                <span className="text-[10px] font-mono text-slate-500 hidden sm:inline">{g.day}</span>
+                <span className="text-[10px] font-bold text-slate-400" data-testid={`aud-day-count-${g.day}`}>{g.list.length} record{g.list.length === 1 ? "" : "s"}</span>
+                <span className="ml-auto text-[10px] font-bold text-teal-300">{open ? "Hide" : "Show"}</span>
+              </button>
+              {open && <div className="mt-2">{renderList(g.list)}</div>}
+            </section>
+            );
+          })}
+
+          {/* History / Previous records (older than 7 days) — collapsed by default */}
+          <section data-testid="aud-history-section">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              aria-expanded={historyOpen}
+              className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-700/80 bg-slate-900 hover:border-teal-500/40 transition text-left"
+              data-testid="aud-history-toggle"
+            >
+              <History className={`w-4 h-4 text-teal-300 transition-transform ${historyOpen ? "" : "-rotate-90 "}`} />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-200">History / Previous records</span>
+              <span className="text-[10px] text-slate-500 hidden sm:inline">older than {RECENT_DAYS} days</span>
+              <span className="text-[10px] font-bold text-slate-400" data-testid="aud-history-count">{historyRecords.length} record{historyRecords.length === 1 ? "" : "s"}</span>
+              <span className="ml-auto text-[10px] font-bold text-teal-300">{historyOpen ? "Hide" : "Show"}</span>
+            </button>
+            {historyOpen && (
+              <div className="mt-2 space-y-2" data-testid="aud-history-body">
+                {historyRecords.length === 0 && !loading && (
+                  <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-8 text-center text-slate-500 text-sm">
+                    No earlier records match the current filters.
+                  </div>
+                )}
+                {renderList(historyRecords)}
+                {moreHistoryAvailable && (
+                  <button
+                    type="button"
+                    onClick={loadOlderRecords}
+                    disabled={olderLoading}
+                    className="w-full py-2.5 rounded-xl border border-teal-500/40 bg-teal-500/10 hover:bg-teal-500/20 text-teal-200 text-xs font-bold disabled:opacity-50 transition"
+                    data-testid="aud-history-load-more"
+                  >
+                    {olderLoading ? "Loading older records…" : "Load older records (previous 250)"}
+                  </button>
+                )}
+                {!moreHistoryAvailable && historyRecords.length > 0 && (
+                  <p className="text-center text-[10px] text-slate-500" data-testid="aud-history-end">
+                    {olderDone ? "End of history for these filters." : `${historyRecords.length} earlier record${historyRecords.length === 1 ? "" : "s"}`}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+        );
+      })()}
 
       {/* ── ISSUES ──────────────────────────────────────────────── */}
       {tab === "ISSUES" && (
@@ -636,6 +891,15 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <User className="w-3 h-3" />{i.assignedUserName ? `${i.assignedUserName} (${i.assignedUserRole})` : i.workerName || "no account matched"}
                   </span>
                 </span>
+                {i.dueDate && ["FLAGGED", "UNDER_REVIEW", "CORRECTION_REQUIRED"].includes(i.status) && (
+                  <span
+                    className={`inline-flex items-center gap-1 font-bold px-1.5 py-0.5 rounded border ${String(i.dueDate) < todayIso ? "text-rose-300 bg-rose-500/10 border-rose-500/40" : String(i.dueDate) === todayIso ? "text-amber-300 bg-amber-500/10 border-amber-500/40" : "text-slate-300 bg-slate-800 border-slate-600"}`}
+                    data-testid={`aud-issue-due-${i.id}`}
+                  >
+                    <CalendarClock className="w-3 h-3" />
+                    {String(i.dueDate) < todayIso ? `OVERDUE — was ${i.dueDate}` : `due ${i.dueDate}`}
+                  </span>
+                )}
               </div>
               {i.reason && <div className="text-xs text-amber-200 flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {i.reason}</div>}
               {i.comment && <div className="text-xs text-slate-300">“{i.comment}”</div>}
@@ -822,28 +1086,49 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
           {/* Financial discrepancies */}
           <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden" data-testid="aud-disc">
-            <div className="px-4 py-3 flex items-center justify-between bg-slate-950/60 border-b border-slate-800">
+            <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 bg-slate-950/60 border-b border-slate-800">
               <div className="text-[11px] font-bold text-slate-400 uppercase">Financial discrepancies — open flags & corrections on the books</div>
               <div className="text-rose-300 font-black text-sm" data-testid="aud-disc-total">{money(report.totals.flaggedAmount)}</div>
             </div>
-            <table className="w-full text-left text-xs">
-              <thead className="text-slate-500 uppercase text-[9px] tracking-wider bg-slate-950/40">
-                <tr><th className="px-4 py-2">Record</th><th className="px-3 py-2">Action</th><th className="px-3 py-2">Reason</th><th className="px-3 py-2">Business</th><th className="px-3 py-2">Raised by</th><th className="px-3 py-2 text-right">Amount</th></tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/70" data-testid="aud-disc-rows">
+            {isWide ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-slate-500 uppercase text-[9px] tracking-wider bg-slate-950/40">
+                    <tr><th className="px-4 py-2">Record</th><th className="px-3 py-2">Action</th><th className="px-3 py-2">Reason</th><th className="px-3 py-2">Business</th><th className="px-3 py-2">Raised by</th><th className="px-3 py-2 text-right">Amount</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70" data-testid="aud-disc-rows">
+                    {report.discrepancies.map((d: any) => (
+                      <tr key={d.reviewId} className="text-slate-300">
+                        <td className="px-4 py-2"><span className="font-mono text-[10px] text-cyan-300">{d.ref}</span> · {d.title}</td>
+                        <td className="px-3 py-2"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[d.action]}`}>{d.action}</span></td>
+                        <td className="px-3 py-2 text-amber-200">{d.reason || "—"}</td>
+                        <td className="px-3 py-2">{bizName(d.businessId)}</td>
+                        <td className="px-3 py-2">{d.raisedBy} · {fmtTs(d.raisedAt)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-rose-300">{d.amountGhs != null ? money(d.amountGhs) : "—"}</td>
+                      </tr>
+                    ))}
+                    {report.discrepancies.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No open discrepancies — clean books.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* Phone / tablet — discrepancies as cards, nothing clipped. */
+              <div className="divide-y divide-slate-800/70" data-testid="aud-disc-rows">
                 {report.discrepancies.map((d: any) => (
-                  <tr key={d.reviewId} className="text-slate-300">
-                    <td className="px-4 py-2"><span className="font-mono text-[10px] text-cyan-300">{d.ref}</span> · {d.title}</td>
-                    <td className="px-3 py-2"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[d.action]}`}>{d.action}</span></td>
-                    <td className="px-3 py-2 text-amber-200">{d.reason || "—"}</td>
-                    <td className="px-3 py-2">{bizName(d.businessId)}</td>
-                    <td className="px-3 py-2">{d.raisedBy} · {fmtTs(d.raisedAt)}</td>
-                    <td className="px-3 py-2 text-right font-bold text-rose-300">{d.amountGhs != null ? money(d.amountGhs) : "—"}</td>
-                  </tr>
+                  <div key={d.reviewId} className="px-4 py-3 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[d.action]}`}>{d.action}</span>
+                      <span className="font-mono text-[10px] text-cyan-300">{d.ref}</span>
+                      <span className="ml-auto font-bold text-rose-300 text-xs">{d.amountGhs != null ? money(d.amountGhs) : "—"}</span>
+                    </div>
+                    <div className="font-semibold text-slate-100 text-xs">{d.title}</div>
+                    {d.reason && <div className="text-[11px] text-amber-200">{d.reason}</div>}
+                    <div className="text-[10px] text-slate-500">{bizName(d.businessId)} · raised by {d.raisedBy} · {fmtTs(d.raisedAt)}</div>
+                  </div>
                 ))}
-                {report.discrepancies.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No open discrepancies — clean books.</td></tr>}
-              </tbody>
-            </table>
+                {report.discrepancies.length === 0 && <div className="px-4 py-6 text-center text-slate-500 text-xs">No open discrepancies — clean books.</div>}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -986,8 +1271,8 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       )}
 
       {/* ── AUDIT LOG ───────────────────────────────────────────── */}
-      {tab === "LOG" && (
-        <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden">
+      {tab === "LOG" && (isWide ? (
+        <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 text-slate-400 uppercase text-[10px] tracking-wider">
               <tr><th className="px-4 py-2">When</th><th className="px-3 py-2">Who</th><th className="px-3 py-2">Action</th><th className="px-3 py-2">Target</th><th className="px-3 py-2">Business</th><th className="px-3 py-2">Reason / detail</th></tr>
@@ -1007,15 +1292,37 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
             </tbody>
           </table>
         </div>
-      )}
+      ) : (
+        /* Phone / tablet — full audit trail as cards, nothing clipped. */
+        <div className="space-y-2" data-testid="aud-log-rows">
+          {log.map((l: any) => (
+            <div key={l.id} className="bg-slate-900 border border-slate-700/80 rounded-xl p-3.5 space-y-2" data-testid={`aud-log-row-${l.id}`}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[l.action] || (l.action.includes("GRANT") || l.action === "DELEGATE" ? "text-cyan-300 bg-cyan-500/15 border-cyan-500/30" : l.action === "RESOLVE" ? ACTION_TINT.RESOLVED : "text-slate-300 bg-slate-700/40 border-slate-600")}`}>{l.action}</span>
+                <span className="font-semibold text-slate-100 text-xs">{l.actorName}</span>
+                <span className="text-[9px] text-slate-500">({l.actorRole})</span>
+                <span className="ml-auto font-mono text-[9px] text-slate-500">{fmtTs(l.createdAt)}</span>
+              </div>
+              <div className="text-[11px] text-slate-200">{l.targetLabel}</div>
+              <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-slate-400">
+                <span>{l.businessId ? bizName(l.businessId) : "—"}{l.branchCode ? ` · ${l.branchCode}` : ""}</span>
+              </div>
+              {(l.reason || l.detail) && (
+                <div className="text-[10px] text-slate-400 break-words">{l.reason || ""}{l.reason && l.detail ? " — " : ""}{l.detail || ""}</div>
+              )}
+            </div>
+          ))}
+          {log.length === 0 && <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-10 text-center text-slate-500 text-sm">Nothing on the audit trail yet.</div>}
+        </div>
+      ))}
 
       {/* ── Record detail drawer: complete underlying record ────── */}
       {detail && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" data-testid="aud-detail-overlay">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" data-testid="aud-detail">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88dvh] flex flex-col overflow-hidden" data-testid="aud-detail" role="dialog" aria-modal="true">
             <div className="flex items-start gap-3 px-5 py-4 border-b border-slate-800">
               {detailStack.length > 0 && (
-                <button onClick={backDetail} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0" title="Back" data-testid="aud-detail-back"><ArrowLeft className="w-4 h-4" /></button>
+                <button onClick={backDetail} aria-label="Back to previous record" className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0" title="Back" data-testid="aud-detail-back"><ArrowLeft className="w-4 h-4" /></button>
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1031,7 +1338,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                   {detail.date ? ` · ${detail.date}` : ""}
                 </p>
               </div>
-              <button onClick={closeDetail} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 shrink-0" data-testid="aud-detail-close"><X className="w-4 h-4" /></button>
+              <button onClick={closeDetail} aria-label="Close record detail" title="Close" className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 shrink-0" data-testid="aud-detail-close"><X className="w-4 h-4" /></button>
             </div>
 
             <div className="overflow-y-auto px-5 py-4 space-y-5">
@@ -1102,7 +1409,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       {/* ── Action modal ────────────────────────────────────────── */}
       {actionModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-5 space-y-3" data-testid="aud-action">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-action" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">
@@ -1119,7 +1426,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                   </p>
                 )}
               </div>
-              <button onClick={() => setActionModal(null)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-action-close"><X className="w-4 h-4" /></button>
+              <button onClick={() => setActionModal(null)} aria-label="Close dialog" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-action-close"><X className="w-4 h-4" /></button>
             </div>
             {(actionModal.action === "FLAGGED" || actionModal.action === "CORRECTION_REQUESTED") && (
               <div>
@@ -1156,6 +1463,37 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                       ? "The responsible user + business managers and the organization Owner are notified."
                       : "The responsible user + business managers are notified (Owner joins on HIGH/CRITICAL)."}
                   </p>
+                  <div className="mt-2.5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Corrective-action deadline (optional)</div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="date"
+                        value={actionForm.dueDate}
+                        onChange={(e) => setActionForm({ ...actionForm, dueDate: e.target.value })}
+                        className="flex-1 rounded-lg border border-slate-600 bg-slate-800 px-2.5 py-1.5 text-[11px] text-slate-100 [color-scheme:dark]"
+                        data-testid="aud-action-due"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setActionForm({ ...actionForm, dueDate: new Date(Date.now() + 3 * 86400000).toLocaleDateString("en-CA") })}
+                        className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 text-[10px] font-bold text-slate-300 hover:text-white"
+                        title="Due in 3 days"
+                      >
+                        +3d
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActionForm({ ...actionForm, dueDate: new Date(Date.now() + 7 * 86400000).toLocaleDateString("en-CA") })}
+                        className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 text-[10px] font-bold text-slate-300 hover:text-white"
+                        title="Due in a week"
+                      >
+                        +1w
+                      </button>
+                    </div>
+                    <p className="text-[9px] text-slate-500 mt-1">
+                      Surfaces in the assignee&apos;s Action Center with an overdue badge, and the daily SLA sweep re-notifies if it slips.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -1186,14 +1524,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       {/* ── Verify & close modal (review the response, then close) ── */}
       {verifyModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-5 space-y-3" data-testid="aud-verify">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-verify" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">Review response & verify</h3>
                 <p className="text-[11px] text-slate-400 mt-0.5"><span className="font-mono text-cyan-300">{verifyModal.recordRef}</span> — {verifyModal.issueTitle || verifyModal.reason}</p>
                 <p className="text-[10px] text-slate-500">Assigned to {verifyModal.assignedUserName || verifyModal.workerName || "—"} · current status {STEP_LABEL[verifyModal.status] || verifyModal.status}</p>
               </div>
-              <button onClick={() => setVerifyModal(null)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-verify-close"><X className="w-4 h-4" /></button>
+              <button onClick={() => setVerifyModal(null)} aria-label="Close dialog" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-verify-close"><X className="w-4 h-4" /></button>
             </div>
             {verifyModal.responseNote && (
               <div className="rounded-lg bg-cyan-500/5 border border-cyan-500/20 px-3 py-2">
@@ -1217,14 +1555,14 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       {/* ── Request correction modal (sends it back to the assignee) ─ */}
       {correctModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-5 space-y-3" data-testid="aud-correct">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-correct" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">Request correction</h3>
                 <p className="text-[11px] text-slate-400 mt-0.5"><span className="font-mono text-cyan-300">{correctModal.recordRef}</span> — {correctModal.issueTitle || correctModal.reason}</p>
                 <p className="text-[10px] text-cyan-300 mt-0.5">Sent straight to {correctModal.assignedUserName || correctModal.workerName || "the assigned user"}'s dashboard with a notification.</p>
               </div>
-              <button onClick={() => setCorrectModal(null)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-correct-close"><X className="w-4 h-4" /></button>
+              <button onClick={() => setCorrectModal(null)} aria-label="Close dialog" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-correct-close"><X className="w-4 h-4" /></button>
             </div>
             {correctModal.responseNote && (
               <div className="rounded-lg bg-cyan-500/5 border border-cyan-500/20 px-3 py-2">

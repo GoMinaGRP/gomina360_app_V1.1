@@ -318,7 +318,13 @@ export function computeFinancialReport(input: FinanceReportInput): FinanceReport
       b.receipts = (b.receipts || 0) + 1;
     } else if (t.type === "EXPENSE") b.expenses += t.amountGhs || 0;
   }
-  if (baselineIncludedInTotals) {
+  // Fold the seeded quarterly close into the trend ONLY when it actually
+  // carries figures. A zero baseline (units provisioned after the quarter,
+  // e.g. the hardware flagship) must not mint an empty "Q1 close" bucket or
+  // the "Q1 close folded in" footnote — the ledger alone tells the story.
+  const hasBaselineFigures =
+    !!baseline && (baseline.revenueGhs > 0 || baseline.expensesGhs > 0);
+  if (baselineIncludedInTotals && hasBaselineFigures) {
     if (granularity === "YEAR") {
       const b = put("2026");
       b.revenue += baseline!.revenueGhs;

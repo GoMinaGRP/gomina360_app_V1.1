@@ -247,7 +247,7 @@ function PanelBody({
   activeTab: string;
   businesses: any[];
   currentUser: any;
-  onSelectTab: (tab: ActiveTab) => void;
+  onSelectTab: (tab: ActiveTab, bizId?: number | null) => void;
 }) {
   const role = currentUser?.role || "OWNER";
   const isExecutive = role === "OWNER" || role === "GENERAL_MANAGER";
@@ -320,7 +320,7 @@ function PanelBody({
             {siblings.map((s) => (
               <button
                 key={s.code}
-                onClick={() => onSelectTab(s.code)}
+                onClick={() => onSelectTab(s.code, s.id)}
                 data-testid={`ctx-unit-${s.code}`}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
                   s.code === activeTab
@@ -378,7 +378,7 @@ function PanelBody({
 
 interface NavProps {
   activeTab: ActiveTab;
-  onSelectTab: (tab: ActiveTab) => void;
+  onSelectTab: (tab: ActiveTab, bizId?: number | null) => void;
   businesses: any[];
   currentUser: any;
   /** Drawer visibility below xl + close handler. */

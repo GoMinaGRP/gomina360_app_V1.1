@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import AdvisorSectionPicker from "./AdvisorSectionPicker";
+import { farmModuleOfBusiness } from "@/lib/advisorSections";
 import {
   Users,
   UserPlus,
@@ -16,7 +18,11 @@ import {
   Mail,
   Phone,
   ArrowLeftRight,
+  Stethoscope,
+  CalendarClock,
+  ShieldCheck,
 } from "lucide-react";
+import { isFarmBusinessCategory } from "@/lib/businessTypeKeys";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
 import SignedInStaffPanel from "./SignedInStaffPanel";
@@ -27,6 +33,16 @@ interface EnterpriseUserPanelProps {
   usersList: any[];
   businesses: any[];
   onRefreshData: () => void;
+  /** Jump straight to the deep-management Farm Advisors console (ADVISOR tab). */
+  onOpenFarmAdvisors?: () => void;
+}
+
+/** Farm Advisor grant rows are shared with the Farm Advisors console through
+ *  ONE API (/api/advisor) — this panel never keeps a second copy of truth. */
+interface AdvisorGrants {
+  assignments: any[];
+  advisors: any[];
+  businesses: any[];
 }
 
 export default function EnterpriseUserPanel({
@@ -34,6 +50,7 @@ export default function EnterpriseUserPanel({
   usersList,
   businesses,
   onRefreshData,
+  onOpenFarmAdvisors,
 }: EnterpriseUserPanelProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
@@ -47,6 +64,21 @@ export default function EnterpriseUserPanel({
   const [newEmail, setNewEmail] = useState("");
   const [newPhone, setNewPhone] = useState("+233 24 ");
   const [newRole, setNewRole] = useState("WORKER");
+  // Farm Advisor onboarding: the OWNER sets the advisor's initial password
+  // by hand (external guest account — credentials are shared off-platform).
+  const [newPassword, setNewPassword] = useState("");
+  const [createdCredentials, setCreatedCredentials] = useState<{ name: string; password: string; granted?: string } | null>(null);
+  // Advisor onboarding: farm units picked at creation (granted right after
+  // the account is created, through the SAME /api/advisor grants API).
+  const [advUnits, setAdvUnits] = useState<Set<number>>(new Set());
+  const [advExpiry, setAdvExpiry] = useState("");
+  const [advScope, setAdvScope] = useState("");
+  // Per-unit section visibility picked during registration: businessId →
+  // section list (null = all — the default for untouched units).
+  const [advSections, setAdvSections] = useState<Record<number, string[] | null>>({});
+  // Live advisor grants for the users table + the access modal (OWNER/GM).
+  const [advisorGrants, setAdvisorGrants] = useState<AdvisorGrants | null>(null);
+  const [advisorAccessUser, setAdvisorAccessUser] = useState<any>(null);
   const [newBusinessId, setNewBusinessId] = useState("");
   const [newCanRecordSales, setNewCanRecordSales] = useState(true);
   const [newCanRecordExpenses, setNewCanRecordExpenses] = useState(false);
@@ -140,6 +172,34 @@ export default function EnterpriseUserPanel({
     return b ? `${b.name} (${b.branchLocation})` : `Branch #${bId}`;
   };
 
+  const mayManageAdvisors =
+    currentUser?.role === "OWNER" ||
+    currentUser?.role === "GENERAL_MANAGER" ||
+    currentUser?.canManageUsers === true;
+
+  const loadAdvisorGrants = async () => {
+    if (!mayManageAdvisors) return;
+    try {
+      const res = await fetch("/api/advisor");
+      const d = await res.json();
+      if (res.ok && d.success) setAdvisorGrants(d);
+    } catch {
+      /* transient — rows simply show without grant detail until reload */
+    }
+  };
+
+  useEffect(() => {
+    loadAdvisorGrants();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const today = new Date().toISOString().slice(0, 10);
+  /** All grants of one advisor, newest first. */
+  const grantsOf = (userId: number) =>
+    (advisorGrants?.assignments || [])
+      .filter((a) => Number(a.userId) === Number(userId))
+      .sort((a, b) => Number(b.id) - Number(a.id));
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim() || !newEmail.trim()) return;
@@ -163,15 +223,56 @@ export default function EnterpriseUserPanel({
           canRecordExpenses: newCanRecordExpenses,
           canManageStock: newCanManageStock,
           canExportData: newCanExportData,
+          // Advisors only: the OWNER-chosen initial password (server generates
+          // a random one when blank and returns it exactly once).
+          ...(newRole === "FARM_ADVISOR" ? { password: newPassword.trim() || undefined } : {}),
         }),
       });
 
       const data = await res.json();
       if (data.success) {
+        // One-flow advisor onboarding: grant the picked farm units through
+        // the SAME grants API the Farm Advisors console uses.
+        let grantedSummary = "";
+        if (newRole === "FARM_ADVISOR" && advUnits.size > 0) {
+          try {
+            const g = await fetch("/api/advisor", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userId: data.user.id,
+                businessIds: [...advUnits],
+                validUntil: advExpiry || null,
+                scopeNote: advScope || null,
+                sectionsByBusiness: Object.fromEntries(
+                  [...advUnits]
+                    .filter((bid) => advSections[bid] !== undefined)
+                    .map((bid) => [String(bid), advSections[bid]])
+                ),
+              }),
+            });
+            const gd = await g.json();
+            grantedSummary = gd.success
+              ? `Farm-unit access granted: ${gd.granted} unit${Number(gd.granted) === 1 ? "" : "s"}${advExpiry ? `, expires ${advExpiry}` : ""}.`
+              : gd.error || "Units were not granted — manage access from the user's row.";
+            loadAdvisorGrants();
+          } catch {
+            grantedSummary = "Units were not granted — manage access from the user's row.";
+          }
+        }
+        if (newRole === "FARM_ADVISOR" && data.initialPassword) {
+          setCreatedCredentials({ name: newName, password: String(data.initialPassword), granted: grantedSummary });
+        }
         setNewName("");
         setNewEmail("");
         setNewPhone("+233 24 ");
         setNewRole("WORKER");
+        setNewPassword("");
+        setAdvUnits(new Set());
+        setAdvSections({});
+        setAdvUnits(new Set());
+        setAdvExpiry("");
+        setAdvScope("");
         setNewBusinessId("");
         setShowCreateModal(false);
         onRefreshData();
@@ -359,7 +460,7 @@ export default function EnterpriseUserPanel({
               Executive Directory & Access HQ
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
-              Create, edit, toggle status, and transfer Branch Managers and Workers across all 7 business locations.
+              Create, edit, toggle status, and transfer Branch Managers and Workers across all 7 business locations — and onboard read-only Farm Advisors with per-unit access, expiry and scope.
             </p>
           </div>
         </div>
@@ -455,6 +556,7 @@ export default function EnterpriseUserPanel({
             <option value="ALL">All Roles</option>
             <option value="OWNER">Owner</option>
             <option value="GENERAL_MANAGER">General Manager</option>
+            <option value="FARM_ADVISOR">Farm Advisor</option>
             <option value="BRANCH_MANAGER">Branch Manager</option>
             <option value="WORKER">Worker (Sales Person)</option>
           </select>
@@ -518,17 +620,64 @@ export default function EnterpriseUserPanel({
                             ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
                             : user.role === "BRANCH_MANAGER"
                             ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                            : user.role === "FARM_ADVISOR"
+                            ? "bg-teal-500/20 text-teal-300 border border-teal-500/30"
                             : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                         }`}
                       >
-                        {user.role}
+                        {user.role === "FARM_ADVISOR" ? "FARM ADVISOR" : user.role}
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-slate-300">
-                      <div className="flex items-center space-x-1">
-                        <Building className="w-3.5 h-3.5 text-slate-400" />
-                        <span className="truncate max-w-[200px]">{getBusinessName(user.assignedBusinessId)}</span>
-                      </div>
+                      {user.role === "FARM_ADVISOR" ? (
+                        (() => {
+                          const gs = grantsOf(user.id);
+                          const activeCount = gs.filter(
+                            (a) => a.isActive !== false && (!a.validUntil || String(a.validUntil) >= today),
+                          ).length;
+                          return (
+                            <div className="space-y-1" data-testid={`usr-advisor-units-${user.id}`}>
+                              {gs.length === 0 ? (
+                                <span className="text-[10px] text-slate-500 italic">No farm units granted</span>
+                              ) : (
+                                <>
+                                  <div className="text-[10px] text-slate-400 font-semibold">
+                                    {gs.length} unit{gs.length === 1 ? "" : "s"} · {activeCount} active
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {gs.slice(0, 4).map((a) => {
+                                      const expired = a.validUntil && String(a.validUntil) < today;
+                                      const state = a.isActive === false ? "REVOKED" : expired ? "EXPIRED" : "ACTIVE";
+                                      const biz = businesses.find((b) => Number(b.id) === Number(a.businessId));
+                                      return (
+                                        <span
+                                          key={a.id}
+                                          title={`${biz?.name || ""} — ${state}${a.validUntil ? ` · expires ${a.validUntil}` : " · no expiry"}`}
+                                          className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                            state === "ACTIVE"
+                                              ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                                              : state === "EXPIRED"
+                                                ? "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                                                : "bg-slate-600/20 text-slate-400 border-slate-600/40"
+                                          }`}
+                                        >
+                                          {biz?.code || `#${a.businessId}`}
+                                        </span>
+                                      );
+                                    })}
+                                    {gs.length > 4 && <span className="text-[9px] text-slate-500">+{gs.length - 4}</span>}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div className="flex items-center space-x-1">
+                          <Building className="w-3.5 h-3.5 text-slate-400" />
+                          <span className="truncate max-w-[200px]">{getBusinessName(user.assignedBusinessId)}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-center text-xs">
                       {(user.role === "WORKER" || user.role === "BRANCH_MANAGER") ? (
@@ -541,6 +690,10 @@ export default function EnterpriseUserPanel({
                           <span>•</span>
                           <span className={user.canExportData ? "text-indigo-400" : "text-slate-500"}>Export</span>
                         </div>
+                      ) : user.role === "FARM_ADVISOR" ? (
+                        <span className="text-[10px] font-bold text-teal-300" title="Read-only farm monitoring — advisor notes are their one write surface">
+                          READ-ONLY · NOTES
+                        </span>
                       ) : (
                         <span className="text-emerald-400 text-[10px] font-bold">Full</span>
                       )}
@@ -561,6 +714,19 @@ export default function EnterpriseUserPanel({
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center justify-end space-x-2">
+                        {/* Farm Advisor: manage grants (same data as the Farm Advisors console) */}
+                        {user.role === "FARM_ADVISOR" && mayManageAdvisors && (
+                          <button
+                            onClick={() => setAdvisorAccessUser(user)}
+                            disabled={!advisorGrants}
+                            className="p-1.5 rounded-lg hover:bg-teal-500/20 text-teal-400 transition disabled:opacity-30"
+                            title="Manage Advisor Access (grant / renew / revoke)"
+                            data-testid={`usr-advisor-manage-${user.id}`}
+                          >
+                            <Stethoscope className="w-4 h-4" />
+                          </button>
+                        )}
+
                         {/* Edit profile & Transfer */}
                         <button
                           onClick={() => openEditModal(user)}
@@ -672,7 +838,7 @@ export default function EnterpriseUserPanel({
       {/* Create User / Register Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+          <div className={`bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full ${newRole === "FARM_ADVISOR" ? "max-w-lg" : "max-w-md"} shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto`}>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <UserPlus className="w-5 h-5 text-emerald-400" />
@@ -721,8 +887,15 @@ export default function EnterpriseUserPanel({
                     <option value="GENERAL_MANAGER">General Manager</option>
                     <option value="BRANCH_MANAGER">Branch Manager</option>
                     <option value="WORKER">Worker (Sales Person)</option>
+                    <option value="FARM_ADVISOR">Farm Advisor (external, read-only)</option>
                   </select>
+                  {newRole === "FARM_ADVISOR" && (
+                    <p className="text-[10px] text-teal-300 mt-1 leading-snug">
+                      External advisor — OWNER only, read-only by design (no branch, no management permissions). Grant their farm units below or later from <b>Farm Advisors</b> / their row in this table.
+                    </p>
+                  )}
                 </div>
+                {newRole !== "FARM_ADVISOR" && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Branch / Business</label>
                   <select
@@ -736,7 +909,117 @@ export default function EnterpriseUserPanel({
                     ))}
                   </select>
                 </div>
+                )}
               </div>
+
+              {/* ── Farm Advisor onboarding: password + unit access in one flow ──
+                  Uses the SAME /api/advisor grants as the Farm Advisors console. */}
+              {newRole === "FARM_ADVISOR" && (
+                <div className="space-y-3 rounded-xl border border-teal-500/30 bg-teal-500/5 p-3.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-teal-300 uppercase tracking-wider">
+                    <Stethoscope className="w-3.5 h-3.5" /> Advisor Access &amp; Settings
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Initial Password *</label>
+                    <input
+                      type="text"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="e.g. Advisor@2026"
+                      data-testid="user-create-password"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Share it securely with the advisor — a random one is generated (and shown once) if left blank.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">
+                      Farm units <span className="text-slate-500 font-medium normal-case">(farm types highlighted — tap to toggle)</span>
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5" data-testid="user-create-unit-chips">
+                      {businesses.map((b) => {
+                        const farm = isFarmBusinessCategory(b.category);
+                        const on = advUnits.has(Number(b.id));
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() =>
+                              setAdvUnits((prev) => {
+                                const next = new Set(prev);
+                                if (on) next.delete(Number(b.id));
+                                else next.add(Number(b.id));
+                                return next;
+                              })
+                            }
+                            data-testid={`user-create-biz-${b.code}`}
+                            className={`text-left px-2.5 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                              on
+                                ? "bg-teal-500/20 border-teal-400/60 text-teal-200"
+                                : farm
+                                  ? "bg-slate-800/80 border-emerald-600/40 text-slate-200 hover:border-emerald-500/60"
+                                  : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500"
+                            }`}
+                          >
+                            <div className="truncate">{b.name}</div>
+                            <div className="text-[9px] font-mono opacity-70">{b.code}{farm ? " · FARM" : ""}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {/* Per-unit visible sections — only farm units have a
+                      catalog; default is ALL sections per unit. */}
+                  {[...advUnits]
+                    .map((bid) => businesses.find((b) => Number(b.id) === Number(bid)))
+                    .filter((b) => !!b && farmModuleOfBusiness(b))
+                    .length > 0 && (
+                    <div className="space-y-2.5 rounded-lg border border-slate-700/60 bg-slate-800/40 p-2.5">
+                      <div className="text-[10px] text-slate-400">
+                        Section visibility per selected farm unit — uncheck what this advisor must <b>not</b> see (default: all).
+                      </div>
+                      {[...advUnits]
+                        .map((bid) => businesses.find((b) => Number(b.id) === Number(bid)))
+                        .filter((b) => !!b && farmModuleOfBusiness(b))
+                        .map((b) => (
+                          <AdvisorSectionPicker
+                            key={b.id}
+                            business={b}
+                            value={advSections[Number(b.id)] ?? null}
+                            onChange={(next) => setAdvSections((prev) => ({ ...prev, [Number(b.id)]: next }))}
+                            compact
+                            testidPrefix="usr-create-sec"
+                          />
+                        ))}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Access expires (optional)</label>
+                      <input
+                        type="date"
+                        value={advExpiry}
+                        min={today}
+                        onChange={(e) => setAdvExpiry(e.target.value)}
+                        data-testid="user-create-valid-until"
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Scope note (optional)</label>
+                      <input
+                        type="text"
+                        value={advScope}
+                        onChange={(e) => setAdvScope(e.target.value)}
+                        placeholder="e.g. Growth & health review"
+                        data-testid="user-create-scope-note"
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1">Phone Number</label>
@@ -773,6 +1056,7 @@ export default function EnterpriseUserPanel({
                 </div>
               )}
 
+              {newRole !== "FARM_ADVISOR" && (
               <div className="pt-2 border-t border-slate-800">
                 <LocationSelector
                   value={newLocation}
@@ -781,6 +1065,7 @@ export default function EnterpriseUserPanel({
                   headingLabel="User Location (Ghana)"
                 />
               </div>
+              )}
 
               <div className="flex justify-end space-x-3 pt-3 border-t border-slate-800">
                 <button
@@ -847,12 +1132,35 @@ export default function EnterpriseUserPanel({
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
                     <option value="GENERAL_MANAGER">General Manager</option>
+                    <option value="FARM_ADVISOR">Farm Advisor (external, read-only)</option>
                     <option value="BRANCH_MANAGER">Branch Manager</option>
                     <option value="WORKER">Worker (Sales Person)</option>
                   </select>
+                  {editRole === "FARM_ADVISOR" && (
+                    <div className="mt-1.5 rounded-lg border border-teal-500/30 bg-teal-500/5 px-3 py-2 space-y-1.5">
+                      <p className="text-[10px] text-teal-300 leading-snug">
+                        External advisor — read-only by design. Their farm-unit access, expiry and scope live in the advisor grants system, not in this form.
+                      </p>
+                      {showEditModal?.role === "FARM_ADVISOR" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowEditModal(null);
+                            setAdvisorAccessUser(showEditModal);
+                          }}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-[10px] font-bold"
+                          data-testid="usr-edit-open-advisor-access"
+                        >
+                          <Stethoscope className="w-3.5 h-3.5" /> Manage Advisor Access
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Assigned Branch (Transfer)</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">
+                    {editRole === "FARM_ADVISOR" ? "Branch (not applicable to advisors)" : "Assigned Branch (Transfer)"}
+                  </label>
                   <select
                     value={editBusinessId}
                     onChange={(e) => setEditBusinessId(e.target.value)}
@@ -930,6 +1238,54 @@ export default function EnterpriseUserPanel({
         </div>
       )}
 
+      {/* ── Advisor Access modal: grant / renew / expire / revoke — the SAME
+            /api/advisor assignments the Farm Advisors console manages. ── */}
+      {advisorAccessUser && (
+        <AdvisorAccessModal
+          user={advisorAccessUser}
+          grants={advisorGrants}
+          businesses={businesses}
+          today={today}
+          onReload={loadAdvisorGrants}
+          onClose={() => setAdvisorAccessUser(null)}
+          onOpenConsole={() => {
+            setAdvisorAccessUser(null);
+            onOpenFarmAdvisors?.();
+          }}
+        />
+      )}
+
+      {/* Advisor credentials — one-time reveal after account creation */}
+      {createdCredentials && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4 text-center">
+            <Key className="w-12 h-12 text-teal-400 mx-auto" />
+            <h3 className="text-lg font-bold text-white">Farm Advisor account created</h3>
+            <p className="text-xs text-slate-300">
+              Initial login for <strong className="text-white">{createdCredentials.name}</strong>:
+            </p>
+            <div className="rounded-xl bg-slate-800 border border-slate-700 px-4 py-3 font-mono text-sm text-teal-300 break-all" data-testid="user-created-password">
+              {createdCredentials.password}
+            </div>
+            {createdCredentials.granted && (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-3 py-2 text-[11px] font-semibold" data-testid="user-created-granted">
+                {createdCredentials.granted}
+              </div>
+            )}
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Share it securely with the advisor — it is shown only once. The advisor signs in with their email and this password, then changes it from their profile settings.
+            </p>
+            <button
+              type="button"
+              onClick={() => setCreatedCredentials(null)}
+              className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Password Reset Modal */}
       {showPasswordResetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
@@ -971,6 +1327,354 @@ export default function EnterpriseUserPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   AdvisorAccessModal — per-advisor grant management inside Users & Access.
+   Same data, same API, same states as the Farm Advisors console: this is a
+   compact inline surface, NOT a second access system.
+   ════════════════════════════════════════════════════════════════════════ */
+function AdvisorAccessModal({
+  user,
+  grants,
+  businesses,
+  today,
+  onReload,
+  onClose,
+  onOpenConsole,
+}: {
+  user: any;
+  grants: AdvisorGrants | null;
+  businesses: any[];
+  today: string;
+  onReload: () => void;
+  onClose: () => void;
+  onOpenConsole?: () => void;
+}) {
+  const mine = (grants?.assignments || [])
+    .filter((a) => Number(a.userId) === Number(user.id))
+    .sort((a, b) => Number(b.id) - Number(a.id));
+  const grantedIds = new Set(mine.map((a) => Number(a.businessId)));
+
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [validUntil, setValidUntil] = useState("");
+  const [scopeNote, setScopeNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [rowEdits, setRowEdits] = useState<Record<number, { validUntil: string; scopeNote: string; sections?: string[] | null }>>({});
+
+  const rowState = (a: any) => {
+    const expired = a.validUntil && String(a.validUntil) < today;
+    if (a.isActive === false) return "REVOKED";
+    if (expired) return "EXPIRED";
+    return "ACTIVE";
+  };
+
+  const grant = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/advisor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: Number(user.id),
+          businessIds: [...picked],
+          validUntil: validUntil || null,
+          scopeNote: scopeNote || null,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.success) {
+        setMsg(d.error || "Grant failed.");
+        return;
+      }
+      setMsg(`Access granted to ${d.granted} unit(s)${d.reactivated ? `, ${d.reactivated} re-activated` : ""}.`);
+      setPicked(new Set());
+      setValidUntil("");
+      setScopeNote("");
+      await onReload();
+    } catch {
+      setMsg("Network error — try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const patch = async (assignmentId: number, body: Record<string, any>, note: string) => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/advisor", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentId, ...body }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.success) {
+        setMsg(d.error || "Update failed.");
+        return;
+      }
+      setMsg(note);
+      await onReload();
+    } catch {
+      setMsg("Network error — try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-3 sm:p-4">
+      <div className="bg-slate-900 border border-teal-500/40 rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl" data-testid="usr-advisor-modal">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 rounded-t-2xl">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-teal-500/15 border border-teal-500/30">
+              <Stethoscope className="w-5 h-5 text-teal-300" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                Advisor Access — {user.name}
+                <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/40">READ-ONLY</span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">{user.email} · grants, expiry and scope — identical to the Farm Advisors console</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none" aria-label="Close">×</button>
+        </div>
+
+        <div className="p-4 sm:p-5 space-y-4">
+          {msg && (
+            <div className={`text-xs rounded-lg px-3 py-2 border ${msg.match(/granted|re-activated|updated|extended|restored|revoked/i) ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30" : "text-rose-300 bg-rose-500/10 border-rose-500/30"}`}>
+              {msg}
+            </div>
+          )}
+
+          {/* Current grants */}
+          <section>
+            <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" /> Current Grants ({mine.filter((a) => rowState(a) === "ACTIVE").length} active)
+            </h4>
+            {mine.length === 0 ? (
+              <div className="rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-4 text-center text-xs text-slate-400">
+                No farm units granted yet — grant the first ones below.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {mine.map((a) => {
+                  const biz = businesses.find((b) => Number(b.id) === Number(a.businessId));
+                  const state = rowState(a);
+                  const edit = rowEdits[Number(a.id)] || {
+                    validUntil: a.validUntil || "",
+                    scopeNote: a.scopeNote || "",
+                    sections: a.sections === undefined ? undefined : a.sections,
+                  };
+                  const sectionsDirty =
+                    edit.sections !== undefined && JSON.stringify(edit.sections ?? null) !== JSON.stringify(a.sections ?? null);
+                  const dirty = edit.validUntil !== (a.validUntil || "") || edit.scopeNote !== (a.scopeNote || "") || sectionsDirty;
+                  return (
+                    <div
+                      key={a.id}
+                      className={`rounded-xl border px-3.5 py-3 space-y-2 ${state === "ACTIVE" ? "border-slate-700/60 bg-slate-900/60" : "border-slate-800 bg-slate-900/40 opacity-80"}`}
+                      data-testid={`usr-grant-row-${a.id}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-100">{biz?.name || `Unit #${a.businessId}`}</span>
+                        <span className="text-[9px] font-mono text-slate-500">{biz?.code}</span>
+                        <span
+                          className={`text-[8px] font-black px-1.5 py-0.5 rounded border ${
+                            state === "ACTIVE"
+                              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                              : state === "EXPIRED"
+                                ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                                : "bg-slate-500/15 text-slate-300 border-slate-500/40"
+                          }`}
+                        >
+                          {state}
+                        </span>
+                        <span className="ml-auto text-[9px] text-slate-500">granted by {a.grantedByName}</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">Expires</label>
+                          <input
+                            type="date"
+                            value={edit.validUntil}
+                            min={today}
+                            onChange={(e) => setRowEdits((r) => ({ ...r, [Number(a.id)]: { ...edit, validUntil: e.target.value } }))}
+                            data-testid={`usr-grant-expiry-${a.id}`}
+                            className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-[11px] focus:outline-none"
+                          />
+                          <p className="text-[9px] text-slate-500 mt-0.5">Empty = no expiry. Past dates expire the grant automatically.</p>
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">Scope note</label>
+                          <input
+                            type="text"
+                            value={edit.scopeNote}
+                            placeholder="e.g. Growth & health review only"
+                            onChange={(e) => setRowEdits((r) => ({ ...r, [Number(a.id)]: { ...edit, scopeNote: e.target.value } }))}
+                            data-testid={`usr-grant-scope-${a.id}`}
+                            className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-[11px] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      {biz && farmModuleOfBusiness(biz) && state === "ACTIVE" && (
+                        <div className="rounded-lg border border-slate-700/50 bg-slate-800/40 px-2.5 py-2">
+                          <AdvisorSectionPicker
+                            business={biz}
+                            value={edit.sections === undefined ? (a.sections ?? null) : edit.sections}
+                            onChange={(next) => setRowEdits((r) => ({ ...r, [Number(a.id)]: { ...edit, sections: next } }))}
+                            compact
+                            testidPrefix="usr-grant-sec"
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {dirty && (
+                          <button
+                            onClick={() =>
+                              patch(
+                                Number(a.id),
+                                {
+                                  validUntil: edit.validUntil || null,
+                                  scopeNote: edit.scopeNote || null,
+                                  ...(edit.sections !== undefined ? { sections: edit.sections } : {}),
+                                },
+                                "Grant updated — expiry/scope/sections saved.",
+                              )
+                            }
+                            disabled={busy}
+                            data-testid={`usr-grant-save-${a.id}`}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold disabled:opacity-40"
+                          >
+                            Save changes
+                          </button>
+                        )}
+                        {state === "ACTIVE" ? (
+                          <button
+                            onClick={() => patch(Number(a.id), { isActive: false }, "Access revoked — the advisor lost this unit immediately.")}
+                            disabled={busy}
+                            data-testid={`usr-grant-revoke-${a.id}`}
+                            className="px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-[10px] font-bold disabled:opacity-40"
+                          >
+                            Revoke
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => patch(Number(a.id), { isActive: true, ...(edit.validUntil ? { validUntil: edit.validUntil } : {}) }, "Access re-activated.")}
+                            disabled={busy}
+                            data-testid={`usr-grant-reactivate-${a.id}`}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold disabled:opacity-40"
+                          >
+                            Re-activate{edit.validUntil ? ` (expires ${edit.validUntil})` : ""}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Grant more units */}
+          <section className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-3.5 space-y-3">
+            <h4 className="text-[11px] font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+              <CalendarClock className="w-3.5 h-3.5" /> Grant / Renew Access
+            </h4>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                Farm units <span className="text-slate-500 normal-case font-medium">(farm types highlighted; already-granted units marked)</span>
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5" data-testid="usr-grant-unit-chips">
+                {businesses.map((b) => {
+                  const farm = isFarmBusinessCategory(b.category);
+                  const held = grantedIds.has(Number(b.id));
+                  const on = picked.has(Number(b.id));
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() =>
+                        setPicked((prev) => {
+                          const next = new Set(prev);
+                          if (on) next.delete(Number(b.id));
+                          else next.add(Number(b.id));
+                          return next;
+                        })
+                      }
+                      data-testid={`usr-grant-biz-${b.code}`}
+                      className={`text-left px-2.5 py-2 rounded-lg border text-[11px] font-semibold transition ${
+                        on
+                          ? "bg-teal-500/20 border-teal-400/60 text-teal-200"
+                          : held
+                            ? "bg-slate-800/40 border-slate-700 text-slate-500"
+                            : farm
+                              ? "bg-slate-800/80 border-emerald-600/40 text-slate-200 hover:border-emerald-500/60"
+                              : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-500"
+                      }`}
+                    >
+                      <div className="truncate">{b.name}</div>
+                      <div className="text-[9px] font-mono opacity-70">
+                        {b.code}
+                        {farm ? " · FARM" : ""}
+                        {held ? " · HELD" : ""}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Access expires (optional)</label>
+                <input
+                  type="date"
+                  value={validUntil}
+                  min={today}
+                  onChange={(e) => setValidUntil(e.target.value)}
+                  data-testid="usr-grant-new-expiry"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Scope note (optional)</label>
+                <input
+                  type="text"
+                  value={scopeNote}
+                  onChange={(e) => setScopeNote(e.target.value)}
+                  placeholder="e.g. Growth & health review only"
+                  data-testid="usr-grant-new-scope"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={grant}
+                disabled={busy || picked.size === 0}
+                data-testid="usr-grant-new-submit"
+                className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" /> {busy ? "Granting…" : `Grant access (${picked.size} unit${picked.size === 1 ? "" : "s"})`}
+              </button>
+            </div>
+          </section>
+
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            Every change lands on the immutable audit trail (GRANT_ACCESS / UPDATE_GRANT / REVOKE_ACCESS). Advisors are read-only everywhere except their own notes.
+            {onOpenConsole && (
+              <button onClick={onOpenConsole} className="ml-1 text-teal-300 font-bold hover:text-teal-200" data-testid="usr-advisor-open-console">
+                Open the Farm Advisors console →
+              </button>
+            )}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

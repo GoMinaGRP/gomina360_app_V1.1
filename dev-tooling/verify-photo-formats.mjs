@@ -70,7 +70,10 @@ for (const f of files) {
     // Extract the accept value
     const am = tag.match(/accept\s*=\s*["']([^"']*)["']/);
     const accept = am ? am[1] : "";
-    if (!accept.includes("image/*")) {
+    // Legitimate non-image file inputs: the NewBusinessModal backup importer
+    // accepts a GoMina business-backup .zip by design (not a photo input).
+    const isBackupInput = accept.includes("application/vnd.gomina.business-backup+zip") || accept.includes("application/zip");
+    if (!isBackupInput && !accept.includes("image/*")) {
       problems.push(`${f}: accept="${accept}" (not image/*)`);
     }
   }

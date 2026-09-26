@@ -35,6 +35,9 @@ LD_LIBRARY_PATH=/tmp/al2023/lib node dev-tooling/verify-live.mjs
 | `extract-chromium.mjs` | Unpacks headless Chromium to `/tmp/al2023` for browser tests |
 | `restore-userdata.mjs` | Replays the owner's Payroll & Audit activity (4 paid runs incl. OT/allowance composition, finance transactions, Emmanuel's auditor grant) through the app's own APIs. Idempotent. |
 | `verify-live.mjs` | Full issue-workflow E2E (checklist review → flag+photo → dashboard routing → 5-stage pipeline → verify/close) + restored-state regression + TEST-data purge + DB forensics |
+| `verify-audit-history.mjs` | Audit & Review → Records declutter E2E: today-only default view, collapsible History section, search/filters governing both, load-more paging through the 250-record API cap, phone + desktop layouts |
+| `verify-responsive-deep.mjs` | Deep mobile/tablet sweep: every nav surface × every in-page tab at 375px/768px — no document overflow, no clipped interactive controls (env: `VIEWPORTS`, `ROLES`) |
+| `verify-responsive-modals.mjs` | Modal sweep at 375px/768px: opens every modal/drawer on every surface, checks fit + clipped controls + that it closes again (env: `VIEWPORTS`, `ROLES`) |
 | `recover.sh` | The orchestrator above |
 
 Credentials used by the scripts are the seeded demo accounts

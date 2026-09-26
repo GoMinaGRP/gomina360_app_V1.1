@@ -75,6 +75,7 @@ import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/li
 import { businessTypeAllowed } from "@/lib/businessTypes";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { managesBusiness } from "@/lib/permissions";
+import { recordDeletedBusiness } from "@/lib/systemMarkers";
 import { apiError } from "@/lib/apiError";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
@@ -641,6 +642,15 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
     // 5. Finally remove the unit itself.
     await db.delete(businesses).where(eq(businesses.id, businessId));
+
+    // 6. Deletion tombstone: the unit code is recorded in system_markers so
+    //    NO auto-provisioning path (boot seeder "repair-forward", future
+    //    flagship passes) can ever resurrect this unit. OWNER deletion is
+    //    final — this is the root-cause fix for deleted units (e.g. the
+    //    HARDWARE-01 flagship) reappearing after the next server restart.
+    //    Best-effort: a pre-migration database (table absent) skips the
+    //    tombstone rather than failing the deletion itself.
+    await recordDeletedBusiness(biz.code);
 
     return NextResponse.json({
       success: true,

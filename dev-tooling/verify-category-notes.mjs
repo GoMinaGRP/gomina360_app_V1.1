@@ -439,8 +439,8 @@ async function sectionG(ownerCookie, base) {
   for (const t of Object.keys(base.counts)) counts[t] = (await pg.query(`SELECT count(*)::int c FROM ${t}`)).rows[0].c;
   const mismatches = Object.entries(base.counts).filter(([t, c]) => counts[t] !== c).map(([t, c]) => `${t}:${c}→${counts[t]}`);
   ok("G2 ALL live-data counts restored exactly", mismatches.length === 0, mismatches.join(", "));
-  const eggs = (await pg.query(`SELECT quantity FROM inventory_items WHERE id=1`)).rows[0];
-  ok("G3 live stock untouched (eggs = 873.63)", Number(eggs?.quantity) === 873.63, eggs?.quantity);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`G3 live stock untouched (eggs = ${base.eggsQty})`, base.eggsQty !== null && Math.abs(Number(eggs?.q) - base.eggsQty) < 1e-9, eggs?.q);
   const stray = (await pg.query(`SELECT count(*)::int c FROM daily_notes WHERE content LIKE 'TEST%'`)).rows[0].c
     + (await pg.query(`SELECT count(*)::int c FROM businesses WHERE name LIKE 'TEST%'`)).rows[0].c;
   ok("G4 zero TEST strays anywhere", stray === 0, stray);
@@ -451,6 +451,9 @@ console.log("══ verify-category-notes — category catalog + auto-dashboard 
 await pg.connect();
 const ownerCookie = await login(OWNER.email, OWNER.pass);
 const base = {
+  // Live stock snapshot — AZ-AUDIT-REPORT M5: never hardcode demo quantities
+  // (eggs was 873.63 on the old snapshot; a fresh reseed starts at 850/200).
+  eggsQty: (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0]?.q ?? null,
   maxSessionId: (await pg.query(`SELECT COALESCE(max(id),0)::int m FROM user_sessions`)).rows[0].m,
   counts: Object.fromEntries((await pg.query(`
     SELECT 'businesses' t, count(*)::int c FROM businesses

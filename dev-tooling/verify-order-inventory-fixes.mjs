@@ -130,7 +130,7 @@ async function sectionA() {
   console.log("\n— A · phone validation: API rejects bad numbers, records nothing —");
   const cart = [{ inventoryId: 6, quantity: 1 }]; // biz 8 cement
   const baseOrder = {
-    businessId: 8, customerName: "TEST Phone Probe", fulfillmentType: "PICKUP",
+    businessId: HW, customerName: "TEST Phone Probe", fulfillmentType: "PICKUP",
     destinationAddress: "", paymentChoice: "ON_DELIVERY", momoRef: "", note: "", items: cart,
   };
   const before = await pg.query(`SELECT count(*)::int c FROM customer_trackings`);
@@ -157,7 +157,8 @@ let T1; // biz-8 PICKUP online order code (used by the notification section)
 async function sectionB() {
   console.log("\n— B · DESKTOP storefront: live phone error + typed qty + order —");
   const { ctx, page } = await newPage("storefront-desktop");
-  await page.goto(`${BASE}/order?biz=8`, { waitUntil: "networkidle0", timeout: 60000 });
+  // AZ-AUDIT-REPORT M5: never hardcode the storefront biz id (was biz=8).
+  await page.goto(`${BASE}/order?biz=${HW}`, { waitUntil: "networkidle0", timeout: 60000 });
   await page.waitForSelector('[data-testid="oo-add-6"]', { timeout: 30000 });
 
   // — typed quantity —
@@ -304,7 +305,7 @@ async function sectionD(ownerCookie) {
     body: JSON.stringify({
       entity: "PURCHASE",
       data: {
-        businessId: 8, purchaseNumber: num, supplierName: "TEST Bell Supplier",
+        businessId: HW, purchaseNumber: num, supplierName: "TEST Bell Supplier",
         itemName: "TEST Bell Cement Restock", quantity: 25, unitCostGhs: 100,
         status: "ORDERED", orderDate: "2026-09-03", createdByName: "Kwame Mina",
       },
@@ -323,7 +324,7 @@ async function sectionD(ownerCookie) {
     method: "POST",
     body: JSON.stringify({
       name: "TEST Bell User", email: `test.bell.${uniq}@gomina.test`, phone: "0557778899",
-      password: "GoMina@Test99", role: "WORKER", assignedBusinessId: 8, canRecordSales: true,
+      password: "GoMina@Test99", role: "WORKER", assignedBusinessId: HW, canRecordSales: true,
     }),
   });
   testUser = mk.json?.user;
@@ -514,8 +515,8 @@ async function sectionG(ownerCookie, base) {
   const mismatches = Object.entries(base.counts).filter(([t, c]) => after[t] !== c)
     .map(([t, c]) => `${t}:${c}→${after[t]}`);
   ok("G3 ALL live-data table counts unchanged", mismatches.length === 0, mismatches.join(", "));
-  const eggs = (await pg.query(`SELECT quantity FROM inventory_items WHERE id=1`)).rows[0];
-  ok("G4 live stock untouched (eggs qty = 873.63)", Number(eggs?.quantity) === 873.63, eggs?.quantity);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`G4 live stock untouched (eggs qty = ${base.eggsQty})`, base.eggsQty !== null && Math.abs(Number(eggs?.q) - base.eggsQty) < 1e-9, eggs?.q);
   const strays = (await pg.query(`SELECT count(*)::int c FROM customer_trackings WHERE customer_name LIKE 'TEST%' OR tracking_code LIKE 'TEST%'`)).rows[0].c
     + (await pg.query(`SELECT count(*)::int c FROM notifications WHERE title LIKE '%TEST%' OR body LIKE '%TEST %'`)).rows[0].c;
   ok("G5 no TEST strays in trackings/notifications", strays === 0, strays);
@@ -524,8 +525,15 @@ async function sectionG(ownerCookie, base) {
 /* ═══ main ═══ */
 console.log("══ verify-order-inventory-fixes — 5 fixes × mobile + desktop ══");
 await pg.connect();
+// AZ-AUDIT-REPORT M5: resolve the hardware flagship's id at runtime (fresh
+// reseeds re-generate business ids — the old snapshot had it as biz 8).
+const HW = (await pg.query(`SELECT id::int id FROM businesses WHERE code='HARDWARE-01' AND owner_id=1 ORDER BY id LIMIT 1`)).rows[0]?.id;
+if (!HW) throw new Error("preflight: HARDWARE-01 flagship missing — run the seeders first");
+console.log(`hardware flagship = biz ${HW}`);
 const ownerCookie = await login(OWNER.email, OWNER.pass);
 const base = {
+  // Live stock snapshot — AZ-AUDIT-REPORT M5: never hardcode demo quantities.
+  eggsQty: (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0]?.q ?? null,
   maxSessionId: (await pg.query(`SELECT COALESCE(max(id),0)::int m FROM user_sessions`)).rows[0].m,
   counts: Object.fromEntries(
     (await pg.query(`

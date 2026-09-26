@@ -385,6 +385,8 @@ try {
     ["ai_insights", "business_id"], ["ai_insights", "owner_id"],
     ["scenario_simulations", "target_business_id"], ["scenario_simulations", "owner_id"],
     ["checklist_templates", "business_id"], ["checklist_entries", "business_id"],
+    ["checklist_plan_templates", "business_id"], ["checklist_flock_plans", "business_id"],
+    ["checklist_flock_plans", "flock_id"],
     ["poultry_logs", "business_id"], ["block_factory_logs", "business_id"],
     ["aquaculture_logs", "business_id"], ["livestock_logs", "business_id"],
     ["restaurant_logs", "business_id"], ["electronics_logs", "business_id"],
@@ -502,6 +504,15 @@ try {
         where n.nspname = 'public' and t.relkind = 'r'`,
     );
     for (const { table_name } of tables.rows) {
+      // Tables legitimately exist without an `id` column (natural-key tables
+      // like system_markers); pg_get_serial_sequence raises for those —
+      // skip them instead of failing the whole migration.
+      const hasId = await client.query(
+        `select 1 from information_schema.columns
+          where table_schema = 'public' and table_name = $1 and column_name = 'id'`,
+        [table_name],
+      );
+      if (!hasId.rowCount) continue;
       const seq = await client.query(`select pg_get_serial_sequence($1, 'id') as s`, [`public.${table_name}`]);
       const s = seq.rows[0]?.s;
       if (s) {
@@ -516,6 +527,41 @@ try {
       }
     }
   }
+
+  // ── Org-scoped identifier uniqueness ─────────────────────────────────────
+  // Unit codes, asset codes and QR labels number PER TENANT (per
+  // organization / per business): independent organizations may both run a
+  // POULTRY-01 unit with its own AST-0001 registry and QR tags. Legacy
+  // deployments enforced GLOBAL uniqueness — drop those and install the
+  // composite forms (existing data is globally unique, so this is a pure
+  // widening: every existing row remains valid).
+  //
+  // The old globals exist as either a UNIQUE CONSTRAINT (drizzle column
+  // `.unique()` → `ALTER TABLE … ADD CONSTRAINT`, e.g. businesses_code_unique)
+  // or a bare unique INDEX (table-level uniqueIndex). DROP INDEX alone fails
+  // on the constraint shape with "cannot drop index … because constraint …
+  // requires it" — which is exactly what broke the Vercel build-time
+  // migration (build = db:migrate && next build). Drop the CONSTRAINT first
+  // (removes its index with it), then DROP INDEX IF EXISTS for the bare-index
+  // shape; each branch is a safe no-op for the other shape.
+  for (const [table, names] of [
+    ["businesses", ["businesses_code_unique", "businesses_code_key"]],
+    ["assets", ["assets_asset_code_unique", "assets_asset_code_key"]],
+  ]) {
+    for (const n of names) {
+      await client.query(`alter table public.${table} drop constraint if exists ${n}`);
+      await client.query(`drop index if exists public.${n}`);
+    }
+  }
+  // Same NAME as the old global QR indexes but new (business_id, …) columns —
+  // drop first so the recreate below wins even if it already existed.
+  // (These were table-level uniqueIndex — plain indexes, DROP INDEX is right.)
+  await client.query(`drop index if exists public.assets_qr_code_unique`);
+  await client.query(`drop index if exists public.inventory_items_qr_code_unique`);
+  await client.query(`create unique index if not exists businesses_owner_code_unique on public.businesses (owner_id, code)`);
+  await client.query(`create unique index if not exists assets_business_asset_code_unique on public.assets (business_id, asset_code)`);
+  await client.query(`create unique index if not exists assets_qr_code_unique on public.assets (business_id, qr_code)`);
+  await client.query(`create unique index if not exists inventory_items_qr_code_unique on public.inventory_items (business_id, qr_code)`);
 
   // Multi-owner runtime tools (used by dev-tooling/multiowner-verify.mjs):
   await client.query(`create or replace function gomina_org_of_business(bid integer)

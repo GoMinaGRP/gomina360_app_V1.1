@@ -1,8 +1,9 @@
 import { throttle, clientIp } from "@/lib/rateLimit";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db, dbFailureMessage } from "@/db";
-import { users, organizationMembers, organizations } from "@/db/schema";
+import { mapRawRow } from "@/lib/rawRowMapper";
+import { users } from "@/db/schema";
 import {
   createSession,
   verifyPassword,
@@ -46,7 +47,24 @@ export async function POST(request: Request) {
     }
 
     operation = "user lookup";
-    const [user] = await db.select().from(users).where(eq(users.email, email));
+    // ONE combined query: the user row plus the org memberships (with org
+    // status) aggregated server-side. The previous flow ran these as two
+    // sequential round trips — on a remote (deployed) database every extra
+    // sequential query is a fixed RTT on the login critical path.
+    const lookupRes = (await db.execute(sql`
+      SELECT to_jsonb(u) AS "__user",
+        COALESCE((
+          SELECT json_agg(jsonb_build_object('organizationId', m.organization_id, 'isPrimary', m.is_primary, 'status', o.status))
+          FROM organization_members m
+          LEFT JOIN organizations o ON o.id = m.organization_id
+          WHERE m.user_id = u.id
+        ), '[]'::json) AS "__memberships"
+      FROM users u
+      WHERE u.email = ${email}
+    `)) as any;
+    const rawLookup: any = lookupRes?.rows?.[0];
+    const user = rawLookup ? mapRawRow(users, rawLookup.__user) : null;
+    const memberships: any[] = rawLookup && Array.isArray(rawLookup.__memberships) ? rawLookup.__memberships : [];
     // Uniform error to avoid leaking which accounts exist.
     if (!user) {
       return NextResponse.json(
@@ -67,11 +85,6 @@ export async function POST(request: Request) {
     // access while preserving every row of their data (Super-Admin restorable).
     // The Super Admin's primary org stays ACTIVE by construction.
     {
-      const memberships = await db
-        .select({ status: organizations.status })
-        .from(organizationMembers)
-        .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
-        .where(eq(organizationMembers.userId, user.id));
       const stat = (m: any) => (m.status || "ACTIVE").toUpperCase();
       if (memberships.length > 0) {
         if (memberships.every((m) => stat(m) === "DELETED")) {
@@ -129,32 +142,46 @@ export async function POST(request: Request) {
     }
 
     operation = "login-state reset";
-    await db
-      .update(users)
-      .set({ failedLoginAttempts: 0, lockedUntil: null })
-      .where(eq(users.id, user.id));
+    // Only write when there is actually something to reset — the common
+    // successful login otherwise paid an UPDATE round trip on every sign-in.
+    if ((user.failedLoginAttempts || 0) > 0 || user.lockedUntil) {
+      await db
+        .update(users)
+        .set({ failedLoginAttempts: 0, lockedUntil: null })
+        .where(eq(users.id, user.id));
+    }
 
-    operation = "session creation";
+    // Session creation + business-access resolution run in ONE parallel wave
+    // (the access scope is derived from the memberships already fetched —
+    // no second membership read).
+    const loginOrgIds = memberships.map((m) => Number(m.organizationId)).filter(Number.isFinite);
+    // Legacy users with a primary org but no membership row keep the raw-row
+    // resolveUserOrgIds fallback so their login scope is unchanged.
+    const orgIdsForAccess =
+      loginOrgIds.length || !user.primaryOrgId ? loginOrgIds : [Number(user.primaryOrgId)];
+    const userForAccess = { ...user, organizationIds: orgIdsForAccess };
     const { label: sessLabel, raw: sessAgent } = deviceLabel(request);
-    const { token, expires } = await createSession(user.id, {
-      deviceLabel: sessLabel,
-      userAgent: sessAgent,
-      ipHash: hashClientIp(request),
-      initialBusinessId: user.assignedBusinessId ?? null,
-    });
-    operation = "business-access lookup";
-    const access = await accessibleBusinessIds(user);
+    operation = "session creation";
+    const [session, access] = await Promise.all([
+      createSession(user.id, {
+        deviceLabel: sessLabel,
+        userAgent: sessAgent,
+        ipHash: hashClientIp(request),
+        initialBusinessId: user.assignedBusinessId ?? null,
+      }),
+      accessibleBusinessIds(userForAccess, orgIdsForAccess),
+    ]);
 
     const res = NextResponse.json({
       success: true,
       user: sanitize(user),
       accessibleBusinessIds: access,
-      expiresAt: expires,
+      expiresAt: session.expires,
       // Header-channel fallback for cookie-hostile embedded contexts; the
       // client stores this in sessionStorage and reattaches it to /api calls.
-      sessionToken: token,
+      sessionToken: session.token,
     });
-    res.headers.set("Set-Cookie", `${SESSION_COOKIE}=${token}; ${COOKIE_BASE}`);
+    res.headers.set("Set-Cookie", `${SESSION_COOKIE}=${session.token}; ${COOKIE_BASE}`);
     return res;
   } catch (error: any) {
     // DB/driver failures land here — keep the detail server-side, give the

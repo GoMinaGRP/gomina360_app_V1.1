@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { buildTrackingCode } from "@/lib/tracking";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * POST /api/sales
@@ -247,7 +248,7 @@ export async function POST(request: NextRequest) {
     const resolvedBranchName = biz?.name || "";
 
     // ── 5. Create financial transaction ──────────────────────────────
-    const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const trxNum = nextTrxNumber();
     const dateStr = new Date().toISOString().split("T")[0];
 
     const lineDesc = lineItems

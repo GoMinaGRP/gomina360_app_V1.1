@@ -20,7 +20,7 @@
  *   D · Deep links: /?tab=TRACKING & /?tab=AUDIT after session bootstrap;
  *       signed-out click → login wall → lands on the requested tab; sw.js
  *       carries notificationclick/openWindow/showNotification.
- *   E · Idle logout: server side ends a session idle >10min (401 +
+ *   E · Idle logout: server side ends a session idle >24h (401 +
  *       end_reason=IDLE_TIMEOUT, other sessions unaffected); client side
  *       signs out on DOM inactivity with the inactivity notice; real mouse
  *       activity resets the clock.
@@ -496,15 +496,26 @@ async function sectionD(browser) {
 
 /* ── E · idle auto-logout ───────────────────────────────────────────── */
 async function sectionE(browser) {
-  console.log("\n— E · 10-minute idle auto-logout —");
-  // E1: server-side idle expiry.
+  console.log("\n— E · idle auto-logout (24h inactivity policy, 2026-09) —");
+  // E1: server-side idle expiry. Policy 2026-09: sessions retire after 24
+  // HOURS of inactivity (was 10 minutes) — verify-session-timeout.mjs owns
+  // the full policy audit; this crosscheck only proves the soft-end path.
+  // The alive-probe and the idle-probe MUST use different sessions: the auth
+  // layer caches session lookups per token, so a just-authenticated session
+  // cannot observe a DB-side backdate until the cache entry ages out. A real
+  // 24h-idle session by definition made no recent request, so the fresh,
+  // never-probed session is the honest simulation.
+  const aliveCookie = await loginCookie(GM);
+  const alive = await api(aliveCookie, "/api/auth/me");
   const idleCookie = await loginCookie(GM);
-  const sessId = (await pg.query(`SELECT id FROM user_sessions WHERE user_id=$1 AND ended_at IS NULL ORDER BY id DESC LIMIT 1`, [GM.id])).rows[0].id;
-  const alive = await api(idleCookie, "/api/auth/me");
-  await pg.query(`UPDATE user_sessions SET last_seen_at = NOW() - INTERVAL '11 minutes' WHERE id=$1`, [sessId]);
+  const idleToken = decodeURIComponent(idleCookie.split("=").slice(1).join("="));
+  const crypto = (await import("node:crypto")).default;
+  const idleHash = crypto.createHash("sha256").update(idleToken).digest("hex");
+  const sessId = (await pg.query(`SELECT id FROM user_sessions WHERE token_hash=$1`, [idleHash])).rows[0].id;
+  await pg.query(`UPDATE user_sessions SET last_seen_at = NOW() - INTERVAL '25 hours' WHERE token_hash=$1`, [idleHash]);
   const dead = await api(idleCookie, "/api/auth/me");
   const ended = (await pg.query(`SELECT end_reason r FROM user_sessions WHERE id=$1`, [sessId])).rows[0];
-  ok("E1 session idle >10min is refused (401) and soft-ended as IDLE_TIMEOUT server-side",
+  ok("E1 session idle >24h is refused (401) and soft-ended as IDLE_TIMEOUT server-side",
     alive.status === 200 && dead.status === 401 && ended?.r === "IDLE_TIMEOUT",
     `alive=${alive.status} dead=${dead.status} reason=${ended?.r}`);
   const fresh = await loginCookie(GM);

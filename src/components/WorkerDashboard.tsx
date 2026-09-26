@@ -22,6 +22,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
+import MyTasksCard from "./MyTasksCard";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
 interface WorkerDashboardProps {
@@ -35,6 +36,8 @@ interface WorkerDashboardProps {
   currentCurrency: CurrencyCode;
   isOnline: boolean;
   onRefreshData: () => void;
+  /** Opens the full Action Center tab (the worker's cross-module task list). */
+  onOpenActions?: () => void;
 }
 
 export default function WorkerDashboard({
@@ -48,6 +51,7 @@ export default function WorkerDashboard({
   currentCurrency,
   isOnline,
   onRefreshData,
+  onOpenActions,
 }: WorkerDashboardProps) {
   const [activeSubTab, setActiveSubTab] = useState<"SALES" | "CUSTOMERS" | "INVENTORY" | "MY_ACTIVITY" | "TRACKING">("SALES");
 
@@ -110,8 +114,10 @@ export default function WorkerDashboard({
   const branchInventory = inventory.filter(
     (inv) => inv.businessId === businessInfo?.id
   );
+  // Business-isolated CRM: only this unit's own customers (shared legacy
+  // rows belong to the enterprise, not to this unit's count).
   const branchCustomers = customers.filter(
-    (c) => c.businessId === businessInfo?.id || c.businessId === null
+    (c) => c.businessId === businessInfo?.id
   );
 
   // ─── Cart helpers ───
@@ -278,6 +284,9 @@ export default function WorkerDashboard({
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto text-slate-100">
+      {/* My actions — the worker's slice of the unified Action Center (P1) */}
+      <MyTasksCard onOpenActions={onOpenActions} />
+
       {/* Top bar: worker identity & branch */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-5 rounded-2xl border border-slate-700/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-start space-x-3">
@@ -337,6 +346,7 @@ export default function WorkerDashboard({
           <button
             key={tab.key}
             onClick={() => setActiveSubTab(tab.key)}
+            data-testid={`wk-tab-${tab.key}`}
             className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
               activeSubTab === tab.key
                 ? "bg-emerald-600 text-white shadow"

@@ -417,7 +417,7 @@ export default function ElectronicsShopModule({
   const nextClaimStatus: Record<string, string> = { OPEN: "IN_PROGRESS", IN_PROGRESS: "RESOLVED" };
 
   if (loading) {
-    return <div className="p-10 text-center text-slate-400 text-sm">Loading Mina Tech &amp; Electronics Hub…</div>;
+    return <div className="p-10 text-center text-slate-400 text-sm">Loading {businessInfo?.name ? `${businessInfo.name}…` : "Electronics workspace…"}</div>;
   }
 
   return (
@@ -450,7 +450,7 @@ export default function ElectronicsShopModule({
       {/* Tab bar */}
       <div className="flex flex-wrap gap-1 bg-slate-800/60 border border-slate-700 rounded-xl p-1">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-testid={`elex-tab-${t.key}`}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${tab === t.key ? "bg-cyan-600 text-white" : "text-slate-400 hover:text-white"}`}>
             <t.icon className="w-3.5 h-3.5" />{t.label}
           </button>
@@ -728,7 +728,7 @@ export default function ElectronicsShopModule({
                   <div key={a.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700"><span className="text-slate-200">{a.name}</span><span className="text-slate-400">{a.status || "ACTIVE"}</span></div>
                 ))}
                 <div className="text-[10px] uppercase text-slate-500 font-bold pt-2">Customers</div>
-                {(branchCustomers.length ? branchCustomers : customers).slice(0, 5).map((c) => (
+                {branchCustomers.slice(0, 5).map((c) => (
                   <div key={c.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700">
                     <span className="text-slate-200">{c.name}</span>
                     <span className="text-slate-400">{c.type} • {formatMoney(c.totalSpentGhs || 0, currentCurrency, true)}</span>

@@ -21,7 +21,7 @@ import {
   businesses,
   recordDeletionLogs,
 } from "@/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
@@ -33,6 +33,7 @@ const MODULE_TABLE: Record<string, any> = {
   SUPPLIERS: suppliers,
   EMPLOYEES: employees,
   INVENTORY: inventoryItems,
+  CUSTOMERS: customers,
 };
 
 /**
@@ -56,20 +57,23 @@ export async function GET(request: Request) {
       const allowed = await accessibleBusinessIds(session.user); // null ⇒ see all
       const canSee = (bizId: number | null | undefined) =>
         allowed == null || (bizId != null && allowed.includes(bizId));
-      const [item] = await db
+      // QR labels are unique PER BUSINESS: two independent organizations may
+      // legitimately carry the same label value (their unit codes can match).
+      // Resolve the caller's accessible match — not just the first global row.
+      const itemRows = await db
         .select()
         .from(inventoryItems)
-        .where(eq(inventoryItems.qrCode, code))
-        .limit(1);
-      if (item && canSee(item.businessId)) {
+        .where(eq(inventoryItems.qrCode, code));
+      const item = itemRows.find((r: any) => canSee(r.businessId));
+      if (item) {
         return NextResponse.json({ success: true, found: true, kind: "inventory", record: item });
       }
-      const [asset] = await db
+      const assetRows = await db
         .select()
         .from(assets)
-        .where(eq(assets.qrCode, code))
-        .limit(1);
-      if (asset && canSee(asset.businessId)) {
+        .where(eq(assets.qrCode, code));
+      const asset = assetRows.find((r: any) => canSee(r.businessId));
+      if (asset) {
         return NextResponse.json({ success: true, found: true, kind: "asset", record: asset });
       }
       return NextResponse.json({ success: true, found: false });
@@ -143,7 +147,7 @@ export async function PATCH(request: Request) {
     const table = MODULE_TABLE[moduleKey];
     if (!table) {
       return NextResponse.json(
-        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES or INVENTORY." },
+        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES, INVENTORY or CUSTOMERS." },
         { status: 400 }
       );
     }
@@ -168,7 +172,8 @@ export async function PATCH(request: Request) {
     }
 
     // Inventory entries are permission-gated separately (delete-inventory
-    // permission); suppliers/employees follow the shared-record flag. A user
+    // permission); suppliers/employees/customers follow the shared-record
+    // flag. A user
     // the OWNER granted "Manage Business / Unit" power for the record's unit
     // may always edit — owner-equivalent, scoped to that unit only.
     const unitManager = canManageBusinessUnit(actor, existing.businessId);
@@ -191,9 +196,16 @@ export async function PATCH(request: Request) {
 
     // Tenant boundary: capability flags never cross organizations.
     if (!actor.isSuperAdmin) {
-      if (moduleKey === "SUPPLIERS") {
+      if (moduleKey === "SUPPLIERS" || moduleKey === "CUSTOMERS") {
+        // Organization boundary first (customers carry an ownerId stamp)…
         if (existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
-          return FORBIDDEN("That supplier belongs to a different organization.");
+          return FORBIDDEN(`That ${moduleKey === "SUPPLIERS" ? "supplier" : "customer"} belongs to a different organization.`);
+        }
+        // …then business isolation for unit-stamped customers. Shared rows
+        // (businessId NULL, e.g. legacy enterprise-wide clients) resolve to
+        // OWNER-only via canAccessBusiness(NULL).
+        if (moduleKey === "CUSTOMERS" && !(await canAccessBusiness(actor, existing.businessId))) {
+          return FORBIDDEN("That customer belongs to a business you cannot access.");
         }
       } else if (!(await canAccessBusiness(actor, existing.businessId))) {
         return FORBIDDEN("That record belongs to a business you cannot access.");
@@ -215,6 +227,18 @@ export async function PATCH(request: Request) {
       if (typeof d.phone === "string" && d.phone.trim()) updates.phone = d.phone.trim();
       if (typeof d.email === "string") updates.email = d.email.trim() || null;
       if (typeof d.paymentTerms === "string" && d.paymentTerms.trim()) updates.paymentTerms = d.paymentTerms.trim();
+    } else if (moduleKey === "CUSTOMERS") {
+      // CRM clients — contact identity + classification. Moving a customer to
+      // another unit is guarded above (must stay inside the actor's scope).
+      if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
+      if (typeof d.type === "string" && d.type.trim()) updates.type = d.type.trim().toUpperCase();
+      if (typeof d.phone === "string" && d.phone.trim()) updates.phone = d.phone.trim();
+      if (typeof d.email === "string") updates.email = d.email.trim() || null;
+      if (typeof d.address === "string" && d.address.trim()) updates.address = d.address.trim();
+      if (d.region !== undefined) updates.region = d.region || null;
+      if (d.district !== undefined) updates.district = d.district || null;
+      if (d.town !== undefined) updates.town = d.town || null;
+      if (d.businessId !== undefined && Number(d.businessId)) updates.businessId = Number(d.businessId);
     } else if (moduleKey === "INVENTORY") {
       // Inventory & Stock — editable catalog fields. Quantity edits recompute
       // the IN_STOCK / LOW_STOCK / OUT_OF_STOCK status that drives alerts.
@@ -332,7 +356,7 @@ export async function DELETE(request: Request) {
     const table = MODULE_TABLE[moduleKey];
     if (!table) {
       return NextResponse.json(
-        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES or INVENTORY." },
+        { success: false, error: "entityType must be SUPPLIERS, EMPLOYEES, INVENTORY or CUSTOMERS." },
         { status: 400 }
       );
     }
@@ -364,7 +388,8 @@ export async function DELETE(request: Request) {
     }
 
     // Inventory entries are permission-gated separately (delete-inventory
-    // permission); suppliers/employees follow the shared-record flag. A user
+    // permission); suppliers/employees/customers follow the shared-record
+    // flag. A user
     // the OWNER granted "Manage Business / Unit" power for the record's unit
     // may always delete — owner-equivalent, scoped to that unit only.
     const unitManager = canManageBusinessUnit(actor, existing.businessId);
@@ -387,9 +412,16 @@ export async function DELETE(request: Request) {
 
     // Tenant boundary: capability flags never cross organizations.
     if (!actor.isSuperAdmin) {
-      if (moduleKey === "SUPPLIERS") {
+      if (moduleKey === "SUPPLIERS" || moduleKey === "CUSTOMERS") {
+        // Organization boundary first (customers carry an ownerId stamp)…
         if (existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
-          return FORBIDDEN("That supplier belongs to a different organization.");
+          return FORBIDDEN(`That ${moduleKey === "SUPPLIERS" ? "supplier" : "customer"} belongs to a different organization.`);
+        }
+        // …then business isolation for unit-stamped customers. Shared rows
+        // (businessId NULL, e.g. legacy enterprise-wide clients) resolve to
+        // OWNER-only via canAccessBusiness(NULL).
+        if (moduleKey === "CUSTOMERS" && !(await canAccessBusiness(actor, existing.businessId))) {
+          return FORBIDDEN("That customer belongs to a business you cannot access.");
         }
       } else if (!(await canAccessBusiness(actor, existing.businessId))) {
         return FORBIDDEN("That record belongs to a business you cannot access.");
@@ -397,7 +429,7 @@ export async function DELETE(request: Request) {
     }
 
     const label =
-      moduleKey === "SUPPLIERS"
+      moduleKey === "SUPPLIERS" || moduleKey === "CUSTOMERS"
         ? existing.name
         : moduleKey === "INVENTORY"
           ? `${existing.name} (${existing.sku})`
@@ -478,9 +510,13 @@ export async function POST(request: Request) {
       // Quick-add path — auto-assign the employee number and record the
       // registration in the employee record history (same as the full
       // Employee Registration flow in /api/employees).
+      // Staff numbers are PER UNIT (each unit numbers its own roster from
+      // EMP-0001) — never a continuation of another unit's or organization's
+      // sequence.
       const maxRows = await db
         .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-        .from(employees);
+        .from(employees)
+        .where(eq(employees.businessId, empBizId));
       const employeeNo = `EMP-${String((Number(maxRows[0]?.v) || 0) + 1).padStart(4, "0")}`;
       const [inserted] = await db
         .insert(employees)
@@ -577,10 +613,12 @@ export async function POST(request: Request) {
           );
         }
       } else {
+        // Asset codes number PER BUSINESS: two independent organizations may
+        // both run a POULTRY-01 unit with its own AST-0001 registry.
         const branchAssets = await db
           .select()
           .from(assets)
-          .where(eq(assets.branchCode, branchCode));
+          .where(eq(assets.businessId, businessIdNum));
         let seq = branchAssets.length + 1;
         // Guard against gaps/collisions by probing until a free code is found
         // eslint-disable-next-line no-constant-condition
@@ -589,7 +627,7 @@ export async function POST(request: Request) {
           const [exists] = await db
             .select()
             .from(assets)
-            .where(eq(assets.assetCode, candidate));
+            .where(and(eq(assets.assetCode, candidate), eq(assets.businessId, businessIdNum)));
           if (!exists) {
             assetCode = candidate;
             break;
@@ -601,10 +639,12 @@ export async function POST(request: Request) {
       // ── Unique QR tag — a scanned/generated QR must never point at two assets. ──
       const assetQr = data.qrCode ? String(data.qrCode).trim().slice(0, 200) : "";
       if (assetQr) {
+        // QR uniqueness is PER BUSINESS (independent orgs may share unit
+        // codes, so identical label values can exist in two tenants).
         const [qrDupe] = await db
           .select()
           .from(assets)
-          .where(eq(assets.qrCode, assetQr))
+          .where(and(eq(assets.qrCode, assetQr), eq(assets.businessId, businessIdNum)))
           .limit(1);
         if (qrDupe) {
           return NextResponse.json(
@@ -719,7 +759,7 @@ export async function POST(request: Request) {
         const [qrDupe] = await db
           .select()
           .from(inventoryItems)
-          .where(eq(inventoryItems.qrCode, invQr))
+          .where(and(eq(inventoryItems.qrCode, invQr), eq(inventoryItems.businessId, bizId)))
           .limit(1);
         if (qrDupe) {
           return NextResponse.json(

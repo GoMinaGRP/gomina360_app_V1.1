@@ -254,19 +254,24 @@ async function sectionB() {
 
   // B6 — far GPS: biz1 drops out of the serving list too. Select an
   // unanchored branch first (the selected chip is always kept visible).
+  // (AZ-AUDIT-REPORT M5: resolve the hardware flagship's id at runtime —
+  // never hardcode business ids, a fresh reseed re-generates them.)
+  const hwRow = (await pg.query(`SELECT id FROM businesses WHERE code='HARDWARE-01' AND owner_id=1 ORDER BY id LIMIT 1`)).rows[0];
+  const HW = hwRow ? hwRow.id : null;
+  if (!HW) throw new Error("B6 preflight: HARDWARE-01 flagship missing — run the seeders first");
   const { ctx: ctx3, page: p3 } = await newPage("nearme-far", v);
   await ctx3.overridePermissions(BASE, ["geolocation"]);
   await p3.setGeolocation({ latitude: CUST_INTL.lat, longitude: CUST_INTL.lng, accuracy: 20 });
   await p3.goto(`${BASE}/order`, { waitUntil: "networkidle0", timeout: 60000 });
-  await p3.waitForSelector('[data-testid="oo-biz-8"]', { timeout: 30000 });
-  await p3.click('[data-testid="oo-biz-8"]');
+  await p3.waitForSelector(`[data-testid="oo-biz-${HW}"]`, { timeout: 30000 });
+  await p3.click(`[data-testid="oo-biz-${HW}"]`);
   await p3.waitForSelector('[data-testid="oo-locate"]', { timeout: 30000 });
   await p3.click('[data-testid="oo-locate"]');
   await p3.waitForSelector('[data-testid="oo-locate-state"]', { timeout: 20000 });
   const bothGone = (await p3.$('[data-testid="oo-biz-1"]')) === null && (await p3.$('[data-testid="oo-biz-2"]')) === null;
-  const unanchoredThere = (await p3.$('[data-testid="oo-biz-8"]')) !== null;
+  const unanchoredThere = (await p3.$(`[data-testid="oo-biz-${HW}"]`)) !== null;
   ok("B6 33 km+ away: both radius-limited branches hidden; unanchored branches still listed",
-    bothGone && unanchoredThere, `biz1/2gone=${bothGone} biz8=${unanchoredThere}`);
+    bothGone && unanchoredThere, `biz1/2gone=${bothGone} biz${HW}=${unanchoredThere}`);
   await p3.click('[data-testid="oo-locate-clear"]');
   await p3.waitForSelector('[data-testid="oo-biz-1"]', { timeout: 10000 });
   ok("B7 Clear removes the filter — every branch returns", (await p3.$('[data-testid="oo-biz-2"]')) !== null);

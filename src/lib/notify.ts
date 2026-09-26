@@ -103,6 +103,7 @@ async function fanOut(
     businessId: number;
     branchCode?: string | null;
     actorName?: string | null;
+    priority?: string | null;
   },
   opts?: { push?: boolean },
 ): Promise<number> {
@@ -133,6 +134,7 @@ async function fanOut(
       businessId: row.businessId,
       branchCode: row.branchCode ?? null,
       actorName: row.actorName ?? null,
+      priority: row.priority ?? null,
       ownerId: ownerId ?? null,
     });
     sent++;
@@ -349,5 +351,104 @@ export async function auditEscalationRecipients(
     if (String(u.role).toUpperCase() === "OWNER") return wantOwner;
     if (!isManagerRole(u.role)) return false;
     return Number(u.assignedBusinessId) === Number(businessId) || granted.has(Number(u.id));
+  });
+}
+
+// ─── Poultry stage-plan notifications ─────────────────────────────────────
+// Both ride the same rails as every other bell notification: fanOut with
+// per-user (type, recordRef) dedupe and OS-level push.
+
+const CHECKLIST_MANAGER_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"];
+
+/** Announce a flock's production-stage change (BROODING → GROWER → …) to the
+ *  business' managers. recordRef `poultry-stage:{flockId}:{stageKey}` makes
+ *  each lifecycle crossing announce exactly once per recipient. */
+export async function notifyPoultryStageTransition({
+  flock,
+  stage,
+  businessId,
+  branchCode,
+}: {
+  flock: { id: number; batchNumber: string; birdType: string };
+  stage: { stageKey: string; label: string; birdType: string; ageDays: number; ageWeeks: number; transitionNote: string };
+  businessId: number;
+  branchCode?: string | null;
+}): Promise<number> {
+  const recipients = (await orderNotificationRecipients(businessId)).filter((u: any) =>
+    CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase())
+  );
+  if (!recipients.length) return 0;
+  const ageTxt = String(stage.birdType).toUpperCase() === "LAYERS" ? `week ${stage.ageWeeks}` : `day ${stage.ageDays}`;
+  return fanOut(recipients, {
+    type: "POULTRY_STAGE",
+    title: `${flock.batchNumber} → ${stage.label}`,
+    body: `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age. ${stage.transitionNote}`,
+    recordType: "CHECKLIST",
+    recordId: flock.id,
+    recordRef: `poultry-stage:${flock.id}:${stage.stageKey}`,
+    businessId,
+    branchCode: branchCode ?? null,
+    actorName: "Checklist Engine",
+    priority: "MEDIUM",
+  });
+}
+
+/** End-of-day overdue sweep: incomplete CRITICAL tasks grouped PER FLOCK (or
+ *  farm-wide group) so every notification is linked to the right flock — one
+ *  bell row per (business, flock, date) to the managers and assignees. */
+export async function notifyChecklistOverdue({
+  businessId,
+  branchCode,
+  date,
+  flock,
+  tasks,
+}: {
+  businessId: number;
+  branchCode?: string | null;
+  date: string;
+  flock?: { id: number; batchNumber: string } | null;
+  tasks: {
+    taskLabel: string;
+    batchNumber?: string | null;
+    stageLabel?: string | null;
+    assignedToUserId?: number | null;
+  }[];
+}): Promise<number> {
+  const all = await orderNotificationRecipients(businessId);
+  const managers = all.filter((u: any) => CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase()));
+  const assignedIds = new Set(
+    tasks.map((t) => Number(t.assignedToUserId)).filter((n) => Number.isFinite(n) && n > 0)
+  );
+  const assignees = all.filter((u: any) => assignedIds.has(Number(u.id)));
+  const seen = new Set<number>();
+  const recipients = [...managers, ...assignees].filter((u: any) => {
+    const k = Number(u.id);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!recipients.length) return 0;
+  const list = tasks
+    .slice(0, 12)
+    .map(
+      (t) =>
+        `• ${t.taskLabel}${t.stageLabel ? ` (${t.stageLabel})` : ""}`
+    )
+    .join("\n");
+  const more = tasks.length > 12 ? `\n…and ${tasks.length - 12} more` : "";
+  const who = flock?.batchNumber || "Farm-wide";
+  return fanOut(recipients, {
+    type: "CHECKLIST_OVERDUE",
+    title: flock
+      ? `Critical checklist overdue — ${flock.batchNumber} (${date})`
+      : `Critical checklist overdue — ${branchCode || "business"} (${date})`,
+    body: `${tasks.length} critical task(s) still incomplete for ${who}:\n${list}${more}`.slice(0, 600),
+    recordType: "CHECKLIST",
+    recordId: flock?.id ?? null,
+    recordRef: `checklist-overdue:${businessId}:${flock?.id ?? "farm"}:${date}`,
+    businessId,
+    branchCode: branchCode ?? null,
+    actorName: "Checklist Engine",
+    priority: "HIGH",
   });
 }

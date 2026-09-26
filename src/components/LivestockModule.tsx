@@ -12,6 +12,7 @@ import {
   Package,
   ArrowRight,
   AlertTriangle,
+  Lock,
 } from "lucide-react";
 import AiSectionGuide from "./AiSectionGuide";
 import SpecializedBusinessView from "./SpecializedBusinessView";
@@ -19,6 +20,7 @@ import FinancialReportSection from "./FinancialReportSection";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { canViewSection } from "@/lib/advisorSections";
 
 /**
  * LivestockModule — the Cattle & Small Ruminants unit gets the same tabbed
@@ -54,6 +56,14 @@ interface LivestockModuleProps {
   transactions?: any[];
   inventory?: any[];
   customers?: any[];
+  /** FARM_ADVISOR read-only mode: the expense button, log-entry forms and
+   *  FINANCE tab collapse (the API 403s advisor mutations anyway). */
+  isAdvisorView?: boolean;
+  /** The advisor's OWNER-chosen section list for THIS unit (null = all).
+   *  LIVESTOCK has a single section: OPERATIONS. When it is not granted the
+   *  whole module renders a locked notice (its data is also stripped from
+   *  /api/init server-side). */
+  advisorSections?: string[] | null;
 }
 
 export default function LivestockModule(props: LivestockModuleProps) {
@@ -67,6 +77,11 @@ export default function LivestockModule(props: LivestockModuleProps) {
   } = props;
   const [showExpense, setShowExpense] = useState(false);
   const [tab, setTab] = useState<Tab>("OVERVIEW");
+
+  // ── Advisor per-section visibility (mirrors /api/init stripping) ──────
+  const isAdvisorView = props.isAdvisorView === true;
+  const operationsAllowed = !isAdvisorView || canViewSection(props.advisorSections ?? null, "OPERATIONS");
+  const visibleTabs = TABS.filter((t) => !isAdvisorView || t.key !== "FINANCE");
 
   const revenue = businessMetrics?.revenueGhs || 0;
   const expenses = businessMetrics?.expensesGhs || 0;
@@ -124,6 +139,23 @@ export default function LivestockModule(props: LivestockModuleProps) {
     </div>
   );
 
+  // Advisor whose OPERATIONS section was not granted: the Owner allowed the
+  // unit but no section of it — the whole workspace stays locked (datasets
+  // are already stripped from /api/init server-side).
+  if (isAdvisorView && !operationsAllowed) {
+    return (
+      <div className="p-4 sm:p-6 max-w-[1500px] mx-auto text-slate-100">
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/80 p-10 text-center" data-testid="lk-advisor-locked">
+          <Lock className="w-10 h-10 text-slate-500 mx-auto mb-3" />
+          <p className="text-sm font-bold text-slate-200">No sections enabled for this unit</p>
+          <p className="text-xs text-slate-400 mt-1">
+            The farm owner has not enabled livestock operations for your advisor access yet.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-[1500px] mx-auto text-slate-100" data-testid="lk-module">
       {/* Header (module pattern) */}
@@ -159,7 +191,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
 
       {/* Tab bar — label below/beside every icon, always visible */}
       <div className="flex items-center gap-1.5 flex-wrap bg-slate-800/70 border border-slate-700/60 rounded-xl p-1.5 w-fit" data-testid="lk-tabs">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             data-testid={`lk-tab-${t.key}`}
@@ -172,6 +204,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
             <span>{t.label}</span>
           </button>
         ))}
+        {!isAdvisorView && (
         <button
           data-testid="lk-open-expense"
           onClick={() => setShowExpense(true)}
@@ -179,6 +212,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
         >
           <Landmark className="w-3.5 h-3.5" />Record Expense
         </button>
+        )}
         <AiSectionGuide moduleKey="LIVESTOCK" section={tab === "FINANCE" ? "FINANCE_REPORT" : tab === "HERD" ? "OPERATIONS" : "DEFAULT"} businessInfo={businessInfo} />
       </div>
 
@@ -282,6 +316,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
           inventory={inventory}
           customers={props.customers}
           hideFinanceReport
+          isAdvisorView={isAdvisorView}
         />
       )}
 

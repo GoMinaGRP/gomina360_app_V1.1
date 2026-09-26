@@ -10,6 +10,7 @@ import {
 } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 export async function GET(request: Request) {
   try {
@@ -82,9 +83,22 @@ export async function POST(request: Request) {
     if (!(await canAccessBusiness(session.user, businessId))) {
       return FORBIDDEN("You do not have access to record against that business.");
     }
+    // Worker expense-permission parity (same rule the feed-mill intake routes
+    // enforce): a WORKER whose OWNER left "can record expenses" OFF cannot
+    // book EXPENSE rows — the module UIs hide the button, the API must agree.
+    // OWNER / GENERAL_MANAGER / BRANCH_MANAGER are never restricted here.
+    if (
+      String(type).toUpperCase() === "EXPENSE" &&
+      session.user.role === "WORKER" &&
+      !session.user.canRecordExpenses
+    ) {
+      return FORBIDDEN(
+        "You do not have permission to record expenses. Ask the OWNER to enable 'can record expenses' for your account."
+      );
+    }
 
     const now = new Date();
-    const trxNum = `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`;
+    const trxNum = nextTrxNumber(now);
     const dateStr = now.toISOString().split("T")[0];
 
     // Auto-resolve branch details from business if not provided

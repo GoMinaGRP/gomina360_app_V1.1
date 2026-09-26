@@ -467,8 +467,8 @@ async function cleanup() {
     counts.b === base.b && counts.u === base.u && counts.cu === base.cu && counts.t === base.t &&
     counts.sd === base.sd && counts.tx === base.tx && counts.ii === base.ii,
     `start=${JSON.stringify(base)} end=${JSON.stringify(counts)}`);
-  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE id=1`)).rows[0];
-  ok("Z2 eggs stock untouched (873.63)", Math.abs(eggs.q - 873.63) < 1e-9, `qty=${eggs.q}`);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`Z2 eggs stock untouched (${baseline.eggsQty})`, baseline.eggsQty !== null && Math.abs(eggs.q - baseline.eggsQty) < 1e-9, `qty=${eggs.q}`);
   const sale = (await pg.query(`SELECT status FROM customer_trackings WHERE tracking_code='GM-POULTRY-ESY6GN'`)).rows[0];
   ok("Z3 the owner's live GH₵55 sale GM-POULTRY-ESY6GN intact", sale?.status === "RECEIVED");
   const gps = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
@@ -486,6 +486,7 @@ async function cleanup() {
   baseline.ntfMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM notifications`)).rows[0].m;
   baseline.custMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM customers`)).rows[0].m;
   baseline.sessMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM user_sessions`)).rows[0].m;
+  baseline.eggsQty = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0]?.q ?? null;
   baseline.counts = (await pg.query(`SELECT
       (SELECT count(*)::int FROM businesses) b, (SELECT count(*)::int FROM users) u,
       (SELECT count(*)::int FROM customers) cu, (SELECT count(*)::int FROM customer_trackings) t,

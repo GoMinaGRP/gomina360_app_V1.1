@@ -15,6 +15,7 @@ import { eq, desc } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * Auto Car Wash module API.
@@ -81,7 +82,7 @@ async function bookTransaction(
 ) {
   const now = new Date();
   await db.insert(transactions).values({
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+    transactionNumber: nextTrxNumber(now),
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,

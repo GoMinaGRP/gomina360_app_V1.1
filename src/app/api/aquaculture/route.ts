@@ -9,15 +9,19 @@ import {
   aquacultureHarvests,
   aquacultureChecklists,
   aquacultureWeightLogs,
+  aquacultureBenchmarkProfiles,
   transactions,
   businesses,
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { stockIn, stockOut } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { advisorSectionsForBusiness } from "@/lib/auth";
+import { canViewSection } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -30,6 +34,17 @@ const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; c
 };
 const aquaProductFor = (species: string) =>
   AQUA_PRODUCTS[species] || { sku: `AQUA-${(species || "FISH").toUpperCase()}-KG`, name: `Fresh ${(species || "fish").replace(/_/g, " ").toLowerCase()} (per Kg)`, unit: "Kg", costPriceGhs: 38, sellingPriceGhs: 60, minStockThreshold: 30 };
+
+/** Benchmark profile id → id, only when it belongs to this business. */
+async function resolveProfileId(raw: any, businessId: number): Promise<number | null> {
+  const id = Number(raw);
+  if (!id) return null;
+  const [profile] = await db
+    .select({ id: aquacultureBenchmarkProfiles.id })
+    .from(aquacultureBenchmarkProfiles)
+    .where(and(eq(aquacultureBenchmarkProfiles.id, id), eq(aquacultureBenchmarkProfiles.businessId, businessId)));
+  return profile ? profile.id : null;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -49,7 +64,7 @@ export async function GET(request: NextRequest) {
     const scope = (table: any) =>
       db.select().from(table).where(eq(table.businessId, businessId));
 
-    const [ponds, batches, feedLogs, waterLogs, harvests, checklists, weightLogs] =
+    const [ponds, batches, feedLogs, waterLogs, harvests, checklists, weightLogs, benchmarkProfiles] =
       await Promise.all([
         scope(aquaculturePonds),
         scope(aquacultureBatches),
@@ -58,17 +73,31 @@ export async function GET(request: NextRequest) {
         scope(aquacultureHarvests),
         scope(aquacultureChecklists),
         scope(aquacultureWeightLogs),
+        scope(aquacultureBenchmarkProfiles),
       ]);
+
+    // ── Farm Advisor section visibility (OWNER-controlled per unit) ───────
+    // Denied datasets are stripped server-side — hidden tabs can never be
+    // reconstructed from the payload. null sections = all (legacy default).
+    const advisorSecs = await advisorSectionsForBusiness(__authSession.user, businessId);
+    const view = (key: string) => canViewSection(advisorSecs, key);
 
     return NextResponse.json({
       success: true,
-      ponds: ponds.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      batches: batches.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      feedLogs: feedLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      waterLogs: waterLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      harvests: harvests.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
-      weightLogs: weightLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
+      ponds: view("PONDS") ? ponds.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      batches: view("STOCK") ? batches.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      feedLogs: view("FEED") ? feedLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      waterLogs: view("WATER") ? waterLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      harvests: view("HARVEST") ? harvests.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      checklists: view("HEALTH") ? checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)) : [],
+      weightLogs: view("GROWTH") ? weightLogs.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)) : [],
+      benchmarkProfiles: view("BENCHMARK")
+        ? benchmarkProfiles.sort(
+            (a: any, b: any) => Number(!!b.isDefault) - Number(!!a.isDefault) || (b.id || 0) - (a.id || 0),
+          )
+        : [],
+      // Echo the resolved section list for the read-only UI's tab filter.
+      advisorSections: advisorSecs,
     });
   } catch (error: any) {
     return apiError(error);
@@ -157,6 +186,18 @@ export async function POST(request: NextRequest) {
       }
       const pondCheck = await ownPond(data.pondId);
       if (!pondCheck.ok) return NextResponse.json({ success: false, error: pondCheck.error }, { status: 404 });
+      // Optional benchmark profile pin (must belong to this business).
+      let benchmarkProfileId: number | null = null;
+      if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "") {
+        benchmarkProfileId = await resolveProfileId(data.benchmarkProfileId, businessId);
+        if (!benchmarkProfileId) {
+          return NextResponse.json({ success: false, error: "Benchmark profile not found for this business." }, { status: 404 });
+        }
+      }
+      const costPerFingerlingGhs = Number(data.costPerFingerlingGhs) || 0;
+      if (costPerFingerlingGhs < 0) {
+        return NextResponse.json({ success: false, error: "costPerFingerlingGhs cannot be negative" }, { status: 400 });
+      }
       const [row] = await db.insert(aquacultureBatches).values({
         businessId, branchCode,
         batchNumber: data.batchNumber || `BATCH-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`,
@@ -170,6 +211,8 @@ export async function POST(request: NextRequest) {
         avgWeightGrams: Number(data.avgWeightGrams) || 0,
         targetHarvestDate: data.targetHarvestDate || null,
         status: data.status || "GROWING",
+        benchmarkProfileId,
+        costPerFingerlingGhs,
         notes: data.notes || null,
         createdByName: data.createdByName || "Aquaculture User",
       }).returning();
@@ -223,7 +266,7 @@ export async function POST(request: NextRequest) {
 
       // Expense for PURCHASE entries
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId, branchCode, branchName: data.branchName || null,
@@ -376,7 +419,7 @@ export async function POST(request: NextRequest) {
 
       // Auto-create income transaction for fish sales
       if (revenue > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         await db.insert(transactions).values({
           transactionNumber: trxNum,
           businessId, branchCode, branchName: data.branchName || null,
@@ -488,6 +531,56 @@ export async function PATCH(request: NextRequest) {
         })
         .where(eq(aquacultureChecklists.id, Number(id)))
         .returning();
+      return NextResponse.json({ success: true, item: row });
+    }
+
+    // BATCH — benchmark profile pin/unpin + stocking-cost basis updates
+    // (used by the Fish Benchmark panel's "pin profile" action and the batch
+    // form's fingerling cost field).
+    if (entity === "BATCH" && id) {
+      const [existing] = await db.select().from(aquacultureBatches).where(eq(aquacultureBatches.id, Number(id)));
+      if (!existing) {
+        return NextResponse.json({ success: false, error: "Batch not found" }, { status: 404 });
+      }
+      if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
+        return FORBIDDEN("You do not have access to that business.");
+      }
+      let benchmarkProfileId: number | null | undefined = undefined;
+      if (data?.benchmarkProfileId !== undefined) {
+        benchmarkProfileId = data.benchmarkProfileId === null || data.benchmarkProfileId === ""
+          ? null
+          : await resolveProfileId(data.benchmarkProfileId, existing.businessId);
+        if (data.benchmarkProfileId != null && data.benchmarkProfileId !== "" && !benchmarkProfileId) {
+          return NextResponse.json({ success: false, error: "Benchmark profile not found for this business." }, { status: 404 });
+        }
+      }
+      let costPerFingerlingGhs: number | undefined = undefined;
+      if (data?.costPerFingerlingGhs !== undefined) {
+        const n = Number(data.costPerFingerlingGhs);
+        if (!Number.isFinite(n) || n < 0) {
+          return NextResponse.json({ success: false, error: "costPerFingerlingGhs must be 0 or more" }, { status: 400 });
+        }
+        costPerFingerlingGhs = n;
+      }
+      if (benchmarkProfileId === undefined && costPerFingerlingGhs === undefined) {
+        return NextResponse.json({ success: false, error: "Nothing to update (benchmarkProfileId or costPerFingerlingGhs)" }, { status: 400 });
+      }
+      const [row] = await db
+        .update(aquacultureBatches)
+        .set({
+          ...(benchmarkProfileId !== undefined ? { benchmarkProfileId } : {}),
+          ...(costPerFingerlingGhs !== undefined ? { costPerFingerlingGhs } : {}),
+        })
+        .where(eq(aquacultureBatches.id, Number(id)))
+        .returning();
+      await auditLog(__authSession.user, "AQUA_BATCH_UPDATE", "RECORD", `Fish batch ${row.batchNumber} updated`,
+        "OPERATION_LOG", row.id, existing.businessId, existing.branchCode || null,
+        [
+          benchmarkProfileId === null ? "benchmark profile unpinned" : benchmarkProfileId ? `benchmark profile pinned (#${benchmarkProfileId})` : null,
+          costPerFingerlingGhs !== undefined ? `fingerling cost GH₵${costPerFingerlingGhs}` : null,
+        ].filter(Boolean).join(" · "),
+        (await ownerOrgOfBusiness(existing.businessId).catch(() => null)) ?? null,
+      ).catch((e: any) => console.error("[aqua] audit failed:", e));
       return NextResponse.json({ success: true, item: row });
     }
 

@@ -2,7 +2,10 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
+import AdvisorNotesPanel from "./AdvisorNotesPanel";
 import FishGrowthAnalytics from "./FishGrowthAnalytics";
+import FishBenchmarkPanel from "./FishBenchmarkPanel";
+import FishBenchmarkManager from "./FishBenchmarkManager";
 import {
   Fish, Droplets, HeartPulse, Activity, Egg as EggIcon, Boxes,
   Wallet, ClipboardCheck, Plus, X, Loader2, Building2,
@@ -14,12 +17,14 @@ import {
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { analyzeAquaculture, AQUA_ALERT_STYLES, AQUA_METRIC_COLORS } from "@/lib/aquacultureAnalytics";
+import { computeFishBenchmarkAlerts, type FishBenchmarkResult } from "@/lib/fishBenchmarking";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import AquaFeedMill from "./AquaFeedMill";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { canViewSection } from "@/lib/advisorSections";
 
 interface Props {
   currentUser: any;
@@ -31,6 +36,13 @@ interface Props {
   employees: any[];
   currentCurrency: CurrencyCode;
   onRefreshData: () => void;
+  /** FARM_ADVISOR read-only mode: recording affordances hidden (the API
+   *  403s advisor mutations regardless — this is the friendly UI half). */
+  isAdvisorView?: boolean;
+  /** The advisor's OWNER-chosen section list for THIS unit (null = all).
+   *  Tabs/panels not on the list are hidden; their datasets are already
+   *  stripped server-side by GET /api/aquaculture. */
+  advisorSections?: string[] | null;
 }
 
 type AquaTab = "DASHBOARD" | "STOCK" | "PONDS" | "FEED" | "FEED_MILL" | "WATER" | "HEALTH" | "HARVEST" | "FINANCE";
@@ -50,7 +62,14 @@ const TABS: { key: AquaTab; label: string; icon: any }[] = [
 export default function AquacultureModule({
   currentUser, businessInfo, businessMetrics, inventory, transactions,
   assets, employees, currentCurrency, onRefreshData,
+  isAdvisorView = false,
+  advisorSections = null,
 }: Props) {
+  // ── Advisor per-section visibility (mirrors GET /api/aquaculture) ─────
+  const sec = (key: string) => !isAdvisorView || canViewSection(advisorSections, key);
+  const visibleTabs = TABS.filter(
+    (t) => (!isAdvisorView || !["FEED_MILL", "FINANCE"].includes(t.key)) && sec(t.key)
+  );
   const [tab, setTab] = useState<AquaTab>("DASHBOARD");
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState<null | "POND" | "BATCH" | "FEED" | "WATER" | "HARVEST" | "CHECKLIST" | "SALE">(null);
@@ -67,6 +86,15 @@ export default function AquacultureModule({
   const [checklists, setChecklists] = useState<any[]>([]);
   // Daily fish weight-sampling logs (growth & biomass analysis)
   const [weightLogs, setWeightLogs] = useState<any[]>([]);
+
+  // Benchmark Performance: profiles + the batch being benchmarked.
+  const [benchmarkProfiles, setBenchmarkProfiles] = useState<any[]>([]);
+  const [benchBatchId, setBenchBatchId] = useState<number | null>(null);
+  const [showBenchManager, setShowBenchManager] = useState(false);
+  const [benchResult, setBenchResult] = useState<FishBenchmarkResult | null>(null);
+  const benchCanManage =
+    currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER" ||
+    currentUser?.canManageRecords === true;
 
   const today = new Date().toISOString().split("T")[0];
   const bizId = businessInfo?.id;
@@ -89,6 +117,7 @@ export default function AquacultureModule({
         setHarvests(d.harvests || []);
         setChecklists(d.checklists || []);
         setWeightLogs(d.weightLogs || []);
+        setBenchmarkProfiles(d.benchmarkProfiles || []);
       }
     } finally {
       setLoading(false);
@@ -96,6 +125,13 @@ export default function AquacultureModule({
   }, [bizId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Advisor section filter: never stay parked on a denied tab.
+  useEffect(() => {
+    if (!visibleTabs.length || visibleTabs.some((t) => t.key === tab)) return;
+    setTab(visibleTabs[0].key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdvisorView, JSON.stringify(advisorSections)]);
 
   // ─── Submit handler (with Sale/Inventory/Asset confirmation gate) ───
   const performSubmit = async (entity: string, data: any) => {
@@ -231,7 +267,23 @@ export default function AquacultureModule({
     transactions: branchTrx, currentCurrency,
   }), [ponds, batches, feedLogs, waterLogs, harvests, checklists, branchTrx, currentCurrency]);
 
-  const { alerts, metrics, healthScore, statusColor } = analysis;
+  const { alerts: baseAlerts, metrics, healthScore: baseHealthScore, statusColor } = analysis;
+
+  // Benchmark alerts merge into the same AI Smart Alerts grid (benchmark ids
+  // win over any same-id analytics alert), and the health score blends 85/15
+  // with the batch scorecard compliance when a benchmark is active.
+  const benchAlerts = useMemo(() => computeFishBenchmarkAlerts(benchResult), [benchResult]);
+  const alerts = useMemo(() => {
+    if (!benchAlerts.length) return baseAlerts;
+    const benchIds = new Set(benchAlerts.map((a) => a.id));
+    return [...baseAlerts.filter((a: any) => !benchIds.has(a.id)), ...benchAlerts];
+  }, [baseAlerts, benchAlerts]);
+  const healthScore = useMemo(() => {
+    const compliance = benchResult?.scorecard?.compliancePct;
+    return compliance != null && benchResult?.hasAnyBenchmark
+      ? Math.round(baseHealthScore * 0.85 + compliance * 0.15)
+      : baseHealthScore;
+  }, [baseHealthScore, benchResult]);
   // A brand-new farm (no ponds/batches/logs/harvests) shows a neutral
   // ready-to-start state instead of a misleading score + noise alerts.
   const hasFarmData =
@@ -260,7 +312,10 @@ export default function AquacultureModule({
 
   const imageBtnCls = "h-24 w-full object-cover rounded-lg border border-slate-700";
 
-  const addBtn = (onClick: () => void, label: string, color = "emerald") => (
+  // Advisor read-only mode: every "add / record" affordance collapses — the
+  // API rejects advisor mutations anyway; the UI simply never offers them.
+  const addBtn = (onClick: () => void, label: string, color = "emerald") =>
+    isAdvisorView ? null : (
     <button onClick={onClick} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg bg-${color}-600 hover:bg-${color}-500 text-white text-xs font-bold`}>
       <Plus className="w-3.5 h-3.5" /> {label}
     </button>
@@ -285,7 +340,14 @@ export default function AquacultureModule({
             <Fish className="w-6 h-6 text-cyan-400" />
           </div>
           <div>
-            <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-xs font-bold border border-cyan-500/30">AQUACULTURE FARM MANAGEMENT</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-xs font-bold border border-cyan-500/30">AQUACULTURE FARM MANAGEMENT</span>
+              {isAdvisorView && (
+                <span className="px-2.5 py-0.5 rounded-full bg-teal-500/15 text-teal-300 text-[10px] font-black border border-teal-500/40" data-testid="aqua-advisor-readonly-chip">
+                  ADVISOR · READ-ONLY
+                </span>
+              )}
+            </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-white mt-1">{businessInfo?.name}</h2>
             <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5"><Building2 className="w-3 h-3" />{businessInfo?.code} • {[businessInfo?.town, businessInfo?.district, businessInfo?.region].filter(Boolean).join(", ")}</p>
           </div>
@@ -300,15 +362,18 @@ export default function AquacultureModule({
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl">
-        {TABS.map((t) => (
+      {/* Tabs — the advisor never sees the Feed Mill (formulation costs) or
+          the Finance report (transactions); those are business-sensitive. */}
+      <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl" data-testid="aqua-tab-bar">
+        {visibleTabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${tab === t.key ? "bg-cyan-600 text-white shadow" : "text-slate-300 hover:bg-slate-700/70"}`}>
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${tab === t.key ? "bg-cyan-600 text-white shadow" : "text-slate-300 hover:bg-slate-700/70"}`}
+            data-testid={`aqua-tab-${t.key}`}>
             <t.icon className="w-4 h-4" />
             <span className="text-[10px] leading-none lg:leading-normal lg:text-xs">{t.label}</span>
           </button>
         ))}
+        {!isAdvisorView && (
         <button
           data-testid="aqua-open-expense"
           onClick={() => setShowExpense(true)}
@@ -316,6 +381,7 @@ export default function AquacultureModule({
         >
           <Wallet className="w-4 h-4" />Record Expense
         </button>
+        )}
         <AiSectionGuide moduleKey="AQUA" section={tab} businessInfo={businessInfo} />
       </div>
 
@@ -325,8 +391,10 @@ export default function AquacultureModule({
       {tab === "DASHBOARD" && (
         <div className="space-y-5">
           {/* Health & Performance Score — neutral ready-to-start card on a
-              brand-new farm (no ponds/batches/logs yet) */}
-          {!hasFarmData ? (
+              brand-new farm (no ponds/batches/logs yet). The whole block
+              (score + AI alerts) is the ALERTS section — hidden when the
+              Owner did not grant it to the advisor. */}
+          {sec("ALERTS") && (!hasFarmData ? (
             <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-5 grid grid-cols-1 md:grid-cols-3 gap-4" data-testid="aqua-health-empty">
               <div>
                 <div className="flex items-center gap-2 text-xs font-semibold text-slate-300"><Activity className="w-4 h-4" /> Farm Health & Performance Score</div>
@@ -357,10 +425,10 @@ export default function AquacultureModule({
               <div className="w-full max-w-xs h-2.5 bg-slate-800 rounded-full overflow-hidden mt-2"><div className={`h-full ${scoreBarColor} transition-all`} style={{ width: `${healthScore}%` }} /></div>
             </div>
             <div className="md:col-span-2 flex items-center justify-around gap-3">
-              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center"><AlertTriangle className="w-5 h-5 text-rose-400" /></div><div className="mt-1 text-2xl font-black text-rose-400">{analysis.alerts.filter((a: any) => a.level === "critical").length}</div><div className="text-[10px] text-slate-400">Critical</div></div>
-              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center"><AlertTriangle className="w-5 h-5 text-amber-400" /></div><div className="mt-1 text-2xl font-black text-amber-400">{analysis.alerts.filter((a: any) => a.level === "warning").length}</div><div className="text-[10px] text-slate-400">Warning</div></div>
-              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center"><CalendarCheck className="w-5 h-5 text-emerald-400" /></div><div className="mt-1 text-2xl font-black text-emerald-400">{analysis.alerts.filter((a: any) => a.level === "normal").length}</div><div className="text-[10px] text-slate-400">Normal</div></div>
-              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center"><Fish className="w-5 h-5 text-slate-300" /></div><div className="mt-1 text-2xl font-black text-slate-200">{analysis.alerts.length}</div><div className="text-[10px] text-slate-400">Total</div></div>
+              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center"><AlertTriangle className="w-5 h-5 text-rose-400" /></div><div className="mt-1 text-2xl font-black text-rose-400">{alerts.filter((a: any) => a.level === "critical").length}</div><div className="text-[10px] text-slate-400">Critical</div></div>
+              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center"><AlertTriangle className="w-5 h-5 text-amber-400" /></div><div className="mt-1 text-2xl font-black text-amber-400">{alerts.filter((a: any) => a.level === "warning").length}</div><div className="text-[10px] text-slate-400">Warning</div></div>
+              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center"><CalendarCheck className="w-5 h-5 text-emerald-400" /></div><div className="mt-1 text-2xl font-black text-emerald-400">{alerts.filter((a: any) => a.level === "normal").length}</div><div className="text-[10px] text-slate-400">Normal</div></div>
+              <div className="text-center"><div className="w-10 h-10 mx-auto rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center"><Fish className="w-5 h-5 text-slate-300" /></div><div className="mt-1 text-2xl font-black text-slate-200">{alerts.length}</div><div className="text-[10px] text-slate-400">Total</div></div>
             </div>
           </div>
 
@@ -378,7 +446,7 @@ export default function AquacultureModule({
               ))}
             </div>
           </div>
-          </>)}
+          </>))}
 
           {/* KPI section */}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
@@ -412,20 +480,47 @@ export default function AquacultureModule({
             </Card>
           </div>
 
+          {/* Fish Batch Performance Benchmarking — age-matched actual vs
+              benchmark-profile target vs comparable historical batches, with
+              variance chips, an A–D scorecard, weekly trend charts with the
+              farm-history band and a harvest close-out projection. */}
+          {sec("BENCHMARK") && (
+          <FishBenchmarkPanel
+            businessId={bizId!}
+            batches={batches}
+            feedLogs={feedLogs}
+            harvests={harvests}
+            weightLogs={weightLogs}
+            ponds={ponds}
+            profiles={benchmarkProfiles}
+            currentCurrency={currentCurrency}
+            benchBatchId={benchBatchId}
+            onBenchBatchChange={setBenchBatchId}
+            onManage={() => setShowBenchManager(true)}
+            onBenchmarks={setBenchResult}
+            canManage={benchCanManage}
+          />
+          )}
+
           {/* Fish Growth & Production Analytics — daily weight sampling vs
-              species standard, weight by age, feed, FCR, survival/mortality,
-              harvests and biomass, scoped by pond/batch/species/branch/date */}
+              species standard / benchmark target, weight by age, feed, FCR,
+              survival/mortality, harvests and biomass, scoped by
+              pond/batch/species/branch/date */}
+          {sec("GROWTH") && (
           <FishGrowthAnalytics
             businessId={bizId}
+            canRecord={!isAdvisorView}
             ponds={ponds}
             batches={batches}
             feedLogs={feedLogs}
             harvests={harvests}
             weightLogs={weightLogs}
+            benchmarkProfiles={benchmarkProfiles}
             currentUserName={currentUser?.name}
             currentUserRole={currentUser?.role}
             onRefresh={refresh}
           />
+          )}
 
           {/* Performance metrics cards */}
           <div>
@@ -440,6 +535,15 @@ export default function AquacultureModule({
               ))}
             </div>
           </div>
+
+          {/* Advisor Notes & Guidance — the advisor's write surface and the
+              staff's guidance inbox, right on the farm dashboard. */}
+          <AdvisorNotesPanel
+            businessId={bizId}
+            businessName={businessInfo?.name}
+            currentUser={currentUser}
+            batches={growingBatches}
+          />
         </div>
       )}
 
@@ -615,9 +719,11 @@ export default function AquacultureModule({
         <Card title="Harvest Records & Sales" icon={TrendingDown}
           action={
             <div className="flex items-center gap-2">
+              {!isAdvisorView && (
               <button onClick={() => setShowForm("SALE")} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow">
                 + Record Sale
               </button>
+              )}
               {addBtn(() => setShowForm("HARVEST"), "Record Harvest")}
             </div>
           }>
@@ -710,7 +816,8 @@ export default function AquacultureModule({
                       </td>
                     </tr>
                   ))}
-                  {branchTrx.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No transactions on this branch yet.</td></tr>}\n                </tbody>
+                  {branchTrx.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No transactions on this branch yet.</td></tr>}
+                </tbody>
               </table>
             </div>
           </Card>
@@ -720,8 +827,21 @@ export default function AquacultureModule({
       {/* ══════════ FORMS ══════════ */}
       {showForm && (
         <AquacultureForm type={showForm} busy={busy} error={err} ponds={ponds} batches={batches} inventory={branchInventory}
+          profiles={benchmarkProfiles}
           onClose={() => { setShowForm(null); setErr(""); }}
           onSubmit={submit}
+        />
+      )}
+
+      {showBenchManager && (
+        <FishBenchmarkManager
+          businessId={bizId!}
+          batches={batches}
+          currentUserName={currentUser?.name}
+          currentUserRole={currentUser?.role}
+          canManage={benchCanManage}
+          onClose={() => setShowBenchManager(false)}
+          onRefresh={refresh}
         />
       )}
 
@@ -822,7 +942,7 @@ function BatchSelect({ batches, f, set }: any) {
   );
 }
 
-function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, onClose, onSubmit }: any) {
+function AquacultureForm({ type, ponds, batches, inventory = [], profiles = [], busy, error, onClose, onSubmit }: any) {
   const [f, setF] = useState<any>({
     type: "CAGE",
     status: "ACTIVE",
@@ -902,7 +1022,27 @@ function AquacultureForm({ type, ponds, batches, inventory = [], busy, error, on
               <div className="grid grid-cols-2 gap-3">
                 <FormField f={f} set={set} label="Target Harvest Date" k="targetHarvestDate" t="date" />
                 <FormField f={f} set={set} label="Current Count" k="currentCount" t="number" min={0} placeholder="Defaults to initial" />
+                <FormField f={f} set={set} label="Cost / Fingerling (GH₵)" k="costPerFingerlingGhs" t="number" step="0.01" min={0} placeholder="e.g. 1.20" />
               </div>
+              <label className="block">
+                <span className="block text-[10px] text-slate-500 mb-1">Benchmark profile (optional)</span>
+                <select
+                  data-testid="aqua-form-benchmark"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                  value={f.benchmarkProfileId ?? ""}
+                  onChange={(e) => set("benchmarkProfileId", e.target.value === "" ? null : e.target.value)}
+                >
+                  <option value="">Auto — match by species / strain</option>
+                  {(profiles || [])
+                    .filter((p: any) => (p.status || "ACTIVE") === "ACTIVE" && (!p.species || p.species === (f.species || "VOLTA_TILAPIA")))
+                    .map((p: any) => (
+                      <option key={p.id} value={p.id}>{p.name}{p.isDefault ? " (default)" : ""}</option>
+                    ))}
+                </select>
+                <span className="block text-[9px] text-slate-500 mt-1">
+                  Pin this batch to a specific performance target — leave on Auto to follow the default profile for its species.
+                </span>
+              </label>
             </>
           )}
 
