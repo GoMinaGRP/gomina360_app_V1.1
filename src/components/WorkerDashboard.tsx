@@ -339,6 +339,7 @@ export default function WorkerDashboard({
           <button
             key={tab.key}
             onClick={() => setActiveSubTab(tab.key)}
+            data-testid={`wk-tab-${tab.key}`}
             className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
               activeSubTab === tab.key
                 ? "bg-emerald-600 text-white shadow"

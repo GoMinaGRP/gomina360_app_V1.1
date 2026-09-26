@@ -363,7 +363,7 @@ export default function BusinessDashboardModule({
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-testid={`bdm-tab-${t.key}`}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
               tab === t.key ? `${cfg.tabActive} text-white shadow` : "text-slate-300 hover:bg-slate-700/70"}`}>
             <t.icon className="w-4 h-4" />

@@ -450,7 +450,7 @@ export default function ElectronicsShopModule({
       {/* Tab bar */}
       <div className="flex flex-wrap gap-1 bg-slate-800/60 border border-slate-700 rounded-xl p-1">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-testid={`elex-tab-${t.key}`}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${tab === t.key ? "bg-cyan-600 text-white" : "text-slate-400 hover:text-white"}`}>
             <t.icon className="w-3.5 h-3.5" />{t.label}
           </button>

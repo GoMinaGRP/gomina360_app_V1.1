@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck, RefreshCw, Flag, MessageSquare, PencilLine, BadgeCheck, History,
   KeyRound, ScrollText, BarChart3, Rows3, X, FileSpreadsheet, UserCheck, Ban, Search, AlertTriangle,
-  ImagePlus, Send, User, Eye, Images, Link2, ArrowLeft,
+  ImagePlus, Send, User, Eye, Images, Link2, ArrowLeft, CalendarClock,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
@@ -150,6 +150,15 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const [notice, setNotice] = useState("");
   const [tab, setTab] = useState<"RECORDS" | "ISSUES" | "REPORTS" | "ACCESS" | "LOG">("RECORDS");
   const [filters, setFilters] = useState({ businessId: "", module: "", recordType: "", branchCode: "", worker: "", status: "", q: "", from: "", to: "" });
+  // Records declutter: TODAY's activities show by default; everything older
+  // lives in a collapsible History section (collapsed until asked for). All
+  // historical data stays intact and reachable — the split is a pure view
+  // partition of the SAME server-filtered list, and "Load older records"
+  // pages further back than the API's 250-record page.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [olderRecords, setOlderRecords] = useState<Rec[]>([]);
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [olderDone, setOlderDone] = useState(false);
   const [histKey, setHistKey] = useState<string | null>(null);
   const [actionModal, setActionModal] = useState<{ rec: Rec; action: string } | null>(null);
   const [actionForm, setActionForm] = useState({ issueTitle: "", reason: "", comment: "", evidence: "", photo: "", priority: "MEDIUM" });
@@ -186,6 +195,9 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "Failed to load the audit workspace");
       setData(body);
+      // New filter result → the incremental history paging state starts over.
+      setOlderRecords([]);
+      setOlderDone(false);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -215,6 +227,44 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
   const scope = data?.scope;
   const records: Rec[] = data?.records || [];
+  // Today vs History partition (local calendar day of each record's date).
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const isToday = (r: Rec) => String(r.date || "").slice(0, 10) === todayStr;
+  const todaysRecords = useMemo(() => records.filter(isToday), [records]); // eslint-disable-line react-hooks/exhaustive-deps
+  const historyRecords = useMemo(() => {
+    const inPayload = records.filter((r) => !isToday(r));
+    const seen = new Set(inPayload.map((r) => r.key));
+    return [...inPayload, ...olderRecords.filter((r) => !seen.has(r.key))];
+  }, [records, olderRecords]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The API pages at 250 records — when the payload is full there may be
+  // more history behind it. Each click walks one 250-page further back.
+  const moreHistoryAvailable = records.length >= 250 && !olderDone;
+  const loadOlderRecords = useCallback(async () => {
+    const oldest = [...historyRecords].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))[0];
+    if (!oldest?.date) { setOlderDone(true); return; }
+    setOlderLoading(true);
+    try {
+      const p = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => v && k !== "to" && p.set(k, v));
+      p.set("to", String(oldest.date).slice(0, 10)); // exclusive walk backwards
+      const res = await fetch(`/api/audit?${p.toString()}`);
+      const body = await res.json();
+      if (res.ok && body?.records) {
+        const batch = (body.records as Rec[]).filter((r) => !isToday(r));
+        setOlderRecords((prev) => {
+          const seen = new Set(prev.map((r) => r.key));
+          return [...prev, ...batch.filter((r) => !seen.has(r.key))];
+        });
+        if ((body.records as Rec[]).length < 250) setOlderDone(true);
+      } else {
+        setOlderDone(true);
+      }
+    } catch {
+      setOlderDone(true);
+    } finally {
+      setOlderLoading(false);
+    }
+  }, [filters, historyRecords]); // eslint-disable-line react-hooks/exhaustive-deps
   const reviews: Rev[] = data?.reviews || [];
   const log: any[] = data?.log || [];
   const report = data?.report;
@@ -582,7 +632,11 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
       )}
 
       {/* ── RECORDS ─────────────────────────────────────────────── */}
-      {tab === "RECORDS" && (isWide ? (
+      {/* ── RECORDS — Today's activities by default; older records live in
+             the collapsible History section (search + filters above govern
+             both; nothing is deleted, everything stays accessible). ──── */}
+      {tab === "RECORDS" && (() => {
+        const renderWide = (list: Rec[]) => (
         <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 text-slate-400 uppercase text-[10px] tracking-wider">
@@ -593,7 +647,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70" data-testid="aud-rec-rows">
-              {records.map((r) => (
+              {list.map((r) => (
                 <React.Fragment key={r.key}>
                   <tr className="text-slate-300 hover:bg-slate-800/40" data-testid={`aud-rec-row-${r.key}`}>
                     <td className="px-4 py-2.5">
@@ -624,17 +678,17 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                   )}
                 </React.Fragment>
               ))}
-              {records.length === 0 && !loading && (
+              {list.length === 0 && !loading && (
                 <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500 text-sm">No records match the current filters.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      ) : (
-        /* Phone / tablet — every record as a full card: the complete record
-           info AND the whole audit action set stay visible, no clipping. */
+        );
+        const renderNarrow = (list: Rec[]) => (
+
         <div className="space-y-2" data-testid="aud-rec-rows">
-          {records.map((r) => (
+          {list.map((r) => (
             <div key={r.key} className="bg-slate-900 border border-slate-700/80 rounded-xl p-3.5 space-y-2.5" data-testid={`aud-rec-row-${r.key}`}>
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-mono text-[10px] text-cyan-300">{r.ref}</span>
@@ -663,11 +717,70 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
               )}
             </div>
           ))}
-          {records.length === 0 && !loading && (
+          {list.length === 0 && !loading && (
             <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-10 text-center text-slate-500 text-sm">No records match the current filters.</div>
           )}
         </div>
-      ))}
+        );
+        const renderList = (list: Rec[]) => (isWide ? renderWide(list) : renderNarrow(list));
+        return (
+        <div className="space-y-4">
+          {/* Today's activities — the default view */}
+          <section data-testid="aud-today-section">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5" /> Today's activities
+              </h3>
+              <span className="text-[10px] font-bold text-slate-400" data-testid="aud-today-count">{todaysRecords.length} record{todaysRecords.length === 1 ? "" : "s"}</span>
+              <span className="ml-auto text-[10px] text-slate-500">older records are in History ↓</span>
+            </div>
+            {renderList(todaysRecords)}
+          </section>
+
+          {/* History / Previous records — collapsed by default */}
+          <section data-testid="aud-history-section">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              aria-expanded={historyOpen}
+              className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-700/80 bg-slate-900 hover:border-teal-500/40 transition text-left"
+              data-testid="aud-history-toggle"
+            >
+              <History className={`w-4 h-4 text-teal-300 transition-transform ${historyOpen ? "" : "-rotate-90 "}`} />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-200">History / Previous records</span>
+              <span className="text-[10px] font-bold text-slate-400" data-testid="aud-history-count">{historyRecords.length} record{historyRecords.length === 1 ? "" : "s"}</span>
+              <span className="ml-auto text-[10px] font-bold text-teal-300">{historyOpen ? "Hide" : "Show"}</span>
+            </button>
+            {historyOpen && (
+              <div className="mt-2 space-y-2" data-testid="aud-history-body">
+                {historyRecords.length === 0 && !loading && (
+                  <div className="bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-8 text-center text-slate-500 text-sm">
+                    No earlier records match the current filters.
+                  </div>
+                )}
+                {renderList(historyRecords)}
+                {moreHistoryAvailable && (
+                  <button
+                    type="button"
+                    onClick={loadOlderRecords}
+                    disabled={olderLoading}
+                    className="w-full py-2.5 rounded-xl border border-teal-500/40 bg-teal-500/10 hover:bg-teal-500/20 text-teal-200 text-xs font-bold disabled:opacity-50 transition"
+                    data-testid="aud-history-load-more"
+                  >
+                    {olderLoading ? "Loading older records…" : "Load older records (previous 250)"}
+                  </button>
+                )}
+                {!moreHistoryAvailable && historyRecords.length > 0 && (
+                  <p className="text-center text-[10px] text-slate-500" data-testid="aud-history-end">
+                    {olderDone ? "End of history for these filters." : `${historyRecords.length} earlier record${historyRecords.length === 1 ? "" : "s"}`}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+        );
+      })()}
 
       {/* ── ISSUES ──────────────────────────────────────────────── */}
       {tab === "ISSUES" && (
