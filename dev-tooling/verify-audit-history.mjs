@@ -93,7 +93,7 @@ const TS = Date.now();
 const txnRow = (num, dayOffset, clock, label) => q1(
   `INSERT INTO transactions (transaction_number, business_id, branch_code, type, category, amount_ghs, payment_method, description, date, status, recorded_by, recorded_by_role, recorded_by_user_id, created_at)
    VALUES ($1, 1, 'POULTRY-01', 'EXPENSE', 'Feed Expense', 10, 'CASH', $2, CURRENT_DATE - ${dayOffset}, 'COMPLETED', 'Kwame Mina', 'OWNER', 1, (CURRENT_DATE - ${dayOffset}) + time '${clock}')
-   RETURNING id, transaction_number`,
+   RETURNING id, transaction_number, created_at`,
   [num, label]
 );
 // TODAY_A inserted first (lower id) but EARLIER clock time — B must render above it.
@@ -233,6 +233,75 @@ try {
       dClicks++;
     }
     ok("G27 desktop: 40-day fixture reachable in History (via load-more)", d40Found, `${dClicks} load-more clicks`);
+    await ctx.close();
+  }
+
+  // ══ 3. TIMEZONE — a viewer far from UTC (America/Regina, UTC-6, no DST):
+  //    day grouping must follow the VIEWER's calendar ("Today" is their
+  //    today), stamps show local times, and nothing leaks between zones ══
+  console.log("\n── 3. PHONE 390×844 · America/Regina viewer — local-day coherence ──");
+  {
+    const { ctx, page } = await newCtx("tz-phone", 390, 844);
+    await page.emulateTimezone("America/Regina");
+    const H = helpers(page);
+    await login(page, OWNER);
+    await H.waitSel('[data-testid="nav-sidebar"]', 20000);
+    await H.clickTid("audit-tab");
+    await H.waitSel('[data-testid="aud-root"]');
+    await sleep(2500);
+
+    const reginaDay = (v) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Regina", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(v));
+    const expDayA = reginaDay(txA.created_at);
+    const expDayB = reginaDay(txB.created_at);
+
+    // Both today-fixtures group by the viewer's local day of their timestamps
+    const tzGroups = await page.evaluate((da, db) => {
+      const inGroup = (key) => {
+        const rows = [...document.querySelectorAll('section[data-testid^="aud-day-"]')];
+        for (const s of rows) {
+          const row = s.querySelector(`[data-testid="aud-rec-row-${key}"]`);
+          if (row) return s.getAttribute("data-testid").replace("aud-day-", "");
+        }
+        return null;
+      };
+      return { a: inGroup(`TRANSACTION:transactions:${da}`), b: inGroup(`TRANSACTION:transactions:${db}`) };
+    }, txA.id, txB.id);
+    ok("T1 fixtures group by the viewer's LOCAL day (not the server's UTC day)", tzGroups.a === expDayA && tzGroups.b === expDayB && !!expDayA, JSON.stringify({ tzGroups, expDayA }));
+
+    // Local times on the stamps: 09:15Z → 03:15 Regina, 15:40Z → 09:40 Regina
+    const stampA = await H.textOf(`aud-rec-stamp-TRANSACTION:transactions:${txA.id}`);
+    const stampB = await H.textOf(`aud-rec-stamp-TRANSACTION:transactions:${txB.id}`);
+    ok("T2 stamps show the viewer's LOCAL times (03:15 / 09:40)", /03:15/.test(stampA) && /09:40/.test(stampB), `${stampA} | ${stampB}`);
+
+    // Local coherence: every row's stamp date equals its group's date
+    const coherence = await page.evaluate(() => {
+      const groups = [...document.querySelectorAll('section[data-testid^="aud-day-"]')];
+      let rows = 0, mismatches = 0;
+      for (const g of groups) {
+        const gday = g.getAttribute("data-testid").replace("aud-day-", "");
+        for (const r of g.querySelectorAll('[data-testid^="aud-rec-row-"]')) {
+          rows++;
+          const stamp = r.querySelector('[data-testid^="aud-rec-stamp-"]');
+          const stampDay = (stamp?.textContent || "").split(" · ")[0].trim();
+          if (stampDay !== gday) mismatches++;
+        }
+      }
+      return { groups: groups.length, rows, mismatches };
+    });
+    ok("T3 every record's stamp date matches its day group (locally coherent)", coherence.rows > 0 && coherence.mismatches === 0, JSON.stringify(coherence));
+
+    // Split still clean under a non-UTC viewer: history holds none of the
+    // 7-day records, and no record appears twice on the page.
+    await H.clickTid("aud-history-toggle");
+    await H.waitSel('[data-testid="aud-history-body"]');
+    await sleep(600);
+    const split = await page.evaluate((db) => {
+      const inHist = !!document.querySelector(`[data-testid="aud-history-body"] [data-testid="aud-rec-row-TRANSACTION:transactions:${db}"]`);
+      const keys = [...document.querySelectorAll('[data-testid^="aud-rec-row-"]')].map((r) => r.getAttribute("data-testid"));
+      const dupes = keys.length - new Set(keys).size;
+      return { inHist, dupes, total: keys.length };
+    }, txB.id);
+    ok("T4 History holds no 7-day records; no record rendered twice", !split.inHist && split.dupes === 0 && split.total > 0, JSON.stringify(split));
     await ctx.close();
   }
 

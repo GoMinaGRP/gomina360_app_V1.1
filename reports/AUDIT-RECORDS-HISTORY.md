@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-26 · **Components:** `src/components/AuditCommandCenter.tsx`,
 `src/app/api/audit/route.ts` · **Verification:** `dev-tooling/verify-audit-history.mjs`
-(28/28 green, phone + desktop, production build)
+(32/32 green — phone + desktop + emulated non-UTC viewer, production build)
 
 ## The behavior
 
@@ -61,6 +61,32 @@ reachable via load-more · G28 zero page errors. All seeded rows are purged.
 fetched with its own id-window (e.g. newest 240 transactions) as a
 performance guard; everything the API exposes is reachable through the
 paging.
+
+## Cross-check follow-up (2026-09-26, second pass)
+
+**Reported:** only "Today" and "Older than 7 Days" were visible. **Finding:**
+the grouping logic was correct, but the freshly recovered demo database had
+records ONLY for today (everything is created at recovery time) — zero rows
+dated 1–6 days ago, so those day groups correctly rendered as nothing. Two
+fixes landed:
+
+1. **Viewer-timezone coherence (real bug, edge hours).** Day grouping used
+   the records' date strings, which are UTC-derived for timestamp-backed
+   sources — so a viewer far from UTC could see records group under the
+   wrong day near midnight. Records that carry an exact event timestamp
+   (`at`) now group by the **viewer's local day** of that timestamp, and the
+   stamps show local day + local time; business-date records (plain text
+   dates) keep their date. Verified with a new America/Regina (UTC-6)
+   emulated section: fixtures group by the local day, stamps read 03:15 /
+   09:40, every record's stamp date matches its group, and no record leaks
+   between the 7-day zone and History.
+2. **Demo data gap.** `dev-tooling/seed-recent-demo.mjs` (idempotent, wired
+   into `recover.sh`) now populates each of the last 7 days with realistic
+   activity — 3 finance records + 2 completed checklist tasks per day with
+   varied clock times — so Today, Yesterday and every previous date show
+   content on a freshly recovered database.
+
+`verify-audit-history.mjs` grew to **32 checks** (G1–G28 + T1–T4).
 
 ## Recovery hardening (found while re-verifying)
 

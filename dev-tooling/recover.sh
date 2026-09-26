@@ -52,6 +52,10 @@ node dev-tooling/restore-livedata.mjs || true
 # memberships) — without this the per-organization party-detail checks in
 # /api/audit 403 for scoped auditors right after a fresh reseed.
 node dev-tooling/migrate-multiowner.mjs || true
+# Recent demo activity across the last 7 days so the Audit → Records day
+# grouping (Today / Yesterday / each previous date) has content to show on a
+# freshly reseeded database. Idempotent.
+node dev-tooling/seed-recent-demo.mjs || true
 # Heal the owner's REAL GoMina crest (business/branch/company logos) if the
 # rebuild rolled the DB back to a snapshot taken before his upload.
 node dev-tooling/restore-branding.mjs

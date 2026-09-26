@@ -232,8 +232,13 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   //    everything older than 7 days in the collapsible History section.
   const RECENT_DAYS = 7;
   const dayKeyOf = (d: Date) => d.toLocaleDateString("en-CA");
+  const localDayOf = (v: any) => { const d = new Date(v); return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA"); };
   const todayStr = dayKeyOf(new Date());
-  const dayOf = (r: Rec) => String(r.date || "").slice(0, 10);
+  // A record's calendar day in the VIEWER'S timezone: timestamp-backed
+  // records (r.at set) group by the local day of their event time — so
+  // "Today"/"Yesterday" are the user's actual days even far from UTC —
+  // while business-date records (plain text dates) keep their date.
+  const dayOf = (r: Rec) => (r.at ? localDayOf(r.at) : "") || String(r.date || "").slice(0, 10);
   const recentCutoff = dayKeyOf(new Date(Date.now() - (RECENT_DAYS - 1) * 86400000)); // today − 6 days
   const isRecent = (r: Rec) => { const d = dayOf(r); return !!d && d >= recentCutoff; };
   const dayLabel = (ds: string) => {
@@ -703,7 +708,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <td className="px-3 py-2.5">{bizName(r.businessId)} · <span className="font-mono text-[10px] text-cyan-300">{r.branchCode || bizCode(r.businessId)}</span></td>
                     <td className="px-3 py-2.5">{r.workerName || <span className="text-slate-600">—</span>}</td>
                     <td className="px-3 py-2.5 font-mono text-[10px]">
-                      <div>{r.date || "—"}</div>
+                      <div>{dayOf(r) || "—"}</div>
                       {r.at && (
                         <div className="text-slate-500" data-testid={`aud-rec-stamp-${r.key}`}>
                           {new Date(r.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}
