@@ -172,15 +172,21 @@ const dupRows = (await q(
   `select owner_id, id from businesses where code = 'WASH-01' order by owner_id`)).rows;
 ok("WASH-01 exists once per organization in the DB", dupRows.length === 2, JSON.stringify(dupRows));
 
-// Org #1's numbering is NOT influenced by org #2's units (org #1 has only
-// POULTRY-01; org #2 just created POULTRY-01 + POULTRY-02 — org #1's next
-// must still be POULTRY-02, not POULTRY-03).
+// Org #1's numbering is NOT influenced by org #2's units (org #2 just created
+// POULTRY-01 + POULTRY-02). The expected code is derived from ORG #1's OWN
+// live units only — org #1 may legitimately own more than just POULTRY-01
+// (e.g. restored owner data), so the next code is max(existing)+1 computed
+// from org #1's rows alone; org #2's POULTRY-01/02 must never move it).
+const o1Max = (await q(
+  `select coalesce(max((regexp_match(code, '^POULTRY-(\\d+)$'))[1]::int), 0) as n
+     from businesses where owner_id = 1 and code ~ '^POULTRY-\\d+$'`)).rows[0]?.n || 0;
+const o1Expected = `POULTRY-0${o1Max + 1}`;
 const o1next = await api("POST", "/api/businesses", t1, {
   name: "Org One Poultry II", category: "Poultry Farm",
 });
-ok("org #1 numbering unaffected by org #2 (next is POULTRY-02)",
-  o1next.status === 200 && o1next.json?.business?.code === "POULTRY-02",
-  `status=${o1next.status} body=${JSON.stringify(o1next.json).slice(0, 160)}`);
+ok("org #1 numbering unaffected by org #2 (next is own-org max+1)",
+  o1next.status === 200 && o1next.json?.business?.code === o1Expected,
+  `status=${o1next.status} expected=${o1Expected} body=${JSON.stringify(o1next.json).slice(0, 160)}`);
 // delete the org-#1 probe unit right away (canonical tenant stays pristine)
 await purgeBusinesses([o1next.json?.business?.id].filter(Boolean));
 {

@@ -69,6 +69,19 @@ async function login(cred) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
+  // ── Seed one bell row for the owner so the notification→task check is
+  // self-sufficient (a freshly reseeded database can otherwise start with an
+  // empty owner bell until other suites/digests accumulate rows). Removed in
+  // the finally block below.
+  const OWNER_ID = (await q("select id from users where email = $1", [OWNER.email]))[0]?.id;
+  if (OWNER_ID) {
+    await client.query(
+      `insert into notifications (user_id, type, title, body, record_type, record_ref, owner_id, is_read)
+       values ($1, 'DAILY_DIGEST', 'UI suite — bell fixture', 'Temporary row for the notification → task UI check', null, 'ui-suite-bell', null, false)`,
+      [OWNER_ID],
+    );
+  }
+
   // ── OWNER: Action Center renders from the sidebar ──
   await login(OWNER);
   ok("owner signed in", await exists('[data-testid="nav-sidebar"]'));
@@ -228,6 +241,7 @@ try {
   if (!process.env.KEEP) {
     try {
       await client.query("delete from action_tasks where title like 'UI suite%' or task_number like 'TASK-UI-%'");
+      await client.query("delete from notifications where record_ref = 'ui-suite-bell' or title like 'UI suite — bell fixture%'");
       await client.query("delete from notifications where record_ref in (select task_number from action_tasks where title like 'UI suite%')");
       await client.query("delete from notifications where title like 'Action assigned: UI suite%' or body like '%UI suite%'");
       await client.query("delete from budgets where id in (select id from budgets where amount_ghs = 6500 and category = 'TOTAL' and created_by_name = 'Kwame Mina')");

@@ -274,9 +274,26 @@ try {
 
   const table = await client.query("select to_regclass('public.users') as name");
   if (!table.rows[0]?.name) {
-    throw new Error(
-      "The users table does not exist. Apply the full schema first with DATABASE_URL=\"<managed-url>\" npx drizzle-kit push.",
+    // A database with ZERO user tables is unambiguously a FRESH install (a
+    // wrong/existing database always carries tables). In that case the
+    // reconciler below builds the complete schema from schema.ts — tables,
+    // columns, defaults, indexes — so a first deploy onto a brand-new managed
+    // database succeeds without a manual `drizzle-kit push` step. A database
+    // that is missing `users` but HAS other tables is partial or drifted:
+    // refuse, exactly as before, so a bad DATABASE_URL can never silently
+    // "repair" itself into an empty app.
+    const liveTables = await client.query(
+      `select count(*)::int as n from pg_tables where schemaname = 'public'`,
     );
+    if (Number(liveTables.rows[0]?.n || 0) === 0) {
+      console.log(
+        "[db:migrate] fresh database detected — building the full schema from schema.ts (additive, idempotent)",
+      );
+    } else {
+      throw new Error(
+        "The users table does not exist but the database is not empty. Refusing to migrate a partial/drifted database — inspect DATABASE_URL or apply the full schema with DATABASE_URL=\"<managed-url>\" npx drizzle-kit push.",
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────

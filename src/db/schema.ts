@@ -145,6 +145,7 @@ export const userSessions = pgTable("user_sessions", {
 },
   (t) => [
     index("user_sessions_token_hash_idx").on(t.tokenHash),
+    index("user_sessions_user_id_idx").on(t.userId),
   ]
 );
 
@@ -157,7 +158,11 @@ export const userBusinessAccess = pgTable("user_business_access", {
   businessId: integer("business_id").notNull(),
   createdByUserId: integer("created_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("user_business_access_business_id_idx").on(t.businessId),
+    index("user_business_access_user_id_idx").on(t.userId),
+  ]);
 
 // Immutable audit trail of every shared-record deletion: WHO deleted WHAT,
 // WHEN (date + time) and WHY (mandatory reason), with a full snapshot of the
@@ -436,7 +441,10 @@ export const businessMetrics = pgTable("business_metrics", {
   growthRatePercent: doublePrecision("growth_rate_percent").notNull(),
   riskScore: integer("risk_score").notNull(), // 1 to 100 (low is better)
   lastUpdated: timestamp("last_updated").defaultNow(),
-});
+},
+  (t) => [
+    index("business_metrics_business_id_idx").on(t.businessId),
+  ]);
 
 // 4. Customers & CRM across Businesses
 export const customers = pgTable("customers", {
@@ -458,7 +466,10 @@ export const customers = pgTable("customers", {
   businessId: integer("business_id"), // null if shared across the Owner's units
   ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("customers_business_id_idx").on(t.businessId),
+  ]);
 
 // 5. Suppliers & Vendors
 export const suppliers = pgTable("suppliers", {
@@ -514,7 +525,10 @@ export const employees = pgTable("employees", {
   idNumber: text("id_number"),
   workPermitNo: text("work_permit_no"), // where applicable (non-citizens)
   notes: text("notes"),
-});
+},
+  (t) => [
+    index("employees_business_id_idx").on(t.businessId),
+  ]);
 
 /** Employee documents — contracts, certificates, qualifications, work
  *  permits, ID copies and any other files (base64 data-URL payloads, the
@@ -533,7 +547,10 @@ export const employeeDocuments = pgTable("employee_documents", {
   uploadedByUserId: integer("uploaded_by_user_id"),
   uploadedByName: text("uploaded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("employee_documents_business_id_idx").on(t.businessId),
+  ]);
 
 /** Employee record history — immutable audit trail of every important
  *  change (registration, field edits with old → new, photo updates,
@@ -551,7 +568,10 @@ export const employeeHistory = pgTable("employee_history", {
   changedByName: text("changed_by_name"),
   changedByRole: text("changed_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("employee_history_business_id_idx").on(t.businessId),
+  ]);
 
 // 7. Enterprise Assets & Equipment
 // Every asset MUST be linked to a Business and a Branch at registration.
@@ -706,7 +726,10 @@ export const universalExports = pgTable("universal_exports", {
   requestedAt: timestamp("requested_at").defaultNow(),
   approvedAt: timestamp("approved_at"),
   completedAt: timestamp("completed_at"),
-});
+},
+  (t) => [
+    index("universal_exports_business_id_idx").on(t.businessId),
+  ]);
 
 // 9. Financial Transactions (Sales, Purchases, Expenses, Payroll, MoMo)
 export const transactions = pgTable("transactions", {
@@ -730,7 +753,10 @@ export const transactions = pgTable("transactions", {
   recordedByUserId: integer("recorded_by_user_id"),
   receiptImage: text("receipt_image"), // base64 image or URL of receipt photo
   receiptImages: jsonb("receipt_images"), // array of receipt photo URLs/base64
-});
+},
+  (t) => [
+    index("transactions_business_id_idx").on(t.businessId),
+  ]);
 
 // Custom expense categories
 export const expenseCategories = pgTable("expense_categories", {
@@ -744,6 +770,7 @@ export const expenseCategories = pgTable("expense_categories", {
   ownerId: integer("owner_id"), // tenant scope — unique per Owner organization, not global
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
+    index("expense_categories_business_id_idx").on(t.businessId),
   uniqueIndex("expense_categories_owner_name_uq").on(t.ownerId, t.name),
 ]);
 
@@ -775,6 +802,7 @@ export const budgets = pgTable("budgets", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => [
+    index("budgets_owner_id_idx").on(t.ownerId),
   uniqueIndex("budgets_unique_line").on(t.businessId, t.period, t.branchCode, t.kind, t.category),
   index("budgets_business_period_idx").on(t.businessId, t.period),
 ]);
@@ -819,7 +847,10 @@ export const salesDocuments = pgTable("sales_documents", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("sales_documents_business_id_idx").on(t.businessId),
+  ]);
 
 // 9c. Customer Order Tracking — every customer order/product gets a unique,
 // unguessable tracking code. Customers track WITHOUT logging in on the
@@ -968,6 +999,8 @@ export const fulfillmentOptions = pgTable("fulfillment_options", {
   updatedAt: timestamp("updated_at").defaultNow(),
 },
   (t) => [
+    index("fulfillment_options_business_id_idx").on(t.businessId),
+    index("fulfillment_options_owner_id_idx").on(t.ownerId),
     index("fulfillment_options_inventory_id_idx").on(t.inventoryId),
   ]
 );
@@ -989,7 +1022,11 @@ export const orderPayments = pgTable("order_payments", {
   markedByUserId: integer("marked_by_user_id"),
   markedByName: text("marked_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("order_payments_business_id_idx").on(t.businessId),
+    index("order_payments_owner_id_idx").on(t.ownerId),
+  ]);
 
 // 9d-4. Supplier orders — the shared procurement pipeline pre-orders demand.
 export const supplierOrders = pgTable("supplier_orders", {
@@ -1020,7 +1057,11 @@ export const supplierOrders = pgTable("supplier_orders", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("supplier_orders_business_id_idx").on(t.businessId),
+    index("supplier_orders_owner_id_idx").on(t.ownerId),
+  ]);
 
 // 9d-5. Goods receipts — the ONLY stock gate for pre-ordered goods: a posted
 // receipt increments inventory_items.quantity; nothing before it does.
@@ -1037,7 +1078,11 @@ export const goodsReceipts = pgTable("goods_receipts", {
   receivedByName: text("received_by_name"),
   receivedAt: timestamp("received_at").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("goods_receipts_business_id_idx").on(t.businessId),
+    index("goods_receipts_owner_id_idx").on(t.ownerId),
+  ]);
 
 // 9d. Credit Sales — buy-now-pay-in-installments anchored to a secure
 // order/customer code. A credit sale is created at the register (stock is
@@ -1076,7 +1121,10 @@ export const creditSales = pgTable("credit_sales", {
   paidAt: timestamp("paid_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("credit_sales_business_id_idx").on(t.businessId),
+  ]);
 
 // 9e. Credit Sale Installment Payments — the dated payment history behind
 // every credit sale (deposit + installments), each linked to its INCOME
@@ -1098,7 +1146,10 @@ export const creditPayments = pgTable("credit_payments", {
   receivedByName: text("received_by_name"),
   receivedByRole: text("received_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("credit_payments_business_id_idx").on(t.businessId),
+  ]);
 
 // --- SPECIALIZED MODULE LOGS FOR EACH OF THE 7 BUSINESSES ---
 
@@ -1114,7 +1165,10 @@ export const poultryLogs = pgTable("poultry_logs", {
   mortalityCount: integer("mortality_count").default(0),
   healthStatus: text("health_status").default("HEALTHY"), // 'HEALTHY', 'VET_CHECK_REQUIRED', 'VACCINATED'
   recordedDate: text("recorded_date").notNull(),
-});
+},
+  (t) => [
+    index("poultry_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // ─── POULTRY FARM MANAGEMENT MODULE ───────────────────────────────────
 
@@ -1146,7 +1200,10 @@ export const poultryFlocks = pgTable("poultry_flocks", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_flocks_business_id_idx").on(t.businessId),
+  ]);
 
 // P2. Feed Management
 export const poultryFeedLogs = pgTable("poultry_feed_logs", {
@@ -1169,7 +1226,10 @@ export const poultryFeedLogs = pgTable("poultry_feed_logs", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_feed_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // P3. Water Management
 export const poultryWaterLogs = pgTable("poultry_water_logs", {
@@ -1186,7 +1246,10 @@ export const poultryWaterLogs = pgTable("poultry_water_logs", {
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_water_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // P4. Health & Vaccination
 export const poultryHealthRecords = pgTable("poultry_health_records", {
@@ -1209,7 +1272,10 @@ export const poultryHealthRecords = pgTable("poultry_health_records", {
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_health_records_business_id_idx").on(t.businessId),
+  ]);
 
 // P5. Egg / Broiler Production
 export const poultryProduction = pgTable("poultry_production", {
@@ -1240,7 +1306,10 @@ export const poultryProduction = pgTable("poultry_production", {
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_production_business_id_idx").on(t.businessId),
+  ]);
 
 // P5b. Poultry Master Product List — the farm's production types & sellable
 // products. Seeded with EGGS + BROILER (system); any product the user adds
@@ -1286,7 +1355,10 @@ export const poultryWeightLogs = pgTable("poultry_weight_logs", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_weight_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // ═══ P-BENCHMARK. Flock Performance Benchmarking (sub-module of the Poultry farm) ═══
 // Owner-managed benchmark PROFILES: age-keyed target curves per metric
@@ -1321,7 +1393,11 @@ export const poultryBenchmarkProfiles = pgTable("poultry_benchmark_profiles", {
   createdByUserId: integer("created_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_benchmark_profiles_business_id_idx").on(t.businessId),
+    index("poultry_benchmark_profiles_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ═══ P-FEED-MILL. Feed Production & Milling (sub-module of the Poultry farm) ═══
 // Raw materials → formulations (recipes) → production batches → QC release →
@@ -1360,7 +1436,11 @@ export const poultryFeedFormulations = pgTable("poultry_feed_formulations", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("poultry_feed_formulations_business_id_idx").on(t.businessId),
+    index("poultry_feed_formulations_owner_id_idx").on(t.ownerId),
+  ]);
 
 // FM2. Formulation BOM lines — ingredients with share % of the batch volume.
 export const poultryFeedFormulationItems = pgTable("poultry_feed_formulation_items", {
@@ -1415,7 +1495,11 @@ export const poultryFeedBatches = pgTable("poultry_feed_batches", {
   recordedByRole: text("recorded_by_role"),
   recordedByUserId: integer("recorded_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_feed_batches_business_id_idx").on(t.businessId),
+    index("poultry_feed_batches_owner_id_idx").on(t.ownerId),
+  ]);
 
 // FM4. Batch ingredient-draw lines — the traceability half-ledger.
 export const poultryFeedBatchInputs = pgTable("poultry_feed_batch_inputs", {
@@ -1458,7 +1542,10 @@ export const poultryFeedQcChecks = pgTable("poultry_feed_qc_checks", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_feed_qc_checks_business_id_idx").on(t.businessId),
+  ]);
 
 // P6. Daily Activity Checklist
 export const poultryChecklists = pgTable("poultry_checklists", {  id: serial("id").primaryKey(),
@@ -1474,7 +1561,10 @@ export const poultryChecklists = pgTable("poultry_checklists", {  id: serial("id
   completedAt: timestamp("completed_at"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("poultry_checklists_business_id_idx").on(t.businessId),
+  ]);
 
 // 11. Block Factory Log (Blocks molded, bags cement used, breakage rate)
 export const blockFactoryLogs = pgTable("block_factory_logs", {
@@ -1490,7 +1580,10 @@ export const blockFactoryLogs = pgTable("block_factory_logs", {
   // Mixing link (optional): the mixer batch this production run consumed
   // (1:1 — set by PRODUCTION when mixBatchId is supplied).
   mixBatchId: integer("mix_batch_id"),
-});
+},
+  (t) => [
+    index("block_factory_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // 11b. Block Factory Orders
 export const blockFactoryOrders = pgTable("block_factory_orders", {
@@ -1510,7 +1603,10 @@ export const blockFactoryOrders = pgTable("block_factory_orders", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_factory_orders_business_id_idx").on(t.businessId),
+  ]);
 
 // 11c. Block Factory Deliveries
 export const blockFactoryDeliveries = pgTable("block_factory_deliveries", {
@@ -1529,7 +1625,10 @@ export const blockFactoryDeliveries = pgTable("block_factory_deliveries", {
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_factory_deliveries_business_id_idx").on(t.businessId),
+  ]);
 
 // 11d. Block Factory Daily Activity Checklist
 export const blockFactoryChecklists = pgTable("block_factory_checklists", {
@@ -1546,7 +1645,10 @@ export const blockFactoryChecklists = pgTable("block_factory_checklists", {
   completedAt: timestamp("completed_at"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_factory_checklists_business_id_idx").on(t.businessId),
+  ]);
 
 // 11e. Block Types Master List (production master data — user-extensible)
 export const blockTypes = pgTable("block_types", {
@@ -1563,7 +1665,10 @@ export const blockTypes = pgTable("block_types", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_types_business_id_idx").on(t.businessId),
+  ]);
 
 // 11f. Block Factory Quality Control — one row per QC check at any pipeline
 // stage (RAW_MATERIAL → MIXING → PRODUCTION → CURING → FINISHED_BLOCK). A
@@ -1608,7 +1713,10 @@ export const blockQcChecks = pgTable("block_qc_checks", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_qc_checks_business_id_idx").on(t.businessId),
+  ]);
 
 // 12. Aquaculture Log (Tilapia/Catfish, water quality pH & dissolved O2, FCR)
 export const aquacultureLogs = pgTable("aquaculture_logs", {
@@ -1622,7 +1730,10 @@ export const aquacultureLogs = pgTable("aquaculture_logs", {
   dissolvedOxygen: doublePrecision("dissolved_oxygen").notNull(), // mg/L e.g. 6.5
   fcr: doublePrecision("fcr").notNull(), // Feed conversion ratio e.g. 1.35
   recordedDate: text("recorded_date").notNull(),
-});
+},
+  (t) => [
+    index("aquaculture_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // ─── AQUACULTURE (CONCEPTUAL FARM) MANAGEMENT ─────────────────────────
 
@@ -1644,7 +1755,10 @@ export const aquaculturePonds = pgTable("aquaculture_ponds", {
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_ponds_business_id_idx").on(t.businessId),
+  ]);
 
 // A2. Stock / Batch Management
 export const aquacultureBatches = pgTable("aquaculture_batches", {
@@ -1670,7 +1784,10 @@ export const aquacultureBatches = pgTable("aquaculture_batches", {
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_batches_business_id_idx").on(t.businessId),
+  ]);
 
 // A3. Feed Management
 export const aquacultureFeedLogs = pgTable("aquaculture_feed_logs", {
@@ -1692,7 +1809,10 @@ export const aquacultureFeedLogs = pgTable("aquaculture_feed_logs", {
   recordedDate: text("recorded_date").notNull(),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_feed_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // ──────────────────────────────────────────────────────────────────────────
 // FISH FEED MILL (Aquaculture) — production of pond feed in-house.
@@ -1725,7 +1845,11 @@ export const fishFeedFormulations = pgTable("fish_feed_formulations", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("fish_feed_formulations_business_id_idx").on(t.businessId),
+    index("fish_feed_formulations_owner_id_idx").on(t.ownerId),
+  ]);
 
 // FF2. Formulation BOM lines
 export const fishFeedFormulationItems = pgTable("fish_feed_formulation_items", {
@@ -1780,7 +1904,11 @@ export const fishFeedBatches = pgTable("fish_feed_batches", {
   recordedByRole: text("recorded_by_role"),
   recordedByUserId: integer("recorded_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("fish_feed_batches_business_id_idx").on(t.businessId),
+    index("fish_feed_batches_owner_id_idx").on(t.ownerId),
+  ]);
 
 // FF4. Batch ingredient draws — traceability half-ledger
 export const fishFeedBatchInputs = pgTable("fish_feed_batch_inputs", {
@@ -1824,7 +1952,10 @@ export const fishFeedQcChecks = pgTable("fish_feed_qc_checks", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("fish_feed_qc_checks_business_id_idx").on(t.businessId),
+  ]);
 
 // ──────────────────────────────────────────────────────────────────────────
 // BLOCK FACTORY — MIXING. Recipes (bound to the block-types master list),
@@ -1854,7 +1985,11 @@ export const blockMixFormulations = pgTable("block_mix_formulations", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("block_mix_formulations_business_id_idx").on(t.businessId),
+    index("block_mix_formulations_owner_id_idx").on(t.ownerId),
+  ]);
 
 // BM2. Recipe BOM lines
 export const blockMixFormulationItems = pgTable("block_mix_formulation_items", {
@@ -1905,7 +2040,11 @@ export const blockMixBatches = pgTable("block_mix_batches", {
   recordedByRole: text("recorded_by_role"),
   recordedByUserId: integer("recorded_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("block_mix_batches_business_id_idx").on(t.businessId),
+    index("block_mix_batches_owner_id_idx").on(t.ownerId),
+  ]);
 
 // BM4. Mixer batch ingredient draws
 export const blockMixBatchInputs = pgTable("block_mix_batch_inputs", {
@@ -1936,7 +2075,10 @@ export const aquacultureWaterQualityLogs = pgTable("aquaculture_water_quality_lo
   treatmentUsed: text("treatment_used"),
   publishedByName: text("published_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_water_quality_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // A5. Harvest Management
 export const aquacultureHarvests = pgTable("aquaculture_harvests", {
@@ -1954,7 +2096,10 @@ export const aquacultureHarvests = pgTable("aquaculture_harvests", {
   buyerName: text("buyer_name"),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_harvests_business_id_idx").on(t.businessId),
+  ]);
 
 // A5b. Daily Fish Weight Log — one row per sampling/weighing event: fish
 // netted from a pond/tank for a batch and weighed. avgWeightGrams is the mean
@@ -1977,7 +2122,10 @@ export const aquacultureWeightLogs = pgTable("aquaculture_weight_logs", {
   notes: text("notes"),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_weight_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // A5c. Fish Benchmark Performance Profiles — the aquaculture adaptation of
 // the poultry benchmark system: age-based target curves (avg weight, SGR,
@@ -2007,7 +2155,11 @@ export const aquacultureBenchmarkProfiles = pgTable("aquaculture_benchmark_profi
   createdByUserId: integer("created_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_benchmark_profiles_business_id_idx").on(t.businessId),
+    index("aquaculture_benchmark_profiles_owner_id_idx").on(t.ownerId),
+  ]);
 
 // A6. Daily Tasks / Checklist for Aquaculture
 export const aquacultureChecklists = pgTable("aquaculture_checklists", {
@@ -2024,7 +2176,10 @@ export const aquacultureChecklists = pgTable("aquaculture_checklists", {
   completedAt: timestamp("completed_at"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("aquaculture_checklists_business_id_idx").on(t.businessId),
+  ]);
 
 // 13. Livestock Log (Cattle, Small Ruminants tags, vaccination, breeding)
 export const livestockLogs = pgTable("livestock_logs", {
@@ -2037,7 +2192,10 @@ export const livestockLogs = pgTable("livestock_logs", {
   vaccinationStatus: text("vaccination_status").notNull(), // 'UP_TO_DATE', 'DUE_THIS_MONTH', 'PENDING'
   pregnantStatus: boolean("pregnant_status").default(false),
   recordedDate: text("recorded_date").notNull(),
-});
+},
+  (t) => [
+    index("livestock_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // 14. Restaurant & Food Log (Orders, popular dish, waste %, MoMo receipts)
 export const restaurantLogs = pgTable("restaurant_logs", {
@@ -2050,7 +2208,10 @@ export const restaurantLogs = pgTable("restaurant_logs", {
   wastePercent: doublePrecision("waste_percent").notNull(), // e.g. 3.2%
   momoReceiptsGhs: doublePrecision("momo_receipts_ghs").notNull(),
   cashReceiptsGhs: doublePrecision("cash_receipts_ghs").notNull(),
-});
+},
+  (t) => [
+    index("restaurant_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // 15. Electronic Shop Log (Serial/IMEI warranty, products, retail stock)
 export const electronicsLogs = pgTable("electronics_logs", {
@@ -2063,7 +2224,10 @@ export const electronicsLogs = pgTable("electronics_logs", {
   inStock: boolean("in_stock").default(true),
   retailPriceGhs: doublePrecision("retail_price_ghs").notNull(),
   lastCheckedDate: text("last_checked_date").notNull(),
-});
+},
+  (t) => [
+    index("electronics_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // 16. Car Wash Log (Vehicles washed, bay usage, water/chemical usage)
 export const carWashLogs = pgTable("car_wash_logs", {
@@ -2075,7 +2239,10 @@ export const carWashLogs = pgTable("car_wash_logs", {
   totalRevenueGhs: doublePrecision("total_revenue_ghs").notNull(),
   waterPressurePsi: integer("water_pressure_psi").default(3200),
   recordedDate: text("recorded_date").notNull(),
-});
+},
+  (t) => [
+    index("car_wash_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // 16B. Hardware Store — Goods Received / Yard Ops Log. Every logged receipt
 // tops up the matching inventory item (or creates it) and optionally books
@@ -2093,7 +2260,10 @@ export const hardwareLogs = pgTable("hardware_logs", {
   receivedBy: text("received_by"),
   recordedDate: text("recorded_date").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("hardware_logs_business_id_idx").on(t.businessId),
+  ]);
 
 // H2. Hardware Store — Customer Orders (contractor / builder material orders
 // with a fulfilment pipeline; delivering one deducts stock + books revenue)
@@ -2118,7 +2288,10 @@ export const hardwareOrders = pgTable("hardware_orders", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("hardware_orders_business_id_idx").on(t.businessId),
+  ]);
 
 // H3. Hardware Store — Supplier Purchases / Restock POs. RECEIVED stock flows
 // into Inventory (+quantity / new SKU) and Finance (expense) in one step.
@@ -2139,7 +2312,10 @@ export const hardwarePurchases = pgTable("hardware_purchases", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("hardware_purchases_business_id_idx").on(t.businessId),
+  ]);
 
 // H4. Hardware Store — Site Deliveries / Dispatch. A completed standalone
 // delivery deducts the dispatched quantity from stock (order-linked
@@ -2166,7 +2342,10 @@ export const hardwareDeliveries = pgTable("hardware_deliveries", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("hardware_deliveries_business_id_idx").on(t.businessId),
+  ]);
 
 // ─── Auto Car Wash module: services, bookings, work-queue, activities ───────
 
@@ -2184,7 +2363,10 @@ export const carWashServices = pgTable("car_wash_services", {
   supplyUsageLiters: doublePrecision("supply_usage_liters").default(0), // liters drawn from that item per job
   active: boolean("active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("car_wash_services_business_id_idx").on(t.businessId),
+  ]);
 
 export const carWashBookings = pgTable("car_wash_bookings", {
   id: serial("id").primaryKey(),
@@ -2207,7 +2389,10 @@ export const carWashBookings = pgTable("car_wash_bookings", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("car_wash_bookings_business_id_idx").on(t.businessId),
+  ]);
 
 export const carWashWashes = pgTable("car_wash_washes", {
   id: serial("id").primaryKey(),
@@ -2231,7 +2416,10 @@ export const carWashWashes = pgTable("car_wash_washes", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("car_wash_washes_business_id_idx").on(t.businessId),
+  ]);
 
 export const carWashActivities = pgTable("car_wash_activities", {
   id: serial("id").primaryKey(),
@@ -2243,7 +2431,10 @@ export const carWashActivities = pgTable("car_wash_activities", {
   actorRole: text("actor_role"),
   refNumber: text("ref_number"), // booking/wash number involved
   recordedAt: timestamp("recorded_at").defaultNow(),
-});
+},
+  (t) => [
+    index("car_wash_activities_business_id_idx").on(t.businessId),
+  ]);
 
 // ── Telecom & Digital Services (MoMo / airtime / data bundles / Wi-Fi) ─────
 // Agent lines (MoMo SIMs, airtime wallets, hotspot routers) carry the
@@ -2263,7 +2454,10 @@ export const telecomLines = pgTable("telecom_lines", {
   cashGhs: doublePrecision("cash_ghs").notNull().default(0), // physical cash at this till
   active: boolean("active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("telecom_lines_business_id_idx").on(t.businessId),
+  ]);
 
 export const telecomTxns = pgTable("telecom_txns", {
   id: serial("id").primaryKey(),
@@ -2290,7 +2484,10 @@ export const telecomTxns = pgTable("telecom_txns", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("telecom_txns_business_id_idx").on(t.businessId),
+  ]);
 
 export const telecomWifiPackages = pgTable("telecom_wifi_packages", {
   id: serial("id").primaryKey(),
@@ -2303,7 +2500,10 @@ export const telecomWifiPackages = pgTable("telecom_wifi_packages", {
   routerLabel: text("router_label"), // hotspot the voucher is valid on, e.g. "Wi-Fi Zone A"
   active: boolean("active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("telecom_wifi_packages_business_id_idx").on(t.businessId),
+  ]);
 
 export const telecomVouchers = pgTable("telecom_vouchers", {
   id: serial("id").primaryKey(),
@@ -2324,7 +2524,10 @@ export const telecomVouchers = pgTable("telecom_vouchers", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("telecom_vouchers_business_id_idx").on(t.businessId),
+  ]);
 
 export const telecomActivities = pgTable("telecom_activities", {
   id: serial("id").primaryKey(),
@@ -2336,7 +2539,10 @@ export const telecomActivities = pgTable("telecom_activities", {
   actorRole: text("actor_role"),
   refNumber: text("ref_number"),
   recordedAt: timestamp("recorded_at").defaultNow(),
-});
+},
+  (t) => [
+    index("telecom_activities_business_id_idx").on(t.businessId),
+  ]);
 
 // 17. AI Strategic Insights & Risk Recommendations
 export const aiInsights = pgTable("ai_insights", {
@@ -2351,7 +2557,10 @@ export const aiInsights = pgTable("ai_insights", {
   status: text("status").default("NEW"), // 'NEW', 'ACTIONED', 'ARCHIVED'
   ownerId: integer("owner_id"), // tenant scope; businessId null = this Owner's enterprise-wide
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("ai_insights_business_id_idx").on(t.businessId),
+  ]);
 
 // 18. Scenario Planning & What-If Simulations
 export const scenarioSimulations = pgTable("scenario_simulations", {
@@ -2410,7 +2619,10 @@ export const cctvCameras = pgTable("cctv_cameras", {
   updatedByName: text("updated_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("cctv_cameras_business_id_idx").on(t.businessId),
+  ]);
 
 // 19c. Enterprise Payroll — runs, per-employee entries & attendance.
 // Lifecycle: DRAFT → REVIEWED → APPROVED → PAID (payment posts a real EXPENSE
@@ -2435,7 +2647,10 @@ export const payrollRuns = pgTable("payroll_runs", {
   paidAt: timestamp("paid_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("payroll_runs_business_id_idx").on(t.businessId),
+  ]);
 
 export const payrollEntries = pgTable("payroll_entries", {
   id: serial("id").primaryKey(),
@@ -2475,7 +2690,10 @@ export const payrollEntries = pgTable("payroll_entries", {
   paidByName: text("paid_by_name"),
   transactionId: integer("transaction_id"), // ledger link (transactions.id)
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("payroll_entries_business_id_idx").on(t.businessId),
+  ]);
 
 export const payrollAttendance = pgTable("payroll_attendance", {
   id: serial("id").primaryKey(),
@@ -2492,7 +2710,10 @@ export const payrollAttendance = pgTable("payroll_attendance", {
   recordedByUserId: integer("recorded_by_user_id"),
   recordedByName: text("recorded_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("payroll_attendance_business_id_idx").on(t.businessId),
+  ]);
 
 // 19e. Staff Clock In / Clock Out — the real-time attendance log. One row per
 // shift: who (user + linked employee), where (assigned Business & Branch,
@@ -2529,7 +2750,11 @@ export const attendanceLogs = pgTable("attendance_logs", {
   offSiteOut: boolean("off_site_out").notNull().default(false),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("attendance_logs_business_id_idx").on(t.businessId),
+    index("attendance_logs_user_id_idx").on(t.userId),
+  ]);
 
 /** Statutory rates & configuration for payroll — one live row (id=1).
  *  Editable by the OWNER / owner-authorized managers from the Payroll
@@ -2621,7 +2846,11 @@ export const auditAssignments = pgTable("audit_assignments", {
   grantedByRole: text("granted_by_role").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("audit_assignments_business_id_idx").on(t.businessId),
+    index("audit_assignments_user_id_idx").on(t.userId),
+  ]);
 
 /** A review action on an existing record — this IS the issue head when the
  *  action is FLAGGED / CORRECTION_REQUESTED. Issues follow the pipeline
@@ -2675,7 +2904,11 @@ export const auditReviews = pgTable("audit_reviews", {
    *  daily-ops SLA escalation sweep (overdue issues re-notify assignee +
    *  escalation watchers). Nullable = no deadline agreed. */
   dueDate: text("due_date"),
-});
+},
+  (t) => [
+    index("audit_reviews_business_id_idx").on(t.businessId),
+    index("audit_reviews_assigned_status_idx").on(t.assignedUserId, t.status),
+  ]);
 
 /** Immutable per-issue conversation: who did what, when, notes & evidence,
  *  with the status transition each step caused. */
@@ -2740,6 +2973,7 @@ export const actionTasks = pgTable("action_tasks", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => [
+    index("action_tasks_owner_id_idx").on(t.ownerId),
   index("action_tasks_assignee_status_idx").on(t.assignedUserId, t.status),
   index("action_tasks_business_idx").on(t.businessId),
   index("action_tasks_due_date_idx").on(t.dueDate),
@@ -2768,7 +3002,12 @@ export const notifications = pgTable("notifications", {
   ownerId: integer("owner_id"), // tenant scope of the recipient
   isRead: boolean("is_read").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("notifications_business_id_idx").on(t.businessId),
+    index("notifications_user_id_id_idx").on(t.userId, t.id),
+    index("notifications_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ── Web Push (phone/laptop notifications) ─────────────────────────────
 /** VAPID keypair (single live row, id=1) — auto-generated once, reused so
@@ -2790,7 +3029,10 @@ export const pushSubscriptions = pgTable("push_subscriptions", {
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at").defaultNow(),
   lastSeenAt: timestamp("last_seen_at").defaultNow(),
-});
+},
+  (t) => [
+    index("push_subscriptions_user_id_idx").on(t.userId),
+  ]);
 
 /** Per-user notification preferences — master switch + per-category toggles
  *  (orders, approvals, alerts, tasks, messages, reports). Defaults: all on. */
@@ -2805,7 +3047,10 @@ export const userPushSettings = pgTable("user_push_settings", {
   messages: boolean("messages").notNull().default(true),
   reports: boolean("reports").notNull().default(true),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("user_push_settings_user_id_idx").on(t.userId),
+  ]);
 
 /** Immutable log of everything that happens inside the Audit Center. */
 export const auditTrail = pgTable("audit_trail", {
@@ -2824,7 +3069,10 @@ export const auditTrail = pgTable("audit_trail", {
   detail: text("detail"),
   ownerId: integer("owner_id"), // tenant scope
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("audit_trail_business_id_idx").on(t.businessId),
+  ]);
 
 export const assetDownloads = pgTable("asset_downloads", {
   id: serial("id").primaryKey(),
@@ -2879,7 +3127,10 @@ export const checklistTemplates = pgTable("checklist_templates", {
   flockId: integer("flock_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("checklist_templates_business_id_idx").on(t.businessId),
+  ]);
 
 // 7b. Daily checklist entries — one row per task per business+branch+date.
 //     Generated from active templates; completion records who did it and when.
@@ -2913,7 +3164,10 @@ export const checklistEntries = pgTable("checklist_entries", {
   frequency: text("frequency"),
   priority: text("priority"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("checklist_entries_business_id_idx").on(t.businessId),
+  ]);
 
 // 7b-2. Saved reusable flock-plan templates — snapshots of a customized plan
 //       the Owner can apply to any new flock. Items are self-contained task
@@ -2931,7 +3185,10 @@ export const checklistPlanTemplates = pgTable("checklist_plan_templates", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("checklist_plan_templates_business_id_idx").on(t.businessId),
+  ]);
 
 // 7b-3. Per-flock plan state — which plan each flock runs and how it started.
 //       source: 'SYSTEM' (recommended stage plan, no private rows) |
@@ -2952,7 +3209,10 @@ export const checklistFlockPlans = pgTable("checklist_flock_plans", {
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("checklist_flock_plans_business_id_idx").on(t.businessId),
+  ]);
 
 // 7c. Daily Notes — free-form end-of-day notes workers file under the Daily
 //     Checklist (activities, observations, problems, notices). Every note is
@@ -2975,7 +3235,11 @@ export const dailyNotes = pgTable("daily_notes", {
   aiFlags: jsonb("ai_flags").default([]), // short chip strings for the UI
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
-});
+},
+  (t) => [
+    index("daily_notes_business_id_idx").on(t.businessId),
+    index("daily_notes_user_id_idx").on(t.userId),
+  ]);
 
 // 7d. Business Insights — the AI's continuously-updated memory of a business:
 //     a rolling narrative, an issue register (recurring problems with counts),
@@ -3050,7 +3314,11 @@ export const advisorAssignments = pgTable("advisor_assignments", {
   grantedByRole: text("granted_by_role").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("advisor_assignments_business_id_idx").on(t.businessId),
+    index("advisor_assignments_user_id_idx").on(t.userId),
+  ]);
 
 /** An advisor observation / recommendation. Linked to the farm unit + the
  *  farm day + optionally a flock/batch and any record (checklist entry, feed
@@ -3087,7 +3355,10 @@ export const advisorNotes = pgTable("advisor_notes", {
   authorRole: text("author_role").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("advisor_notes_business_id_idx").on(t.businessId),
+  ]);
 
 /** Immutable per-note conversation: who did what, when, notes & evidence,
  *  with the status transition each step caused (audit_issue_updates twin). */
@@ -3125,7 +3396,10 @@ export const electronicsOrders = pgTable("electronics_orders", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("electronics_orders_business_id_idx").on(t.businessId),
+  ]);
 
 // T2. Electronics Shop — Serial Number Tracking (per-unit lifecycle & warranty)
 export const electronicsSerials = pgTable("electronics_serials", {
@@ -3144,7 +3418,10 @@ export const electronicsSerials = pgTable("electronics_serials", {
   priceGhs: doublePrecision("price_ghs").default(0),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("electronics_serials_business_id_idx").on(t.businessId),
+  ]);
 
 // T3. Electronics Shop — Warranty Claims, Returns & Repairs
 export const electronicsWarranties = pgTable("electronics_warranties", {
@@ -3165,7 +3442,10 @@ export const electronicsWarranties = pgTable("electronics_warranties", {
   handledByName: text("handled_by_name"),
   handledByRole: text("handled_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("electronics_warranties_business_id_idx").on(t.businessId),
+  ]);
 
 // T4. Electronics Shop — Supplier Purchases (received stock auto-books inventory + expense)
 export const electronicsPurchases = pgTable("electronics_purchases", {
@@ -3185,7 +3465,10 @@ export const electronicsPurchases = pgTable("electronics_purchases", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("electronics_purchases_business_id_idx").on(t.businessId),
+  ]);
 
 // R1. Restaurant & Kitchen — Orders (kitchen ticket pipeline)
 export const restaurantOrders = pgTable("restaurant_orders", {
@@ -3206,7 +3489,10 @@ export const restaurantOrders = pgTable("restaurant_orders", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("restaurant_orders_business_id_idx").on(t.businessId),
+  ]);
 
 // R2. Restaurant & Kitchen — Menu master (price + recipe cost per plate drives food-cost analytics)
 export const restaurantMenuItems = pgTable("restaurant_menu_items", {
@@ -3220,7 +3506,10 @@ export const restaurantMenuItems = pgTable("restaurant_menu_items", {
   description: text("description"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("restaurant_menu_items_business_id_idx").on(t.businessId),
+  ]);
 
 // R3. Restaurant & Kitchen — Food Waste log (decrements stock, feeds cost analytics)
 export const restaurantWaste = pgTable("restaurant_waste", {
@@ -3238,7 +3527,10 @@ export const restaurantWaste = pgTable("restaurant_waste", {
   recordedByRole: text("recorded_by_role"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("restaurant_waste_business_id_idx").on(t.businessId),
+  ]);
 
 // R4. Restaurant & Kitchen — Supplier Purchases (RECEIVED stock-ins update inventory + finance)
 export const restaurantPurchases = pgTable("restaurant_purchases", {
@@ -3259,7 +3551,10 @@ export const restaurantPurchases = pgTable("restaurant_purchases", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("restaurant_purchases_business_id_idx").on(t.businessId),
+  ]);
 
 // ════════════════════════════════════════════════════════════════════════════
 // TRANSPORTATION & HAULAGE MODULE — fleet, trips, bookings, fuel, maintenance,
@@ -3327,7 +3622,11 @@ export const transportVehicles = pgTable("transport_vehicles", {
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("transport_vehicles_business_id_idx").on(t.businessId),
+    index("transport_vehicles_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportTrips = pgTable("transport_trips", {
   id: serial("id").primaryKey(),
@@ -3362,7 +3661,11 @@ export const transportTrips = pgTable("transport_trips", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   completedAt: timestamp("completed_at"),
-});
+},
+  (t) => [
+    index("transport_trips_business_id_idx").on(t.businessId),
+    index("transport_trips_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportBookings = pgTable("transport_bookings", {
   id: serial("id").primaryKey(),
@@ -3389,7 +3692,11 @@ export const transportBookings = pgTable("transport_bookings", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   cancelledReason: text("cancelled_reason"),
-});
+},
+  (t) => [
+    index("transport_bookings_business_id_idx").on(t.businessId),
+    index("transport_bookings_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportFuelLogs = pgTable("transport_fuel_logs", {
   id: serial("id").primaryKey(),
@@ -3411,7 +3718,11 @@ export const transportFuelLogs = pgTable("transport_fuel_logs", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("transport_fuel_logs_business_id_idx").on(t.businessId),
+    index("transport_fuel_logs_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportMaintenance = pgTable("transport_maintenance", {
   id: serial("id").primaryKey(),
@@ -3436,7 +3747,11 @@ export const transportMaintenance = pgTable("transport_maintenance", {
   createdAt: timestamp("created_at").defaultNow(),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
-});
+},
+  (t) => [
+    index("transport_maintenance_business_id_idx").on(t.businessId),
+    index("transport_maintenance_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportVehicleChecklists = pgTable("transport_vehicle_checklists", {
   id: serial("id").primaryKey(),
@@ -3467,7 +3782,11 @@ export const transportVehicleChecklists = pgTable("transport_vehicle_checklists"
   userRole: text("user_role"),
   employeeId: integer("employee_id"), // employees.id (driver)
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("transport_vehicle_checklists_business_id_idx").on(t.businessId),
+    index("transport_vehicle_checklists_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportGeofences = pgTable("transport_geofences", {
   id: serial("id").primaryKey(),
@@ -3486,7 +3805,11 @@ export const transportGeofences = pgTable("transport_geofences", {
   createdAt: timestamp("created_at").defaultNow(),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
-});
+},
+  (t) => [
+    index("transport_geofences_business_id_idx").on(t.businessId),
+    index("transport_geofences_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const transportTrackerViolations = pgTable("transport_tracker_violations", {
   id: serial("id").primaryKey(),
@@ -3511,7 +3834,11 @@ export const transportTrackerViolations = pgTable("transport_tracker_violations"
   notifiedManagerUserIds: jsonb("notified_manager_user_ids").default(sql`'[]'::jsonb`),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
-});
+},
+  (t) => [
+    index("transport_tracker_violations_business_id_idx").on(t.businessId),
+    index("transport_tracker_violations_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ══════════════════════════════════════════════════════════════════════════
 // R1 — APPROVALS FRAMEWORK (CAPABILITY-AUDIT-REPORT §4)
@@ -3577,7 +3904,11 @@ export const approvalRequests = pgTable("approval_requests", {
   decisionReason: text("decision_reason"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("approval_requests_business_id_idx").on(t.businessId),
+    index("approval_requests_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ══════════════════════════════════════════════════════════════════════════
 // R2 — PROCUREMENT CHAIN COMPLETION (CAPABILITY-AUDIT-REPORT §5)
@@ -3609,7 +3940,11 @@ export const purchaseRequisitions = pgTable("purchase_requisitions", {
   decidedAt: timestamp("decided_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("purchase_requisitions_business_id_idx").on(t.businessId),
+    index("purchase_requisitions_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const supplierQuotes = pgTable("supplier_quotes", {
   id: serial("id").primaryKey(),
@@ -3633,7 +3968,11 @@ export const supplierQuotes = pgTable("supplier_quotes", {
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("supplier_quotes_business_id_idx").on(t.businessId),
+    index("supplier_quotes_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const supplierInvoices = pgTable("supplier_invoices", {
   id: serial("id").primaryKey(),
@@ -3657,7 +3996,11 @@ export const supplierInvoices = pgTable("supplier_invoices", {
   registeredByRole: text("registered_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("supplier_invoices_business_id_idx").on(t.businessId),
+    index("supplier_invoices_owner_id_idx").on(t.ownerId),
+  ]);
 
 export const supplierPayments = pgTable("supplier_payments", {
   id: serial("id").primaryKey(),
@@ -3678,7 +4021,11 @@ export const supplierPayments = pgTable("supplier_payments", {
   recordedByName: text("recorded_by_name"),
   recordedByRole: text("recorded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("supplier_payments_business_id_idx").on(t.businessId),
+    index("supplier_payments_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ══════════════════════════════════════════════════════════════════════════
 // R3 — CRM RELATIONAL LAYER (CAPABILITY-AUDIT-REPORT §6)
@@ -3700,7 +4047,11 @@ export const customerInteractions = pgTable("customer_interactions", {
   actorRole: text("actor_role"),
   occurredAt: text("occurred_at"), // yyyy-mm-dd (defaults to today)
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    index("customer_interactions_business_id_idx").on(t.businessId),
+    index("customer_interactions_owner_id_idx").on(t.ownerId),
+  ]);
 
 // ══════════════════════════════════════════════════════════════════════════
 // R4 — DOCUMENT VAULT (CAPABILITY-AUDIT-REPORT §3)
@@ -3746,4 +4097,8 @@ export const businessDocuments = pgTable("business_documents", {
   uploadedByRole: text("uploaded_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+},
+  (t) => [
+    index("business_documents_business_id_idx").on(t.businessId),
+    index("business_documents_owner_id_idx").on(t.ownerId),
+  ]);

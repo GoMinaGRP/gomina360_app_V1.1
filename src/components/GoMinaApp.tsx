@@ -6,46 +6,16 @@ import LoginScreen from "./LoginScreen";
 import Sidebar, { ActiveTab } from "./Sidebar";
 import ContextNavigator, { ContextBar } from "./ContextNavigator";
 import CommandCenterDashboard from "./CommandCenterDashboard";
-import LivestockModule from "./LivestockModule";
-import SharedEnterpriseModule from "./SharedEnterpriseModule";
-import CustomerTrackingPanel from "./CustomerTrackingPanel";
-import PreordersHubView from "./PreordersHubView";
-import DocumentVaultPanel from "./DocumentVaultPanel";
-import BiAssistantPanel from "./BiAssistantPanel";
-import AiAdvisorView from "./AiAdvisorView";
-import ScenarioPlannerView from "./ScenarioPlannerView";
-import IntegrationsHubView from "./IntegrationsHubView";
 import NewBusinessModal from "./NewBusinessModal";
 import ManageBusinessesModal from "./ManageBusinessesModal";
 import UserAccessConsole from "./UserAccessConsole";
 import CustomerSupportModal from "./CustomerSupportModal";
 import ChangePasswordModal from "./ChangePasswordModal";
 import ProfilePhotoModal from "./ProfilePhotoModal";
-import WorkerDashboard from "./WorkerDashboard";
-import BranchManagerWorkerPanel from "./BranchManagerWorkerPanel";
-import BranchManagerSalesView from "./BranchManagerSalesView";
-import EnterpriseUserPanel from "./EnterpriseUserPanel";
-import PlatformAdminPanel from "./PlatformAdminPanel";
-import EnterpriseFinanceView from "./EnterpriseFinanceView";
-import AuditCommandCenter from "./AuditCommandCenter";
-import AdvisorConsole from "./AdvisorConsole";
-import ActionCenter from "./ActionCenter";
 import NotificationBell from "./NotificationBell";
 import NotificationSettingsModal from "./NotificationSettingsModal";
 import PushNotifications from "./PushNotifications";
 import IdleLogout from "./IdleLogout";
-import MyAuditIssues from "./MyAuditIssues";
-import PoultryFarmModule from "./PoultryFarmModule";
-import BlockFactoryModule from "./BlockFactoryModule";
-import AquacultureModule from "./AquacultureModule";
-import ElectronicsShopModule from "./ElectronicsShopModule";
-import RestaurantKitchenModule from "./RestaurantKitchenModule";
-import HardwareStoreModule from "./HardwareStoreModule";
-import CarWashModule from "./CarWashModule";
-import TelecomServicesModule from "./TelecomServicesModule";
-import TransportModule from "./TransportModule";
-import BusinessDashboardModule from "./BusinessDashboardModule";
-import UniversalExportCenter from "./UniversalExportCenter";
 import { CurrencyCode } from "@/lib/currency";
 import { isSeededBaselineTxn } from "@/lib/financeReport";
 import { getOfflineQueue } from "@/lib/offlineSync";
@@ -54,6 +24,53 @@ import { businessManageIdsOf } from "@/lib/permissions";
 import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
 import { readCachedBranding, fetchBranding, withBranding } from "@/lib/brandingCache";
+import dynamic from "next/dynamic";
+
+/** Lazy module shells — the nine business modules and the heavy post-login
+ *  views are code-split so the login page + Command Center paint without
+ *  downloading every module's charts/tables up front. Each chunk loads on
+ *  first use and is cached by the browser afterwards. */
+function ModuleLoading() {
+  return (
+    <div className="flex items-center justify-center py-16 text-slate-400" data-testid="module-loading">
+      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+      <span className="text-xs font-semibold">Loading module…</span>
+    </div>
+  );
+}
+const lazyMod = (loader: () => Promise<{ default: React.ComponentType<any> }>) =>
+  dynamic(loader, { ssr: false, loading: () => <ModuleLoading /> });
+
+const LivestockModule = lazyMod(() => import("./LivestockModule"));
+const SharedEnterpriseModule = lazyMod(() => import("./SharedEnterpriseModule"));
+const CustomerTrackingPanel = lazyMod(() => import("./CustomerTrackingPanel"));
+const PreordersHubView = lazyMod(() => import("./PreordersHubView"));
+const DocumentVaultPanel = lazyMod(() => import("./DocumentVaultPanel"));
+const BiAssistantPanel = lazyMod(() => import("./BiAssistantPanel"));
+const AiAdvisorView = lazyMod(() => import("./AiAdvisorView"));
+const ScenarioPlannerView = lazyMod(() => import("./ScenarioPlannerView"));
+const IntegrationsHubView = lazyMod(() => import("./IntegrationsHubView"));
+const WorkerDashboard = lazyMod(() => import("./WorkerDashboard"));
+const BranchManagerWorkerPanel = lazyMod(() => import("./BranchManagerWorkerPanel"));
+const BranchManagerSalesView = lazyMod(() => import("./BranchManagerSalesView"));
+const EnterpriseUserPanel = lazyMod(() => import("./EnterpriseUserPanel"));
+const PlatformAdminPanel = lazyMod(() => import("./PlatformAdminPanel"));
+const EnterpriseFinanceView = lazyMod(() => import("./EnterpriseFinanceView"));
+const AuditCommandCenter = lazyMod(() => import("./AuditCommandCenter"));
+const AdvisorConsole = lazyMod(() => import("./AdvisorConsole"));
+const ActionCenter = lazyMod(() => import("./ActionCenter"));
+const MyAuditIssues = lazyMod(() => import("./MyAuditIssues"));
+const PoultryFarmModule = lazyMod(() => import("./PoultryFarmModule"));
+const BlockFactoryModule = lazyMod(() => import("./BlockFactoryModule"));
+const AquacultureModule = lazyMod(() => import("./AquacultureModule"));
+const ElectronicsShopModule = lazyMod(() => import("./ElectronicsShopModule"));
+const RestaurantKitchenModule = lazyMod(() => import("./RestaurantKitchenModule"));
+const HardwareStoreModule = lazyMod(() => import("./HardwareStoreModule"));
+const CarWashModule = lazyMod(() => import("./CarWashModule"));
+const TelecomServicesModule = lazyMod(() => import("./TelecomServicesModule"));
+const TransportModule = lazyMod(() => import("./TransportModule"));
+const BusinessDashboardModule = lazyMod(() => import("./BusinessDashboardModule"));
+const UniversalExportCenter = lazyMod(() => import("./UniversalExportCenter"));
 
 export default function GoMinaApp() {
   const [loading, setLoading] = useState(true);
@@ -682,7 +699,7 @@ export default function GoMinaApp() {
             mode="advisor"
             currentUser={currentUser}
             businesses={scopedBusinesses}
-            onSelectTab={(code) => handleSelectTab(code as ActiveTab)}
+            onSelectTab={(code: string) => handleSelectTab(code as ActiveTab)}
           />
         );
       }
@@ -696,7 +713,7 @@ export default function GoMinaApp() {
           mode={isExecutive || currentUser?.canManageUsers ? "manage" : "advisor"}
           currentUser={currentUser}
           businesses={scopedBusinesses}
-          onSelectTab={(code) => handleSelectTab(code as ActiveTab)}
+          onSelectTab={(code: string) => handleSelectTab(code as ActiveTab)}
         />
       );
     }
@@ -745,7 +762,7 @@ export default function GoMinaApp() {
         <ActionCenter
           currentUser={currentUser}
           businesses={scopedBusinesses}
-          onSelectTab={(tab) => handleSelectTab(tab as ActiveTab)}
+          onSelectTab={(tab: string) => handleSelectTab(tab as ActiveTab)}
         />
       );
     }
