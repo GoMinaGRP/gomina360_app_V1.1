@@ -15,7 +15,7 @@
 // Every mutation also writes an immutable audit_trail row.
 
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   users,
@@ -446,7 +446,23 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   // the audit trail keeps them ONLY once real activity lands (a completion, a
   // note, or an explicit re-assignment), so this module can't flood the record
   // universe and hide transactions/payroll/etc. behind "pending" rows.
-  const chk = await db.select().from(checklistEntries).orderBy(desc(checklistEntries.id)).limit(240);
+  // Only entries with audit-relevant activity belong in the feed — filter
+  // in SQL BEFORE the limit: a burst of freshly generated PENDING entries
+  // (e.g. stage-plan checklists across many units) would otherwise push all
+  // acted-on history out of the newest-240 window and blank the CHECKLIST
+  // record type from the audit trail entirely.
+  const chk = await db
+    .select()
+    .from(checklistEntries)
+    .where(
+      or(
+        eq(checklistEntries.isCompleted, true),
+        isNotNull(checklistEntries.notes),
+        isNotNull(checklistEntries.completedByName),
+      ),
+    )
+    .orderBy(desc(checklistEntries.id))
+    .limit(240);
   for (const c of chk) {
     const hasActivity = !!c.isCompleted || !!c.notes || !!c.completedByName;
     if (!hasActivity) continue;

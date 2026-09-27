@@ -272,7 +272,13 @@ async function main() {
   ql(Number(M.revenueGhs) >= 3200, "metrics: revenue aggregated", `GHS ${M.revenueGhs}`);
   ql(Number(M.fuelSpendGhs) > 600, "metrics: fuel spend aggregated", `GHS ${M.fuelSpendGhs}`);
   ql(Number(M.maintenanceSpendGhs) >= 900, "metrics: maintenance spend", `GHS ${M.maintenanceSpendGhs}`);
-  ql(Number(M.profitGhs) > 1500, "metrics: profit computed", `GHS ${M.profitGhs}`);
+  // First-run arithmetic: the suite's own fixtures book 3200 income vs
+  // 632.17 + 656.80 fuel + 900 maintenance = 2188.97 expenses → profit
+  // 1011.03. (Trips quote a fare but revenue is booked explicitly via
+  // REVENUE/booking entries — it is not auto-booked on completion, so a
+  // virgin business can never clear the old >1500 threshold; residual
+  // income from earlier un-purged runs used to mask this.)
+  ql(Number(M.profitGhs) > 1000, "metrics: profit computed", `GHS ${M.profitGhs}`);
   ql(Number(M.tripsCompleted) >= 1, "metrics: completed trips", M.tripsCompleted);
   ql(Number(M.fleetEconomyKmpl) > 0, "metrics: fleet economy computed", `${M.fleetEconomyKmpl} km/L`);
   ql(p2.json.vehicles.every((v) => v.gpsDeviceSecret === undefined), "device secret NEVER leaked in payloads");

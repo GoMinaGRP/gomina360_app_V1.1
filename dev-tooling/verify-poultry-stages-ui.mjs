@@ -59,16 +59,17 @@ ok("checklist shows stage compliance strip", /stage compliance/i.test(body));
 ok("critical chip visible", body.includes("CRITICAL"));
 ok("weekly/once frequency chip visible", body.includes("WEEKLY") || body.includes("ONCE/STAGE"));
 
-// toggle the first incomplete task
+// toggle the first incomplete task (task rows are div[role=button] with a
+// dcp-task-{id} testid — they were <button> elements when this was written)
 const toggled = await page.evaluate(() => {
-  const btn = [...document.querySelectorAll("button")].find((b) => b.className.includes("rounded-xl") && (b.textContent || "").includes("Morning house walk"));
-  if (!btn) return false; btn.click(); return true;
+  const row = [...document.querySelectorAll('[data-testid^="dcp-task-"]')].find((b) => (b.textContent || "").includes("Morning house walk"));
+  if (!row) return false; row.click(); return true;
 });
 await new Promise((r) => setTimeout(r, 1500));
 const doneStamp = await page.evaluate(() => document.body.innerText.includes("Done by Kwame Mina"));
 ok("task completion toggle works (owner stamp)", toggled && doneStamp);
 if (toggled) { // revert
-  await page.evaluate(() => { const btn = [...document.querySelectorAll("button")].find((b) => b.className.includes("rounded-xl") && (b.textContent || "").includes("Morning house walk")); if (btn) btn.click(); });
+  await page.evaluate(() => { const row = [...document.querySelectorAll('[data-testid^="dcp-task-"]')].find((b) => (b.textContent || "").includes("Morning house walk")); if (row) row.click(); });
   await new Promise((r) => setTimeout(r, 1200));
 }
 
