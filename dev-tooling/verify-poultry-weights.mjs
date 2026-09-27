@@ -150,7 +150,11 @@ try {
   console.log("── D. Analytics: weight logs merged with feed/mortality/production ──");
   await sleep(1500);
   ok("D1 growth trend line count (actual + target)", (await lines("poa-chart-growth")) === 2);
-  ok("D2 egg weight vs output chart live (bars + 2 lines)", (await bars("poa-chart-eggweight")) >= 3 && (await lines("poa-chart-eggweight")) === 2, `${await bars("poa-chart-eggweight")} bars`);
+  // Benchmarking enrichment: when a benchmark profile + farm history resolve
+  // for the scoped flock, the egg-weight chart gains a "Farm median" line
+  // (3 lines); without benchmarking it stays at the classic 2 (avg + standard).
+  const d2Lines = await lines("poa-chart-eggweight");
+  ok("D2 egg weight vs output chart live (bars + 2-3 lines)", (await bars("poa-chart-eggweight")) >= 3 && (d2Lines === 2 || d2Lines === 3), `${await bars("poa-chart-eggweight")} bars, ${d2Lines} lines`);
   ok("D3 biomass chart rendered", (await lines("poa-chart-biomass")) === 1);
   await setTid("poa-filter-batch", "TEST-W-B01");
   await sleep(1200);
@@ -167,7 +171,10 @@ try {
   ok("D4 batch scope: calc FCR from weighings × feed", (await textOf('[data-testid="poa-kpi-calcfcr"]')).includes(calcFcrExp), `expect ${calcFcrExp} (feed ${feedTotal} / gain ${gainKg.toFixed(4)}kg × ${aliveMid})`);
   const bioExp = ((wAt(dLast) / 1000) * 985).toFixed(1);
   ok("D5 batch scope: biomass chip = latest sample × live birds", (await textOf('[data-testid="poa-kpi-biomass"]')).includes(Number(bioExp).toLocaleString()), `expect ${bioExp}`);
-  ok("D6 batch scope: growth bars by age W4+W5 present", (await bars("poa-chart-weight-age")) >= 2 && (await lines("poa-chart-weight-age")) === 1);
+  // Benchmarking enrichment: the weight-by-age chart shows the target line,
+  // plus p25/median/p75 farm-history lines when comparable flocks exist.
+  const d6Lines = await lines("poa-chart-weight-age");
+  ok("D6 batch scope: growth bars by age W4+W5 present", (await bars("poa-chart-weight-age")) >= 2 && (d6Lines === 1 || d6Lines === 4), `${d6Lines} lines`);
   ok("D7 batch scope: egg charts show empty states for a broiler batch", (await exists('[data-testid="poa-empty-eggweight"]')) && (await exists('[data-testid="poa-empty-eggs"]')));
   await setTid("poa-filter-batch", "TEST-W-L01");
   await sleep(1200);

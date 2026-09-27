@@ -133,7 +133,13 @@ async function sectionC() {
 
   // — desktop profile: hardware depot has many categories —
   const { ctx, page: p } = await newPage("catalog-desktop");
-  await p.goto(`${BASE}/order?biz=8`, { waitUntil: "networkidle0", timeout: 60000 });
+  // M5 (ids): the hardware flagship's biz id regenerates on fresh reseeds —
+  // resolve it (and its cement storefront item) at runtime, never biz=8/oo-add-6.
+  const CAT_HW = (await pg.query(`SELECT id::int id FROM businesses WHERE code = 'HARDWARE-01' AND owner_id = 1 ORDER BY id LIMIT 1`)).rows[0]?.id;
+  if (!CAT_HW) throw new Error("preflight: HARDWARE-01 missing — re-provision before running");
+  const CAT_CEM = (await pg.query(`SELECT id::int id FROM inventory_items WHERE business_id = $1 AND sku LIKE '%CEMENT-50KG' ORDER BY id LIMIT 1`, [CAT_HW])).rows[0]?.id;
+  if (!CAT_CEM) throw new Error("preflight: hardware cement storefront item missing");
+  await p.goto(`${BASE}/order?biz=${CAT_HW}`, { waitUntil: "networkidle0", timeout: 60000 });
   await p.waitForSelector('[data-testid="oo-catalog"]', { timeout: 30000 });
   const secs = await p.evaluate(() => {
     const names = [...document.querySelectorAll('[data-testid^="oo-catsec-"]')]
@@ -173,9 +179,9 @@ async function sectionC() {
   await sleep(300);
 
   // full ordering flow still works (typed qty + checkout)
-  await p.click('[data-testid="oo-add-6"]');
-  await p.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 5000 });
-  await fillField(p, "oo-qty-6", "3");
+  await p.click(`[data-testid="oo-add-${CAT_CEM}"]`);
+  await p.waitForSelector(`[data-testid="oo-qty-${CAT_CEM}"]`, { timeout: 5000 });
+  await fillField(p, `oo-qty-${CAT_CEM}`, "3");
   await sleep(300);
   const total = await p.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("C9 typed quantity in the grouped catalog updates cart total (3 × 118)", /354\.00/.test(total), total);
@@ -439,8 +445,8 @@ async function sectionG(ownerCookie, base) {
   for (const t of Object.keys(base.counts)) counts[t] = (await pg.query(`SELECT count(*)::int c FROM ${t}`)).rows[0].c;
   const mismatches = Object.entries(base.counts).filter(([t, c]) => counts[t] !== c).map(([t, c]) => `${t}:${c}→${counts[t]}`);
   ok("G2 ALL live-data counts restored exactly", mismatches.length === 0, mismatches.join(", "));
-  const eggs = (await pg.query(`SELECT quantity FROM inventory_items WHERE id=1`)).rows[0];
-  ok("G3 live stock untouched (eggs = 873.63)", Number(eggs?.quantity) === 873.63, eggs?.quantity);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`G3 live stock untouched (eggs = ${base.eggsQty})`, base.eggsQty !== null && Math.abs(Number(eggs?.q) - base.eggsQty) < 1e-9, eggs?.q);
   const stray = (await pg.query(`SELECT count(*)::int c FROM daily_notes WHERE content LIKE 'TEST%'`)).rows[0].c
     + (await pg.query(`SELECT count(*)::int c FROM businesses WHERE name LIKE 'TEST%'`)).rows[0].c;
   ok("G4 zero TEST strays anywhere", stray === 0, stray);
@@ -451,6 +457,9 @@ console.log("══ verify-category-notes — category catalog + auto-dashboard 
 await pg.connect();
 const ownerCookie = await login(OWNER.email, OWNER.pass);
 const base = {
+  // Live stock snapshot — AZ-AUDIT-REPORT M5: never hardcode demo quantities
+  // (eggs was 873.63 on the old snapshot; a fresh reseed starts at 850/200).
+  eggsQty: (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0]?.q ?? null,
   maxSessionId: (await pg.query(`SELECT COALESCE(max(id),0)::int m FROM user_sessions`)).rows[0].m,
   counts: Object.fromEntries((await pg.query(`
     SELECT 'businesses' t, count(*)::int c FROM businesses

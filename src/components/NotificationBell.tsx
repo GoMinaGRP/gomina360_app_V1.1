@@ -6,7 +6,7 @@
 // (My Issues for the assignee, the Audit Center for the reviewer).
 
 import { useCallback, useEffect, useState } from "react";
-import { Bell, CheckCheck, Flag, Inbox, Settings } from "lucide-react";
+import { Bell, CheckCheck, Flag, Inbox, ListPlus, Loader2, Settings } from "lucide-react";
 import { useClampedDropdown } from "./nav/useClampedDropdown";
 
 type Notif = any;
@@ -30,6 +30,41 @@ export default function NotificationBell({
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notif[]>([]);
   const [unread, setUnread] = useState(0);
+  const [convertingId, setConvertingId] = useState<number | null>(null);
+  const [convertedIds, setConvertedIds] = useState<Set<number>>(new Set());
+
+  /** Notification → Action (P1): turn any bell row into a tracked task with a
+   *  deadline. The task carries the source link, so the daily sweep can see
+   *  its origin; the notification itself stays untouched. */
+  const toTask = async (n: Notif) => {
+    setConvertingId(Number(n.id));
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: String(n.title || "Follow-up").slice(0, 180),
+          detail: String(n.body || "").slice(0, 1000),
+          businessId: n.businessId ?? null,
+          branchCode: n.branchCode ?? null,
+          assignedUserId: currentUser?.id,
+          priority: n.priority || "MEDIUM",
+          dueDate: new Date(Date.now() + 2 * 86400000).toLocaleDateString("en-CA"),
+          sourceType: "NOTIFICATION",
+          sourceId: n.id,
+          sourceRef: n.recordRef || `notification:${n.id}`,
+          sourceLabel: "Notification follow-up",
+        }),
+      });
+      if (res.ok) {
+        setConvertedIds((s) => new Set(s).add(Number(n.id)));
+      }
+    } catch {
+      /* transient — the button simply stays usable */
+    } finally {
+      setConvertingId(null);
+    }
+  };
   // Viewport-clamped panel — the bell sits near the right edge; on phones
   // its `absolute right-0` panel could extend past the LEFT screen edge.
   // width 384 clamps to (vw − 16px) automatically on narrow screens.
@@ -50,12 +85,15 @@ export default function NotificationBell({
   }, [currentUser?.id, onSummary]);
 
   useEffect(() => {
-    load();
     // Visibility-aware polling: a hidden tab gets ZERO polling requests
     // (previous behaviour: one /api/notifications call every 20 s even while
     // backgrounded — a fleet of forgotten tabs is a constant server load).
     // The 30 s cadence runs only whilst visible; returning to the tab always
     // fetches immediately, so no notification is ever missed.
+    // syncVisibility() alone drives the initial fetch: a VISIBLE tab gets
+    // exactly ONE immediate load (this used to fire load() and then
+    // syncVisibility() — two identical /api/notifications requests on every
+    // mount/remount), a hidden tab none until it becomes visible.
     let t: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!t) t = setInterval(load, 30_000); };
     const stop = () => { if (t) { clearInterval(t); t = null; } };
@@ -151,40 +189,57 @@ export default function NotificationBell({
             </div>
           ) : (
             items.map((n) => (
-              <button
+              <div
                 key={n.id}
-                onClick={() => clickItem(n)}
-                className={`w-full text-left px-3 py-2.5 border-b border-slate-700/60 last:border-0 hover:bg-slate-700/60 transition ${n.isRead ? "opacity-70" : ""}`}
+                className={`group flex items-start gap-2 px-3 py-2.5 border-b border-slate-700/60 last:border-0 hover:bg-slate-700/60 transition cursor-pointer ${n.isRead ? "opacity-80" : ""}`}
                 data-testid={`notif-item-${n.id}`}
+                onClick={() => clickItem(n)}
               >
-                <div className="flex items-start gap-2">
-                  <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${n.isRead ? "bg-slate-600" : "bg-rose-400"}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[11px] font-bold text-slate-100 flex items-center gap-1.5">
-                      {String(n.type).includes("CORRECTION") ? <Flag className="w-3 h-3 text-amber-400 shrink-0" /> : null}
-                      <span className="truncate">{n.title}</span>
-                      {n.priority && (
-                        <span
-                          className={`shrink-0 text-[8px] font-black px-1 py-px rounded border leading-[1.3] ${
-                            String(n.priority).toUpperCase() === "CRITICAL" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" :
-                            String(n.priority).toUpperCase() === "HIGH" ? "bg-orange-500/15 text-orange-300 border-orange-500/40" :
-                            String(n.priority).toUpperCase() === "MEDIUM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40" :
-                            "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                          }`}
-                          data-testid={`notif-priority-${n.id}`}
-                        >
-                          {String(n.priority).toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-                    {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
-                    <div className="text-[9px] text-slate-500 mt-1">
-                      {n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}{n.recordRef ? ` · ${n.recordRef}` : ""}
-                      {n.issueId || onOpenRecord ? " · tap to open" : ""}
-                    </div>
+                <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${n.isRead ? "bg-slate-600" : "bg-rose-400"}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-bold text-slate-100 flex items-center gap-1.5">
+                    {String(n.type).includes("CORRECTION") ? <Flag className="w-3 h-3 text-amber-400 shrink-0" /> : null}
+                    <span className="truncate">{n.title}</span>
+                    {n.priority && (
+                      <span
+                        className={`shrink-0 text-[8px] font-black px-1 py-px rounded border leading-[1.3] ${
+                          String(n.priority).toUpperCase() === "CRITICAL" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" :
+                          String(n.priority).toUpperCase() === "HIGH" ? "bg-orange-500/15 text-orange-300 border-orange-500/40" :
+                          String(n.priority).toUpperCase() === "MEDIUM" ? "bg-amber-500/15 text-amber-300 border-amber-500/40" :
+                          "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                        }`}
+                        data-testid={`notif-priority-${n.id}`}
+                      >
+                        {String(n.priority).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
+                  <div className="text-[9px] text-slate-500 mt-1">
+                    {n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}{n.recordRef ? ` · ${n.recordRef}` : ""}
+                    {n.issueId || onOpenRecord ? " · tap to open" : ""}
                   </div>
                 </div>
-              </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); toTask(n); }}
+                  disabled={convertingId === Number(n.id) || convertedIds.has(Number(n.id))}
+                  title={convertedIds.has(Number(n.id)) ? "Already tracked in the Action Center" : "Track as an action — due in 2 days, assigned to you"}
+                  className={`shrink-0 mt-0.5 p-1 rounded-lg border transition ${
+                    convertedIds.has(Number(n.id))
+                      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                      : "bg-slate-700/60 text-slate-300 border-slate-600 hover:bg-amber-500/20 hover:text-amber-300 hover:border-amber-500/40"
+                  } disabled:cursor-default`}
+                  data-testid={`notif-to-task-${n.id}`}
+                >
+                  {convertingId === Number(n.id) ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : convertedIds.has(Number(n.id)) ? (
+                    <CheckCheck className="w-3.5 h-3.5" />
+                  ) : (
+                    <ListPlus className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
             ))
           )}
         </div>

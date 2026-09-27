@@ -75,6 +75,7 @@ import { requireOwner, getSessionInfo, canAccessBusiness, FORBIDDEN } from "@/li
 import { businessTypeAllowed } from "@/lib/businessTypes";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { managesBusiness } from "@/lib/permissions";
+import { recordDeletedBusiness } from "@/lib/systemMarkers";
 import { apiError } from "@/lib/apiError";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
@@ -295,10 +296,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
     if (level === "UNIT_MANAGER") {
       const touched = Object.keys(body || {}).filter((k) => !["actorUserId", "id"].includes(k));
-      const outsideScope = touched.filter((k) => k === "status");
+      const outsideScope = touched.filter((k) => k === "status" || k === "isArchived");
       if (outsideScope.length > 0) {
         return FORBIDDEN(
-          "Deactivating / re-activating a unit (status) stays with the OWNER. As a “Manage Unit” grantee you can edit, change business type, manage online ordering & service settings, and reset this unit.",
+          "Deactivating / re-activating or archiving a unit stays with the OWNER. As a “Manage Unit” grantee you can edit, change business type, manage online ordering & service settings, and reset this unit.",
         );
       }
     }
@@ -379,6 +380,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         return NextResponse.json({ success: false, error: `Invalid status "${status}".` }, { status: 400 });
       }
       updates.status = status;
+    }
+    // P0.3 — archive / restore (OWNER only): archived units stay fully
+    // auditable but leave the executive comparison scopes and the sidebar.
+    if (body.isArchived !== undefined) {
+      updates.isArchived = !!body.isArchived;
     }
     if (body.initialCapitalGhs !== undefined) {
       const v = Number(body.initialCapitalGhs);
@@ -641,6 +647,15 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
     // 5. Finally remove the unit itself.
     await db.delete(businesses).where(eq(businesses.id, businessId));
+
+    // 6. Deletion tombstone: the unit code is recorded in system_markers so
+    //    NO auto-provisioning path (boot seeder "repair-forward", future
+    //    flagship passes) can ever resurrect this unit. OWNER deletion is
+    //    final — this is the root-cause fix for deleted units (e.g. the
+    //    HARDWARE-01 flagship) reappearing after the next server restart.
+    //    Best-effort: a pre-migration database (table absent) skips the
+    //    tombstone rather than failing the deletion itself.
+    await recordDeletedBusiness(biz.code);
 
     return NextResponse.json({
       success: true,

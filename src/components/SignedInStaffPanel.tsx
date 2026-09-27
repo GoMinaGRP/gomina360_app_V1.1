@@ -88,9 +88,10 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
     }
   };
 
-  const meta = data?.meta || { canView: false, canManage: false };
-  const staff: any[] = data?.staff || [];
-  const groups: any[] = Array.isArray(meta.groups) ? meta.groups : [];
+  const meta = useMemo(() => data?.meta || { canView: false, canManage: false }, [data]);
+  // Memoised so the useMemos below keep stable dependencies across renders.
+  const staff: any[] = useMemo(() => data?.staff || [], [data]);
+  const groups: any[] = useMemo(() => (Array.isArray(meta.groups) ? meta.groups : []), [meta]);
   const scopeType: string = meta.scopeType || "";
 
   const filtered = useMemo(() => staff.filter((s) => {
@@ -102,6 +103,19 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
     return true;
   }), [staff, filter, bizFilter]);
   const staffById = useMemo(() => new Map(filtered.map((s) => [Number(s.id), s])), [filtered]);
+
+  // Owner business selector options (from grouped buckets, businessId > 0).
+  // NOTE: must stay ABOVE any early return (rules-of-hooks).
+  const bizOptions = useMemo(() => {
+    const opts: { id: number; name: string }[] = [];
+    for (const g of groups) {
+      for (const b of g.businesses || []) {
+        if (Number(b.businessId) > 0) opts.push({ id: Number(b.businessId), name: b.businessName });
+      }
+    }
+    return opts.sort((a, b) => a.name.localeCompare(b.name));
+  }, [groups]);
+
 
   const fmtDT = (t: any) => {
     if (!t) return "—";
@@ -410,17 +424,6 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
       </div>
     );
   };
-
-  // Owner business selector options (from grouped buckets, businessId > 0).
-  const bizOptions = useMemo(() => {
-    const opts: { id: number; name: string }[] = [];
-    for (const g of groups) {
-      for (const b of g.businesses || []) {
-        if (Number(b.businessId) > 0) opts.push({ id: Number(b.businessId), name: b.businessName });
-      }
-    }
-    return opts.sort((a, b) => a.name.localeCompare(b.name));
-  }, [groups]);
 
   return (
     <div className="space-y-4" data-testid="sis-root">

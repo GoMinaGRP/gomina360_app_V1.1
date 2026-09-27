@@ -15,6 +15,7 @@ import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * Complete a delivered electronics order as a real sale:
@@ -48,7 +49,7 @@ async function fulfillElectronicsOrder(order: any, businessId: number, branchCod
   }
   // Revenue into Finance so dashboards / reports update
   await db.insert(transactions).values({
-    transactionNumber: `TRX-${new Date().getFullYear()}-${stamp}`,
+    transactionNumber: nextTrxNumber(),
     businessId,
     branchCode,
     branchName: null,
@@ -308,7 +309,7 @@ export async function POST(request: NextRequest) {
             businessId,
             branchCode,
             branchName: biz?.name || null,
-            transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+            transactionNumber: nextTrxNumber(now),
             type: "EXPENSE",
             category: "Stock Purchase (Electronics)",
             amountGhs: qty * cost,

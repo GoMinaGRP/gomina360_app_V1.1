@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import AiSectionGuide from "./AiSectionGuide";
 import FinancialReportSection from "./FinancialReportSection";
+import BudgetsAndCashflowSection from "./BudgetsAndCashflowSection";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import {
   computeFinancialReport,
@@ -264,6 +265,12 @@ export default function EnterpriseFinanceView({
         title="Consolidated Financial Report — All Businesses & Branches"
         subtitle="Revenue, sales, expenses, profit, payments, outstanding and trends — filtered by days, months and years, per business and per branch/register."
       />
+
+      {/* ── Budgets & 13-week cash-flow forecast (P4) — self-fetching panel
+          that turns the live ledger into forward-looking controls: monthly
+          budget envelopes with live variance, and a projection from the
+          Command Center's liquid-surplus figure. ── */}
+      <BudgetsAndCashflowSection currentUser={currentUser} businesses={businesses} />
     </div>
   );
 }

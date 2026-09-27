@@ -38,6 +38,11 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then npm run build; fi
 
 echo "── 6/7 app server"
 pkill -f "next-server" 2>/dev/null || true
+# The notifications E2E suite runs a mock Web-Push endpoint on localhost with a
+# self-signed cert (/tmp/pushsrv.pem, SAN IP:127.0.0.1). Export it as a trusted
+# CA so the app's web-push delivery (Node https client) accepts the mock —
+# without this every push dispatch fails TLS validation (sent=0).
+if [ -f /tmp/pushsrv.pem ]; then export NODE_EXTRA_CA_CERTS=/tmp/pushsrv.pem; fi
 (nohup npx next start -H 0.0.0.0 -p 3000 > /tmp/gomina-app.log 2>&1 & echo $! > /tmp/gomina-app.pid)
 for i in $(seq 1 40); do curl -s -o /dev/null http://localhost:3000/ && break; sleep 1; done
 echo "app up on :3000"
@@ -48,6 +53,14 @@ if [ "${RESTORE:-1}" = "1" ]; then node dev-tooling/restore-userdata.mjs; fi
 # Replay the live-data safety net (UI-created units/orders/customers — the
 # data no fixture knows about). Idempotent ON CONFLICT (id) DO NOTHING.
 node dev-tooling/restore-livedata.mjs || true
+# Tenant-scope the seeded demo data (suppliers/customers/etc. owner_id, org
+# memberships) — without this the per-organization party-detail checks in
+# /api/audit 403 for scoped auditors right after a fresh reseed.
+node dev-tooling/migrate-multiowner.mjs || true
+# Recent demo activity across the last 7 days so the Audit → Records day
+# grouping (Today / Yesterday / each previous date) has content to show on a
+# freshly reseeded database. Idempotent.
+node dev-tooling/seed-recent-demo.mjs || true
 # Heal the owner's REAL GoMina crest (business/branch/company logos) if the
 # rebuild rolled the DB back to a snapshot taken before his upload.
 node dev-tooling/restore-branding.mjs

@@ -15,6 +15,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import SaleFields, { stockDetailOptions } from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -363,7 +364,7 @@ export default function BusinessDashboardModule({
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-1 bg-slate-800/90 border border-slate-700/80 p-1.5 rounded-xl">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-testid={`bdm-tab-${t.key}`}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
               tab === t.key ? `${cfg.tabActive} text-white shadow` : "text-slate-300 hover:bg-slate-700/70"}`}>
             <t.icon className="w-4 h-4" />
@@ -569,7 +570,7 @@ export default function BusinessDashboardModule({
                 <Row k="Assets registered" v={`${branchAssets.length} (${formatMoney(branchAssets.reduce((s, a) => s + (a.currentValueGhs || 0), 0), currentCurrency, true)})`} />
                 <Row k="Initial capital" v={formatMoney(businessInfo?.initialCapitalGhs || 0, currentCurrency)} />
                 <Row k="Monthly revenue target" v={formatMoney(businessInfo?.monthlyTargetRevenueGhs || 0, currentCurrency)} />
-                <Row k="CRM customers (enterprise)" v={`${customers.length}`} />
+                <Row k="CRM customers (this unit)" v={`${customers.filter((c: any) => Number(c.businessId) === Number(businessInfo?.id)).length}`} />
               </div>
             </Card>
 
@@ -805,10 +806,6 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
 
   const selectedItem = inventory.find((i: any) => String(i.id) === String(f.inventoryId));
   const qty = Number(f.quantity) || 0;
-  const price = f.sellingPrice ? Number(f.sellingPrice) : selectedItem?.sellingPriceGhs || 0;
-  const saleTotal = qty * price;
-  const salePct = Math.max(0, Math.min(100, Number(f.discountPct) || 0));
-  const saleNet = Math.round(saleTotal * (1 - salePct / 100) * 100) / 100;
   const restockCost = Number(f.unitCostGhs) || 0;
   const restockTotal = qty * restockCost;
 
@@ -821,36 +818,17 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
         </div>
         <form onSubmit={(e) => { e.preventDefault(); onSubmit(type, type === "RESTOCK" ? { ...f, totalCostGhs: restockTotal } : f); }} className="p-5 space-y-3">
           {type === "SALE" && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-[10px] text-slate-400 font-semibold mb-1">Product (from live stock — sellable items first)</label>
-                  <select required value={f.inventoryId ?? ""} onChange={(e) => set("inventoryId", e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-                    <option value="" disabled>— Select product —</option>
-                    {[...inventory]
-                      .sort((a: any, b: any) => (cfg.productRe.test(`${b.name} ${b.category}`) ? 1 : 0) - (cfg.productRe.test(`${a.name} ${a.category}`) ? 1 : 0) || String(a.name).localeCompare(String(b.name)))
-                      .map((i: any) => {
-                        const out = (i.quantity || 0) <= 0 || i.status === "OUT_OF_STOCK";
-                        return <option key={i.id} value={i.id} disabled={out}>{i.name} • {out ? "OUT OF STOCK" : `${Number(i.quantity).toLocaleString()} ${i.unit} available`} • {i.sellingPriceGhs} GH₵</option>;
-                      })}
-                  </select>
-                </div>
-                <FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
-                <FormField f={f} set={set} label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
-                <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-                <FormField f={f} set={set} label="Customer Phone" k="customerPhone" />
-                <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
-                <FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
-                <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
-              </div>
-              {selectedItem && (
-                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200">
-                  Total due: <span className="font-black">GH₵ {saleNet.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>{salePct > 0 && <span className="ml-1 text-emerald-300">({salePct}% discount − GH₵ {(saleTotal - saleNet).toLocaleString(undefined, { maximumFractionDigits: 2 })})</span>} — sells {qty} {selectedItem.unit} of “{selectedItem.name}”. Stock after sale: {Math.max(0, (selectedItem.quantity || 0) - qty).toLocaleString()}.
-                </div>
-              )}
-              <FormField f={f} set={set} label="Notes" k="notes" />
-            </>
+            <SaleFields
+              variant="stock"
+              f={f}
+              set={set}
+              inventory={inventory}
+              selectedItem={selectedItem}
+              productSelectLabel="Product (from live stock — sellable items first)"
+              productOptions={stockDetailOptions(inventory, (a: any, b: any) => (cfg.productRe.test(`${b.name} ${b.category}`) ? 1 : 0) - (cfg.productRe.test(`${a.name} ${b.category}`) ? 1 : 0) || String(a.name).localeCompare(String(b.name)))}
+              reasonLabel="Price Override Reason"
+              stockTone="emerald"
+            />
           )}
           {type === "RESTOCK" && (
             <>

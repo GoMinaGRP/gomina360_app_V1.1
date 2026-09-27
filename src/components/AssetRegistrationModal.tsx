@@ -6,6 +6,7 @@ import { formatLocation } from "@/lib/ghanaLocations";
 import QrScanModal from "./QrScanModal";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { buildAssetQr } from "@/lib/qrRegistry";
+import { displayCategory } from "@/lib/businessTypeKeys";
 
 interface AssetRegistrationModalProps {
   isOpen: boolean;
@@ -184,7 +185,7 @@ export default function AssetRegistrationModal({
     (async () => {
       try {
         const res = await fetch(
-          `/api/assets/next-code?branchCode=${encodeURIComponent(branchCode)}`
+          `/api/assets/next-code?branchCode=${encodeURIComponent(branchCode)}&businessId=${encodeURIComponent(businessId)}`
         );
         const data = await res.json();
         if (!cancelled && data.success && data.suggestion) {
@@ -212,7 +213,7 @@ export default function AssetRegistrationModal({
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/assets/next-code?check=${encodeURIComponent(code)}`
+          `/api/assets/next-code?check=${encodeURIComponent(code)}&businessId=${encodeURIComponent(businessId)}`
         );
         const data = await res.json();
         setCodeStatus(data.available ? "available" : "taken");
@@ -411,7 +412,7 @@ export default function AssetRegistrationModal({
                   : businesses
                 ).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.name} ({b.category})
+                    {b.name} ({displayCategory(b.category)})
                   </option>
                 ))}
               </select>

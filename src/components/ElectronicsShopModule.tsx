@@ -15,6 +15,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import SaleFields from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -417,7 +418,7 @@ export default function ElectronicsShopModule({
   const nextClaimStatus: Record<string, string> = { OPEN: "IN_PROGRESS", IN_PROGRESS: "RESOLVED" };
 
   if (loading) {
-    return <div className="p-10 text-center text-slate-400 text-sm">Loading Mina Tech &amp; Electronics Hub…</div>;
+    return <div className="p-10 text-center text-slate-400 text-sm">Loading {businessInfo?.name ? `${businessInfo.name}…` : "Electronics workspace…"}</div>;
   }
 
   return (
@@ -450,7 +451,7 @@ export default function ElectronicsShopModule({
       {/* Tab bar */}
       <div className="flex flex-wrap gap-1 bg-slate-800/60 border border-slate-700 rounded-xl p-1">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-testid={`elex-tab-${t.key}`}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${tab === t.key ? "bg-cyan-600 text-white" : "text-slate-400 hover:text-white"}`}>
             <t.icon className="w-3.5 h-3.5" />{t.label}
           </button>
@@ -728,7 +729,7 @@ export default function ElectronicsShopModule({
                   <div key={a.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700"><span className="text-slate-200">{a.name}</span><span className="text-slate-400">{a.status || "ACTIVE"}</span></div>
                 ))}
                 <div className="text-[10px] uppercase text-slate-500 font-bold pt-2">Customers</div>
-                {(branchCustomers.length ? branchCustomers : customers).slice(0, 5).map((c) => (
+                {branchCustomers.slice(0, 5).map((c) => (
                   <div key={c.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700">
                     <span className="text-slate-200">{c.name}</span>
                     <span className="text-slate-400">{c.type} • {formatMoney(c.totalSpentGhs || 0, currentCurrency, true)}</span>
@@ -871,7 +872,6 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
     "Log Unit Check (Ops Log)";
 
   const selectedItem = (inventory || []).find((i: any) => String(i.id) === String(f.inventoryId));
-  const saleTotal = (Number(f.quantity) || 0) * (f.sellingPrice ? Number(f.sellingPrice) : selectedItem?.sellingPriceGhs || 0);
 
   const handle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -881,14 +881,7 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
   const purchaseStatusOpts = [{ v: "ORDERED", l: "Ordered (on the way)" }, { v: "RECEIVED", l: "Received (stock-in + expense booked)" }];
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
-    {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
-      <FormSelect f={f} set={set} label="Product" k="inventoryId" opts={[{ v: "", l: "— select product —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
-      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><FormField f={f} set={set} label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
-      <FormField f={f} set={set} label="Custom price reason (if discounted)" k="customPriceReason" /><FormField f={f} set={set} label="Notes" k="notes" />
-      {saleTotal > 0 && <div className="text-xs text-cyan-300 font-bold">Total: {formatMoney(saleTotal, currency)}</div>}
-    </>}
+    {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} totalTone="text-cyan-300" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Rent, Fuel, Utilities, Repair..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Product Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Electronics & Solar" list="tec-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Units" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="tec-item-cats">{["Electronics & Solar", "Phones & Accessories", "Computers", "Home Appliances", "TV & Audio"].map((c) => <option key={c} value={c} />)}</datalist></>}
     {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Product (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Item Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} />{selectedItem && !f.itemName && <p className="text-[10px] text-cyan-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormSelect f={f} set={set} label="Status" k="status" opts={["PENDING", "READY", "DELIVERED", "CANCELLED"]} /><FormField f={f} set={set} label="Notes" k="notes" /></>}

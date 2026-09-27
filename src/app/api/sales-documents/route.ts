@@ -5,6 +5,7 @@ import { salesDocuments, businesses } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 
 /**
  * GET /api/sales-documents
@@ -140,6 +141,20 @@ export async function POST(request: NextRequest) {
     }
     const total = r2(subtotal + taxAmount - discount);
 
+    // R1 approval gate — DISCOUNT: when an active policy matches this
+    // discount percentage and the creator is not an approver, the document
+    // is born PENDING_APPROVAL; approval releases it as a normal document
+    // while rejection cancels it.
+    const discountGate =
+      discountPct > 0
+        ? await approvalGateCheck({
+            user: __authSession.user,
+            action: "DISCOUNT",
+            businessId: Number(businessId),
+            percent: discountPct,
+          })
+        : ({ gated: false } as Awaited<ReturnType<typeof approvalGateCheck>>);
+
     // Fetch business/branch details if not provided
     let resolvedBranchCode = branchCode;
     let resolvedBranchName = branchName;
@@ -187,7 +202,7 @@ export async function POST(request: NextRequest) {
       discountPercent: discountPct,
       totalGhs: total,
       currency: currency || "GHS",
-      status: documentType === "QUOTATION" ? "SENT" : "SENT",
+      status: discountGate.gated ? "PENDING_APPROVAL" : documentType === "QUOTATION" ? "SENT" : "SENT",
       notes: notes || null,
       terms: terms || null,
       validUntil: validUntil || null,
@@ -196,6 +211,32 @@ export async function POST(request: NextRequest) {
       createdByName: String(createdByName || "Sales Center User"),
       createdByRole: createdByRole || null,
     }).returning();
+
+    if (discountGate.gated) {
+      await createApprovalRequest({
+        action: "DISCOUNT",
+        businessId: Number(businessId),
+        branchCode: resolvedBranchCode || null,
+        targetType: "SALE_DOCUMENT",
+        targetId: Number(inserted.id),
+        targetLabel: `${documentType} ${documentNumber} — ${customerName} (${discountPct}% off)`,
+        amountGhs: discount,
+        payloadSnapshot: {
+          documentNumber,
+          documentType,
+          discountPercent: discountPct,
+          discountGhs: discount,
+          totalGhs: total,
+        },
+        actor: __authSession.user,
+      });
+      return NextResponse.json({
+        success: true,
+        document: inserted,
+        pendingApproval: true,
+        message: `Document saved as PENDING APPROVAL — a ${discountPct}% discount needs approval. The approvers have been notified.`,
+      });
+    }
 
     return NextResponse.json({ success: true, document: inserted });
   } catch (error: any) {

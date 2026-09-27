@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { users, userSessions, userBusinessAccess, auditTrail, organizationMembers } from "@/db/schema";
+import { users, userSessions, userBusinessAccess, auditTrail, organizationMembers, advisorAssignments } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
 import {
   getSessionInfo,
@@ -12,6 +12,7 @@ import {
   sharesOrganization,
   FORBIDDEN,
   UNAUTHENTICATED,
+  bustSessionCache,
 } from "@/lib/auth";
 
 /** May this caller see/pick `targetUserRow`? Super Admin ⇒ anyone; everyone
@@ -132,6 +133,23 @@ export async function POST(request: Request) {
     // to run Users & Access strictly within the branches they can access.
     const isDelegatedMgr =
       !isOwner && !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
+    // ── Farm Advisor accounts ─────────────────────────────────────────────
+    // External advisors are onboarded by the OWNER only. They never carry a
+    // primary branch assignment or any management power — their entire access
+    // flows through advisor_assignments, granted separately (see /api/advisor).
+    if (role === "FARM_ADVISOR" && !isOwner) {
+      return FORBIDDEN("Only the OWNER can create Farm Advisor accounts.");
+    }
+    if (role === "FARM_ADVISOR" && assignedBusinessId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Farm Advisors are not assigned to a branch. Grant them farm units (with optional expiry) from the Farm Advisors console.",
+        },
+        { status: 400 },
+      );
+    }
     if (!isOwner) {
       const allowed = await accessibleBusinessIds(me);
       if (isDelegatedMgr) {
@@ -139,7 +157,7 @@ export async function POST(request: Request) {
         // pinned to a branch inside their own scope; extra grants are capped
         // at that same scope. They can never mint elevated roles, hand out
         // record-management, or extend the delegation itself.
-        if (!["WORKER", "BRANCH_MANAGER"].includes(role)) {
+        if (![ "WORKER", "BRANCH_MANAGER"].includes(role)) {
           return FORBIDDEN("You can only create Worker and Branch Manager accounts.");
         }
         if (!assignedBusinessId || !(allowed ?? []).includes(Number(assignedBusinessId))) {
@@ -226,6 +244,20 @@ export async function POST(request: Request) {
       return FORBIDDEN("Insufficient privilege.");
     }
 
+    // An advisor account never carries management power — not even on the
+    // OWNER's request. The role is read-only by construction; its only write
+    // surface anywhere in the platform is advisor notes.
+    if (
+      role === "FARM_ADVISOR" &&
+      ([canManageRecords, canDeleteInventory, canManageExpenses, canManageUsers, canManageCctv, canManageAuditors, canManageOnline, canCreateBusiness, canViewFinance, canManageSupport].some(Boolean) ||
+        (Array.isArray(businessManageIds) && businessManageIds.length > 0))
+    ) {
+      return NextResponse.json(
+        { success: false, error: "Farm Advisor accounts are read-only by design — management permissions cannot be attached." },
+        { status: 400 },
+      );
+    }
+
     const emailNorm = String(email).trim().toLowerCase();
     const dupe = await db.select({ id: users.id }).from(users).where(eq(users.email, emailNorm));
     if (dupe.length) {
@@ -262,7 +294,9 @@ export async function POST(request: Request) {
         canManageStock: role === "WORKER" ? (canManageStock ?? false) : undefined,
         canExportData: ["OWNER", "GENERAL_MANAGER"].includes(role)
           ? true
-          : Boolean(canExportData ?? false),
+          : role === "FARM_ADVISOR"
+            ? false // advisors never export data
+            : Boolean(canExportData ?? false),
         canManageRecords: isOwner ? Boolean(canManageRecords ?? false) : false,
         // Delete-inventory permission is likewise OWNER-granted only.
         canDeleteInventory: isOwner ? Boolean(canDeleteInventory ?? false) : false,
@@ -297,6 +331,16 @@ export async function POST(request: Request) {
         userId: newUser.id,
         roleInOrg: role === "OWNER" ? "OWNER" : "MEMBER",
         isPrimary: true,
+      });
+    }
+    // Farm Advisor account creation lands on the immutable audit trail.
+    if (role === "FARM_ADVISOR") {
+      await db.insert(auditTrail).values({
+        actorUserId: me.id, actorName: me.name, actorRole: me.role,
+        action: "GRANT_ACCESS", targetType: "USER", targetLabel: newUser.name,
+        businessId: null, branchCode: null, ownerId: session.orgId ?? null,
+        reason: null,
+        detail: `Farm Advisor account created (${newUser.email}) — farm-unit access is granted separately, with optional expiry, from the Farm Advisors console`,
       });
     }
     if ((isOwner || isDelegatedMgr) && Array.isArray(extraAccessIds) && extraAccessIds.length) {
@@ -401,6 +445,17 @@ export async function PATCH(request: Request) {
     const isBM = me.role === "BRANCH_MANAGER";
     const isDelegatedMgr =
       !isOwner && !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
+
+    // ── Farm Advisor account rules ───────────────────────────────────────
+    // Only the OWNER touches an advisor account; only the OWNER may turn
+    // anyone INTO an advisor. Advisors never keep management power, grants
+    // or a primary branch — access flows exclusively via advisor_assignments.
+    if (targetUser.role === "FARM_ADVISOR" && !isOwner) {
+      return FORBIDDEN("Only the OWNER can modify Farm Advisor accounts.");
+    }
+    if (role === "FARM_ADVISOR" && targetUser.role !== "FARM_ADVISOR" && !isOwner) {
+      return FORBIDDEN("Only the OWNER can convert an account into a Farm Advisor.");
+    }
 
     // Org OWNER (not Super Admin): business ids being granted must belong to
     // their OWN organization — otherwise a user could be dragged across the
@@ -536,9 +591,17 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const [updatedUser] = await db
-      .update(users)
-      .set({
+    // ── Advisor shape enforcement ────────────────────────────────────────
+    // Converting an account to FARM_ADVISOR (or editing an existing one)
+    // strips every management power, grant list and primary branch — access
+    // flows exclusively through advisor_assignments. Applied to the patch
+    // object AFTER the role-change authorization above, so even a form
+    // round-tripping an old manager's true flags cannot smuggle power onto
+    // an advisor account.
+    const advisorShape =
+      isOwner && String(role !== undefined ? role : targetUser.role) === "FARM_ADVISOR";
+
+    const userPatch: any = {
         name: name !== undefined ? name : targetUser.name,
         email: email !== undefined ? String(email).trim().toLowerCase() : targetUser.email,
         phone: phone !== undefined ? phone : targetUser.phone,
@@ -611,7 +674,31 @@ export async function PATCH(request: Request) {
           isOwner && businessManageIds !== undefined
             ? cleanIdList(businessManageIds)
             : targetUser.businessManageIds,
-      })
+    };
+    if (advisorShape) {
+      Object.assign(userPatch, {
+        assignedBusinessId: null,
+        canRecordSales: false,
+        canRecordExpenses: false,
+        canManageStock: false,
+        canExportData: false,
+        canManageRecords: false,
+        canDeleteInventory: false,
+        canManageExpenses: false,
+        canManageUsers: false,
+        canManageCctv: false,
+        canManageAuditors: false,
+        canManageOnline: false,
+        canCreateBusiness: false,
+        canViewFinance: false,
+        canManageSupport: false,
+        businessManageIds: [],
+      });
+    }
+
+    const [updatedUser] = await db
+      .update(users)
+      .set(userPatch)
       .where(eq(users.id, Number(userId)))
       .returning();
 
@@ -658,6 +745,10 @@ export async function PATCH(request: Request) {
       const allBiz = await businessIdsForUser(updatedUser.id, updatedUser.assignedBusinessId ?? null);
       await backfillUserNotifications({ userId: updatedUser.id, userName: updatedUser.name, businessIds: allBiz });
     }
+
+    // Role/permission/assignment/deactivation changes must reach the very
+    // next authenticated request in THIS process immediately.
+    bustSessionCache();
 
     return NextResponse.json({
       success: true,
@@ -706,8 +797,12 @@ export async function DELETE(request: Request) {
 
     await db.delete(userSessions).where(eq(userSessions.userId, userId));
     await db.delete(userBusinessAccess).where(eq(userBusinessAccess.userId, userId));
+    // Advisor grants die with the advisor account (notes survive, stamped
+    // with their author — the farm's guidance history is never lost).
+    await db.delete(advisorAssignments).where(eq(advisorAssignments.userId, userId));
     await db.delete(organizationMembers).where(eq(organizationMembers.userId, userId));
     await db.delete(users).where(eq(users.id, userId));
+    bustSessionCache(); // deleted user's memoised sessions must not survive in this process
     return NextResponse.json({ success: true, deleted: true });
   } catch (error: any) {
     return apiError(error);

@@ -176,8 +176,19 @@ try {
   ok("C4 all three levels distinct", BIZ_LOGO !== BRANCH_LOGO && BIZ_LOGO !== CO_LOGO && BRANCH_LOGO !== CO_LOGO);
   const init = await fetch(`${BASE}/api/init`, { headers: { "x-gomina-session": ownerToken } }).then((x) => x.json());
   const initB1 = (init.businesses || []).find((b) => b.id === 1);
-  ok("C5 bootstrap carries company + business + branch logos",
-    init.companyLogo === CO_LOGO && initB1?.logo === BIZ_LOGO && initB1?.branchLogos?.["POULTRY-01"] === BRANCH_LOGO);
+  // Since the branding performance pass (e74f1ef), logos ride their own
+  // versioned channel: /api/init carries only a content-hashed
+  // brandingVersion; /api/branding serves the blobs (ETag + browser cache).
+  const branding = await fetch(`${BASE}/api/branding`, { headers: { "x-gomina-session": ownerToken } }).then((x) => x.json());
+  const brandingB1 = (branding.businesses || {})["1"];
+  ok("C5 bootstrap carries company + business + branch logos (brandingVersion + /api/branding)",
+    typeof init.brandingVersion === "string" && init.brandingVersion.length > 0 &&
+      init.companyLogo === null && !(initB1?.logo) && // blobs stay off the hot path
+      branding?.success === true &&
+      branding.companyLogo === CO_LOGO &&
+      brandingB1?.logo === BIZ_LOGO &&
+      (brandingB1?.branchLogos || {})["POULTRY-01"] === BRANCH_LOGO,
+    `v=${init.brandingVersion} co=${(branding?.companyLogo || "").slice(0, 20)} biz=${(brandingB1?.logo || "").slice(0, 20)} br=${(((brandingB1?.branchLogos || {})["POULTRY-01"]) || "").slice(0, 20)}`);
 
   // ══ D. Automatic logo on payslips: branch → business → company ══════════
   console.log("── D. Payslip resolution on real documents ──");
@@ -192,6 +203,9 @@ try {
   RUN2 = r2.body?.run?.id; RUN2E = r2.body?.run?.entries?.[0]?.id;
   ok("D2 TEST run biz2 2026-11 created (biz2 has no own logo)", !!RUN2 && !!RUN2E, `run ${RUN2}`);
 
+  // Fresh bootstrap so the client picks up the just-uploaded logos via the
+  // versioned branding channel (init → brandingVersion → /api/branding).
+  await login(OWNER);
   await clickText("Employees & Payroll");
   await waitSel('[data-testid="emp-payroll-open"]');
   await clickTid("emp-payroll-open");
@@ -236,7 +250,8 @@ try {
   await clickTid(`prl-entry-slip-${RUN1E}`);
   await waitSel('[data-testid="prl-slip"]');
   const slipLogo2 = await page.$eval('[data-testid="prl-slip-logo"]', (e) => e.src).catch(() => null);
-  ok("F2 same payslip now uses the BUSINESS logo", slipLogo2 === BIZ_LOGO);
+  ok("F2 same payslip now uses the BUSINESS logo", slipLogo2 === BIZ_LOGO,
+    `got(len=${(slipLogo2 || "").length},mid=${(slipLogo2 || "").slice(200, 260)}) want(len=${(BIZ_LOGO || "").length},mid=${(BIZ_LOGO || "").slice(200, 260)})`);
   await clickTid("prl-slip-close");
   await waitSel(`[data-testid="prl-run-${RUN2}"]`);
   await clickTid(`prl-run-toggle-${RUN2}`);
@@ -244,7 +259,8 @@ try {
   await clickTid(`prl-entry-slip-${RUN2E}`);
   await waitSel('[data-testid="prl-slip"]');
   const slipLogo3 = await page.$eval('[data-testid="prl-slip-logo"]', (e) => e.src).catch(() => null);
-  ok("F3 business without a logo falls back to the COMPANY logo", slipLogo3 === CO_LOGO);
+  ok("F3 business without a logo falls back to the COMPANY logo", slipLogo3 === CO_LOGO,
+    `got(len=${(slipLogo3 || "").length},mid=${(slipLogo3 || "").slice(200, 260)}) want(len=${(CO_LOGO || "").length},mid=${(CO_LOGO || "").slice(200, 260)})`);
   await clickTid("prl-slip-close");
 
   // G. Downloadable payroll PDF carries the resolved logo inside the file

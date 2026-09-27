@@ -10,6 +10,8 @@ import {
 } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
+import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 
 export async function GET(request: Request) {
   try {
@@ -82,9 +84,36 @@ export async function POST(request: Request) {
     if (!(await canAccessBusiness(session.user, businessId))) {
       return FORBIDDEN("You do not have access to record against that business.");
     }
+    // Worker expense-permission parity (same rule the feed-mill intake routes
+    // enforce): a WORKER whose OWNER left "can record expenses" OFF cannot
+    // book EXPENSE rows — the module UIs hide the button, the API must agree.
+    // OWNER / GENERAL_MANAGER / BRANCH_MANAGER are never restricted here.
+    if (
+      String(type).toUpperCase() === "EXPENSE" &&
+      session.user.role === "WORKER" &&
+      !session.user.canRecordExpenses
+    ) {
+      return FORBIDDEN(
+        "You do not have permission to record expenses. Ask the OWNER to enable 'can record expenses' for your account."
+      );
+    }
+
+    // R1 approval gate: when an active EXPENSE policy matches this amount and
+    // the recorder is not themselves an approver, the expense lands in
+    // PENDING_APPROVAL and the approvers are bell/push-notified. With no
+    // matching policy (or when the recorder may decide it) nothing changes.
+    let expenseGate: Awaited<ReturnType<typeof approvalGateCheck>> = { gated: false };
+    if (String(type).toUpperCase() === "EXPENSE") {
+      expenseGate = await approvalGateCheck({
+        user: session.user,
+        action: "EXPENSE",
+        businessId: Number(businessId),
+        amountGhs: Number(amountGhs) || 0,
+      });
+    }
 
     const now = new Date();
-    const trxNum = `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`;
+    const trxNum = nextTrxNumber(now);
     const dateStr = now.toISOString().split("T")[0];
 
     // Auto-resolve branch details from business if not provided
@@ -117,7 +146,7 @@ export async function POST(request: Request) {
         description: description || "Transaction logged in GoMina 360",
         date: dateStr,
         createdAt: now,
-        status: status || "COMPLETED",
+        status: expenseGate.gated ? "PENDING_APPROVAL" : status || "COMPLETED",
         recordedBy: session.user.name || recordedBy || "Command Center User",
         recordedByRole: session.user.role || recordedByRole || null,
         recordedByUserId: session.user.id,
@@ -125,6 +154,27 @@ export async function POST(request: Request) {
         receiptImages: body?.receiptImages || null,
       })
       .returning();
+
+    // Request the decision (bell + push the approvers) for gated expenses.
+    if (expenseGate.gated) {
+      await createApprovalRequest({
+        action: "EXPENSE",
+        businessId: Number(businessId),
+        branchCode: resolvedBranchCode,
+        targetType: "TRANSACTION",
+        targetId: Number(newTrx.id),
+        targetLabel: `${category || "Expense"} — GH₵ ${(Number(amountGhs) || 0).toFixed(2)}`,
+        amountGhs: Number(amountGhs) || 0,
+        payloadSnapshot: { transactionNumber: trxNum, category, description },
+        actor: session.user,
+      });
+      return NextResponse.json({
+        success: true,
+        transaction: newTrx,
+        pendingApproval: true,
+        message: "Expense saved as PENDING APPROVAL — the approvers have been notified.",
+      });
+    }
 
     return NextResponse.json({ success: true, transaction: newTrx });
   } catch (error: any) {

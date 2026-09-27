@@ -543,7 +543,13 @@ async function cleanup() {
   const cust = await pg.query(`DELETE FROM customers WHERE id > $1 RETURNING id`, [baseline.custMax]);
   const scen = await pg.query(`DELETE FROM scenario_simulations WHERE id > $1 OR name LIKE 'TEST%' RETURNING id`, [baseline.scenMax]);
   const sess = await pg.query(`DELETE FROM user_sessions WHERE id > $1 RETURNING id`, [baseline.sessMax]);
-  console.log(`   purged: trackings=${trk.rowCount} txns=${trx.rowCount} notifications=${ntf.rowCount} customers=${cust.rowCount} scenarios=${scen.rowCount} sessions=${sess.rowCount}`);
+  // Suite-created staff (e.g. the F-section AUDIT worker) go last — AFTER
+  // their notifications were purged above — plus a final sweep of any
+  // notification whose user vanished (defense against orphaned FKs, which
+  // the NEXT run's A1 would otherwise flag).
+  const usr = await pg.query(`DELETE FROM users WHERE name LIKE 'AUDIT %' AND email LIKE '%@audit.local' RETURNING id`);
+  const orphanNtf = await pg.query(`DELETE FROM notifications n WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = n.user_id) RETURNING id`);
+  console.log(`   purged: trackings=${trk.rowCount} txns=${trx.rowCount} notifications=${ntf.rowCount} customers=${cust.rowCount} scenarios=${scen.rowCount} sessions=${sess.rowCount} users=${usr.rowCount} orphanNtf=${orphanNtf.rowCount}`);
 
   const counts = (await pg.query(`SELECT
       (SELECT count(*)::int FROM businesses) b, (SELECT count(*)::int FROM users) u,

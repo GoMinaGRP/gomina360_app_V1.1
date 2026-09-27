@@ -47,11 +47,12 @@ export const BIZ_TABLES = [
   "sales_documents",
   "telecom_activities","telecom_lines","telecom_txns","telecom_vouchers","telecom_wifi_packages",
   "transactions",
+  "customers",
 ];
 
 export const BIZ_NAME_PATTERNS = ["MW-%", "TEST%", "TEST %", "Unrelated Biz %", "kkkkk"];
 export const ORG_NAME_PATTERNS = ["MW-%", "AU Unrelated Org %", "TEST%", "TEST %"];
-export const USER_EMAIL_PATTERNS = ["%@demo.local", "%@mw-test.local", "test.%"];
+export const USER_EMAIL_PATTERNS = ["%@demo.local", "%@mw-test.local", "test.%", "audtest.%@gomina360.com"];
 export const USER_NAME_PATTERNS = ["TEST %", "TEST%", "Auditor One %", "Assignee Worker %", "Shared Worker %", "Unrelated Owner %"];
 
 // Inline ONLY trouble-free values (ints + our own constant patterns) into
@@ -59,6 +60,9 @@ export const USER_NAME_PATTERNS = ["TEST %", "TEST%", "Auditor One %", "Assignee
 // protocol error response later desyncs the connection (the purge touches
 // tables whose columns may not exist — swallowed below). Identical SQL on
 // real Postgres; impossible to inject since no value is user-supplied here.
+// NOTE: `customers` is business-scoped too — without it, purging a fixture
+// business (MW-*, TEST%) leaves orphaned customer rows that the az-app audit
+// flags as broken foreign keys.
 function inlineParams(sql, params = []) {
   let out = sql;
   for (let i = params.length; i >= 1; i--) {
@@ -108,6 +112,9 @@ export async function purgeUserId(pg, id) {
     ["push_subscriptions", "user_id"], ["audit_trail", "actor_user_id"],
     ["audit_reviews", "reviewer_user_id"], ["audit_reviews", "assigned_user_id"],
     ["audit_issue_updates", "actor_user_id"],
+    // auditor grants follow the grantee AND the granter — without these the
+    // purged user leaves orphaned rows in the ACCESS tab forever
+    ["audit_assignments", "user_id"], ["audit_assignments", "granted_by_user_id"],
   ];
   let n = 0;
   // assigned_user_id / reviewer_user_id are references to users; nullify

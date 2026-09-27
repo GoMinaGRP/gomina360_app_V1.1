@@ -247,7 +247,7 @@ function PanelBody({
   activeTab: string;
   businesses: any[];
   currentUser: any;
-  onSelectTab: (tab: ActiveTab) => void;
+  onSelectTab: (tab: ActiveTab, bizId?: number | null) => void;
 }) {
   const role = currentUser?.role || "OWNER";
   const isExecutive = role === "OWNER" || role === "GENERAL_MANAGER";
@@ -274,11 +274,11 @@ function PanelBody({
     quick = Object.entries(PAGE_INFO)
       .filter(([, v]) => v.section === SHARED)
       .map(([k, v]) => ({ tid: k, label: v.label, Icon: v.Icon }));
-  } else if (loc.section === "Branch Workspace" && isBranchManager) {
-    quick = ["BRANCH_SALES", "WORKERS_MANAGE", "BRANCH_ASSETS"]
-      .map((k) => ({ tid: k, label: PAGE_INFO[k].label, Icon: PAGE_INFO[k].Icon }));
-    if (currentUser?.canManageCctv) quick.push({ tid: "INTEGRATIONS", label: "Integrations Hub", Icon: Share2 });
   }
+  // P0.2 — the rail no longer re-lists the Branch Workspace links for a
+  // BRANCH_MANAGER: the sidebar's single "Branch Management" group is their
+  // one home for those destinations (the rail keeps breadcrumb + location
+  // + family/sibling chips).
 
   const showHome = isExecutive && activeTab !== "COMMAND_CENTER";
 
@@ -320,7 +320,7 @@ function PanelBody({
             {siblings.map((s) => (
               <button
                 key={s.code}
-                onClick={() => onSelectTab(s.code)}
+                onClick={() => onSelectTab(s.code, s.id)}
                 data-testid={`ctx-unit-${s.code}`}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
                   s.code === activeTab
@@ -378,7 +378,7 @@ function PanelBody({
 
 interface NavProps {
   activeTab: ActiveTab;
-  onSelectTab: (tab: ActiveTab) => void;
+  onSelectTab: (tab: ActiveTab, bizId?: number | null) => void;
   businesses: any[];
   currentUser: any;
   /** Drawer visibility below xl + close handler. */

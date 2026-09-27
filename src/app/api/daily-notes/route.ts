@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { businessInsights, businesses, dailyNotes } from "@/db/schema";
+import { businessInsights, businesses, dailyNotes, advisorNotes } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { canAccessBusiness, getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import {
@@ -202,23 +202,31 @@ export async function DELETE(request: NextRequest) {
     await db.delete(dailyNotes).where(eq(dailyNotes.id, id));
 
     // Rebuild the insights register from the remaining notes so the running
-    // history never carries a withdrawn day.
-    const rest = await db
-      .select()
-      .from(dailyNotes)
-      .where(eq(dailyNotes.businessId, note.businessId))
-      .orderBy(asc(dailyNotes.id));
-    const rebuilt = rebuildInsights(
-      rest.map((r) => ({
-        noteDate: r.noteDate,
-        analysis: {
-          summary: r.aiSummary || "",
-          issues: (r.aiIssues as any[]) || [],
-          severity: (r.aiSeverity as any) || "INFO",
-          flags: (r.aiFlags as string[]) || [],
-        } as NoteAnalysis,
-      })),
+    // history never carries a withdrawn day. Farm Advisor notes live in the
+    // SAME memory (they are folded in when filed) — a rebuild must carry
+    // them along or every staff-note withdrawal would silently erase the
+    // advisor's contributions from the unit's AI picture.
+    const [rest, advisorRows] = await Promise.all([
+      db
+        .select()
+        .from(dailyNotes)
+        .where(eq(dailyNotes.businessId, note.businessId))
+        .orderBy(asc(dailyNotes.id)),
+      db.select().from(advisorNotes).where(eq(advisorNotes.businessId, note.businessId)),
+    ]);
+    const asAnalysis = (r: any) => ({
+      noteDate: r.noteDate,
+      analysis: {
+        summary: r.aiSummary || "",
+        issues: (r.aiIssues as any[]) || [],
+        severity: (r.aiSeverity as any) || "INFO",
+        flags: (r.aiFlags as string[]) || [],
+      } as NoteAnalysis,
+    });
+    const allNotes = [...rest.map(asAnalysis), ...advisorRows.map(asAnalysis)].sort((a, b) =>
+      a.noteDate > b.noteDate ? 1 : a.noteDate < b.noteDate ? -1 : 0,
     );
+    const rebuilt = rebuildInsights(allNotes);
     if (rest.length === 0) {
       await db.delete(businessInsights).where(eq(businessInsights.businessId, note.businessId));
     } else {

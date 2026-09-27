@@ -272,7 +272,13 @@ async function main() {
   ql(Number(M.revenueGhs) >= 3200, "metrics: revenue aggregated", `GHS ${M.revenueGhs}`);
   ql(Number(M.fuelSpendGhs) > 600, "metrics: fuel spend aggregated", `GHS ${M.fuelSpendGhs}`);
   ql(Number(M.maintenanceSpendGhs) >= 900, "metrics: maintenance spend", `GHS ${M.maintenanceSpendGhs}`);
-  ql(Number(M.profitGhs) > 1500, "metrics: profit computed", `GHS ${M.profitGhs}`);
+  // First-run arithmetic: the suite's own fixtures book 3200 income vs
+  // 632.17 + 656.80 fuel + 900 maintenance = 2188.97 expenses → profit
+  // 1011.03. (Trips quote a fare but revenue is booked explicitly via
+  // REVENUE/booking entries — it is not auto-booked on completion, so a
+  // virgin business can never clear the old >1500 threshold; residual
+  // income from earlier un-purged runs used to mask this.)
+  ql(Number(M.profitGhs) > 1000, "metrics: profit computed", `GHS ${M.profitGhs}`);
   ql(Number(M.tripsCompleted) >= 1, "metrics: completed trips", M.tripsCompleted);
   ql(Number(M.fleetEconomyKmpl) > 0, "metrics: fleet economy computed", `${M.fleetEconomyKmpl} km/L`);
   ql(p2.json.vehicles.every((v) => v.gpsDeviceSecret === undefined), "device secret NEVER leaked in payloads");
@@ -292,7 +298,7 @@ async function main() {
   console.log("· tenant isolation …");
   await q(`insert into organizations (id, name, slug) values (2, 'Rival Logistics Co', 'rival-logistics-co') on conflict (id) do nothing`);
   await q(`insert into businesses (name, code, category, owner_id, branch_location, region, manager_name, contact_phone, initial_capital_ghs, monthly_target_revenue_ghs, status)
-           values ('Rival Transport', 'TRANSPORT-02', 'Transportation', 2, 'Tema', 'Greater Accra', 'Rival Boss', '+233 20 000 0002', 50000, 20000, 'ACTIVE') on conflict (code) do nothing`);
+           values ('Rival Transport', 'TRANSPORT-02', 'Transportation', 2, 'Tema', 'Greater Accra', 'Rival Boss', '+233 20 000 0002', 50000, 20000, 'ACTIVE') on conflict (owner_id, code) do nothing`);
   const org2Biz = (await q(`select id from businesses where owner_id=2 and code='TRANSPORT-02'`)).rows[0];
   ql(!!org2Biz, "second-org transport business exists (fixture)", `#${org2Biz?.id}`);
   // org-2's own tracker vehicle — must never leak into org-1 payloads

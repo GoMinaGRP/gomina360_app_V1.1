@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 // NOTE: the Restaurant menu master list starts EMPTY for every business — no
 // sample dishes are auto-seeded (owner directive: new / reset units begin with
@@ -67,7 +68,7 @@ async function bookExpense(businessId: number, biz: any, branchCode: string | nu
     businessId,
     branchCode,
     branchName: biz?.name || null,
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+    transactionNumber: nextTrxNumber(now),
     type: "EXPENSE",
     category: "Stock Purchase (Kitchen)",
     amountGhs: total,

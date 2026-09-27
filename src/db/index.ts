@@ -36,6 +36,25 @@ type DrizzleDb = ReturnType<typeof drizzle>;
 
 const LOCAL_HOST_PATTERN = /^(127\.0\.0\.1|localhost|0\.0\.0\.0|::1|\[::1\])$/i;
 
+/** Does this connection string point at the provider's connection POOLER
+ *  (transaction-mode pgBouncer / Neon pooler / Supabase pooler)? Pooled
+ *  endpoints multiplex client sockets server-side, so a larger client-side
+ *  pool no longer risks exhausting the database's connection slots. */
+function looksPooled(databaseUrl: string): boolean {
+  try {
+    const u = new URL(databaseUrl.replace(/^postgres(ql)?:\/\//i, "https://"));
+    const host = u.hostname.toLowerCase();
+    if (host.includes("pooler")) return true; // neon *-pooler.*, supabase pooler.*
+    if ((u.port || "") === "6543") return true; // standard Neon/Supabase pooler port
+    const q = u.searchParams;
+    if (q.get("pgbouncer") === "true" || q.get("pgbouncer") === "1") return true;
+    if ((q.get("channel_binding") || "") === "require" && host.includes("neon.tech")) return true; // neon pooled links
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Accepted environment variable names for the connection string, in
  * priority order. `DATABASE_URL` stays primary (an explicit value always
@@ -174,9 +193,16 @@ export function getPool(): Pool {
           ? false
           : undefined,
       // Serverless-friendly sizing: one function instance must not fan out 10+
-      // sockets — managed Postgres free tiers hard-cap client connections.
-      // Tune explicitly with PG_POOL_MAX when your plan allows more.
-      max: Math.max(1, Number(process.env.PG_POOL_MAX) || (process.env.VERCEL ? 2 : 10)),
+      // sockets — DIRECT connections to managed Postgres are capped hard on
+      // free tiers (that is why the serverless default is 2). BUT when the URL
+      // points at the provider's CONNECTION POOLER (Neon/Vercel Postgres
+      // *-pooler hosts, Supabase pooler.*, port 6543, ?pgbouncer=true), each
+      // client socket is multiplexed by the pooler and a larger client pool
+      // is safe AND removes the query queuing that serialised parallel reads
+      // (the old /api/init fired 24 concurrent selects through 2 sockets —
+      // 12 latency waves on a remote database). Tune explicitly with
+      // PG_POOL_MAX when your plan allows more.
+      max: Math.max(1, Number(process.env.PG_POOL_MAX) || (process.env.VERCEL ? (looksPooled(databaseUrl) ? 8 : 2) : 10)),
       idleTimeoutMillis: 20_000,
       connectionTimeoutMillis: 10_000,
       keepAlive: true,

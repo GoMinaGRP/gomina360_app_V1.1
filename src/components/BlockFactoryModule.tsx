@@ -18,6 +18,7 @@ import DailyChecklistPanel from "./DailyChecklistPanel";
 import BlockMixing from "./BlockMixing";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import SaleFields, { stockDetailOptions } from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -40,7 +41,7 @@ const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
   { key: "INVENTORY", label: "Inventory", icon: Boxes },
   { key: "MIXING", label: "Mixing", icon: Cog },
-  { key: "FINANCE", label: "Finance", icon: Wallet },
+  { key: "FINANCE", label: "Finance & Reports", icon: Wallet },
   { key: "QC", label: "Quality Control", icon: ShieldCheck },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
 ];
@@ -807,11 +808,6 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
     "Record Expense";
 
   const selectedItem = (inventory || []).find((i: any) => String(i.id) === String(f.inventoryId));
-  const saleQty = Number(f.quantity) || 0;
-  const salePrice = f.sellingPrice ? Number(f.sellingPrice) : selectedItem?.sellingPriceGhs || 0;
-  const saleTotal = saleQty * salePrice;
-  const salePct = Math.max(0, Math.min(100, Number(f.discountPct) || 0));
-  const saleNet = Math.round(saleTotal * (1 - salePct / 100) * 100) / 100;
   const restockCost = Number(f.unitCostGhs) || 0;
   const restockTotal = (Number(f.quantity) || 0) * restockCost;
 
@@ -903,37 +899,20 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
     {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={blockTypeOptions} /><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Status" k="status" opts={["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormField f={f} set={set} label="Notes" k="notes" /></>}
     {type === "DELIVERY" && <><div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Order" k="orderNumber" opts={[{ v: "", l: "— No linked order —" }, ...orders.map((o: any) => ({ v: o.orderNumber, l: `${o.orderNumber} • ${o.customerName}` }))]} /><FormField f={f} set={set} label="Customer" k="customerName" required /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={blockTypeOptions} /><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Vehicle #" k="vehicleNumber" /><FormField f={f} set={set} label="Driver" k="driverName" /><FormSelect f={f} set={set} label="Status" k="status" opts={["SCHEDULED", "IN_TRANSIT", "DELIVERED", "CANCELLED"]} /><FormField f={f} set={set} label="Delivery Date" k="deliveryDate" t="date" /></div><FormField f={f} set={set} label="Notes" k="notes" /></>}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Fuel, Cement, Payroll..." required list="blk-exp-cats" /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /><datalist id="blk-exp-cats">{["Fuel & Diesel", "Cement Purchase", "Sand & Aggregates", "Payroll", "Machine Repair", "Transport", "Utilities", "Pallets", "Rent", "Miscellaneous"].map((c) => <option key={c} value={c} />)}</datalist></>}
-    {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2"><label className="block text-[10px] text-slate-400 font-semibold mb-1">Product (from live stock — finished blocks first)</label>
-          <select required value={f.inventoryId ?? ""} onChange={(e) => set("inventoryId", e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-            <option value="" disabled>— Select product —</option>
-            {[...(inventory || [])]
-              .sort((a: any, b: any) => {
-                const blk = (x: any) => (/block|brick|paving/i.test(`${x.name} ${x.category}`) ? 0 : 1);
-                return blk(a) - blk(b) || String(a.name).localeCompare(String(b.name));
-              })
-              .map((i: any) => {
-                const out = (i.quantity || 0) <= 0 || i.status === "OUT_OF_STOCK";
-                return (
-                  <option key={i.id} value={i.id} disabled={out}>
-                    {i.name} • {out ? "OUT OF STOCK" : `${Number(i.quantity).toLocaleString()} ${i.unit} available`} • {i.sellingPriceGhs} GH₵
-                  </option>
-                );
-              })}
-          </select>
-        </div>
-        <FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} max={selectedItem?.quantity} />
-        <FormField f={f} set={set} label={`Unit Price (GH₵)${selectedItem ? ` — default ${selectedItem.sellingPriceGhs}` : ""}`} k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} />
-        <FormField f={f} set={set} label="Customer Name" k="customerName" placeholder="Walk-in Customer" />
-        <FormField f={f} set={set} label="Customer Phone" k="customerPhone" />
-        <FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} />
-        <FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto-calculates" />
-        <FormField f={f} set={set} label="Price Override Reason" k="customPriceReason" placeholder="only if price changed" />
-      </div>
-      {selectedItem && <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">Total due: <span className="font-black">GH₵ {saleNet.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>{salePct > 0 && <span> ({salePct}% discount)</span>} — sells {saleQty} {selectedItem.unit} of “{selectedItem.name}”. Stock after sale: {Math.max(0, (selectedItem.quantity || 0) - saleQty).toLocaleString()}.</div>}
-      <FormField f={f} set={set} label="Notes" k="notes" />
-    </>}
+    {type === "SALE" && <SaleFields
+      variant="stock"
+      f={f}
+      set={set}
+      inventory={inventory}
+      selectedItem={selectedItem}
+      productSelectLabel="Product (from live stock — finished blocks first)"
+      productOptions={stockDetailOptions(inventory, (a: any, b: any) => {
+        const blk = (x: any) => (/block|brick|paving/i.test(`${x.name} ${x.category}`) ? 0 : 1);
+        return blk(a) - blk(b) || String(a.name).localeCompare(String(b.name));
+      })}
+      reasonLabel="Price Override Reason"
+      stockTone="amber"
+    />}
     {type === "RESTOCK" && <>
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2"><label className="block text-[10px] text-slate-400 font-semibold mb-1">Stock To Receive — Block Production Master List</label>

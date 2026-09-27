@@ -103,6 +103,7 @@ async function fanOut(
     businessId: number;
     branchCode?: string | null;
     actorName?: string | null;
+    priority?: string | null;
   },
   opts?: { push?: boolean },
 ): Promise<number> {
@@ -133,6 +134,7 @@ async function fanOut(
       businessId: row.businessId,
       branchCode: row.branchCode ?? null,
       actorName: row.actorName ?? null,
+      priority: row.priority ?? null,
       ownerId: ownerId ?? null,
     });
     sent++;
@@ -350,4 +352,257 @@ export async function auditEscalationRecipients(
     if (!isManagerRole(u.role)) return false;
     return Number(u.assignedBusinessId) === Number(businessId) || granted.has(Number(u.id));
   });
+}
+
+// ─── Poultry stage-plan notifications ─────────────────────────────────────
+// Both ride the same rails as every other bell notification: fanOut with
+// per-user (type, recordRef) dedupe and OS-level push.
+
+const CHECKLIST_MANAGER_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"];
+
+/** Announce a flock's production-stage change (BROODING → GROWER → …) to the
+ *  business' managers. recordRef `poultry-stage:{flockId}:{stageKey}` makes
+ *  each lifecycle crossing announce exactly once per recipient. */
+export async function notifyPoultryStageTransition({
+  flock,
+  stage,
+  businessId,
+  branchCode,
+}: {
+  flock: { id: number; batchNumber: string; birdType: string };
+  stage: { stageKey: string; label: string; birdType: string; ageDays: number; ageWeeks: number; transitionNote: string };
+  businessId: number;
+  branchCode?: string | null;
+}): Promise<number> {
+  const recipients = (await orderNotificationRecipients(businessId)).filter((u: any) =>
+    CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase())
+  );
+  if (!recipients.length) return 0;
+  const ageTxt = String(stage.birdType).toUpperCase() === "LAYERS" ? `week ${stage.ageWeeks}` : `day ${stage.ageDays}`;
+  return fanOut(recipients, {
+    type: "POULTRY_STAGE",
+    title: `${flock.batchNumber} → ${stage.label}`,
+    body: `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age. ${stage.transitionNote}`,
+    recordType: "CHECKLIST",
+    recordId: flock.id,
+    recordRef: `poultry-stage:${flock.id}:${stage.stageKey}`,
+    businessId,
+    branchCode: branchCode ?? null,
+    actorName: "Checklist Engine",
+    priority: "MEDIUM",
+  });
+}
+
+/** End-of-day overdue sweep: incomplete CRITICAL tasks grouped PER FLOCK (or
+ *  farm-wide group) so every notification is linked to the right flock — one
+ *  bell row per (business, flock, date) to the managers and assignees. */
+export async function notifyChecklistOverdue({
+  businessId,
+  branchCode,
+  date,
+  flock,
+  tasks,
+}: {
+  businessId: number;
+  branchCode?: string | null;
+  date: string;
+  flock?: { id: number; batchNumber: string } | null;
+  tasks: {
+    taskLabel: string;
+    batchNumber?: string | null;
+    stageLabel?: string | null;
+    assignedToUserId?: number | null;
+  }[];
+}): Promise<number> {
+  const all = await orderNotificationRecipients(businessId);
+  const managers = all.filter((u: any) => CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase()));
+  const assignedIds = new Set(
+    tasks.map((t) => Number(t.assignedToUserId)).filter((n) => Number.isFinite(n) && n > 0)
+  );
+  const assignees = all.filter((u: any) => assignedIds.has(Number(u.id)));
+  const seen = new Set<number>();
+  const recipients = [...managers, ...assignees].filter((u: any) => {
+    const k = Number(u.id);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!recipients.length) return 0;
+  const list = tasks
+    .slice(0, 12)
+    .map(
+      (t) =>
+        `• ${t.taskLabel}${t.stageLabel ? ` (${t.stageLabel})` : ""}`
+    )
+    .join("\n");
+  const more = tasks.length > 12 ? `\n…and ${tasks.length - 12} more` : "";
+  const who = flock?.batchNumber || "Farm-wide";
+  return fanOut(recipients, {
+    type: "CHECKLIST_OVERDUE",
+    title: flock
+      ? `Critical checklist overdue — ${flock.batchNumber} (${date})`
+      : `Critical checklist overdue — ${branchCode || "business"} (${date})`,
+    body: `${tasks.length} critical task(s) still incomplete for ${who}:\n${list}${more}`.slice(0, 600),
+    recordType: "CHECKLIST",
+    recordId: flock?.id ?? null,
+    recordRef: `checklist-overdue:${businessId}:${flock?.id ?? "farm"}:${date}`,
+    businessId,
+    branchCode: branchCode ?? null,
+    actorName: "Checklist Engine",
+    priority: "HIGH",
+  });
+}
+
+// ── R1 Approvals fan-out ──────────────────────────────────────────────────
+
+const APPROVAL_ACTION_LABEL: Record<string, string> = {
+  EXPENSE: "expense",
+  PURCHASE_ORDER: "purchase order",
+  PURCHASE_REQUISITION: "purchase requisition",
+  INVENTORY_ADJUSTMENT: "stock adjustment",
+  DISCOUNT: "discount",
+  DELETION: "deletion",
+  DATA_EXPORT: "data export",
+};
+
+/** Bell + push the entitled approvers that a gated record awaits their
+ *  decision. recordRef `approval:{requestId}` keeps it one row per request.
+ *  The caller (lib/approvals) resolves the approver recipients so this module
+ *  never imports the approvals engine back. */
+export async function notifyApprovalRequest({
+  requestId,
+  businessId,
+  branchCode,
+  action,
+  targetLabel,
+  amountGhs,
+  actorName,
+  recipients,
+}: {
+  requestId: number;
+  businessId: number;
+  branchCode?: string | null;
+  action: string;
+  targetLabel: string;
+  amountGhs?: number | null;
+  actorName?: string | null;
+  ownerId?: number;
+  recipients: { id: number }[];
+}): Promise<number> {
+  try {
+    if (!recipients.length) return 0;
+    const label = APPROVAL_ACTION_LABEL[String(action).toUpperCase()] || String(action).toLowerCase();
+    const amountTxt =
+      amountGhs != null && Number(amountGhs) > 0 ? ` (GH₵ ${Number(amountGhs).toFixed(2)})` : "";
+    return fanOut(recipients, {
+      type: "APPROVAL_REQUESTED",
+      title: `Approval needed: ${label}`,
+      body: `${actorName || "Staff"} requests approval for ${targetLabel}${amountTxt}. Decide in the Action Center → Approvals.`,
+      recordType: "approval_requests",
+      recordId: requestId,
+      recordRef: `approval:${requestId}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: actorName ?? null,
+      priority: "HIGH",
+    });
+  } catch (e) {
+    console.error("[notify] notifyApprovalRequest failed:", e);
+    return 0;
+  }
+}
+
+/** Tell the requester the outcome of their gated record. */
+export async function notifyApprovalDecision({
+  requestId,
+  businessId,
+  branchCode,
+  action,
+  targetLabel,
+  decision,
+  decidedByName,
+  reason,
+  requesterUserId,
+}: {
+  requestId: number;
+  businessId: number;
+  branchCode?: string | null;
+  action: string;
+  targetLabel: string;
+  decision: "APPROVED" | "REJECTED";
+  decidedByName?: string | null;
+  reason?: string | null;
+  ownerId?: number;
+  requesterUserId?: number | null;
+}): Promise<number> {
+  try {
+    if (!requesterUserId) return 0;
+    const label = APPROVAL_ACTION_LABEL[String(action).toUpperCase()] || String(action).toLowerCase();
+    return fanOut([{ id: Number(requesterUserId) }], {
+      type: "APPROVAL_DECIDED",
+      title: `${decision === "APPROVED" ? "Approved" : "Rejected"}: ${label}`,
+      body: `${decidedByName || "Approver"} ${decision === "APPROVED" ? "approved" : "rejected"} ${targetLabel}.${reason ? ` Note: ${reason}` : ""}`,
+      recordType: "approval_requests",
+      recordId: requestId,
+      recordRef: `approval:${requestId}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: decidedByName ?? null,
+      priority: decision === "APPROVED" ? "MEDIUM" : "HIGH",
+    });
+  } catch (e) {
+    console.error("[notify] notifyApprovalDecision failed:", e);
+    return 0;
+  }
+}
+
+/** R3 dunning — bell + push the branch team about an overdue credit sale.
+ *  Stages: T+1 gentle reminder, T+7 firm chase, T+30 final notice. */
+export async function notifyDunning({
+  businessId,
+  branchCode,
+  creditCode,
+  customerName,
+  customerPhone,
+  balanceGhs,
+  daysOverdue,
+  stage,
+}: {
+  businessId: number;
+  branchCode?: string | null;
+  creditCode: string;
+  customerName: string;
+  customerPhone?: string | null;
+  balanceGhs: number;
+  daysOverdue: number;
+  stage: "REMINDER" | "FIRM" | "FINAL";
+}): Promise<void> {
+  try {
+    const recipients = await orderNotificationRecipients(businessId);
+    const titles: Record<string, string> = {
+      REMINDER: `Credit ${creditCode} is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} past due`,
+      FIRM: `Credit ${creditCode} — ${daysOverdue} days overdue, chase firmly`,
+      FINAL: `Credit ${creditCode} — ${daysOverdue} days overdue: final notice before escalation`,
+    };
+    await fanOut(recipients, {
+      type: "CREDIT_OVERDUE",
+      title: titles[stage] || titles.REMINDER,
+      body: `${customerName}${customerPhone ? ` (${customerPhone})` : ""} still owes GH₵ ${Number(balanceGhs).toFixed(2)} on credit sale ${creditCode}. ${
+        stage === "REMINDER"
+          ? "Send a friendly payment reminder today."
+          : stage === "FIRM"
+            ? "Call the customer and agree a settlement date."
+            : "Issue the final notice and prepare for escalation (recovery / suspension of further credit)."
+      }`,
+      recordType: "credit-sales",
+      recordId: null,
+      recordRef: `dunning:${creditCode}:${stage}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: "Dunning sweep",
+      priority: stage === "FINAL" ? "URGENT" : null,
+    });
+  } catch (e) {
+    console.error("[notify] notifyDunning failed:", e);
+  }
 }

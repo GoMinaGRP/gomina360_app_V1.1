@@ -164,7 +164,7 @@ ql(ntx?.businessId === bizId && ntx?.branchCode === poultryBiz.code, "businessId
 
 // ── FINANCE tab re-render + single workflow claim ──
 await page.evaluate(() => {
-  const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "Finance");
+  const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "Finance & Reports");
   b?.click();
 });
 await sleep(2500);

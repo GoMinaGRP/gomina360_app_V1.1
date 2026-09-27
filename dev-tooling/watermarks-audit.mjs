@@ -52,7 +52,17 @@ async function menu() {
   await mkdir(".verify-out", { recursive: true });
   const { cookie } = await login();
 
-  const photoOf = (m) => m.businesses?.[0]?.products?.[0]?.photo ?? null;
+  // First photo-bearing product anywhere in the menu (the demo fixtures
+  // guarantee several; hardcoding businesses[0].products[0] breaks whenever
+  // the first unit's first item simply has no photo).
+  const photoOf = (m) => {
+    for (const b of m.businesses || []) {
+      for (const p of b.products || []) {
+        if (p.photo) return p.photo;
+      }
+    }
+    return null;
+  };
 
   // 0) capture original photo bytes
   const m0 = await menu();

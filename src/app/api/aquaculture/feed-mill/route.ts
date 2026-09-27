@@ -25,6 +25,7 @@ import { auditLog } from "@/lib/audit";
 import { feedToKg } from "@/lib/feedUnits";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
 import { pushToUsers, urlForNotification } from "@/lib/push";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * FISH FEED PRODUCTION & MILLING — sub-module of Aquaculture (fish farm).
@@ -59,7 +60,7 @@ const slugify = (s: string) =>
   (s || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "ITEM";
 const dash = (s: string) => slugify(s).replace(/_/g, "-");
 const todayStr = () => new Date().toISOString().split("T")[0];
-const trxNum = () => `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+const trxNum = () => nextTrxNumber();
 
 async function postExpense(me: any, opts: {
   businessId: number; branchCode: string | null; branchName: string | null;

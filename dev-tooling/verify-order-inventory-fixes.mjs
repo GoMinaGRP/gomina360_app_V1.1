@@ -130,7 +130,7 @@ async function sectionA() {
   console.log("\n— A · phone validation: API rejects bad numbers, records nothing —");
   const cart = [{ inventoryId: 6, quantity: 1 }]; // biz 8 cement
   const baseOrder = {
-    businessId: 8, customerName: "TEST Phone Probe", fulfillmentType: "PICKUP",
+    businessId: HW, customerName: "TEST Phone Probe", fulfillmentType: "PICKUP",
     destinationAddress: "", paymentChoice: "ON_DELIVERY", momoRef: "", note: "", items: cart,
   };
   const before = await pg.query(`SELECT count(*)::int c FROM customer_trackings`);
@@ -157,31 +157,40 @@ let T1; // biz-8 PICKUP online order code (used by the notification section)
 async function sectionB() {
   console.log("\n— B · DESKTOP storefront: live phone error + typed qty + order —");
   const { ctx, page } = await newPage("storefront-desktop");
-  await page.goto(`${BASE}/order?biz=8`, { waitUntil: "networkidle0", timeout: 60000 });
-  await page.waitForSelector('[data-testid="oo-add-6"]', { timeout: 30000 });
+  // AZ-AUDIT-REPORT M5: never hardcode the storefront biz id (was biz=8).
+  await page.goto(`${BASE}/order?biz=${HW}`, { waitUntil: "networkidle0", timeout: 60000 });
+  // M5 (ids): storefront product testids carry the inventory DB id, which
+  // fresh reseeds regenerate — resolve the flagship cement item at runtime
+  // instead of the old snapshot's oo-add-6.
+  const CEM = (await pg.query(
+    `SELECT id::int id FROM inventory_items WHERE business_id = $1 AND sku LIKE '%CEMENT-50KG' ORDER BY id LIMIT 1`,
+    [HW],
+  )).rows[0]?.id;
+  if (!CEM) throw new Error("preflight: hardware cement storefront item missing — re-provision HARDWARE-01");
+  await page.waitForSelector(`[data-testid="oo-add-${CEM}"]`, { timeout: 30000 });
 
   // — typed quantity —
-  await page.click('[data-testid="oo-add-6"]');
-  await page.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 10000 });
-  const isInput = await page.$eval('[data-testid="oo-qty-6"]', (el) => el.tagName);
-  ok("B1 quantity is a typeable INPUT (kept oo-qty-6 testid)", isInput === "INPUT", isInput);
-  await fillField(page, "oo-qty-6", "4");
+  await page.click(`[data-testid="oo-add-${CEM}"]`);
+  await page.waitForSelector(`[data-testid="oo-qty-${CEM}"]`, { timeout: 10000 });
+  const isInput = await page.$eval(`[data-testid="oo-qty-${CEM}"]`, (el) => el.tagName);
+  ok("B1 quantity is a typeable INPUT (kept oo-qty testid)", isInput === "INPUT", isInput);
+  await fillField(page, `oo-qty-${CEM}`, "4");
   await sleep(300);
   let total = await page.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("B2 typed qty 4 → cart total GH₵ 472.00", /472\.00/.test(total), total);
-  await fillField(page, "oo-qty-6", "9999");
+  await fillField(page, `oo-qty-${CEM}`, "9999");
   await sleep(300);
   total = await page.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("B3 typed qty clamps to available stock 200 → GH₵ 23600.00", /23600\.00/.test(total), total);
-  await fillField(page, "oo-qty-6", "0");
+  await fillField(page, `oo-qty-${CEM}`, "0");
   await sleep(300);
-  ok("B4 typing 0 removes the line (Add button returns)", !!(await page.$('[data-testid="oo-add-6"]')));
+  ok("B4 typing 0 removes the line (Add button returns)", !!(await page.$(`[data-testid="oo-add-${CEM}"]`)));
   // stepper still works
-  await page.click('[data-testid="oo-add-6"]');
-  await page.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 5000 });
-  await page.click('[data-testid="oo-plus-6"]');
+  await page.click(`[data-testid="oo-add-${CEM}"]`);
+  await page.waitForSelector(`[data-testid="oo-qty-${CEM}"]`, { timeout: 5000 });
+  await page.click(`[data-testid="oo-plus-${CEM}"]`);
   await sleep(200);
-  const stepped = await page.$eval('[data-testid="oo-qty-6"]', (el) => el.value);
+  const stepped = await page.$eval(`[data-testid="oo-qty-${CEM}"]`, (el) => el.value);
   ok("B5 −/+ stepper still works alongside typing (1→2)", stepped === "2", stepped);
 
   // — live phone validation —
@@ -218,28 +227,28 @@ let T3;
 async function sectionC(ownerCookie) {
   console.log("\n— C · MOBILE storefront: delivery pin never the shop's location —");
   // temp anchor for biz 1 (exact original NULL restored in G)
-  const patch = await api(ownerCookie, "/api/businesses/1", { method: "PATCH", body: JSON.stringify({ gpsLat: SHOP.lat, gpsLng: SHOP.lng }) });
-  ok("C0 biz-1 temporary GPS anchor set", patch.status === 200, JSON.stringify(patch.json || {}).slice(0, 120));
+  const patch = await api(ownerCookie, `/api/businesses/${MAIN}`, { method: "PATCH", body: JSON.stringify({ gpsLat: SHOP.lat, gpsLng: SHOP.lng }) });
+  ok("C0 poultry flagship temporary GPS anchor set", patch.status === 200, JSON.stringify(patch.json || {}).slice(0, 120));
 
   // Server-side guard first (defence in depth, no browser involved)
   const atShop = await api(null, "/api/order", {
     method: "POST",
     body: JSON.stringify({
-      businessId: 1, customerName: "TEST Pin Probe", customerPhone: "0559998877",
+      businessId: MAIN, customerName: "TEST Pin Probe", customerPhone: "0559998877",
       fulfillmentType: "DELIVERY", destinationAddress: "TEST Lane 3",
       deliveryLat: SHOP.lat, deliveryLng: SHOP.lng,
       paymentChoice: "ON_DELIVERY", momoRef: "", note: "",
-      items: [{ inventoryId: 12, quantity: 1 }],
+      items: [{ inventoryId: MAIN_ITEM.id, quantity: 1 }],
     }),
   });
   ok("C1 API refuses a delivery pin dropped exactly at the shop (400)",
     atShop.status === 400 && /shop/i.test(atShop.json?.error || ""), `${atShop.status} ${JSON.stringify(atShop.json || {}).slice(0, 140)}`);
 
   const { ctx, page } = await newPage("storefront-mobile", MOBILE);
-  await page.goto(`${BASE}/order?biz=1`, { waitUntil: "networkidle0", timeout: 60000 });
-  await page.waitForSelector('[data-testid="oo-add-12"]', { timeout: 30000 });
-  await page.click('[data-testid="oo-add-12"]');
-  await page.waitForSelector('[data-testid="oo-qty-12"]', { timeout: 10000 });
+  await page.goto(`${BASE}/order?biz=${MAIN}`, { waitUntil: "networkidle0", timeout: 60000 });
+  await page.waitForSelector(`[data-testid="oo-add-${MAIN_ITEM.id}"]`, { timeout: 30000 });
+  await page.click(`[data-testid="oo-add-${MAIN_ITEM.id}"]`);
+  await page.waitForSelector(`[data-testid="oo-qty-${MAIN_ITEM.id}"]`, { timeout: 10000 });
   await page.click('[data-testid="oo-delivery"]');
   await page.waitForSelector('[data-testid="oo-dest-input"]', { timeout: 10000 });
   await page.type('[data-testid="oo-dest-input"]', "TEST Coconut Avenue, House 12");
@@ -275,10 +284,28 @@ async function sectionC(ownerCookie) {
   ok("C7 DB pin is NOT the owner's pickup location",
     !(Math.abs(dlat - SHOP.lat) < 0.0005 && Math.abs(dlng - SHOP.lng) < 0.0005), `${dlat},${dlng}`);
 
-  // success-screen map + public tracking page must show the customer pin
-  const successSrc = await page.$eval('[data-testid="oo-success-map-frame"]', (el) => el.getAttribute("src") || "").catch(() => "");
-  const expectedQ = `q=${Number(dlat).toFixed(6)},${Number(dlng).toFixed(6)}`;
-  ok("C8 order-success map renders the customer pin", successSrc.includes(expectedQ), successSrc.slice(0, 120));
+  // success-screen map + public tracking page must show the customer pin.
+  // The success screen renders a Leaflet minimap (offline-tile capable) —
+  // assert the map element plus the pin's rendered coordinates; /track below
+  // still proves the shared Google-maps embed.
+  const expectedQ = `q=${Number(dlat).toFixed(6)},${Number(dlng).toFixed(6)}`; // URL form (no space)
+  // The success panel renders the pin coordinates as "lat, lng" (comma +
+  // space — JSX `{a}, {b}`), and the Leaflet minimap mounts async (dynamic
+  // import), so wait for the coordinates to appear instead of racing paint.
+  const expectedTxt = `${Number(dlat).toFixed(6)}, ${Number(dlng).toFixed(6)}`;
+  const coordsShown = await page
+    .waitForFunction(
+      (coordTxt) => {
+        const el = document.querySelector('[data-testid="oo-success-map"]');
+        return !!el && (el.textContent || "").includes(coordTxt);
+      },
+      { timeout: 15000 },
+      expectedTxt,
+    )
+    .then(() => true)
+    .catch(() => false);
+  const mapTag = await page.$eval('[data-testid="oo-success-map-frame"]', (el) => el.tagName).catch(() => "");
+  ok("C8 order-success map renders the customer pin", coordsShown && mapTag === "DIV", `tag=${mapTag} shown=${coordsShown}`);
 
   await page.goto(`${BASE}/track?code=${encodeURIComponent(T3)}`, { waitUntil: "networkidle0", timeout: 60000 });
   await sleep(1200);
@@ -304,7 +331,7 @@ async function sectionD(ownerCookie) {
     body: JSON.stringify({
       entity: "PURCHASE",
       data: {
-        businessId: 8, purchaseNumber: num, supplierName: "TEST Bell Supplier",
+        businessId: HW, purchaseNumber: num, supplierName: "TEST Bell Supplier",
         itemName: "TEST Bell Cement Restock", quantity: 25, unitCostGhs: 100,
         status: "ORDERED", orderDate: "2026-09-03", createdByName: "Kwame Mina",
       },
@@ -323,7 +350,7 @@ async function sectionD(ownerCookie) {
     method: "POST",
     body: JSON.stringify({
       name: "TEST Bell User", email: `test.bell.${uniq}@gomina.test`, phone: "0557778899",
-      password: "GoMina@Test99", role: "WORKER", assignedBusinessId: 8, canRecordSales: true,
+      password: "GoMina@Test99", role: "WORKER", assignedBusinessId: HW, canRecordSales: true,
     }),
   });
   testUser = mk.json?.user;
@@ -364,9 +391,9 @@ async function sectionD(ownerCookie) {
   const t2res = await api(null, "/api/order", {
     method: "POST",
     body: JSON.stringify({
-      businessId: 1, customerName: "TEST Bell Kofi", customerPhone: "0552223344",
+      businessId: MAIN, customerName: "TEST Bell Kofi", customerPhone: "0552223344",
       fulfillmentType: "PICKUP", destinationAddress: "", paymentChoice: "ON_DELIVERY",
-      momoRef: "", note: "", items: [{ inventoryId: 1, quantity: 1 }],
+      momoRef: "", note: "", items: [{ inventoryId: EGGS ?? MAIN_ITEM.id, quantity: 1 }],
     }),
   });
   T2 = t2res.json?.trackingCode || t2res.json?.tracking?.trackingCode;
@@ -433,6 +460,9 @@ async function sectionE() {
     return true;
   });
   ok("E3 submit button reachable by smooth scroll at the bottom of the form", submitted);
+  // Entry-confirmation gate (P3): inventory saves confirm before posting.
+  await page.waitForSelector('[data-testid="shared-confirm-entry-modal"]', { timeout: 10000 });
+  await page.click('[data-testid="shared-confirm-entry-confirm"]');
   await page.waitForFunction(() => !document.querySelector('[data-testid="inv-name"]'), { timeout: 30000 });
   ok("E4 mobile registration submits and closes", true);
   const row = (await pg.query(`SELECT id, quantity FROM inventory_items WHERE name='TEST Mobile Nails Packet' ORDER BY id DESC LIMIT 1`)).rows[0];
@@ -466,6 +496,9 @@ async function sectionF() {
     const btn = [...document.querySelectorAll("button[type=submit]")].find((b) => (b.textContent || "").includes("Save Record"));
     btn?.click();
   });
+  // Entry-confirmation gate (P3) — confirm the save on desktop too.
+  await page.waitForSelector('[data-testid="shared-confirm-entry-modal"]', { timeout: 10000 });
+  await page.click('[data-testid="shared-confirm-entry-confirm"]');
   await page.waitForFunction(() => !document.querySelector('[data-testid="inv-name"]'), { timeout: 30000 });
   const row = (await pg.query(`SELECT id, quantity FROM inventory_items WHERE name='TEST Desktop Cement Bag' ORDER BY id DESC LIMIT 1`)).rows[0];
   if (row) created.inventoryIds.push(row.id);
@@ -478,7 +511,7 @@ const shot = (page, name) => page.screenshot({ path: `/home/user/${name}.png` })
 async function sectionG(ownerCookie, base) {
   console.log("\n— G · cleanup + forensics (every TEST trace removed, live data intact) —");
   // business 1 GPS back to its exact original NULL
-  await api(ownerCookie, "/api/businesses/1", { method: "PATCH", body: JSON.stringify({ gpsLat: null, gpsLng: null }) });
+  await api(ownerCookie, `/api/businesses/${MAIN}`, { method: "PATCH", body: JSON.stringify({ gpsLat: null, gpsLng: null }) });
   const b1 = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
   ok("G1 biz-1 GPS restored exactly (NULL)", b1?.gps_lat == null && b1?.gps_lng == null, JSON.stringify(b1));
   // TEST user account (API removes user + sessions + grants)
@@ -514,8 +547,8 @@ async function sectionG(ownerCookie, base) {
   const mismatches = Object.entries(base.counts).filter(([t, c]) => after[t] !== c)
     .map(([t, c]) => `${t}:${c}→${after[t]}`);
   ok("G3 ALL live-data table counts unchanged", mismatches.length === 0, mismatches.join(", "));
-  const eggs = (await pg.query(`SELECT quantity FROM inventory_items WHERE id=1`)).rows[0];
-  ok("G4 live stock untouched (eggs qty = 873.63)", Number(eggs?.quantity) === 873.63, eggs?.quantity);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`G4 live stock untouched (eggs qty = ${base.eggsQty})`, base.eggsQty !== null && Math.abs(Number(eggs?.q) - base.eggsQty) < 1e-9, eggs?.q);
   const strays = (await pg.query(`SELECT count(*)::int c FROM customer_trackings WHERE customer_name LIKE 'TEST%' OR tracking_code LIKE 'TEST%'`)).rows[0].c
     + (await pg.query(`SELECT count(*)::int c FROM notifications WHERE title LIKE '%TEST%' OR body LIKE '%TEST %'`)).rows[0].c;
   ok("G5 no TEST strays in trackings/notifications", strays === 0, strays);
@@ -524,8 +557,47 @@ async function sectionG(ownerCookie, base) {
 /* ═══ main ═══ */
 console.log("══ verify-order-inventory-fixes — 5 fixes × mobile + desktop ══");
 await pg.connect();
+// AZ-AUDIT-REPORT M5: resolve the hardware flagship's id at runtime (fresh
+// reseeds re-generate business ids — the old snapshot had it as biz 8).
+const HW = (await pg.query(`SELECT id::int id FROM businesses WHERE code='HARDWARE-01' AND owner_id=1 ORDER BY id LIMIT 1`)).rows[0]?.id;
+if (!HW) throw new Error("preflight: HARDWARE-01 flagship missing — run the seeders first");
+console.log(`hardware flagship = biz ${HW}`);
+// Same M5 rule for the poultry flagship and its storefront products: fresh
+// reseeds may carry different inventory ids than any old snapshot.
+const MAIN = (await pg.query(`SELECT id::int id FROM businesses WHERE code='POULTRY-01' AND owner_id=1 ORDER BY id LIMIT 1`)).rows[0]?.id;
+if (!MAIN) throw new Error("preflight: POULTRY-01 flagship missing — run the seeders first");
+const MAIN_ITEM = (await pg.query(
+  `SELECT id::int id, selling_price_ghs::float price, quantity::float qty FROM inventory_items
+    WHERE business_id=$1 AND quantity > 0 ORDER BY id LIMIT 1`, [MAIN])).rows[0];
+if (!MAIN_ITEM) throw new Error("preflight: POULTRY-01 has no in-stock storefront product");
+const EGGS = (await pg.query(`SELECT id::int id FROM inventory_items WHERE business_id=$1 AND sku='POUL-EGG-L01'`, [MAIN])).rows[0]?.id;
+console.log(`poultry flagship = biz ${MAIN} (storefront item ${MAIN_ITEM.id}, eggs ${EGGS})`);
 const ownerCookie = await login(OWNER.email, OWNER.pass);
+// Crash-resilience: a previously interrupted run leaves its TEST artifacts
+// behind (its own G-cleanup never ran) — purge them so this run starts and
+// ends on the same clean footing. Safe: the battery runs suites sequentially.
+{
+  const purged = await pg.query(`
+    WITH del AS (
+      DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE name LIKE 'TEST Bell%')
+        OR title LIKE '%TEST%' OR body LIKE '%TEST %' OR record_ref LIKE 'TEST-PO-%' RETURNING 1)
+    SELECT count(*)::int c FROM del`);
+  // Remove leftover TEST users through their memberships first (FK), then
+  // the rows themselves — mirrors what the /api/users DELETE would have done
+  // had the crashed run reached its cleanup.
+  await pg.query(`DELETE FROM organization_members WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test.bell.%@gomina.test')`);
+  await pg.query(`DELETE FROM user_business_access WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test.bell.%@gomina.test')`);
+  await pg.query(`DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test.bell.%@gomina.test')`);
+  await pg.query(`DELETE FROM users WHERE email LIKE 'test.bell.%@gomina.test'`);
+  await pg.query(`DELETE FROM customer_trackings WHERE customer_name LIKE 'TEST%'`);
+  await pg.query(`DELETE FROM customers WHERE name LIKE 'TEST%'`);
+  await pg.query(`DELETE FROM hardware_purchases WHERE purchase_number LIKE 'TEST-PO-%'`);
+  await pg.query(`DELETE FROM inventory_items WHERE name LIKE 'TEST %'`);
+  console.log(`preflight purge: ${purged.rows[0].c} leftover TEST notification(s) removed`);
+}
 const base = {
+  // Live stock snapshot — AZ-AUDIT-REPORT M5: never hardcode demo quantities.
+  eggsQty: (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=$1 AND sku='POUL-EGG-L01'`, [MAIN])).rows[0]?.q ?? null,
   maxSessionId: (await pg.query(`SELECT COALESCE(max(id),0)::int m FROM user_sessions`)).rows[0].m,
   counts: Object.fromEntries(
     (await pg.query(`

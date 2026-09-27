@@ -303,8 +303,10 @@ async function sectionStorefront(browser, errors) {
   const stepCount = await page.$$eval('[data-testid^="oo-howto-step-"]', (els) => els.length);
   const stepText = await page.$eval('[data-testid="oo-howto-steps"]', (el) => el.textContent);
   const helpInfo = await page.$('[data-testid="oo-help-info"]');
-  ok("H2 HELP panel opens with the 7-step guide beside the support contacts",
-    stepCount === 7 && !!helpInfo, `steps=${stepCount}`);
+  // Guide was extended 7 → 9 steps (stock/pre-order + payment) —
+  // verify-storefront-help C3 is the source of truth for the live count.
+  ok("H2 HELP panel opens with the 9-step guide beside the support contacts",
+    stepCount === 9 && !!helpInfo, `steps=${stepCount}`);
   ok("H2b steps cover the real flow (categories, 10-digit phone, drag-the-map, GM code)",
     /categor/i.test(stepText) && /exactly 10 digits/.test(stepText) && /drag the map/i.test(stepText) && /GM-/.test(stepText));
   await page.screenshot({ path: "/home/user/storefront-howto.png" });
@@ -381,8 +383,15 @@ async function sectionStorefront(browser, errors) {
   ok("M1 pin dropped exactly at the shop → 75m guard-rail warning shows", true, coords0);
 
   const [lat0, lng0] = coords0.split(",").map((s) => parseFloat(s));
-  // Drag the map ~300px to the right with a real mouse gesture
-  const drag = await page.$('[data-testid="oo-pin-drag"]');
+  // Drag the map ~300px to the right with a real mouse gesture.
+  // (Leaflet picker: the drag surface is the map container itself —
+  // `oo-pin-drag` was the retired Google-Maps embed's surface. moveend
+  // commits the new centre as the pin, so the SAVED pin moves with the drag.)
+  const drag = await page.$('[data-testid="oo-pin-map"] .leaflet-container');
+  // Centre the map in the viewport first — on the mobile storefront the
+  // fixed cart bar overlays the bottom of the screen (the map's centre).
+  await drag.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+  await new Promise((r) => setTimeout(r, 800));
   const box = await drag.boundingBox();
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
@@ -403,29 +412,53 @@ async function sectionStorefront(browser, errors) {
   const dLat = (lat1 - lat0) * rad, dLng = (lng1 - lng0) * rad;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat0 * rad) * Math.cos(lat1 * rad) * Math.sin(dLng / 2) ** 2;
   const metres = 2 * 6371000 * Math.asin(Math.sqrt(a));
-  ok("M2 dragging the map 300px moves the SAVED pin ~178m (not just the view)",
-    metres > 75 && metres < 400, `moved ${metres.toFixed(1)}m ${coords0} → ${coords1}`);
+  // Expected displacement = dragged pixels × the live zoom's ground
+  // resolution (Web-Mercator: 156543.03·cos(φ)/2^z m/px). Zoom-agnostic —
+  // the picker's first-pin "zoom to 18" can be cancelled by its own flyTo
+  // animation, so the map may still be at the initial street zoom.
+  const zNow = Number(await page.$eval(
+    '[data-testid="oo-pin-map"] img.leaflet-tile',
+    (el) => (el.src.match(/\/(\d+)\/\d+\/\d+\b/) || [])[1] || 13,
+  ));
+  const expected = Math.hypot(300, 24) * (156543.03 * Math.cos(lat0 * rad)) / 2 ** zNow;
+  ok("M2 dragging the map 300px moves the SAVED pin by the zoom's ground distance (not just the view)",
+    metres > 0.4 * expected && metres < 1.6 * expected,
+    `z=${zNow} moved ${metres.toFixed(1)}m (expected ~${expected.toFixed(0)}m) ${coords0} → ${coords1}`);
   ok("M2b dragging right pulled the centre west (lng decreased)", lng1 < lng0, `${lng0} → ${lng1}`);
   const warnAfterDrag = await page.$('[data-testid="oo-pin-shop-warn"]');
   ok("M3 guard-rail warning clears once the pin is >75m from the shop", !warnAfterDrag);
-  const iframeSrc = await page.$eval('[data-testid="oo-pin-map"]', (el) => el.src);
-  ok("M4 Google embed re-centres on the new pin (q= matches saved coords)",
-    iframeSrc.includes(lat1.toFixed(6)) && iframeSrc.includes(lng1.toFixed(6)),
-    iframeSrc.slice(0, 140));
-  const markerBox = await (await page.$('[data-testid="oo-pin-marker"]')).boundingBox();
-  const offX = Math.abs(markerBox.x + markerBox.width / 2 - cx);
+  // (Leaflet) The centre pin is a live Leaflet marker that tracks the map
+  // centre — it must sit exactly over the container's centre at all times.
+  const markerBox = await (await page.$('[data-testid="oo-pin-map"] .leaflet-marker-icon')).boundingBox();
+  const mapBox = await (await page.$('[data-testid="oo-pin-map"] .leaflet-container')).boundingBox();
+  const offX = Math.abs(markerBox.x + markerBox.width / 2 - (mapBox.x + mapBox.width / 2));
+  ok("M4 the map re-centres on the committed pin (centre marker tracks the new location)",
+    offX <= 12 && coords1 !== coords0, `offX=${offX.toFixed(1)}px ${coords0} → ${coords1}`);
   ok("M5 the marker never leaves the map centre while the map moves", offX <= 12, `offX=${offX.toFixed(1)}px`);
-
-  const zBefore = (await page.$eval('[data-testid="oo-pin-map"]', (el) => el.src)).match(/&z=(\d+)/)?.[1];
+  // (Leaflet) +/− zoom swaps the tile pyramid — read the live zoom level
+  // straight off the tile URLs (…/{z}/{y}/{x}); the old embed exposed it as
+  // the &z= parameter of an iframe src.
+  const tileZoom = () => page.$eval(
+    '[data-testid="oo-pin-map"] img.leaflet-tile',
+    (el) => Number((el.src.match(/\/(\d+)\/\d+\/\d+\b/) || [])[1] || 0),
+  );
+  const zBefore = await tileZoom();
   await clickT(page, "oo-pin-zoom-out");
-  await page.waitForFunction((z) => document.querySelector('[data-testid="oo-pin-map"]')?.src.includes(`&z=${Number(z) - 1}&`), { timeout: 15000 }, zBefore);
-  const zOut = (await page.$eval('[data-testid="oo-pin-map"]', (el) => el.src)).match(/&z=(\d+)/)?.[1];
+  await page.waitForFunction((z) => {
+    const el = document.querySelector('[data-testid="oo-pin-map"] img.leaflet-tile');
+    const m = el && el.src.match(/\/(\d+)\/\d+\/\d+\b/);
+    return !!(m && Number(m[1]) === z - 1);
+  }, { timeout: 15000 }, zBefore);
+  const zOut = await tileZoom();
   await clickT(page, "oo-pin-zoom-in");
-  await page.waitForFunction((z) => document.querySelector('[data-testid="oo-pin-map"]')?.src.includes(`&z=${Number(z) + 1}&`), { timeout: 15000 }, zOut);
-  const zIn = (await page.$eval('[data-testid="oo-pin-map"]', (el) => el.src)).match(/&z=(\d+)/)?.[1];
-  ok("M6 zoom +/− re-frames around the same pin (z param follows)",
-    Number(zOut) === Number(zBefore) - 1 && Number(zIn) === Number(zBefore),
-    `z ${zBefore}→${zOut}→${zIn}`);
+  await page.waitForFunction((z) => {
+    const el = document.querySelector('[data-testid="oo-pin-map"] img.leaflet-tile');
+    const m = el && el.src.match(/\/(\d+)\/\d+\/\d+\b/);
+    return !!(m && Number(m[1]) === z);
+  }, { timeout: 15000 }, zBefore);
+  const zIn = await tileZoom();
+  ok("M6 zoom +/− re-frames around the same pin (tile pyramid z follows)",
+    zOut === zBefore - 1 && zIn === zBefore, `z ${zBefore}→${zOut}→${zIn}`);
   ok("M7 nudge pad / GPS / manual coords / Clear all still present alongside drag",
     !!(await page.$('[data-testid="oo-pin-nudge"]')) && !!(await page.$('[data-testid="oo-pin-gps"]')) &&
     !!(await page.$('[data-testid="oo-pin-manual-toggle"]')) && !!(await page.$('[data-testid="oo-pin-clear"]')));
@@ -467,8 +500,8 @@ async function cleanup() {
     counts.b === base.b && counts.u === base.u && counts.cu === base.cu && counts.t === base.t &&
     counts.sd === base.sd && counts.tx === base.tx && counts.ii === base.ii,
     `start=${JSON.stringify(base)} end=${JSON.stringify(counts)}`);
-  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE id=1`)).rows[0];
-  ok("Z2 eggs stock untouched (873.63)", Math.abs(eggs.q - 873.63) < 1e-9, `qty=${eggs.q}`);
+  const eggs = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0];
+  ok(`Z2 eggs stock untouched (${baseline.eggsQty})`, baseline.eggsQty !== null && Math.abs(eggs.q - baseline.eggsQty) < 1e-9, `qty=${eggs.q}`);
   const sale = (await pg.query(`SELECT status FROM customer_trackings WHERE tracking_code='GM-POULTRY-ESY6GN'`)).rows[0];
   ok("Z3 the owner's live GH₵55 sale GM-POULTRY-ESY6GN intact", sale?.status === "RECEIVED");
   const gps = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
@@ -486,6 +519,7 @@ async function cleanup() {
   baseline.ntfMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM notifications`)).rows[0].m;
   baseline.custMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM customers`)).rows[0].m;
   baseline.sessMax = (await pg.query(`SELECT COALESCE(MAX(id),0) m FROM user_sessions`)).rows[0].m;
+  baseline.eggsQty = (await pg.query(`SELECT quantity::float q FROM inventory_items WHERE business_id=1 AND sku='POUL-EGG-L01'`)).rows[0]?.q ?? null;
   baseline.counts = (await pg.query(`SELECT
       (SELECT count(*)::int FROM businesses) b, (SELECT count(*)::int FROM users) u,
       (SELECT count(*)::int FROM customers) cu, (SELECT count(*)::int FROM customer_trackings) t,

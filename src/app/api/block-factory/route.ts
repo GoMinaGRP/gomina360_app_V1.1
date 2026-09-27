@@ -26,6 +26,7 @@ import { auditLog } from "@/lib/audit";
 import { linkSupplier } from "@/lib/supplierLinks";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
 import { pushToUsers, urlForNotification } from "@/lib/push";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -49,7 +50,7 @@ const LEGACY_PRICE_HINTS: Record<string, number> = {
 const MIX_RAW_CATEGORY = "Block Raw Materials";
 const MIX_OPS_CATEGORY = "BLOCK_MIX_OPS";
 const MIX_SUPPLIER_CATEGORY = "Cement & Aggregates";
-const mixTrxNum = () => `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+const mixTrxNum = () => nextTrxNumber();
 const tr = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "ITEM";
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -499,7 +500,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (entity === "EXPENSE") {
-      const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+      const trxNum = nextTrxNumber();
       const [row] = await db.insert(transactions).values({
         transactionNumber: trxNum,
         businessId,
@@ -718,7 +719,7 @@ export async function POST(request: NextRequest) {
         });
       }
       if (data.recordExpense && totalCost > 0) {
-        const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+        const trxNum = nextTrxNumber();
         [expenseRow] = await db
           .insert(transactions)
           .values({

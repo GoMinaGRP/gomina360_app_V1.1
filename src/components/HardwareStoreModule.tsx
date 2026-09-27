@@ -16,6 +16,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import SaleFields from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -184,13 +185,23 @@ export default function HardwareStoreModule({
     const soldOrders = deliveredOrders.filter((o) => o.inventoryId === i.id);
     const soldQty = soldOrders.reduce((s, o) => s + (o.quantity || 0), 0);
     const estRevenue = soldOrders.reduce((s, o) => s + (o.totalGhs || 0), 0);
-    const received = opsLogs.filter((l) => {
-      const key = String(l.itemName || "").toUpperCase().slice(0, 12);
-      return i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12));
-    }).reduce((s, l) => s + (l.quantityReceived || 0), 0);
+    // "Received" = everything that stocked this item IN: GRN yard receipts
+    // (matched by name) AND supplier purchases that were RECEIVED against it
+    // (explicit inventoryId link, same name-prefix fallback as the API).
+    const nameKey = String(i.name || "").toUpperCase().slice(0, 12);
+    const matches = (label: any) => {
+      const k = String(label || "").toUpperCase().slice(0, 12);
+      return !!label && (String(label).toUpperCase().includes(nameKey) || k.includes(nameKey));
+    };
+    const grnQty = opsLogs
+      .filter((l) => matches(l.itemName))
+      .reduce((s, l) => s + (l.quantityReceived || 0), 0);
+    const purchaseQty = purchases
+      .filter((p) => p.status === "RECEIVED" && (p.inventoryId === i.id || matches(p.itemName)))
+      .reduce((s, p) => s + (p.quantity || 0), 0);
     const marginPct = i.sellingPriceGhs > 0 ? Math.round(((i.sellingPriceGhs - (i.costPriceGhs || 0)) / i.sellingPriceGhs) * 100) : 0;
-    return { ...i, soldQty, estRevenue, received, marginPct, stockValue: (i.quantity || 0) * (i.costPriceGhs || 0) };
-  }).sort((a, b) => b.estRevenue - a.estRevenue), [branchInventory, deliveredOrders, opsLogs]);
+    return { ...i, soldQty, estRevenue, received: grnQty + purchaseQty, marginPct, stockValue: (i.quantity || 0) * (i.costPriceGhs || 0) };
+  }).sort((a, b) => b.estRevenue - a.estRevenue), [branchInventory, deliveredOrders, opsLogs, purchases]);
 
   // Staff performance
   const staffPerformance = useMemo(() => {
@@ -720,7 +731,7 @@ export default function HardwareStoreModule({
                   <div key={a.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700"><span className="text-slate-200">{a.name}</span><span className="text-slate-400">{a.status || "ACTIVE"}</span></div>
                 ))}
                 <div className="text-[10px] uppercase text-slate-500 font-bold pt-2">Customers</div>
-                {(branchCustomers.length ? branchCustomers : customers).slice(0, 5).map((c) => (
+                {branchCustomers.slice(0, 5).map((c) => (
                   <div key={c.id} className="flex justify-between text-xs p-2 rounded-lg bg-slate-900/70 border border-slate-700">
                     <span className="text-slate-200">{c.name}</span>
                     <span className="text-slate-400">{c.type} • {formatMoney(c.totalSpentGhs || 0, currentCurrency, true)}</span>
@@ -867,7 +878,6 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
     "Log Goods Receipt (GRN)";
 
   const selectedItem = (inventory || []).find((i: any) => String(i.id) === String(f.inventoryId));
-  const saleTotal = (Number(f.quantity) || 0) * (f.sellingPrice ? Number(f.sellingPrice) : selectedItem?.sellingPriceGhs || 0);
   const MATERIAL_CATS = ["Cement & Mortar", "Steel & Reinforcement", "Fasteners & Fixings", "Roofing & Cladding", "Paints & Finishing", "Plumbing & Drainage", "Electrical & Lighting", "Timber & Boards", "Tools & Equipment", "Aggregates & Sand"];
 
   const handle = (e: React.FormEvent) => {
@@ -878,14 +888,7 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
   const purchaseStatusOpts = [{ v: "ORDERED", l: "Ordered (on the way)" }, { v: "RECEIVED", l: "Received (stock-in + expense booked)" }];
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" data-testid="hw-form"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button data-testid="hwf-close" onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
-    {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
-      <FormSelect f={f} set={set} label="Material (in stock)" k="inventoryId" opts={[{ v: "", l: "— select material —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
-      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><FormField f={f} set={set} label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
-      <FormField f={f} set={set} label="Custom price reason (if discounted)" k="customPriceReason" /><FormField f={f} set={set} label="Notes" k="notes" />
-      {saleTotal > 0 && <div className="text-xs text-amber-300 font-bold" data-testid="hwf-sale-total">Total: {formatMoney(saleTotal, currency)}</div>}
-    </>}
+    {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} productLabel="Material (in stock)" productEmptyLabel="— select material —" totalTone="text-amber-300" totalTestId="hwf-sale-total" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Forklift Fuel, Yard Rent, Utilities..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Material Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Cement & Mortar" list="hw-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags, Lengths, Sheets…" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="hw-item-cats">{MATERIAL_CATS.map((c) => <option key={c} value={c} />)}</datalist></>}
     {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Material Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. Torkor Blocks 6in Hollow"} />{selectedItem && !f.itemName && <p className="text-[10px] text-amber-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormField f={f} set={set} label="Delivery Site" k="deliverySite" placeholder="e.g. East Legon Site, Plot 14" /><FormField f={f} set={set} label="Notes" k="notes" /></>}

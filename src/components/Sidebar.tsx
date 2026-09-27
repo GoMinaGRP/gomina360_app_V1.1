@@ -34,11 +34,17 @@ import {
   Wifi,
   Settings2,
   CalendarClock,
+  Stethoscope,
+  ListTodo,
+  FolderLock,
+  BrainCircuit,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
+  | "ACTION_CENTER"
+  | "ADVISOR"
   | "POULTRY-01"
   | "BLOCK-01"
   | "AQUA-01"
@@ -52,6 +58,8 @@ export type ActiveTab =
   | "ASSETS"
   | "INVENTORY"
   | "TRANSACTIONS"
+  | "DOCUMENTS"
+  | "BI_ASSISTANT"
   | "FINANCE"
   | "AI_ADVISOR"
   | "SCENARIO_PLANNER"
@@ -101,6 +109,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
+  const isFarmAdvisor = currentUser?.role === "FARM_ADVISOR";
   const isExecutive =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
   const isSuperAdmin = !!currentUser?.isSuperAdmin;
@@ -111,6 +120,27 @@ export default function Sidebar({
   const businessGroups = useMemo(
     () => (isSuperAdmin ? groupBusinessesByOrg(businesses, organizations) : []),
     [isSuperAdmin, businesses, organizations]
+  );
+
+  // P0.3 — archived units leave the navigation for executives and super
+  // admins (Manage Businesses keeps them listed with a Restore control).
+  // A BRANCH_MANAGER still sees their own assigned unit even if archived —
+  // their workspace must never vanish overnight.
+  const navBusinesses = useMemo(
+    () =>
+      isExecutive || isSuperAdmin
+        ? businesses.filter((b) => !b?.isArchived || b.code === activeTab)
+        : businesses,
+    [businesses, isExecutive, isSuperAdmin, activeTab]
+  );
+  const navBusinessGroups = useMemo(
+    () =>
+      isSuperAdmin
+        ? businessGroups
+            .map((g) => ({ ...g, businesses: g.businesses.filter((b) => !b?.isArchived || b.code === activeTab) }))
+            .filter((g) => g.businesses.length > 0)
+        : [],
+    [businessGroups, isSuperAdmin, activeTab]
   );
 
   /** One business/branch chip in the list — identical for Owners and super
@@ -163,6 +193,15 @@ export default function Sidebar({
               data-testid={`sidebar-chip-granted-${biz.code}`}
             >
               GRANTED
+            </span>
+          )}
+          {isFarmAdvisor && accessible && (
+            <span
+              className="text-[8px] font-black text-teal-300 bg-teal-500/15 border border-teal-500/40 px-1 py-0.5 rounded shrink-0"
+              title="Read-only monitoring granted by the OWNER"
+              data-testid={`sidebar-chip-advisor-${biz.code}`}
+            >
+              MONITOR
             </span>
           )}
           {!isExecutive && isUnitManager && managedBizIds.has(Number(biz.id)) && (
@@ -284,6 +323,30 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Top section: Farm Advisor Console (FARM_ADVISOR role only) — the
+          advisor's cross-unit home screen. */}
+      {isFarmAdvisor && (
+        <div className="p-2 sm:p-3 border-b border-slate-800">
+          <button
+            onClick={() => selectTab("ADVISOR")}
+            data-testid="advisor-console-tab"
+            className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
+              activeTab === "ADVISOR"
+                ? "bg-gradient-to-r from-teal-600 to-emerald-700 text-white shadow-lg shadow-teal-900/30 font-bold"
+                : "hover:bg-slate-800/80 text-slate-200"
+            }`}
+          >
+            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+              <Stethoscope className={`w-4 h-4 ${activeTab === "ADVISOR" ? "text-white" : "text-teal-400"}`} />
+              <span>Advisor Console</span>
+            </div>
+            <span className="hidden sm:inline text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-bold border border-teal-500/30">
+              MONITOR
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Top section: Executive Command Center (Owner / General Manager only) */}
       {isExecutive && (
         <div className="p-2 sm:p-3 border-b border-slate-800">
@@ -308,6 +371,34 @@ export default function Sidebar({
             </span>
           </button>
         </div>
+      )}
+
+      {/* Action Center — staff's cross-module to-do list (P1). Owners and
+          managers see their whole scope; workers see their own assignments.
+          The API enforces the same scoping server-side. (Farm advisors keep
+          their closed sandbox: their follow-ups live in the Advisor Console.) */}
+      {!isFarmAdvisor && (
+      <div className="p-2 sm:p-3 border-b border-slate-800">
+        <button
+          onClick={() => selectTab("ACTION_CENTER")}
+          data-testid="sidebar-tab-actions"
+          className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
+            activeTab === "ACTION_CENTER"
+              ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-900/30 font-bold"
+              : "hover:bg-slate-800/80 text-slate-200"
+          }`}
+        >
+          <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+            <ListTodo
+              className={`w-4 h-4 ${activeTab === "ACTION_CENTER" ? "text-white" : "text-amber-400"}`}
+            />
+            <span>Action Center</span>
+          </div>
+          <span className="hidden sm:inline text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold border border-amber-500/30">
+            {isWorker ? "MY TASKS" : "ALL ACTIONS"}
+          </span>
+        </button>
+      </div>
       )}
 
       {/* Businesses — executives see every unit; a branch manager sees the
@@ -363,15 +454,17 @@ export default function Sidebar({
                 : `Owned by ${organizations.find((o) => String(o.id) === orgLens)?.name || "this Owner"} (${businesses.length})`
             : isExecutive
             ? `${businesses.length} Ghana Businesses`
+            : isFarmAdvisor
+            ? `My Farm Units (${navBusinesses.filter(isAccessible).length})`
             : businesses.filter(isAccessible).length > 1
-            ? `My Branches (${businesses.filter(isAccessible).length})`
+            ? `My Branches (${navBusinesses.filter(isAccessible).length})`
             : "My Branch"}
         </div>
         <div className="space-y-1 mt-1">
           {/* ── SUPER ADMIN: grouped by owning Owner/Organization ── */}
           {isSuperAdmin ? (
             <>
-              {businessGroups.map((group) => (
+              {navBusinessGroups.map((group) => (
                 <div key={group.orgId} className="space-y-1">
                   <div
                     data-testid={`sidebar-org-group-${group.orgId}`}
@@ -415,7 +508,7 @@ export default function Sidebar({
             </>
           ) : (
             /* ── Normal Owners & staff: the ORIGINAL flat list, unchanged ── */
-            businesses.map((biz) => renderBizButton(biz))
+            navBusinesses.map((biz) => renderBizButton(biz))
           )}
         </div>
       </div>
@@ -542,6 +635,34 @@ export default function Sidebar({
                 <span>Pre-Orders</span>
               </div>
               <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("BI_ASSISTANT")}
+              data-testid="sidebar-tab-assistant"
+              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "BI_ASSISTANT"
+                  ? "bg-cyan-500/15 text-cyan-300 font-bold border-l-2 border-cyan-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <BrainCircuit className="w-4 h-4 text-cyan-400/90" />
+              <span>BI Assistant</span>
+              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">ASK</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("DOCUMENTS")}
+              data-testid="sidebar-tab-documents"
+              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "DOCUMENTS"
+                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <FolderLock className="w-4 h-4 text-teal-400/90" />
+              <span>Document Vault</span>
+              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">NEW</span>
             </button>
 
             <button
@@ -797,6 +918,27 @@ export default function Sidebar({
             >
               <Sliders className="w-4 h-4 text-teal-400" />
               <span>Scenario Planning</span>
+            </button>
+            )}
+
+            {/* OWNER / GENERAL_MANAGER: Farm Advisor access & guidance console */}
+            {isExecutive && (
+            <button
+              onClick={() => selectTab("ADVISOR")}
+              data-testid="sidebar-advisor-manage"
+              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "ADVISOR"
+                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+                <Stethoscope className="w-4 h-4 text-teal-400" />
+                <span>Farm Advisors</span>
+              </div>
+              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">
+                ACCESS
+              </span>
             </button>
             )}
 

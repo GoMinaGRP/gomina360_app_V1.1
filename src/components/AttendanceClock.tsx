@@ -30,15 +30,20 @@ export default function AttendanceClock({ currentUser }: { currentUser: any }) {
       if (d.success) {
         setShift(d.openShift || null);
         setAnchors(d.anchors || []);
-        if (!bizId && d.anchors?.length) {
+        if (d.anchors?.length) {
           const remembered = Number(localStorage.getItem("att-clock-biz")) || null;
-          setBizId(remembered && d.anchors.some((a: any) => a.id === remembered) ? remembered : d.anchors[0].id);
+          // Functional update keeps this callback STABLE (no bizId dep):
+          // the mount effect ran twice when the initial fetch itself set
+          // bizId — every module open re-fetched attendance twice.
+          setBizId((prev) =>
+            prev || (remembered && d.anchors.some((a: any) => a.id === remembered) ? remembered : d.anchors[0].id)
+          );
         }
       }
     } catch {
       /* offline — keep last state */
     }
-  }, [bizId]);
+  }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {

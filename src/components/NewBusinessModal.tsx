@@ -10,7 +10,7 @@ import LocationSelector, { LocationValue } from "./LocationSelector";
 const ALL_CATEGORY_OPTIONS: { value: string; text: string; key: string }[] = [
   { value: "Poultry Farm", text: "Poultry Farm", key: "POULTRY_FARM" },
   { value: "Block Factory", text: "Block Factory", key: "BLOCK_FACTORY" },
-  { value: "Aquaculture", text: "Aquaculture", key: "AQUACULTURE" },
+  { value: "Aquaculture", text: "Fish Farm", key: "AQUACULTURE" },
   { value: "Livestock", text: "Livestock", key: "LIVESTOCK" },
   { value: "Restaurant & Food", text: "Restaurant & Food", key: "RESTAURANT_FOOD" },
   { value: "Electronic Shop", text: "Electronic Shop", key: "ELECTRONIC_SHOP" },

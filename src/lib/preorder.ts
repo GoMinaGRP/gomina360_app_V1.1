@@ -279,6 +279,10 @@ export const SUPPLIER_ORDER_STATUSES = [
   "ARRIVED",
   "RECEIVED",
   "CANCELLED",
+  // R1 approvals: a gated PO waits here until an approver releases it; only
+  // the approval engine may move it (to RAISED on approve, CANCELLED on
+  // reject) — the ADVANCE transition map below leaves it frozen.
+  "PENDING_APPROVAL",
 ] as const;
 export type SupplierOrderStatus = (typeof SUPPLIER_ORDER_STATUSES)[number];
 
@@ -290,6 +294,7 @@ export const SUPPLIER_ORDER_NEXT: Record<SupplierOrderStatus, SupplierOrderStatu
   ARRIVED: ["RECEIVED", "CANCELLED"],
   RECEIVED: [],
   CANCELLED: [],
+  PENDING_APPROVAL: [],
 };
 
 /** Stage the linked customer order advances to when the supplier order hits
@@ -463,8 +468,12 @@ export async function postGoodsReceipt({
     .returning();
 
   // Supplier expense — booked exactly once alongside the receipt so Finance
-  // shows the cost when the goods physically land.
-  if (!po.expenseBooked && Number(po.totalGhs) > 0) {
+  // shows the cost when the goods physically land. R2 payment modes:
+  // ON_RECEIPT (default, the historical behaviour) books here; ON_CREDIT
+  // books nothing at GRN — the recorded supplier payment books it instead,
+  // giving a true payables ledger without touching the default flow.
+  const poPaymentMode = String((po as any).paymentMode || "ON_RECEIPT").toUpperCase();
+  if (poPaymentMode === "ON_RECEIPT" && !po.expenseBooked && Number(po.totalGhs) > 0) {
     const dateStr = new Date().toISOString().split("T")[0];
     await db.insert(transactions).values({
       transactionNumber: `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,

@@ -3,12 +3,12 @@
 // reviewing auditor, land here in real time.
 
 import { NextResponse } from "next/server";
-import { and, desc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditReviews, notifications } from "@/db/schema";
-import { getSessionInfo, resolveUserOrgIds, UNAUTHENTICATED } from "@/lib/auth";
-import { ownerOrgOfBusiness } from "@/lib/notify";
+import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { businesses } from "@/db/schema";
 
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];
 const OPEN_STATUSES = ["FLAGGED", "CORRECTION_REQUIRED", "OPEN"];
@@ -20,35 +20,41 @@ export async function GET(request: Request) {
     const { user } = session;
     const rows = await db.select().from(notifications).where(eq(notifications.userId, user.id)).orderBy(desc(notifications.id)).limit(60);
     const unreadCount = rows.filter((n) => !n.isRead).length;
-    // Issues still waiting on ME (flagged or correction required) — SQL-scoped
-    // instead of a full-table scan, and the legacy workerName match is
-    // additionally limited to MY organization(s) so a same-name user in
-    // another tenant never inflates (or peeks at) my open-work counter.
+    // Issues still waiting on ME (flagged or correction required) — two indexed
+    // COUNT queries and no row transfer. This used to read the whole
+    // audit_reviews table and issue one ownerOrgOfBusiness() lookup PER legacy
+    // row on EVERY 30 s bell poll — an N+1 that grew with the audit trail.
+    // The legacy workerName match additionally joins businesses once so the
+    // tenant check (my organizations only) happens in SQL, not per row.
     const name = String(user.name || "").trim();
-    const all = await db
-      .select()
-      .from(auditReviews)
-      .where(
-        and(
-          name
-            ? or(eq(auditReviews.assignedUserId, user.id), ilike(auditReviews.workerName, name))
-            : eq(auditReviews.assignedUserId, user.id),
-          inArray(auditReviews.status, OPEN_STATUSES),
-        ),
-      );
-    const orgIds = new Set<number>();
-    if (all.some((r) => r.assignedUserId == null)) {
-      for (const o of await resolveUserOrgIds(user)) orgIds.add(Number(o));
-      if (user.orgId != null) orgIds.add(Number(user.orgId));
-    }
-    let openAssignedCount = 0;
-    for (const r of all) {
-      if (!ISSUE_ACTIONS.includes(r.action)) continue;
-      if (r.assignedUserId === user.id) { openAssignedCount++; continue; }
-      if (r.assignedUserId != null || r.businessId == null) continue;
-      const org = await ownerOrgOfBusiness(Number(r.businessId));
-      if (org != null && orgIds.has(Number(org))) openAssignedCount++;
-    }
+    const orgIds = Array.from(
+      new Set<number>([
+        ...((session.orgIds as number[] | undefined) || []).map((o) => Number(o)),
+        ...(session.orgId != null ? [Number(session.orgId)] : []),
+      ]),
+    );
+    const openCommon = [inArray(auditReviews.status, OPEN_STATUSES), inArray(auditReviews.action, ISSUE_ACTIONS)];
+    const [mineRows, legacyRows] = await Promise.all([
+      db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(auditReviews)
+        .where(and(eq(auditReviews.assignedUserId, user.id), ...openCommon)),
+      name && orgIds.length
+        ? db
+            .select({ c: sql<number>`count(*)::int` })
+            .from(auditReviews)
+            .innerJoin(businesses, eq(businesses.id, auditReviews.businessId))
+            .where(
+              and(
+                isNull(auditReviews.assignedUserId),
+                ilike(auditReviews.workerName, name),
+                inArray(businesses.ownerId, orgIds),
+                ...openCommon,
+              ),
+            )
+        : Promise.resolve([{ c: 0 } as { c: number }]),
+    ]);
+    const openAssignedCount = Number(mineRows[0]?.c || 0) + Number(legacyRows[0]?.c || 0);
     return NextResponse.json({ success: true, notifications: rows, unreadCount, openAssignedCount });
   } catch (error: any) {
     return apiError(error);

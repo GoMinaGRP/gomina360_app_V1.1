@@ -42,6 +42,9 @@ interface SpecializedBusinessViewProps {
   /** LivestockModule hosts the Financial Report in its own FINANCE tab;
    *  when true, the inline report at the bottom of this ops view is hidden. */
   hideFinanceReport?: boolean;
+  /** FARM_ADVISOR read-only mode: the "Log Daily Operations" button and
+   *  entry modal never render (the API 403s advisor mutations anyway). */
+  isAdvisorView?: boolean;
 }
 
 export default function SpecializedBusinessView({
@@ -58,6 +61,7 @@ export default function SpecializedBusinessView({
   inventory,
   customers,
   hideFinanceReport = false,
+  isAdvisorView = false,
 }: SpecializedBusinessViewProps) {
   const [showLogModal, setShowLogModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -374,6 +378,7 @@ export default function SpecializedBusinessView({
             businessInfo={businessInfo}
             variant="header"
           />
+          {!isAdvisorView && (
           <button
             onClick={() => setShowLogModal(true)}
             className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-lg transition"
@@ -381,6 +386,7 @@ export default function SpecializedBusinessView({
             <Plus className="w-4 h-4" />
             <span>Log Daily Operations</span>
           </button>
+          )}
         </div>
       </div>
 

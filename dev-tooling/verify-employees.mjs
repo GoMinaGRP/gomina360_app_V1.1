@@ -97,9 +97,11 @@ try {
   // ══ A. Full registration with photo upload + camera capture ════════════
   console.log("── A. Employee Registration (complete record) ──");
   await login(OWNER);
-  // The ID sequence follows whatever employees already exist (the owner may
-  // have registered real staff in the UI) — expect max EMP-NNNN + 1.
-  const prevEmp = await q(`SELECT employee_no FROM employees WHERE employee_no ~ '^EMP-[0-9]+$'`);
+  // Staff numbers are PER BUSINESS (employees/route.ts: "EMP-0001… numbered
+  // PER BUSINESS") — the registration form below files TEST Ama into
+  // BLOCK-01 (business 2, asserted again in A11/B3/payroll), so expect THAT
+  // unit's max EMP-NNNN + 1.
+  const prevEmp = await q(`SELECT employee_no FROM employees e JOIN businesses b ON b.id = e.business_id WHERE b.code = 'BLOCK-01' AND e.employee_no ~ '^EMP-[0-9]+$'`);
   const expectedEmpNo = `EMP-${String(Math.max(0, ...prevEmp.map((r) => parseInt(r.employee_no.split("-")[1], 10))) + 1).padStart(4, "0")}`;
   await clickText("Employees & Payroll");
   await waitSel('[data-testid="employee-reg-open"]');

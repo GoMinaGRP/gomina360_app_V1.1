@@ -64,7 +64,7 @@ const MODULE_LABELS: Record<string, string> = {
   INTEGRATIONS: "Integrations Hub",
   "POULTRY-01": "Poultry Farm Management",
   "BLOCK-01": "Block Factory Management",
-  "AQUA-01": "Aquaculture Management",
+  "AQUA-01": "Fish Farm Management",
   "LIVESTOCK-01": "Livestock Management",
   "FOOD-01": "Restaurant & Food Management",
   "TECH-01": "Electronics Shop Management",
