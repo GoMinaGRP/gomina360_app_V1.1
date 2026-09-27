@@ -296,10 +296,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
     if (level === "UNIT_MANAGER") {
       const touched = Object.keys(body || {}).filter((k) => !["actorUserId", "id"].includes(k));
-      const outsideScope = touched.filter((k) => k === "status");
+      const outsideScope = touched.filter((k) => k === "status" || k === "isArchived");
       if (outsideScope.length > 0) {
         return FORBIDDEN(
-          "Deactivating / re-activating a unit (status) stays with the OWNER. As a “Manage Unit” grantee you can edit, change business type, manage online ordering & service settings, and reset this unit.",
+          "Deactivating / re-activating or archiving a unit stays with the OWNER. As a “Manage Unit” grantee you can edit, change business type, manage online ordering & service settings, and reset this unit.",
         );
       }
     }
@@ -380,6 +380,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         return NextResponse.json({ success: false, error: `Invalid status "${status}".` }, { status: 400 });
       }
       updates.status = status;
+    }
+    // P0.3 — archive / restore (OWNER only): archived units stay fully
+    // auditable but leave the executive comparison scopes and the sidebar.
+    if (body.isArchived !== undefined) {
+      updates.isArchived = !!body.isArchived;
     }
     if (body.initialCapitalGhs !== undefined) {
       const v = Number(body.initialCapitalGhs);

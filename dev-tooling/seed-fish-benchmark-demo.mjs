@@ -56,7 +56,7 @@ if (!prof.profiles.some((p) => p.name === TILAPIA_PROFILE)) {
       businessId: BIZ, name: TILAPIA_PROFILE, species: "VOLTA_TILAPIA", isDefault: true,
       toleranceWarnPct: 5, toleranceCritPct: 10, curves: tplTilapia.curves,
       notes: "Copied from the tilapia species template — adjust to this farm's strain and feed program.",
-      createdByName: "Demo Seeder", createdByRole: "OWNER",
+      createdByName: "Kwame Mina", createdByRole: "OWNER",
     },
   });
   console.log("✔ tilapia benchmark profile created (default)");
@@ -68,7 +68,7 @@ if (!prof.profiles.some((p) => p.name === CATFISH_PROFILE)) {
       businessId: BIZ, name: CATFISH_PROFILE, species: "AFRICAN_CATFISH", isDefault: true,
       toleranceWarnPct: 5, toleranceCritPct: 10, curves: tplCatfish.curves,
       notes: "Copied from the African catfish species template.",
-      createdByName: "Demo Seeder", createdByRole: "OWNER",
+      createdByName: "Kwame Mina", createdByRole: "OWNER",
     },
   });
   console.log("✔ catfish benchmark profile created (default)");
@@ -146,7 +146,7 @@ async function seedFeed({ batch, samples, alive, rateCurve, rateFactor, feedType
       feedType, entryType: "CONSUMPTION", quantityKg: kg, costPerKgGhs: costPerKg,
       brandSupplier: supplier,
       recordedDate: D(daysAgoOf(batch, day)),
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
   return +totalKg.toFixed(0);
@@ -157,7 +157,7 @@ const seedWeights = async (batch, samples) => {
     await postWeight({
       businessId: BIZ, batchId: batch.id, sampleSize: 30, avgWeightG: g,
       recordedDate: D(daysAgoOf(batch, day)),
-      notes: "demo growth sample", recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      notes: "demo growth sample", recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
 };
@@ -171,7 +171,7 @@ const seedWeights = async (batch, samples) => {
     hatchDate: D(120), initialCount: 10000, currentCount: 9520, mortalityTotal: 480,
     costPerFingerlingGhs: 1.10, targetHarvestDate: D(-76),
     notes: "Demo — current tilapia cycle (growth trailing target).",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   await seedWeights(t01, samples);
   const feedKg = await seedFeed({
@@ -191,7 +191,7 @@ const seedWeights = async (batch, samples) => {
     hatchDate: D(84), initialCount: 6000, currentCount: 5760, mortalityTotal: 240,
     costPerFingerlingGhs: 1.6, targetHarvestDate: D(-112),
     notes: "Demo — current catfish cycle (on target).",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   await seedWeights(c01, samples);
   const feedKg = await seedFeed({
@@ -211,7 +211,7 @@ async function historicalTilapia({ batch, pond, hatchDaysAgo, cycleDays, initial
     hatchDate: D(hatchDaysAgo), initialCount: initial, currentCount: preHarvest, mortalityTotal: mortality,
     costPerFingerlingGhs: 1.0,
     notes: "Demo — completed tilapia cycle.",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   await seedWeights(b, samples);
   const feedKg = await seedFeed({
@@ -226,7 +226,7 @@ async function historicalTilapia({ batch, pond, hatchDaysAgo, cycleDays, initial
       businessId: BIZ, batchId: b.id, pondId: pond.id, species: "VOLTA_TILAPIA",
       harvestedCount: h.count, totalWeightKg: h.kg, revenueGhs: h.revenue,
       saleDate: D(daysAgoOf(b, cycleDays)), buyerName: h.buyer,
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
   console.log(`✔ ${batch} harvested cycle + logs (${feedKg} kg feed, ${sold} fish out)`);
@@ -264,7 +264,7 @@ for (const [pond, doMin, doMax] of [[ponds.T1, 5.2, 6.4], [ponds.T2, 4.8, 6.2], 
       temperatureC: +(27.5 + (i % 2) * 0.8).toFixed(1),
       ammoniaMgL: +(0.1 + (i % 2) * 0.08).toFixed(2),
       turbidity: i % 2 ? "MODERATE" : "CLEAR",
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
 }

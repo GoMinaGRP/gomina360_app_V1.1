@@ -185,7 +185,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   const isWide = useIsWide();
 
   const bizSource = data?.bizList?.length ? data.bizList : businesses;
-  const bizName = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.name || `Business #${id}`, [bizSource]);
+  const bizName = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.name || "(deleted unit)", [bizSource]);
   const bizCode = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.code || "", [bizSource]);
 
   const load = useCallback(async () => {

@@ -238,6 +238,11 @@ export const businesses = pgTable("businesses", {
   // caller's accessible match (see /api/logs/[code] and the QR scanner).
   code: text("code").notNull(),
   category: text("category").notNull(), // 'Poultry Farm', 'Block Factory', 'Aquaculture', 'Livestock', 'Restaurant & Food', 'Electronic Shop', 'Car Wash', 'Hardware Store'
+  // Unit lifecycle (P0.3): archived units stay fully auditable (records,
+  // finance history, audit trail) but drop out of executive comparison
+  // scopes, dashboards and the sidebar list until restored. Deletion stays
+  // the separate, permanent OWNER action.
+  isArchived: boolean("is_archived").notNull().default(false),
   branchLocation: text("branch_location").notNull(), // human-readable summary line
   // Standardized Ghana location (Region → District/MMDA → Town)
   region: text("region").notNull(), // one of the 16 official regions

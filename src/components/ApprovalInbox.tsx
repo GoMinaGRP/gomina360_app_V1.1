@@ -228,7 +228,7 @@ export default function ApprovalInbox({
                         {ACTION_LABEL[r.action] || r.action} · {r.targetLabel || `#${r.targetId}`}
                       </p>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        {bizName.get(Number(r.businessId)) || `Business #${r.businessId}`}
+                        {bizName.get(Number(r.businessId)) || "(deleted unit)"}
                         {r.branchCode ? ` · ${r.branchCode}` : ""} · by {r.requestedByName || "staff"}
                         {money(r.amountGhs) ? ` · ${money(r.amountGhs)}` : ""}
                       </p>
@@ -295,7 +295,7 @@ export default function ApprovalInbox({
                     {ACTION_LABEL[r.action] || r.action} · {r.targetLabel || `#${r.targetId}`}
                   </p>
                   <p className="text-[10px] text-slate-500">
-                    {bizName.get(Number(r.businessId)) || `Business #${r.businessId}`}
+                    {bizName.get(Number(r.businessId)) || "(deleted unit)"}
                     {money(r.amountGhs) ? ` · ${money(r.amountGhs)}` : ""}
                     {r.decidedByName ? ` · ${r.status === "PENDING" ? "with" : "by"} ${r.decidedByName}` : ""}
                     {r.decisionReason ? ` — “${r.decisionReason}”` : ""}

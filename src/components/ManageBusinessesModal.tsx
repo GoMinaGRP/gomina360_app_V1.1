@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   Building2,
   Copy,
@@ -836,6 +837,41 @@ export default function ManageBusinessesModal({
     }
   };
 
+  // P0.3 — Archive / Restore: archived units keep every record (audit,
+  // finance, history) but leave the executive dashboards and the sidebar
+  // until restored. Owner-only, two-click armed like Deactivate.
+  const handleToggleArchive = async (biz: any) => {
+    if (armedCode !== biz.code) {
+      setArmedCode(biz.code);
+      return;
+    }
+    setArmedCode(null);
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/businesses/${biz.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isArchived: !biz.isArchived, actorUserId: currentUser?.id ?? null }),
+      });
+      const d = await res.json().catch(() => null);
+      if (res.ok && d?.success) {
+        await onChanged();
+        setNotice(
+          biz.isArchived
+            ? `"${d.business.name}" restored — it is back in the sidebar and executive dashboards.`
+            : `"${d.business.name}" archived — it left the sidebar and executive comparisons, but ALL data and its audit trail are preserved (Restore anytime).`
+        );
+      } else {
+        setError(d?.error || "Failed to archive unit.");
+      }
+    } catch (err: any) {
+      setError(err?.message || "Network error while archiving.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!selected || confirmText.trim() !== selected.code) return;
     setBusy(true);
@@ -1185,6 +1221,28 @@ export default function ManageBusinessesModal({
                                 : inactive
                                 ? "Re-activate"
                                 : "Deactivate"}
+                            </button>
+                            <button
+                              onClick={() => handleToggleArchive(biz)}
+                              disabled={busy}
+                              data-testid={`manage-biz-archive-${biz.code}`}
+                              title={biz.isArchived ? "Restore archived unit (back into navigation & dashboards)" : "Archive unit — hides it from navigation & executive dashboards; all data preserved"}
+                              className={`px-2 py-2 rounded-lg text-[10px] font-black transition flex items-center gap-1 ${
+                                armed
+                                  ? "bg-amber-500/30 text-amber-200 border border-amber-400/50"
+                                  : biz.isArchived
+                                  ? "bg-slate-700/70 hover:bg-emerald-500/30 text-slate-200 hover:text-emerald-300"
+                                  : "bg-slate-700/70 hover:bg-slate-500/40 text-slate-200 hover:text-slate-100"
+                              }`}
+                            >
+                              <Archive className="w-4 h-4" />
+                              {armed
+                                ? biz.isArchived
+                                  ? "Confirm Restore"
+                                  : "Confirm Archive"
+                                : biz.isArchived
+                                ? "Restore"
+                                : "Archive"}
                             </button>
                             <button
                               onClick={() => openReset(biz)}

@@ -108,15 +108,18 @@ export default function CommandCenterDashboard({
   const [chartView, setChartView] = useState<
     "PROFIT_BAR" | "ROI_RADAR" | "CASH_AREA" | "SALES_BAR" | "ASSETS_BAR"
   >("PROFIT_BAR");
+  // P0.3 — archived units never take part in executive comparisons,
+  // matrices or compliance roll-ups (their history stays in Audit/Finance).
+  const activeBusinesses = (businesses || []).filter((b) => !b?.isArchived);
   // Which businesses to include in the comparison (default: all selected)
   const [selectedBizIds, setSelectedBizIds] = useState<number[]>(
-    businesses.map((b) => b.id)
+    activeBusinesses.map((b) => b.id)
   );
   // Compare by individual Business, or roll up by Branch (region)
   const [groupBy, setGroupBy] = useState<"BUSINESS" | "BRANCH">("BUSINESS");
 
   // Keep selection in sync if the business list changes
-  const allBizIds = businesses.map((b) => b.id);
+  const allBizIds = activeBusinesses.map((b) => b.id);
   const effectiveSelected = selectedBizIds.filter((id) => allBizIds.includes(id));
   const selectedSet = effectiveSelected.length > 0 ? new Set(effectiveSelected) : new Set(allBizIds);
 
@@ -129,7 +132,7 @@ export default function CommandCenterDashboard({
       .reduce((acc, i) => acc + (i.quantity || 0) * (i.costPriceGhs || 0), 0);
 
   // Merge businesses with their metrics
-  const comparisonData = businesses.map((biz) => {
+  const comparisonData = activeBusinesses.map((biz) => {
     const bizMetrics =
       // No quarterly metric row (brand-new unit): honest ZEROS — never
       // invent GH₵50k/30k phantom figures for an empty business. Its live
@@ -229,8 +232,8 @@ export default function CommandCenterDashboard({
   // Super Admin platform oversight: one financial rollup per Owner/Org
   // (memoized — this maps every business × metric row per render).
   const orgRollups = useMemo(
-    () => (orgLens === "ALL" ? rollupsByOrg(businesses, metrics, organizations) : []),
-    [orgLens, businesses, metrics, organizations]
+    () => (orgLens === "ALL" ? rollupsByOrg(activeBusinesses, metrics, organizations) : []),
+    [orgLens, activeBusinesses, metrics, organizations]
   );
 
   // Calculate combined KPI totals across the SELECTED + grouped scope
@@ -289,7 +292,7 @@ export default function CommandCenterDashboard({
 
   const todayStr = new Date().toISOString().split("T")[0];
   const clEntries = checklists?.entries || [];
-  const checklistStats = (businesses || []).map((b) => {
+  const checklistStats = activeBusinesses.map((b) => {
     const rows = clEntries.filter((e) => e.businessId === b.id && e.checklistDate === todayStr);
     const done = rows.filter((e) => e.isCompleted).length;
     return {
@@ -551,7 +554,7 @@ export default function CommandCenterDashboard({
         const low = inventory.filter((i) => i.status === "LOW_STOCK" || ((i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStockThreshold || 0)));
         const out = inventory.filter((i) => i.status === "OUT_OF_STOCK" || (i.quantity || 0) <= 0);
         if (low.length === 0 && out.length === 0) return null;
-        const bizName = (id: number) => businesses.find((b) => b.id === id)?.name || "";
+        const bizName = (id: number) => businesses.find((b) => b.id === id)?.name || ""; // labels may resolve archived units too
         return (
           <div className="bg-slate-800/90 border border-amber-500/30 rounded-2xl p-5 shadow-xl" data-testid="command-stock-alerts">
             <div className="flex items-center justify-between mb-3">

@@ -520,6 +520,9 @@ export default function ActionCenter({
               <div className="flex flex-wrap gap-2">
                 {linked.checklist.map((c: any) => {
                   const biz = bizById.get(Number(c.businessId));
+                  // P0.1: an unknown business (deleted out-of-band) never
+                  // renders — no "Business #NNN" chip, no dead-end click.
+                  if (!biz) return null;
                   return (
                     <button
                       key={`cl-${c.businessId}`}
@@ -528,7 +531,7 @@ export default function ActionCenter({
                       data-testid={`linked-checklist-${c.businessId}`}
                     >
                       <div>
-                        <p className="text-xs font-bold text-slate-200">{biz?.name || `Business #${c.businessId}`}</p>
+                        <p className="text-xs font-bold text-slate-200">{biz?.name || "(deleted unit)"}</p>
                         <p className="text-[10px] text-slate-400">
                           {c.open} open{c.critical ? ` · ${c.critical} critical` : ""}
                         </p>

@@ -28,6 +28,7 @@ import {
   actionTasks,
   advisorNotes,
   auditReviews,
+  businesses,
   checklistEntries,
   notifications,
   organizationMembers,
@@ -300,6 +301,7 @@ export async function linkedAuditIssues(
     .from(auditReviews)
     .where(
       and(
+      sql`exists (select 1 from businesses b where b.id = ${auditReviews.businessId})`,
         inArray(auditReviews.status, OPEN_ISSUE_STATUSES),
         or(eq(auditReviews.action, "FLAGGED"), eq(auditReviews.action, "CORRECTION_REQUESTED")),
         scopeFilter,
@@ -334,6 +336,7 @@ export async function linkedAdvisorFollowUps(
     .where(
       and(
         inArray(advisorNotes.followUpStatus, OPEN_FOLLOWUP_STATUSES),
+        sql`exists (select 1 from businesses b where b.id = ${advisorNotes.businessId})`,
         allowedBusinessIds === null
           ? undefined
           : allowedBusinessIds.length
@@ -375,6 +378,10 @@ export async function linkedChecklistSummary(
       and(
         eq(checklistEntries.checklistDate, todayIso),
         eq(checklistEntries.isCompleted, false),
+        // P0.1: only LIVE businesses surface linked items — orphaned rows
+        // (a unit deleted out-of-band, e.g. a direct-DB purge) must never
+        // reach the Action Center as "Business #NNN" chips.
+        sql`exists (select 1 from businesses b where b.id = ${checklistEntries.businessId})`,
         allowedBusinessIds === null
           ? undefined
           : allowedBusinessIds.length

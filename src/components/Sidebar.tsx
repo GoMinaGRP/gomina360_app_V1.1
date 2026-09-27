@@ -122,6 +122,27 @@ export default function Sidebar({
     [isSuperAdmin, businesses, organizations]
   );
 
+  // P0.3 — archived units leave the navigation for executives and super
+  // admins (Manage Businesses keeps them listed with a Restore control).
+  // A BRANCH_MANAGER still sees their own assigned unit even if archived —
+  // their workspace must never vanish overnight.
+  const navBusinesses = useMemo(
+    () =>
+      isExecutive || isSuperAdmin
+        ? businesses.filter((b) => !b?.isArchived || b.code === activeTab)
+        : businesses,
+    [businesses, isExecutive, isSuperAdmin, activeTab]
+  );
+  const navBusinessGroups = useMemo(
+    () =>
+      isSuperAdmin
+        ? businessGroups
+            .map((g) => ({ ...g, businesses: g.businesses.filter((b) => !b?.isArchived || b.code === activeTab) }))
+            .filter((g) => g.businesses.length > 0)
+        : [],
+    [businessGroups, isSuperAdmin, activeTab]
+  );
+
   /** One business/branch chip in the list — identical for Owners and super
    *  admins; grouping happens at the caller (group headers for SA only). */
   const renderBizButton = (biz: any) => {
@@ -434,16 +455,16 @@ export default function Sidebar({
             : isExecutive
             ? `${businesses.length} Ghana Businesses`
             : isFarmAdvisor
-            ? `My Farm Units (${businesses.filter(isAccessible).length})`
+            ? `My Farm Units (${navBusinesses.filter(isAccessible).length})`
             : businesses.filter(isAccessible).length > 1
-            ? `My Branches (${businesses.filter(isAccessible).length})`
+            ? `My Branches (${navBusinesses.filter(isAccessible).length})`
             : "My Branch"}
         </div>
         <div className="space-y-1 mt-1">
           {/* ── SUPER ADMIN: grouped by owning Owner/Organization ── */}
           {isSuperAdmin ? (
             <>
-              {businessGroups.map((group) => (
+              {navBusinessGroups.map((group) => (
                 <div key={group.orgId} className="space-y-1">
                   <div
                     data-testid={`sidebar-org-group-${group.orgId}`}
@@ -487,7 +508,7 @@ export default function Sidebar({
             </>
           ) : (
             /* ── Normal Owners & staff: the ORIGINAL flat list, unchanged ── */
-            businesses.map((biz) => renderBizButton(biz))
+            navBusinesses.map((biz) => renderBizButton(biz))
           )}
         </div>
       </div>

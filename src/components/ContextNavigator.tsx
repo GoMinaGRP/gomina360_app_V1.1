@@ -274,11 +274,11 @@ function PanelBody({
     quick = Object.entries(PAGE_INFO)
       .filter(([, v]) => v.section === SHARED)
       .map(([k, v]) => ({ tid: k, label: v.label, Icon: v.Icon }));
-  } else if (loc.section === "Branch Workspace" && isBranchManager) {
-    quick = ["BRANCH_SALES", "WORKERS_MANAGE", "BRANCH_ASSETS"]
-      .map((k) => ({ tid: k, label: PAGE_INFO[k].label, Icon: PAGE_INFO[k].Icon }));
-    if (currentUser?.canManageCctv) quick.push({ tid: "INTEGRATIONS", label: "Integrations Hub", Icon: Share2 });
   }
+  // P0.2 — the rail no longer re-lists the Branch Workspace links for a
+  // BRANCH_MANAGER: the sidebar's single "Branch Management" group is their
+  // one home for those destinations (the rail keeps breadcrumb + location
+  // + family/sibling chips).
 
   const showHome = isExecutive && activeTab !== "COMMAND_CENTER";
 

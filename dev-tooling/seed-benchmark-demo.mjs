@@ -51,7 +51,7 @@ if (!prof.profiles.some((p) => p.name === BROILER_PROFILE)) {
       businessId: 1, name: BROILER_PROFILE, birdType: "BROILERS", isDefault: true,
       toleranceWarnPct: 5, toleranceCritPct: 10, curves: tplBroiler.curves,
       notes: "Copied from the Cobb 500 / Ross 308 breed template — adjust to this farm's genetics and feed program.",
-      createdByName: "Demo Seeder", createdByRole: "OWNER",
+      createdByName: "Kwame Mina", createdByRole: "OWNER",
     },
   });
   console.log("✔ broiler benchmark profile created");
@@ -63,7 +63,7 @@ if (!prof.profiles.some((p) => p.name === LAYER_PROFILE)) {
       businessId: 1, name: LAYER_PROFILE, birdType: "LAYERS", isDefault: true,
       toleranceWarnPct: 5, toleranceCritPct: 10, curves: tplLayer.curves,
       notes: "Copied from the Isa Brown / Lohmann layer template.",
-      createdByName: "Demo Seeder", createdByRole: "OWNER",
+      createdByName: "Kwame Mina", createdByRole: "OWNER",
     },
   });
   console.log("✔ layer benchmark profile created");
@@ -87,7 +87,7 @@ async function seedFeed(flock, fromDay, toDay, gPerBirdDay, costPerKg, feedType,
       businessId: 1, flockId: flock.id, batchNumber: flock.batchNumber,
       feedType, entryType: "CONSUMPTION", sourceType: "PURCHASED",
       quantityKg: kg, costPerKgGhs: costPerKg, brandSupplier: supplier,
-      recordedDate: D(daysAgoOf(flock, day)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedDate: D(daysAgoOf(flock, day)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
 }
@@ -99,7 +99,7 @@ const seedWeights = async (flock, samplesG) => {
     await postWeight({
       businessId: 1, flockId: flock.id, batchNumber: flock.batchNumber,
       weightKind: "BIRD", sampleSize: 30, avgWeightG: g,
-      recordedDate: D(daysAgoOf(flock, day)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedDate: D(daysAgoOf(flock, day)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
 };
@@ -110,7 +110,7 @@ const seedMortality = async (flock, events, note = "daily check") => {
       businessId: 1, flockId: flock.id, batchNumber: flock.batchNumber,
       recordType: "MORTALITY", mortalityCount: n, costGhs: cost || 0,
       diseaseOrCondition: note, recordedDate: D(daysAgoOf(flock, day)),
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
 };
@@ -127,7 +127,7 @@ if (demoExists) {
     birdType: "BROILERS", breed: "Cobb 500", supplier: "Akate Farms Hatchery",
     houseName: "House B", initialCount: 2500, currentCount: 2500, mortalityTotal: 0,
     arrivalDate: D(30), costPerBirdGhs: 7.5, status: "ACTIVE",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   await seedWeights(b1, [[7, 185], [14, 460], [21, 820], [28, 1240], [30, 1350]]);
   await seedFeed(b1, 1, 30, (d) => (d <= 7 ? 23 : d <= 14 ? 43 : d <= 21 ? 71 : d <= 28 ? 99 : 108), 5.9, (d) => (d <= 14 ? "STARTER" : "GROWER"), "Ghafeed Poultry Mills");
@@ -136,7 +136,7 @@ if (demoExists) {
     businessId: 1, flockId: b1.id, batchNumber: b1.batchNumber,
     recordType: "VACCINATION", vaccineOrDrug: "Gumboro (intermediate)", dosage: "1 dose/bird via drinking water",
     administeredBy: "Dr. Selorm Gbeho", birdsAffected: 2420, costGhs: 480,
-    recordedDate: D(daysAgoOf(b1, 14)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+    recordedDate: D(daysAgoOf(b1, 14)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
   });
   console.log("✔ BENCH-DEMO-B01 active flock + logs");
 }
@@ -148,7 +148,7 @@ async function historicalBroiler({ batch, name, breed, arrivedDaysAgo, initial, 
     birdType: "BROILERS", breed, supplier: "Akate Farms Hatchery",
     houseName: "House A", initialCount: initial, currentCount: initial, mortalityTotal: 0,
     arrivalDate: D(arrivedDaysAgo), costPerBirdGhs: 7.2, status: "SOLD",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   await seedWeights(f, weights);
   await seedFeed(f, 1, 42, feedG, feedCost, (d) => (d <= 14 ? "STARTER" : d <= 28 ? "GROWER" : "FINISHER"), "Ghafeed Poultry Mills");
@@ -159,7 +159,7 @@ async function historicalBroiler({ batch, name, breed, arrivedDaysAgo, initial, 
     productionType: "BROILER_WEIGHT", avgWeightKg: harvest.avgKg, birdsHarvested: harvest.birds,
     broilersSold: harvest.birds, // merchant took the whole lot — stock nets to zero
     totalWeightKg: harvest.kg, revenueGhs: harvest.revenue, revenueSource: "live-bird sale (merchant)",
-    recordedDate: D(daysAgoOf(f, 42)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+    recordedDate: D(daysAgoOf(f, 42)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
   });
   // the merchant took the whole lot — the flock is sold out (mortality events
   // already drove mortalityTotal; currentCount lands at initial − mortality)
@@ -201,7 +201,7 @@ await historicalBroiler({
       businessId: 1, flockId: f.id, batchNumber: f.batchNumber,
       productionType: "BROILER_WEIGHT", avgWeightKg: 2.43, birdsHarvested: 2800,
       broilersSold: 2800, totalWeightKg: 6800, revenueGhs: 306000, revenueSource: "live-bird sale (merchant)",
-      recordedDate: D(daysAgoOf(f, 42)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedDate: D(daysAgoOf(f, 42)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
     {
       const req = (await import("node:module")).createRequire("/home/user/pgtooling/package.json");
@@ -227,14 +227,14 @@ await historicalBroiler({
         businessId: 1, flockId: l01.id, batchNumber: l01.batchNumber,
         productionType: "EGGS", eggsCollected: eggs, traysProduced: Math.round(eggs / 30),
         crackedEggs: 12 + (i % 3) * 3, layPercentage: layPct,
-        recordedDate: D(day), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedDate: D(day), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     for (const [day, g] of [[20, 62.4], [14, 62.9], [8, 63.2], [2, 63.5]]) {
       await postWeight({
         businessId: 1, flockId: l01.id, batchNumber: l01.batchNumber, weightKind: "EGG",
         sampleSize: 60, avgWeightG: g, recordedDate: D(day),
-        recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     for (let day = 20; day >= 0; day--) {
@@ -242,7 +242,7 @@ await historicalBroiler({
         businessId: 1, flockId: l01.id, batchNumber: l01.batchNumber, feedType: "LAYER_MASH",
         entryType: "CONSUMPTION", sourceType: "PURCHASED", quantityKg: 462, costPerKgGhs: 5.2,
         brandSupplier: "Agricare Layer Mash", recordedDate: D(day),
-        recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     await seedMortality(l01, [[18, 5, 0], [6, 3, 350]], "old flock attrition");
@@ -259,14 +259,14 @@ await historicalBroiler({
         businessId: 1, flockId: l03.id, batchNumber: l03.batchNumber,
         productionType: "EGGS", eggsCollected: eggs, traysProduced: Math.round(eggs / 30),
         crackedEggs: 9, layPercentage: layPct,
-        recordedDate: D(day), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedDate: D(day), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     for (const [day, g] of [[10, 65.1], [3, 65.4]]) {
       await postWeight({
         businessId: 1, flockId: l03.id, batchNumber: l03.batchNumber, weightKind: "EGG",
         sampleSize: 50, avgWeightG: g, recordedDate: D(day),
-        recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     for (let day = 11; day >= 0; day--) {
@@ -274,7 +274,7 @@ await historicalBroiler({
         businessId: 1, flockId: l03.id, batchNumber: l03.batchNumber, feedType: "LAYER_MASH",
         entryType: "CONSUMPTION", sourceType: "PURCHASED", quantityKg: 234, costPerKgGhs: 5.2,
         brandSupplier: "Agricare Layer Mash", recordedDate: D(day),
-        recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+        recordedByName: "Kwame Mina", recordedByRole: "OWNER",
       });
     }
     console.log("✔ BATCH-2026-L03 layer logs");
@@ -286,7 +286,7 @@ await historicalBroiler({
     birdType: "LAYERS", breed: "Isa Brown", supplier: "Akate Farms Hatchery",
     houseName: "House L", initialCount: 4000, currentCount: 4000, mortalityTotal: 0,
     arrivalDate: D(400), costPerBirdGhs: 6.8, status: "SOLD",
-    createdByName: "Demo Seeder", createdByRole: "OWNER",
+    createdByName: "Kwame Mina", createdByRole: "OWNER",
   });
   for (let wk = 44; wk <= 56; wk++) {
     const layPct = +(82 - (wk - 44) * 0.65).toFixed(1);
@@ -295,14 +295,14 @@ await historicalBroiler({
       businessId: 1, flockId: hl.id, batchNumber: hl.batchNumber,
       productionType: "EGGS", eggsCollected: eggs, traysProduced: Math.round(eggs / 30),
       crackedEggs: 14, layPercentage: layPct,
-      recordedDate: D(daysAgoOf(hl, wk * 7)), recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedDate: D(daysAgoOf(hl, wk * 7)), recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
   for (const [wk, g] of [[45, 63.8], [50, 64.2], [55, 64.6]]) {
     await postWeight({
       businessId: 1, flockId: hl.id, batchNumber: hl.batchNumber, weightKind: "EGG",
       sampleSize: 60, avgWeightG: g, recordedDate: D(daysAgoOf(hl, wk * 7)),
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
   for (let day = 44 * 7; day <= 56 * 7; day++) {
@@ -310,7 +310,7 @@ await historicalBroiler({
       businessId: 1, flockId: hl.id, batchNumber: hl.batchNumber, feedType: "LAYER_MASH",
       entryType: "CONSUMPTION", sourceType: "PURCHASED", quantityKg: 425, costPerKgGhs: 5.35,
       brandSupplier: "Agricare Layer Mash", recordedDate: D(daysAgoOf(hl, day)),
-      recordedByName: "Demo Seeder", recordedByRole: "OWNER",
+      recordedByName: "Kwame Mina", recordedByRole: "OWNER",
     });
   }
   await seedMortality(hl, [[320, 60, 0], [350, 55, 0], [380, 90, 0], [392, 75, 0]], "end-of-lay attrition");
