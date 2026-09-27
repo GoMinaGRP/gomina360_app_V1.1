@@ -53,6 +53,7 @@ if (Number(attExisting) === 0) {
 // Resolve the poultry flagship at runtime — the old snapshot carried it as
 // business 22 (cloned-unit era), fresh seeds as POULTRY-01 = id 1.
 const poultryBiz = (await dbc.query("SELECT id::int id FROM businesses WHERE code='POULTRY-01' AND owner_id=1 ORDER BY id LIMIT 1")).rows[0]?.id;
+const techBiz = (await dbc.query("SELECT id::int id FROM businesses WHERE code='TECH-01' AND owner_id=1 ORDER BY id LIMIT 1")).rows[0]?.id;
 const runs1 = (await api(`/api/payroll?businessId=${poultryBiz}`, "GET")).body.runs || [];
 const run1 = runs1.find((r) => r.id === 1);
 if (run1 && run1.status !== "PAID") {
@@ -68,14 +69,11 @@ if (run1 && run1.status !== "PAID") {
   await dbc.query("UPDATE transactions SET amount_ghs=4697.36, description='Payroll 2026-08 — Doris Ansah (Senior Farm Veterinarian) · base 4500 + allow 250 + OT 97.36 − ded 150' WHERE id=(SELECT transaction_id FROM payroll_entries WHERE id=1)");
 } else console.log(`• run1 already ${run1?.status}, skipping`);
 
-// 3→4c) Legacy production-mirror history (businesses 22/23/27 — cloned units
-// from an earlier live state). On a fresh seed those units simply do not
-// exist: skip the whole block instead of hard-failing, exactly like the
-// script's per-row guards — the attendance leg above stays always-on.
-const legacyProbe = await dbc.query("SELECT count(*) c FROM businesses WHERE id IN (22,23,27)");
-if (Number(legacyProbe.rows[0].c) < 3) {
-  console.log("• legacy mirror history skipped (businesses 22/23/27 not present in this seed)");
-} else {
+// 3) The owner's other three real runs — Poultry Jun/Jul at the poultry
+// flagship, Tech Aug at the tech flagship. The original live snapshot
+// carried these on cloned-unit ids (22/27); they are resolved at runtime so
+// a fresh seed replays them against the canonical units. All legs are
+// idempotent per-row guards.
 // 3) Their three extra runs
 const ensureRun = async (businessId, period, method, notes) => {
   let all = (await api(`/api/payroll?businessId=${businessId}`, "GET")).body.runs || [];
@@ -89,22 +87,21 @@ const ensureRun = async (businessId, period, method, notes) => {
   if (run.status === "APPROVED") { must(`PAY ${period} biz${businessId} via ${method}`, await api("/api/payroll", "PATCH", { action: "PAY_RUN", runId: run.id, method })); run.status = "PAID"; }
   return run;
 };
-await ensureRun(22, "2026-06", "OTHER", "fffgg");
-await ensureRun(22, "2026-07", "BANK_TRANSFER");
-await ensureRun(27, "2026-08", "MTN_MOMO");
+await ensureRun(poultryBiz, "2026-06", "OTHER", "fffgg");
+await ensureRun(poultryBiz, "2026-07", "BANK_TRANSFER");
+await ensureRun(techBiz, "2026-08", "MTN_MOMO");
 
 // 3b) Legacy normalization — these three runs were paid BEFORE the statutory
 // engine existed, so they must keep their exact legacy nets (4500 / 4500 /
 // 5387.50) with NULL statutory snapshots and legacy-format ledger lines.
 // (Run creation now computes statutory automatically; this undoes that for
 // the documented legacy state only — paid amounts never change afterwards.)
-await dbc.query(`UPDATE payroll_entries SET gross_pay_ghs=NULL, ssnit_employee_ghs=NULL, ssnit_employer_ghs=NULL, tier2_ghs=NULL, tier2_bearer=NULL, taxable_income_ghs=NULL, paye_ghs=NULL, custom_deductions=NULL, total_employee_deductions_ghs=NULL, employer_contributions_ghs=NULL, employer_cost_ghs=NULL, net_pay_ghs=4500 WHERE employee_name='Doris Ansah' AND run_id IN (SELECT id FROM payroll_runs WHERE period IN ('2026-06','2026-07') AND business_id=22)`);
-await dbc.query(`UPDATE payroll_entries SET gross_pay_ghs=NULL, ssnit_employee_ghs=NULL, ssnit_employer_ghs=NULL, tier2_ghs=NULL, tier2_bearer=NULL, taxable_income_ghs=NULL, paye_ghs=NULL, custom_deductions=NULL, total_employee_deductions_ghs=NULL, employer_contributions_ghs=NULL, employer_cost_ghs=NULL, net_pay_ghs=5387.50 WHERE employee_name='Michael Quaye' AND run_id IN (SELECT id FROM payroll_runs WHERE period='2026-08' AND business_id=27)`);
+await dbc.query(`UPDATE payroll_entries SET gross_pay_ghs=NULL, ssnit_employee_ghs=NULL, ssnit_employer_ghs=NULL, tier2_ghs=NULL, tier2_bearer=NULL, taxable_income_ghs=NULL, paye_ghs=NULL, custom_deductions=NULL, total_employee_deductions_ghs=NULL, employer_contributions_ghs=NULL, employer_cost_ghs=NULL, net_pay_ghs=4500 WHERE employee_name='Doris Ansah' AND run_id IN (SELECT id FROM payroll_runs WHERE period IN ('2026-06','2026-07') AND business_id=${poultryBiz})`);
+await dbc.query(`UPDATE payroll_entries SET gross_pay_ghs=NULL, ssnit_employee_ghs=NULL, ssnit_employer_ghs=NULL, tier2_ghs=NULL, tier2_bearer=NULL, taxable_income_ghs=NULL, paye_ghs=NULL, custom_deductions=NULL, total_employee_deductions_ghs=NULL, employer_contributions_ghs=NULL, employer_cost_ghs=NULL, net_pay_ghs=5387.50 WHERE employee_name='Michael Quaye' AND run_id IN (SELECT id FROM payroll_runs WHERE period='2026-08' AND business_id=${techBiz})`);
 await dbc.query(`UPDATE transactions t SET amount_ghs=4500, description='Payroll 2026-06 — Doris Ansah (Senior Farm Veterinarian) · base 4500 + allow 0 + OT 0 − ded 0' FROM payroll_entries e WHERE e.transaction_id=t.id AND e.employee_name='Doris Ansah' AND t.description LIKE 'Payroll 2026-06%'`);
 await dbc.query(`UPDATE transactions t SET amount_ghs=4500, description='Payroll 2026-07 — Doris Ansah (Senior Farm Veterinarian) · base 4500 + allow 0 + OT 0 − ded 0' FROM payroll_entries e WHERE e.transaction_id=t.id AND e.employee_name='Doris Ansah' AND t.description LIKE 'Payroll 2026-07%'`);
 await dbc.query(`UPDATE transactions t SET amount_ghs=5387.50, description='Payroll 2026-08 — Michael Quaye (Solar Systems Engineer) · base 5200 + allow 0 + OT 187.5 − ded 0' FROM payroll_entries e WHERE e.transaction_id=t.id AND e.employee_name='Michael Quaye' AND t.description LIKE 'Payroll 2026-08%'`);
 console.log("✔ legacy payroll amounts normalized (4500 / 4500 / 5387.50)");
-} // end legacy mirror history (fresh seeds skip the block above only)
 
 // 4) Emmanuel's auditor grant → Mina Concrete & Blocks, all 8 modules.
 // Business ids are resolved at runtime — the old snapshot had this unit as
@@ -130,7 +127,9 @@ console.log(rev.rowCount ? "✔ Comfort's revoked audit grant kept revoked (roll
 // Replayed through /api/poultry so every side-effect (egg crates + dressed
 // birds stocked into Inventory) reproduces exactly like the original entry.
 // Each row guarded by its exact values → idempotent.
-const P = { recordedByName: "Kwame Mina", recordedByRole: "OWNER", businessId: 22 };
+// 4c payloads target the poultry flagship resolved in section 2 — the old
+// snapshot carried it as business 22 (cloned-unit era).
+const P = { recordedByName: "Kwame Mina", recordedByRole: "OWNER", businessId: poultryBiz };
 const replayOnce = async (label, guardSql, entity, data) => {
   const n = Number((await dbc.query(guardSql)).rows[0].c);
   if (n > 0) { console.log(`• ${label} already present, skipping`); return; }

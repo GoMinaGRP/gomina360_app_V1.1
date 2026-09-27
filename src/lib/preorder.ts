@@ -468,8 +468,12 @@ export async function postGoodsReceipt({
     .returning();
 
   // Supplier expense — booked exactly once alongside the receipt so Finance
-  // shows the cost when the goods physically land.
-  if (!po.expenseBooked && Number(po.totalGhs) > 0) {
+  // shows the cost when the goods physically land. R2 payment modes:
+  // ON_RECEIPT (default, the historical behaviour) books here; ON_CREDIT
+  // books nothing at GRN — the recorded supplier payment books it instead,
+  // giving a true payables ledger without touching the default flow.
+  const poPaymentMode = String((po as any).paymentMode || "ON_RECEIPT").toUpperCase();
+  if (poPaymentMode === "ON_RECEIPT" && !po.expenseBooked && Number(po.totalGhs) > 0) {
     const dateStr = new Date().toISOString().split("T")[0];
     await db.insert(transactions).values({
       transactionNumber: `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,

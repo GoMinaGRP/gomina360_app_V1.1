@@ -37,6 +37,7 @@ import {
 import { getSystemMarker, setSystemMarker } from "@/lib/systemMarkers";
 import { ensureTodayFor } from "@/lib/checklistGen";
 import { sweepLowStock, lowStockItemsForBusiness } from "@/lib/lowStock";
+import { draftLowStockRequisitions } from "@/lib/procurement";
 import { autoCompleteLinkedTasks, escalateOverdueTasks, todayLocalISO, ACTION_OPEN_STATUSES } from "@/lib/actionCenter";
 import { pushAfterBell } from "@/lib/push";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -54,6 +55,7 @@ export interface DailyOpsResult {
   tasksEscalated?: number;
   issuesEscalated?: number;
   digests?: { userId: number; sent: boolean; reason?: string }[];
+  draftedRequisitions?: number;
   steps?: { step: string; ok: boolean; error?: string }[];
 }
 
@@ -276,6 +278,16 @@ export async function runDailyOps(opts: { source: "cron" | "init" | "manual" }):
     steps.push({ step: "low-stock", ok: true });
   } catch (e) {
     steps.push({ step: "low-stock", ok: false, error: String((e as any)?.message || e) });
+  }
+
+  // b2. R2 — low-stock → draft purchase requisitions (marker-gated per
+  // business+day; managers review before submitting for approval).
+  try {
+    const drafted = await draftLowStockRequisitions({ businessIds: null });
+    result.draftedRequisitions = drafted.length;
+    steps.push({ step: "low-stock-pr", ok: true });
+  } catch (e) {
+    steps.push({ step: "low-stock-pr", ok: false, error: String((e as any)?.message || e) });
   }
 
   // c. Auto-complete tasks whose linked source was resolved.

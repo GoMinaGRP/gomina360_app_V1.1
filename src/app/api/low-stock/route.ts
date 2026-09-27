@@ -67,12 +67,25 @@ export async function POST(request: NextRequest) {
       }
       const { sweepLowStock } = await import("@/lib/lowStock");
       const results = await sweepLowStock(ids, { actorName: user.name });
+      // R2: ?all=1&draftPr=1 — after the sweep, also draft one purchase
+      // requisition per business that still has low/out items (marker-gated
+      // per business+day). The daily cron passes the same flag.
+      if (searchParams.get("draftPr") === "1") {
+        const { draftLowStockRequisitions } = await import("@/lib/procurement");
+        const drafted = await draftLowStockRequisitions({ businessIds: ids });
+        return NextResponse.json({ success: true, results, draftedRequisitions: drafted });
+      }
       return NextResponse.json({ success: true, results });
     }
     if (!(await canAccessBusiness(user, businessId))) {
       return FORBIDDEN("That business is outside your scope.");
     }
     const result = await sweepLowStockForBusiness(businessId, { actorName: user.name });
+    if (searchParams.get("draftPr") === "1") {
+      const { draftLowStockRequisitions } = await import("@/lib/procurement");
+      const drafted = await draftLowStockRequisitions({ businessIds: [businessId] });
+      return NextResponse.json({ success: true, result, draftedRequisitions: drafted });
+    }
     return NextResponse.json({ success: true, result });
   } catch (e) {
     console.error("[api/low-stock POST]", e);
