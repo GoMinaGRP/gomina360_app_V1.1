@@ -18,8 +18,10 @@ const WORKER = { email: "akua.donkor@gomina360.com", pw: process.env.AKUA_PW || 
 const BM = { email: "emmanuel@gomina360.com", pw: process.env.BM_PW || "GoMina@User3" };
 const GM = { email: "abena.gm@gomina360.com", pw: process.env.GM_PW || "GoMina@User2" };
 
-const BIZ = 8; // GoMina Hardware & Building Materials Depot (org 1)
-const NAILS = 8; // Common Wire Nails 3in — fixture for both GRN + low-stock
+let BIZ = -1; // GoMina Hardware & Building Materials Depot (org 1) — resolved by code
+let NAILS = -1; // Common Wire Nails 3in — fixture for both GRN + low-stock, resolved by SKU
+// (ids change whenever HARDWARE-01 is re-provisioned by verify-hardware-audit's
+//  destructive phase — resolve at runtime instead of hard-coding.)
 
 const checks = [];
 let failures = 0;
@@ -33,6 +35,10 @@ const client = new pg.Client(DB);
 await client.connect();
 const q = async (sql, params) => (await client.query(sql, params)).rows;
 const q1 = async (sql, params) => (await q(sql, params))[0];
+
+// Resolve fixtures by stable business/sku codes (ids drift across re-provisions).
+BIZ = (await q1(`select id from businesses where code='HARDWARE-01'`))?.id ?? -1;
+NAILS = (await q1(`select id from inventory_items where business_id=$1 and sku='HARDWARE-01-NAILS-3IN'`, [BIZ]))?.id ?? -1;
 
 async function apiLogin(cred) {
   const r = await fetch(`${BASE}/api/auth/login`, {
