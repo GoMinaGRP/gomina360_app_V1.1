@@ -10,6 +10,7 @@ import LivestockModule from "./LivestockModule";
 import SharedEnterpriseModule from "./SharedEnterpriseModule";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
 import PreordersHubView from "./PreordersHubView";
+import DocumentVaultPanel from "./DocumentVaultPanel";
 import AiAdvisorView from "./AiAdvisorView";
 import ScenarioPlannerView from "./ScenarioPlannerView";
 import IntegrationsHubView from "./IntegrationsHubView";
@@ -1310,6 +1311,12 @@ export default function GoMinaApp() {
           businesses={scopedBusinesses}
         />
       );
+    }
+
+    // R4 — Document Vault: every business document in one registry (uploads
+    // + generated vet reports & delivery notes), scoped like the rest.
+    if (activeTab === "DOCUMENTS") {
+      return <DocumentVaultPanel currentUser={currentUser} businesses={scopedBusinesses} />;
     }
 
     if (activeTab === "TRACKING") {

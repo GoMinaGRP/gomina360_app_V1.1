@@ -36,6 +36,7 @@ import {
   CalendarClock,
   Stethoscope,
   ListTodo,
+  FolderLock,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -56,6 +57,7 @@ export type ActiveTab =
   | "ASSETS"
   | "INVENTORY"
   | "TRANSACTIONS"
+  | "DOCUMENTS"
   | "FINANCE"
   | "AI_ADVISOR"
   | "SCENARIO_PLANNER"
@@ -610,6 +612,20 @@ export default function Sidebar({
                 <span>Pre-Orders</span>
               </div>
               <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("DOCUMENTS")}
+              data-testid="sidebar-tab-documents"
+              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "DOCUMENTS"
+                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <FolderLock className="w-4 h-4 text-teal-400/90" />
+              <span>Document Vault</span>
+              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">NEW</span>
             </button>
 
             <button

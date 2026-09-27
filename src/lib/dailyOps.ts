@@ -39,6 +39,7 @@ import { ensureTodayFor } from "@/lib/checklistGen";
 import { sweepLowStock, lowStockItemsForBusiness } from "@/lib/lowStock";
 import { draftLowStockRequisitions } from "@/lib/procurement";
 import { sweepDunning } from "@/lib/customerInsights";
+import { sweepDocumentExpiry } from "@/lib/documents";
 import { autoCompleteLinkedTasks, escalateOverdueTasks, todayLocalISO, ACTION_OPEN_STATUSES } from "@/lib/actionCenter";
 import { pushAfterBell } from "@/lib/push";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -58,6 +59,7 @@ export interface DailyOpsResult {
   digests?: { userId: number; sent: boolean; reason?: string }[];
   draftedRequisitions?: number;
   dunningSent?: number;
+  documentsExpiring?: number;
   steps?: { step: string; ok: boolean; error?: string }[];
 }
 
@@ -300,6 +302,16 @@ export async function runDailyOps(opts: { source: "cron" | "init" | "manual" }):
     steps.push({ step: "dunning", ok: true });
   } catch (e) {
     steps.push({ step: "dunning", ok: false, error: String((e as any)?.message || e) });
+  }
+
+  // b4. R4 — document expiry sweep: licences/permits/insurance warn the unit
+  // at 30 / 7 / 0 days out (marker-gated per document+window).
+  try {
+    const expiring = await sweepDocumentExpiry();
+    result.documentsExpiring = expiring.length;
+    steps.push({ step: "doc-expiry", ok: true });
+  } catch (e) {
+    steps.push({ step: "doc-expiry", ok: false, error: String((e as any)?.message || e) });
   }
 
   // c. Auto-complete tasks whose linked source was resolved.
