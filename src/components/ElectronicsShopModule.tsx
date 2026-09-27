@@ -15,6 +15,7 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
+import SaleFields from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 
@@ -871,7 +872,6 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
     "Log Unit Check (Ops Log)";
 
   const selectedItem = (inventory || []).find((i: any) => String(i.id) === String(f.inventoryId));
-  const saleTotal = (Number(f.quantity) || 0) * (f.sellingPrice ? Number(f.sellingPrice) : selectedItem?.sellingPriceGhs || 0);
 
   const handle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -881,14 +881,7 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
   const purchaseStatusOpts = [{ v: "ORDERED", l: "Ordered (on the way)" }, { v: "RECEIVED", l: "Received (stock-in + expense booked)" }];
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
-    {type === "SALE" && <>
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
-      <FormSelect f={f} set={set} label="Product" k="inventoryId" opts={[{ v: "", l: "— select product —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} />
-      <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="sellingPrice" t="number" step="0.01" placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"} /></div>
-      <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" /><FormField f={f} set={set} label="Discount (GH₵)" k="discount" t="number" step="0.01" min={0} /></div>
-      <FormField f={f} set={set} label="Custom price reason (if discounted)" k="customPriceReason" /><FormField f={f} set={set} label="Notes" k="notes" />
-      {saleTotal > 0 && <div className="text-xs text-cyan-300 font-bold">Total: {formatMoney(saleTotal, currency)}</div>}
-    </>}
+    {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} totalTone="text-cyan-300" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Rent, Fuel, Utilities, Repair..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Product Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Electronics & Solar" list="tec-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Units" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="tec-item-cats">{["Electronics & Solar", "Phones & Accessories", "Computers", "Home Appliances", "TV & Audio"].map((c) => <option key={c} value={c} />)}</datalist></>}
     {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Product (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Item Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. 65-inch 4K QLED Smart TV"} />{selectedItem && !f.itemName && <p className="text-[10px] text-cyan-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormSelect f={f} set={set} label="Status" k="status" opts={["PENDING", "READY", "DELIVERED", "CANCELLED"]} /><FormField f={f} set={set} label="Notes" k="notes" /></>}

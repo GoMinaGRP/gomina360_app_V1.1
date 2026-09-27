@@ -159,30 +159,38 @@ async function sectionB() {
   const { ctx, page } = await newPage("storefront-desktop");
   // AZ-AUDIT-REPORT M5: never hardcode the storefront biz id (was biz=8).
   await page.goto(`${BASE}/order?biz=${HW}`, { waitUntil: "networkidle0", timeout: 60000 });
-  await page.waitForSelector('[data-testid="oo-add-6"]', { timeout: 30000 });
+  // M5 (ids): storefront product testids carry the inventory DB id, which
+  // fresh reseeds regenerate — resolve the flagship cement item at runtime
+  // instead of the old snapshot's oo-add-6.
+  const CEM = (await pg.query(
+    `SELECT id::int id FROM inventory_items WHERE business_id = $1 AND sku LIKE '%CEMENT-50KG' ORDER BY id LIMIT 1`,
+    [HW],
+  )).rows[0]?.id;
+  if (!CEM) throw new Error("preflight: hardware cement storefront item missing — re-provision HARDWARE-01");
+  await page.waitForSelector(`[data-testid="oo-add-${CEM}"]`, { timeout: 30000 });
 
   // — typed quantity —
-  await page.click('[data-testid="oo-add-6"]');
-  await page.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 10000 });
-  const isInput = await page.$eval('[data-testid="oo-qty-6"]', (el) => el.tagName);
-  ok("B1 quantity is a typeable INPUT (kept oo-qty-6 testid)", isInput === "INPUT", isInput);
-  await fillField(page, "oo-qty-6", "4");
+  await page.click(`[data-testid="oo-add-${CEM}"]`);
+  await page.waitForSelector(`[data-testid="oo-qty-${CEM}"]`, { timeout: 10000 });
+  const isInput = await page.$eval(`[data-testid="oo-qty-${CEM}"]`, (el) => el.tagName);
+  ok("B1 quantity is a typeable INPUT (kept oo-qty testid)", isInput === "INPUT", isInput);
+  await fillField(page, `oo-qty-${CEM}`, "4");
   await sleep(300);
   let total = await page.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("B2 typed qty 4 → cart total GH₵ 472.00", /472\.00/.test(total), total);
-  await fillField(page, "oo-qty-6", "9999");
+  await fillField(page, `oo-qty-${CEM}`, "9999");
   await sleep(300);
   total = await page.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("B3 typed qty clamps to available stock 200 → GH₵ 23600.00", /23600\.00/.test(total), total);
-  await fillField(page, "oo-qty-6", "0");
+  await fillField(page, `oo-qty-${CEM}`, "0");
   await sleep(300);
-  ok("B4 typing 0 removes the line (Add button returns)", !!(await page.$('[data-testid="oo-add-6"]')));
+  ok("B4 typing 0 removes the line (Add button returns)", !!(await page.$(`[data-testid="oo-add-${CEM}"]`)));
   // stepper still works
-  await page.click('[data-testid="oo-add-6"]');
-  await page.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 5000 });
-  await page.click('[data-testid="oo-plus-6"]');
+  await page.click(`[data-testid="oo-add-${CEM}"]`);
+  await page.waitForSelector(`[data-testid="oo-qty-${CEM}"]`, { timeout: 5000 });
+  await page.click(`[data-testid="oo-plus-${CEM}"]`);
   await sleep(200);
-  const stepped = await page.$eval('[data-testid="oo-qty-6"]', (el) => el.value);
+  const stepped = await page.$eval(`[data-testid="oo-qty-${CEM}"]`, (el) => el.value);
   ok("B5 −/+ stepper still works alongside typing (1→2)", stepped === "2", stepped);
 
   // — live phone validation —

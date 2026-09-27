@@ -133,7 +133,13 @@ async function sectionC() {
 
   // — desktop profile: hardware depot has many categories —
   const { ctx, page: p } = await newPage("catalog-desktop");
-  await p.goto(`${BASE}/order?biz=8`, { waitUntil: "networkidle0", timeout: 60000 });
+  // M5 (ids): the hardware flagship's biz id regenerates on fresh reseeds —
+  // resolve it (and its cement storefront item) at runtime, never biz=8/oo-add-6.
+  const CAT_HW = (await pg.query(`SELECT id::int id FROM businesses WHERE code = 'HARDWARE-01' AND owner_id = 1 ORDER BY id LIMIT 1`)).rows[0]?.id;
+  if (!CAT_HW) throw new Error("preflight: HARDWARE-01 missing — re-provision before running");
+  const CAT_CEM = (await pg.query(`SELECT id::int id FROM inventory_items WHERE business_id = $1 AND sku LIKE '%CEMENT-50KG' ORDER BY id LIMIT 1`, [CAT_HW])).rows[0]?.id;
+  if (!CAT_CEM) throw new Error("preflight: hardware cement storefront item missing");
+  await p.goto(`${BASE}/order?biz=${CAT_HW}`, { waitUntil: "networkidle0", timeout: 60000 });
   await p.waitForSelector('[data-testid="oo-catalog"]', { timeout: 30000 });
   const secs = await p.evaluate(() => {
     const names = [...document.querySelectorAll('[data-testid^="oo-catsec-"]')]
@@ -173,9 +179,9 @@ async function sectionC() {
   await sleep(300);
 
   // full ordering flow still works (typed qty + checkout)
-  await p.click('[data-testid="oo-add-6"]');
-  await p.waitForSelector('[data-testid="oo-qty-6"]', { timeout: 5000 });
-  await fillField(p, "oo-qty-6", "3");
+  await p.click(`[data-testid="oo-add-${CAT_CEM}"]`);
+  await p.waitForSelector(`[data-testid="oo-qty-${CAT_CEM}"]`, { timeout: 5000 });
+  await fillField(p, `oo-qty-${CAT_CEM}`, "3");
   await sleep(300);
   const total = await p.$eval('[data-testid="oo-cart-total"]', (el) => el.textContent || "");
   ok("C9 typed quantity in the grouped catalog updates cart total (3 × 118)", /354\.00/.test(total), total);

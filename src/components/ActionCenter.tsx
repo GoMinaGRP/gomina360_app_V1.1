@@ -327,7 +327,18 @@ export default function ActionCenter({
 
       {/* Task list */}
       {loading && !data ? (
-        <div className="flex items-center justify-center py-16 text-slate-400"><Loader2 className="w-6 h-6 animate-spin" /></div>
+        <div className="space-y-2.5" data-testid="action-list" aria-busy="true" aria-label="Loading actions">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="rounded-xl border border-slate-700/70 bg-slate-800/50 p-4 animate-pulse flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-slate-700/60" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3 w-2/5 rounded bg-slate-700/60" />
+                <div className="h-2.5 w-3/5 rounded bg-slate-700/40" />
+              </div>
+              <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+            </div>
+          ))}
+        </div>
       ) : tasks.length === 0 ? (
         <div className="rounded-2xl border border-slate-700/70 bg-slate-800/50 p-10 text-center" data-testid="action-empty">
           <CheckCircle2 className="w-10 h-10 text-emerald-400/60 mx-auto mb-3" />
