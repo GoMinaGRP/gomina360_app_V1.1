@@ -26,6 +26,7 @@ import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
 import AssetRegistrationModal from "./AssetRegistrationModal";
+import Customer360Drawer from "./Customer360Drawer";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import QrScanModal from "./QrScanModal";
@@ -287,6 +288,8 @@ export default function SharedEnterpriseModule({
   const [recordErr, setRecordErr] = useState("");
   const [deletionLogs, setDeletionLogs] = useState<any[]>([]);
   const [showAccessModal, setShowAccessModal] = useState(false);
+  // R3 — Customer 360 drawer target (null ⇒ closed).
+  const [c360Customer, setC360Customer] = useState<any>(null);
   const [accessUsers, setAccessUsers] = useState<any[]>([]);
   const [accessBusy, setAccessBusy] = useState<string | null>(null);
 
@@ -2009,7 +2012,19 @@ export default function SharedEnterpriseModule({
                     <td className="px-4 py-3.5 text-right font-semibold text-amber-300">
                       {c.loyaltyPoints} pts
                     </td>
-                    <RecordActions r={c} prefix="customer" />
+                    <td className="px-4 py-3.5 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => setC360Customer(c)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40 text-[11px] font-bold"
+                          title="Full relationship: interactions, credit, statement"
+                          data-testid={`cust-360-${c.id}`}
+                        >
+                          360°
+                        </button>
+                        <RecordActions r={c} prefix="customer" />
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -3774,6 +3789,16 @@ export default function SharedEnterpriseModule({
           onClose={() => setEmpProfile(null)}
           onEdit={(e) => { setEmpProfile(null); setEmpEdit(e); setShowEmpReg(true); }}
           onChanged={onRefreshData}
+        />
+      )}
+
+      {/* R3 — Customer 360 drawer */}
+      {c360Customer && (
+        <Customer360Drawer
+          customer={c360Customer}
+          businesses={businesses}
+          onClose={() => setC360Customer(null)}
+          onUpdated={onRefreshData}
         />
       )}
 

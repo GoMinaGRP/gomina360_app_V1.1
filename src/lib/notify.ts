@@ -555,3 +555,54 @@ export async function notifyApprovalDecision({
     return 0;
   }
 }
+
+/** R3 dunning — bell + push the branch team about an overdue credit sale.
+ *  Stages: T+1 gentle reminder, T+7 firm chase, T+30 final notice. */
+export async function notifyDunning({
+  businessId,
+  branchCode,
+  creditCode,
+  customerName,
+  customerPhone,
+  balanceGhs,
+  daysOverdue,
+  stage,
+}: {
+  businessId: number;
+  branchCode?: string | null;
+  creditCode: string;
+  customerName: string;
+  customerPhone?: string | null;
+  balanceGhs: number;
+  daysOverdue: number;
+  stage: "REMINDER" | "FIRM" | "FINAL";
+}): Promise<void> {
+  try {
+    const recipients = await orderNotificationRecipients(businessId);
+    const titles: Record<string, string> = {
+      REMINDER: `Credit ${creditCode} is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} past due`,
+      FIRM: `Credit ${creditCode} — ${daysOverdue} days overdue, chase firmly`,
+      FINAL: `Credit ${creditCode} — ${daysOverdue} days overdue: final notice before escalation`,
+    };
+    await fanOut(recipients, {
+      type: "CREDIT_OVERDUE",
+      title: titles[stage] || titles.REMINDER,
+      body: `${customerName}${customerPhone ? ` (${customerPhone})` : ""} still owes GH₵ ${Number(balanceGhs).toFixed(2)} on credit sale ${creditCode}. ${
+        stage === "REMINDER"
+          ? "Send a friendly payment reminder today."
+          : stage === "FIRM"
+            ? "Call the customer and agree a settlement date."
+            : "Issue the final notice and prepare for escalation (recovery / suspension of further credit)."
+      }`,
+      recordType: "credit-sales",
+      recordId: null,
+      recordRef: `dunning:${creditCode}:${stage}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: "Dunning sweep",
+      priority: stage === "FINAL" ? "URGENT" : null,
+    });
+  } catch (e) {
+    console.error("[notify] notifyDunning failed:", e);
+  }
+}

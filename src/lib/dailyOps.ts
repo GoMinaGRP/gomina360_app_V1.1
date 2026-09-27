@@ -38,6 +38,7 @@ import { getSystemMarker, setSystemMarker } from "@/lib/systemMarkers";
 import { ensureTodayFor } from "@/lib/checklistGen";
 import { sweepLowStock, lowStockItemsForBusiness } from "@/lib/lowStock";
 import { draftLowStockRequisitions } from "@/lib/procurement";
+import { sweepDunning } from "@/lib/customerInsights";
 import { autoCompleteLinkedTasks, escalateOverdueTasks, todayLocalISO, ACTION_OPEN_STATUSES } from "@/lib/actionCenter";
 import { pushAfterBell } from "@/lib/push";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -56,6 +57,7 @@ export interface DailyOpsResult {
   issuesEscalated?: number;
   digests?: { userId: number; sent: boolean; reason?: string }[];
   draftedRequisitions?: number;
+  dunningSent?: number;
   steps?: { step: string; ok: boolean; error?: string }[];
 }
 
@@ -288,6 +290,16 @@ export async function runDailyOps(opts: { source: "cron" | "init" | "manual" }):
     steps.push({ step: "low-stock-pr", ok: true });
   } catch (e) {
     steps.push({ step: "low-stock-pr", ok: false, error: String((e as any)?.message || e) });
+  }
+
+  // b3. R3 — dunning sweep: overdue credit sales escalate T+1 → T+7 → T+30
+  // (marker-gated per sale+stage, so each chase fires exactly once).
+  try {
+    const fired = await sweepDunning();
+    result.dunningSent = fired.length;
+    steps.push({ step: "dunning", ok: true });
+  } catch (e) {
+    steps.push({ step: "dunning", ok: false, error: String((e as any)?.message || e) });
   }
 
   // c. Auto-complete tasks whose linked source was resolved.

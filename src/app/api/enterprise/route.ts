@@ -127,6 +127,20 @@ function sanitizeSpecList(v: any): { key: string; value: string }[] | null {
   }
   return out;
 }
+/** R3 CRM — customer preferences JSONB: at most 20 trimmed key/value string
+ *  pairs (40-char keys, 200-char values). Junk keys are dropped. */
+function sanitizeCustomerPreferences(v: any): Record<string, string> | null {
+  if (v == null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v).slice(0, 20)) {
+    const key = String(k).trim().slice(0, 40);
+    if (!key) continue;
+    const s = String(val ?? "").trim().slice(0, 200);
+    if (s) out[key] = s;
+  }
+  return out;
+}
 function sanitizeVariantList(v: any): { name: string; note?: string }[] | null {
   if (v == null) return null;
   const out: { name: string; note?: string }[] = [];
@@ -241,6 +255,12 @@ export async function PATCH(request: Request) {
       if (d.district !== undefined) updates.district = d.district || null;
       if (d.town !== undefined) updates.town = d.town || null;
       if (d.businessId !== undefined && Number(d.businessId)) updates.businessId = Number(d.businessId);
+      // R3 CRM — flexible preferences (payment terms, preferred channel,
+      // delivery notes flags…): bounded key/value strings only.
+      if (d.preferences !== undefined) {
+        const prefs = sanitizeCustomerPreferences(d.preferences);
+        updates.preferences = prefs || {};
+      }
     } else if (moduleKey === "INVENTORY") {
       // Inventory & Stock — editable catalog fields. Quantity edits recompute
       // the IN_STOCK / LOW_STOCK / OUT_OF_STOCK status that drives alerts.
