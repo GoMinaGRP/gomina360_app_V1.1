@@ -25,11 +25,11 @@ const OWNER = { email: "kwame.owner@gomina360.com", pass: process.env.GOMINA_OWN
 const BM = { email: "emmanuel@gomina360.com", pass: "GoMina@User3", id: 3 };
 
 const CATEGORIES = [
-  { category: "Poultry Farm", name: "TEST Poultry Sprout", tabs: ["Dashboard", "Flock & Batch", "Feed", "Water", "Health & Vaccination", "Production", "Inventory", "Finance", "Daily Checklist", "AI Knowledge"], healthTest: "pa-empty" },
-  { category: "Aquaculture", name: "TEST Aqua Sprout", tabs: ["Dashboard", "Fish Stock & Batches", "Ponds / Tanks", "Feed Management", "Water Quality", "Tasks & Activities", "Harvest Status", "Finance"], healthTest: "aqua-health-empty" },
+  { category: "Poultry Farm", name: "TEST Poultry Sprout", tabs: ["Dashboard", "Flock & Batch", "Feed", "Water", "Health & Vaccination", "Production", "Inventory", "Finance & Reports", "Daily Checklist", "AI Knowledge"], healthTest: "pa-empty" },
+  { category: "Aquaculture", name: "TEST Aqua Sprout", tabs: ["Dashboard", "Fish Stock & Batches", "Ponds / Tanks", "Feed Management", "Water Quality", "Tasks & Activities", "Harvest Status", "Finance & Reports"], healthTest: "aqua-health-empty" },
   { category: "Hardware Store", name: "TEST Hardware Sprout", tabs: ["Dashboard", "Stock & Materials", "Orders & Purchases", "Site Deliveries", "Finance & Reports", "Staff & Yard Ops", "Daily Checklist"] },
-  { category: "Block Factory", name: "TEST Blocks Sprout", tabs: ["Dashboard", "Inventory", "Finance", "Quality Control", "Daily Checklist"] },
-  { category: "Livestock", name: "TEST Livestock Sprout", tabs: ["Overview", "Herd & Grazing", "Finance", "Daily Checklist"] },
+  { category: "Block Factory", name: "TEST Blocks Sprout", tabs: ["Dashboard", "Inventory", "Finance & Reports", "Quality Control", "Daily Checklist"] },
+  { category: "Livestock", name: "TEST Livestock Sprout", tabs: ["Overview", "Herd & Grazing", "Finance & Reports", "Daily Checklist"] },
   { category: "Restaurant & Food", name: "TEST Kitchen Sprout", tabs: ["Dashboard", "Menu Performance", "Stock, Cost & Waste", "Sales & Orders", "Purchases & Suppliers", "Finance & Reports", "Staff & Checklist"] },
   { category: "Electronic Shop", name: "TEST Electronics Sprout", tabs: ["Dashboard", "Products & Stock", "Orders & Purchases", "Finance & Reports", "Warranty & Serials", "Staff & Ops", "Daily Checklist"] },
   { category: "Car Wash", name: "TEST Wash Sprout", tabs: ["Dashboard", "Services & Pricing", "Bookings", "Active Washes", "Stock & Supplies", "Staff", "Finance & Reports", "Daily Checklist"] },

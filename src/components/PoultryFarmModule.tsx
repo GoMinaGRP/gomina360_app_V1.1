@@ -64,7 +64,7 @@ const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "HEALTH", label: "Health & Vaccination", icon: HeartPulse },
   { key: "PRODUCTION", label: "Production", icon: Egg },
   { key: "INVENTORY", label: "Inventory", icon: Boxes },
-  { key: "FINANCE", label: "Finance", icon: Wallet },
+  { key: "FINANCE", label: "Finance & Reports", icon: Wallet },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
   { key: "AI_KNOWLEDGE", label: "AI Knowledge", icon: BookOpen },
 ];

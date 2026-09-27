@@ -41,7 +41,7 @@ const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
   { key: "INVENTORY", label: "Inventory", icon: Boxes },
   { key: "MIXING", label: "Mixing", icon: Cog },
-  { key: "FINANCE", label: "Finance", icon: Wallet },
+  { key: "FINANCE", label: "Finance & Reports", icon: Wallet },
   { key: "QC", label: "Quality Control", icon: ShieldCheck },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
 ];

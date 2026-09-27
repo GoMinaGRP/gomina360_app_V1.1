@@ -11,7 +11,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "GoMina 360 | All-In-One Enterprise Command Center",
   description:
-    "Enterprise management and decision-support operating system for a Ghana-based business owner. Securely manage Poultry, Block Factory, Aquaculture, Livestock, Restaurant, Electronic Shop, Car Wash, and Hardware Store units from one centralized HQ.",
+    "Enterprise management and decision-support operating system for a Ghana-based business owner. Securely manage Poultry, Block Factory, Fish Farm, Livestock, Restaurant, Electronic Shop, Car Wash, and Hardware Store units from one centralized HQ.",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icons/icon-192.png", apple: "/icons/icon-192.png" },
 };

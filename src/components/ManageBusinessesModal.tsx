@@ -42,6 +42,7 @@ import LocationSelector, { LocationValue } from "./LocationSelector";
 import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
 import { businessManageIdsOf } from "@/lib/permissions";
+import { displayCategory } from "@/lib/businessTypeKeys";
 
 /** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
  *  the same convention used for employee photos and document uploads. */
@@ -789,7 +790,7 @@ export default function ManageBusinessesModal({
         const tc = d.typeChange;
         setNotice(
           tc
-            ? `"${d.business.name}" updated — type changed to ${d.business.category}. New-type starter kit (${tc.kitItemsAdded} items) and checklists provisioned automatically across inventory, finance, dashboards & reports.`
+            ? `"${d.business.name}" updated — type changed to ${displayCategory(d.business.category)}. New-type starter kit (${tc.kitItemsAdded} items) and checklists provisioned automatically across inventory, finance, dashboards & reports.`
             : `"${d.business.name}" updated — every dashboard, report and module now reflects the change.`
         );
         resetToList();
@@ -1151,7 +1152,7 @@ export default function ManageBusinessesModal({
                               )}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                              <span>{biz.category}</span>
+                              <span>{displayCategory(biz.category)}</span>
                               <span className="inline-flex items-center gap-1">
                                 <MapPin className="w-3 h-3" />
                                 {biz.branchLocation}
@@ -2084,7 +2085,7 @@ export default function ManageBusinessesModal({
                   >
                     {categoryOptionsForEdit(selected.category).map((c) => (
                       <option key={c} value={c}>
-                        {c}
+                        {displayCategory(c)}
                       </option>
                     ))}
                   </select>
@@ -2096,7 +2097,7 @@ export default function ManageBusinessesModal({
                   )}
                   {category !== selected.category && (
                     <p className="text-[10px] text-amber-300 mt-1">
-                      Type change: this unit will mount the {category} module; new-type starter
+                      Type change: this unit will mount the {displayCategory(category)} module; new-type starter
                       stock & checklists will be provisioned automatically.
                     </p>
                   )}

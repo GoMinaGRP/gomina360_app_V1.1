@@ -17,7 +17,7 @@ const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 export const BUSINESS_TYPES: BusinessTypeDef[] = [
   { key: "POULTRY_FARM", label: "Poultry Farm", aliases: ["poultry", "poultryfarm", "eggs", "broilers"] },
   { key: "BLOCK_FACTORY", label: "Block Factory", aliases: ["blockfactory", "blocks", "blockmoulding", "concrete"] },
-  { key: "AQUACULTURE", label: "Aquaculture", aliases: ["aquaculture", "fishfarm", "fish", "tilapia", "catfish"] },
+  { key: "AQUACULTURE", label: "Fish Farm", aliases: ["aquaculture", "fishfarm", "fish", "tilapia", "catfish"] },
   { key: "LIVESTOCK", label: "Livestock", aliases: ["livestock", "cattle", "smallruminants"] },
   { key: "RESTAURANT_FOOD", label: "Restaurant & Food", aliases: ["restaurantfood", "restaurant", "food", "fooddrinks", "restaurantandfood"] },
   { key: "ELECTRONIC_SHOP", label: "Electronic Shop", aliases: ["electronicshop", "electronics", "electronicsshop", "electronicsstore", "tech"] },
@@ -58,4 +58,15 @@ export const FARM_BUSINESS_TYPE_KEYS = ["POULTRY_FARM", "AQUACULTURE", "LIVESTOC
 
 export function isFarmBusinessCategory(category: string | null | undefined): boolean {
   return (FARM_BUSINESS_TYPE_KEYS as readonly string[]).includes(businessTypeKeyOf(category));
+}
+
+/**
+ * Display-layer category name (P2 rename directive): the stored DB category
+ * is "Aquaculture" — records, reports and API contracts keep it — but the
+ * product shows "Fish Farm". Map every stored category to its display label;
+ * unknown categories render as-is.
+ */
+export function displayCategory(category: string | null | undefined): string {
+  const c = (category || "").trim();
+  return c === "Aquaculture" ? "Fish Farm" : c;
 }

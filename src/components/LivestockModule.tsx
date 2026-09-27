@@ -38,7 +38,7 @@ type Tab = "OVERVIEW" | "HERD" | "FINANCE" | "CHECKLIST";
 const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "OVERVIEW", label: "Overview", icon: LayoutDashboard },
   { key: "HERD", label: "Herd & Grazing", icon: Beef },
-  { key: "FINANCE", label: "Finance", icon: Landmark },
+  { key: "FINANCE", label: "Finance & Reports", icon: Landmark },
   { key: "CHECKLIST", label: "Daily Checklist", icon: ClipboardCheck },
 ];
 

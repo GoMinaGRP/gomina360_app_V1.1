@@ -6,6 +6,7 @@ import { formatLocation } from "@/lib/ghanaLocations";
 import QrScanModal from "./QrScanModal";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { buildAssetQr } from "@/lib/qrRegistry";
+import { displayCategory } from "@/lib/businessTypeKeys";
 
 interface AssetRegistrationModalProps {
   isOpen: boolean;
@@ -411,7 +412,7 @@ export default function AssetRegistrationModal({
                   : businesses
                 ).map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.name} ({b.category})
+                    {b.name} ({displayCategory(b.category)})
                   </option>
                 ))}
               </select>

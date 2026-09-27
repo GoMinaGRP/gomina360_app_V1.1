@@ -56,7 +56,7 @@ const TABS: { key: AquaTab; label: string; icon: any }[] = [
   { key: "WATER", label: "Water Quality", icon: HeartPulse },
   { key: "HEALTH", label: "Tasks & Activities", icon: ClipboardCheck },
   { key: "HARVEST", label: "Harvest Status", icon: TrendingDown },
-  { key: "FINANCE", label: "Finance", icon: Wallet },
+  { key: "FINANCE", label: "Finance & Reports", icon: Wallet },
 ];
 
 export default function AquacultureModule({
@@ -854,8 +854,8 @@ export default function AquacultureModule({
         branchName={businessInfo?.name}
         businessName={businessInfo?.name}
         currentUser={currentUser}
-        title="Record Expense — Aquaculture"
-        contextLabel="Aquaculture"
+        title="Record Expense — Fish Farm"
+        contextLabel="Fish Farm"
         vendorPlaceholder="e.g. fish feed supplier"
         defaultCategory="Feed Purchase"
         defaultCategories={[
