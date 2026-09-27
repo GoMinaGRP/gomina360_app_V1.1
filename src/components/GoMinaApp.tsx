@@ -11,6 +11,7 @@ import SharedEnterpriseModule from "./SharedEnterpriseModule";
 import CustomerTrackingPanel from "./CustomerTrackingPanel";
 import PreordersHubView from "./PreordersHubView";
 import DocumentVaultPanel from "./DocumentVaultPanel";
+import BiAssistantPanel from "./BiAssistantPanel";
 import AiAdvisorView from "./AiAdvisorView";
 import ScenarioPlannerView from "./ScenarioPlannerView";
 import IntegrationsHubView from "./IntegrationsHubView";
@@ -1311,6 +1312,12 @@ export default function GoMinaApp() {
           businesses={scopedBusinesses}
         />
       );
+    }
+
+    // R5 — Unified BI Assistant: deterministic Q&A + the cross-module feed
+    // (OWNER / GM / BM — the API enforces the same gate).
+    if (activeTab === "BI_ASSISTANT") {
+      return <BiAssistantPanel />;
     }
 
     // R4 — Document Vault: every business document in one registry (uploads

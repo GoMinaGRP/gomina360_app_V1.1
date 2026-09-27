@@ -37,6 +37,7 @@ import {
   Stethoscope,
   ListTodo,
   FolderLock,
+  BrainCircuit,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -58,6 +59,7 @@ export type ActiveTab =
   | "INVENTORY"
   | "TRANSACTIONS"
   | "DOCUMENTS"
+  | "BI_ASSISTANT"
   | "FINANCE"
   | "AI_ADVISOR"
   | "SCENARIO_PLANNER"
@@ -612,6 +614,20 @@ export default function Sidebar({
                 <span>Pre-Orders</span>
               </div>
               <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
+            </button>
+
+            <button
+              onClick={() => selectTab("BI_ASSISTANT")}
+              data-testid="sidebar-tab-assistant"
+              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
+                activeTab === "BI_ASSISTANT"
+                  ? "bg-cyan-500/15 text-cyan-300 font-bold border-l-2 border-cyan-400"
+                  : "hover:bg-slate-800/70 text-slate-300"
+              }`}
+            >
+              <BrainCircuit className="w-4 h-4 text-cyan-400/90" />
+              <span>BI Assistant</span>
+              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">ASK</span>
             </button>
 
             <button
