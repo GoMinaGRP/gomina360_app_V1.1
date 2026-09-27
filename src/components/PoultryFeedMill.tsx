@@ -27,7 +27,10 @@ import {
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { FEED_UNITS, feedToKg, kgToFeedUnit, fmtKg } from "@/lib/feedUnits";
-import { computeFeedMillAnalytics, FmAlert } from "@/lib/feedMillAnalytics";
+import { computeFeedMillAnalytics } from "@/lib/feedMillAnalytics";
+import { Field, Stat, Alerts, statusPill, ModalShell, UnitPicker, SubmitBar, ErrBox, inputCls } from "@/lib/feedMill/parts";
+import { FormulaModal, IntakeModal, BatchModal, QcModal } from "@/lib/feedMill/modals";
+import { useFeedMill } from "@/lib/feedMill/useFeedMill";
 import ConfirmActionModal from "./ConfirmActionModal";
 
 interface Props {
@@ -44,73 +47,6 @@ type Modal = null | "FORMULA" | "EDIT_FORMULA" | "INTAKE" | "BATCH" | "QC" | "CO
 const FEED_TYPES = ["STARTER", "GROWER", "FINISHER", "LAYER_MASH", "BROILER_PRESTARTER", "BREEDER", "CONCENTRATE", "CUSTOM"];
 const QC_STAGES = ["RAW_MATERIAL", "GRINDING", "MIXING", "FINISHED_FEED", "STORAGE"];
 
-/* ══════════════════════════════ tiny primitives ═══════════════════════ */
-
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      {children}
-      {hint && <p className="text-[9px] text-slate-500 mt-1">{hint}</p>}
-    </div>
-  );
-}
-const inputCls = "w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:border-emerald-500/60 focus:outline-none";
-
-function Stat({ label, value, sub, color = "emerald", icon: Icon, testid }: any) {
-  return (
-    <div className="bg-slate-800/90 border border-slate-700/80 rounded-xl p-4" data-testid={testid}>
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] uppercase font-bold text-slate-400">{label}</span>
-        {Icon && <Icon className={`w-4 h-4 text-${color}-400`} />}
-      </div>
-      <div className={`text-lg font-black text-${color}-400 mt-1`}>{value}</div>
-      {sub && <div className="text-[10px] text-slate-500 mt-0.5">{sub}</div>}
-    </div>
-  );
-}
-
-function Alerts({ alerts }: { alerts: FmAlert[] }) {
-  if (!alerts.length) return null;
-  const styles: Record<string, string> = {
-    critical: "border-rose-500/40 bg-rose-500/10",
-    warning: "border-amber-500/40 bg-amber-500/10",
-    normal: "border-emerald-500/40 bg-emerald-500/10",
-  };
-  const iconOf = (l: string) =>
-    l === "critical" ? <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
-    : l === "warning" ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-    : <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />;
-  return (
-    <div className="space-y-2" data-testid="fm-alerts">
-      {alerts.map((a) => (
-        <div key={a.id} className={`rounded-xl border p-3 flex items-start gap-3 ${styles[a.level] || styles.normal}`}>
-          {iconOf(a.level)}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[9px] uppercase font-black tracking-wider text-slate-400">{a.category}</span>
-              <span className="text-xs font-bold text-white">{a.title}</span>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-0.5">{a.message}</p>
-            {a.recommendation && <p className="text-[10px] text-slate-400 mt-1 italic">→ {a.recommendation}</p>}
-          </div>
-          {a.value && (
-            <div className="text-right shrink-0">
-              <div className="text-sm font-black text-white">{a.value}</div>
-              {a.threshold && <div className="text-[9px] text-slate-500">{a.threshold}</div>}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const statusPill = (s: string) =>
-  s === "RELEASED" ? "bg-emerald-500/20 text-emerald-300" :
-  s === "QC_HOLD" ? "bg-amber-500/20 text-amber-300" :
-  s === "REJECTED" ? "bg-rose-500/20 text-rose-300" : "bg-slate-700 text-slate-300";
-
 /* ══════════════════════════════ main component ═════════════════════════ */
 
 export default function PoultryFeedMill({ currentUser, businessInfo, currentCurrency, onChanged }: Props) {
@@ -120,33 +56,19 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
   const role = currentUser?.role;
   const canOverride = role === "OWNER" || currentUser?.canManageRecords === true;
 
-  const [view, setView] = useState<View>("OVERVIEW");
-  const [modal, setModal] = useState<Modal>(null);
-  const [editForm, setEditForm] = useState<any>(null); // formulation being edited
-  const [qcBatch, setQcBatch] = useState<any>(null);   // batch context for QC modal
-  const [consumeBatch, setConsumeBatch] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; details: any[]; tone: any; label: string; run: () => Promise<void> }>(null);
-
-  const [mill, setMill] = useState<any>({
-    formulations: [], formulationItems: [], batches: [], batchInputs: [], qcChecks: [],
-    rawMaterials: [], finishedFeeds: [], consumption: [], feedLogs: [], flocks: [],
+  /* P1.2 — shared feed-mill engine (data flow, writes, stock math,
+   * release/reject governance). Species-specific insights + the flock
+   * consumption modal stay local to this module. */
+  const {
+    view, setView, modal, setModal, editForm, setEditForm, qcBatch, setQcBatch,
+    consumeBatch, setConsumeBatch, loading, busy, err, setErr, confirm, setConfirm,
+    mill, toast, refresh, post, finishOk, remainingOf, bomOf, stockLeft, askRelease, askReject,
+  } = useFeedMill({
+    apiBase: "/api/poultry/feed-mill",
+    bizId, currentCurrency, canOverride, onChanged,
+    feedNoun: "flock",
+    extraMillKeys: ["flocks"],
   });
-
-  const refresh = useCallback(async () => {
-    if (!bizId) return;
-    try {
-      const res = await fetch(`/api/poultry/feed-mill?businessId=${bizId}`);
-      const d = await res.json();
-      if (d.success) setMill(d);
-      else setErr(d.error || "Failed to load feed mill data.");
-    } catch (e: any) { setErr(e.message || "Network error"); }
-    finally { setLoading(false); }
-  }, [bizId]);
-
-  useEffect(() => { refresh(); }, [refresh]);
 
   const { formulations, formulationItems, batches, qcChecks, rawMaterials, finishedFeeds, consumption, flocks } = mill;
   const production: any[] = mill.production || [];
@@ -156,17 +78,6 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
     inventory: [...(mill.rawMaterials || []), ...(mill.finishedFeeds || [])],
     feedLogs: mill.feedLogs || [], currentCurrency,
   }), [mill, currentCurrency]);
-
-  /** kg remaining per released/hold batch = stocked − own-mill consumption so far. */
-  const remainingOf = useCallback((batch: any) => {
-    const used = (mill.consumption || [])
-      .filter((c: any) => c.feedBatchId === batch.id)
-      .reduce((s: number, c: any) => s + (c.quantityKg || 0), 0);
-    return Math.max(0, (batch.stockedQtyKg || 0) - used);
-  }, [mill.consumption]);
-
-  const bomOf = useCallback((formId: number) =>
-    formulationItems.filter((i: any) => i.formulationId === formId), [formulationItems]);
 
   /* Feed-conversion insight (last 30 days): own-mill kg fed vs flock output.
    * Layers: feed per 100 eggs & FCR-egg (kg feed per kg egg mass @58 g).
@@ -185,96 +96,6 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
       return { flock: fl, fed, eggs, weightOut, fcrEgg, feedPer100, broiler };
     }).filter((x: any) => x.fed > 0 || x.eggs > 0 || x.weightOut > 0);
   }, [flocks, consumption, production]);
-
-  const stockLeft = useCallback((inventoryId: number | null) => {
-    const hit = rawMaterials.find((r: any) => r.id === inventoryId);
-    return hit ? (hit.quantity || 0) : 0;
-  }, [rawMaterials]);
-
-  /* ── submit ── */
-  const post = async (entity: string, data: any, method = "POST") => {
-    setBusy(true); setErr("");
-    try {
-      // PATCH on this endpoint follows the app's shared convention:
-      // { entity, id (top-level), data } — POST uses { entity, data }.
-      const payload = method === "PATCH" ? { entity, id: data.id, data } : { entity, data };
-      const res = await fetch("/api/poultry/feed-mill", {
-        method, headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await res.json();
-      if (!d.success) { setErr(d.error || "Operation failed."); return false; }
-      return d;
-    } catch (e: any) { setErr(e.message || "Network error"); return false; }
-    finally { setBusy(false); }
-  };
-
-  const finishOk = async (msg: string) => {
-    setModal(null); setEditForm(null); setQcBatch(null); setConsumeBatch(null);
-    setErr("");
-    flash(msg);
-    await refresh();
-    onChanged();
-  };
-
-  const [toast, setToast] = useState("");
-  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 5000); };
-
-  /* ── release / reject ── */
-  const hasFinishedPass = (batchId: number) =>
-    qcChecks.some((q: any) => q.batchId === batchId && q.stage === "FINISHED_FEED" && q.passFail === "PASS");
-
-  const askRelease = (batch: any) => {
-    const passed = hasFinishedPass(batch.id);
-    if (!passed && !canOverride) {
-      setErr(`Batch ${batch.batchNumber} has no PASSING finished-feed QC check. Run a finished-feed test first (QC tab), or ask the Owner to override.`);
-      return;
-    }
-    setConfirm({
-      title: `Release ${batch.batchNumber}`,
-      message: passed
-        ? "This batch passed finished-feed QC. Releasing makes it available for flock feeding."
-        : "⚠ OVERRIDE: this batch has NO passing finished-feed QC check. As Owner/records manager you may release it with a justification that stays in the audit trail.",
-      details: [
-        { label: "Batch", value: batch.batchNumber },
-        { label: "Output", value: fmtKg(batch.actualOutputKg || 0, { bag: "BAG50" }) },
-        { label: "Cost", value: `${formatMoney(batch.costPerKgGhs, currentCurrency)}/kg` },
-        { label: "QC basis", value: passed ? "Finished-feed PASS" : "OWNER OVERRIDE (note required)" },
-      ],
-      tone: passed ? "emerald" : "amber",
-      label: passed ? "Release Batch" : "Override & Release",
-      run: async () => {
-        let note = "";
-        if (!passed) {
-          note = window.prompt("Override justification (audited):")?.trim() || "";
-          if (!note) { setErr("Override release needs a justification note."); return; }
-        }
-        const ok = await post("RELEASE", { businessId: bizId, batchId: batch.id, note });
-        if (ok) await finishOk(`Batch ${batch.batchNumber} released — ${batch.actualOutputKg} kg available for feeding.`);
-      },
-    });
-  };
-
-  const askReject = (batch: any) => {
-    if (!canOverride) { setErr("Only the Owner (or a records-authorized manager) may reject a batch."); return; }
-    setConfirm({
-      title: `Reject ${batch.batchNumber}?`,
-      message: "Rejecting discards the batch: its finished-feed stock-in is reversed and it can never be fed. This is permanent and audit-logged.",
-      details: [
-        { label: "Batch", value: batch.batchNumber },
-        { label: "Reverses", value: fmtKg(remainingOf(batch), { bag: "BAG50" }) },
-        { label: "Write-off", value: formatMoney(batch.totalCostGhs, currentCurrency) },
-      ],
-      tone: "rose",
-      label: "Reject Batch",
-      run: async () => {
-        const reason = window.prompt("Reason for rejection (audited):")?.trim() || "";
-        if (!reason) { setErr("Rejection needs a reason."); return; }
-        const ok = await post("REJECT", { businessId: bizId, batchId: batch.id, reason });
-        if (ok) await finishOk(`Batch ${batch.batchNumber} rejected; ${ok.stockReversedKg ?? remainingOf(batch)} kg reversed from stock.`);
-      },
-    });
-  };
 
   /* ══════════════════ render ══════════════════ */
   if (loading) {
@@ -666,6 +487,32 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
           existing={modal === "EDIT_FORMULA" ? editForm : null}
           bom={editForm ? bomOf(editForm.id) : []}
           rawMaterials={rawMaterials} busy={busy} error={err} canDeactivate={canOverride}
+          tidPrefix="fm"
+          initial={editForm ? {
+            name: editForm.name, feedType: editForm.feedType, birdType: editForm.birdType,
+            ageFromWks: editForm.ageFromWks ?? "", ageToWks: editForm.ageToWks ?? "",
+            batchSizeKg: editForm.batchSizeKg, cpPctTarget: editForm.cpPctTarget ?? "",
+            meKcalKgTarget: editForm.meKcalKgTarget ?? "", commercialRefPriceGhs: editForm.commercialRefPriceGhs ?? "",
+            notes: editForm.notes || "", active: editForm.active !== false,
+          } : {
+            name: "", feedType: "LAYER_MASH", birdType: "LAYERS", ageFromWks: "", ageToWks: "",
+            batchSizeKg: 500, cpPctTarget: "", meKcalKgTarget: "", commercialRefPriceGhs: "", notes: "", active: true,
+          }}
+          speciesFields={(f: any, set: (k: string, v: any) => void) => (<>
+            <Field label="Feed type">
+              <select value={f.feedType} onChange={(e) => set("feedType", e.target.value)} className={inputCls}>
+                {FEED_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Bird type">
+              <select value={f.birdType} onChange={(e) => set("birdType", e.target.value)} className={inputCls}>
+                {["LAYERS", "BROILERS", "COCKERELS", "TURKEYS", "GUINEA_FOWL", "BOTH"].map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Age from (weeks)"><input type="number" step="0.5" value={f.ageFromWks} onChange={(e) => set("ageFromWks", e.target.value)} className={inputCls} /></Field>
+            <Field label="Age to (weeks)"><input type="number" step="0.5" value={f.ageToWks} onChange={(e) => set("ageToWks", e.target.value)} className={inputCls} /></Field>
+            <Field label="ME target (kcal/kg)"><input type="number" step="1" value={f.meKcalKgTarget} onChange={(e) => set("meKcalKgTarget", e.target.value)} className={inputCls} placeholder="e.g. 2750" /></Field>
+          </>)}
           onClose={() => { setModal(null); setEditForm(null); setErr(""); }}
           onSubmit={async (payload: any) => {
             const base = { businessId: bizId, branchCode, branchName, ...payload };
@@ -701,6 +548,15 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
       {modal === "QC" && (
         <QcModal batches={batches.filter((b: any) => b.status !== "REJECTED")} preset={qcBatch} busy={busy} error={err}
           testerName={currentUser?.name} testerRole={currentUser?.role}
+          tidPrefix="fm" qcStages={QC_STAGES}
+          extraFields={(f: any, set: (k: string, v: any) => void) => (
+            <Field label="Texture">
+              <select value={f.textureGrade || ""} onChange={(e) => set("textureGrade", e.target.value)} className={inputCls}>
+                <option value="">—</option><option>FINE</option><option>MEDIUM</option><option>COARSE</option>
+              </select>
+            </Field>
+          )}
+          extraPayload={(f: any) => ({ textureGrade: f.textureGrade || undefined })}
           onClose={() => { setModal(null); setQcBatch(null); setErr(""); }}
           onSubmit={async (payload: any) => {
             const ok = await post("QC", { businessId: bizId, branchCode, ...payload });
@@ -729,403 +585,6 @@ export default function PoultryFeedMill({ currentUser, businessInfo, currentCurr
         testid="fm-confirm"
       />
     </div>
-  );
-}
-
-/* ══════════════════════════════ modal shell ════════════════════════════ */
-
-function ModalShell({ title, icon: Icon, onClose, children, wide }: any) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${wide ? "max-w-2xl" : "max-w-lg"} shadow-2xl max-h-[92vh] flex flex-col`}>
-        <div className="flex items-center justify-between border-b border-slate-800 p-5">
-          <h3 className="text-base font-bold text-white flex items-center gap-2">{Icon && <Icon className="w-4 h-4 text-emerald-400" />} {title}</h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-function UnitPicker({ f, set, k = "unit" }: any) {
-  return (
-    <Field label="Unit">
-      <select value={f[k]} onChange={(e) => set(k, e.target.value)} className={inputCls}>
-        {FEED_UNITS.map((u) => <option key={u.key} value={u.key}>{u.label}</option>)}
-      </select>
-    </Field>
-  );
-}
-
-function SubmitBar({ busy, label, testid }: any) {
-  return (
-    <button type="submit" disabled={busy} data-testid={testid}
-      className="w-full mt-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold transition">
-      {busy ? "Saving…" : label}
-    </button>
-  );
-}
-
-const ErrBox = ({ error }: any) => error ? <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-2.5 rounded-lg text-xs mb-3">{error}</div> : null;
-
-/* ═════════════════════════ FORMULA builder ═════════════════════════════ */
-
-function FormulaModal({ existing, bom, rawMaterials, busy, error, canDeactivate, onClose, onSubmit }: any) {
-  const [f, setF] = useState<any>(existing ? {
-    name: existing.name, feedType: existing.feedType, birdType: existing.birdType,
-    ageFromWks: existing.ageFromWks ?? "", ageToWks: existing.ageToWks ?? "",
-    batchSizeKg: existing.batchSizeKg, cpPctTarget: existing.cpPctTarget ?? "",
-    meKcalKgTarget: existing.meKcalKgTarget ?? "", commercialRefPriceGhs: existing.commercialRefPriceGhs ?? "",
-    notes: existing.notes || "", active: existing.active !== false,
-  } : {
-    name: "", feedType: "LAYER_MASH", birdType: "LAYERS", ageFromWks: "", ageToWks: "",
-    batchSizeKg: 500, cpPctTarget: "", meKcalKgTarget: "", commercialRefPriceGhs: "", notes: "", active: true,
-  });
-  const [items, setItems] = useState<any[]>(bom?.length
-    ? bom.map((b: any) => ({ inventoryId: b.inventoryId, ingredientName: b.ingredientName, sharePct: b.sharePct }))
-    : [{ inventoryId: null, ingredientName: "", sharePct: "" }]);
-  const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const shareTotal = items.reduce((s, i) => s + (Number(i.sharePct) || 0), 0);
-
-  const handle = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = items.filter((i) => i.ingredientName && Number(i.sharePct) > 0);
-    onSubmit({ ...f, items: clean });
-  };
-
-  return (
-    <ModalShell title={existing ? `Edit ${existing.formulationNo}` : "New Feed Formulation"} icon={FlaskConical} onClose={onClose} wide>
-      <ErrBox error={error} />
-      <form onSubmit={handle} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Formula name *">
-            <input required value={f.name} onChange={(e) => set("name", e.target.value)} className={inputCls} placeholder="e.g. Koforidua Layer Mash 18%" data-testid="fm-form-name" />
-          </Field>
-          <Field label="Feed type">
-            <select value={f.feedType} onChange={(e) => set("feedType", e.target.value)} className={inputCls}>
-              {FEED_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-            </select>
-          </Field>
-          <Field label="Bird type">
-            <select value={f.birdType} onChange={(e) => set("birdType", e.target.value)} className={inputCls}>
-              {["LAYERS", "BROILERS", "COCKERELS", "TURKEYS", "GUINEA_FOWL", "BOTH"].map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
-          <Field label="Standard batch size (kg)" hint="Default mix quantity; adjustable per run">
-            <input type="number" min={1} step={1} value={f.batchSizeKg} onChange={(e) => set("batchSizeKg", Number(e.target.value))} className={inputCls} data-testid="fm-form-batchsize" />
-          </Field>
-          <Field label="Age from (weeks)"><input type="number" step={0.5} value={f.ageFromWks} onChange={(e) => set("ageFromWks", e.target.value)} className={inputCls} /></Field>
-          <Field label="Age to (weeks)"><input type="number" step={0.5} value={f.ageToWks} onChange={(e) => set("ageToWks", e.target.value)} className={inputCls} /></Field>
-          <Field label="CP target %"><input type="number" step={0.1} value={f.cpPctTarget} onChange={(e) => set("cpPctTarget", e.target.value)} className={inputCls} placeholder="e.g. 18" /></Field>
-          <Field label="ME target (kcal/kg)"><input type="number" step={1} value={f.meKcalKgTarget} onChange={(e) => set("meKcalKgTarget", e.target.value)} className={inputCls} placeholder="e.g. 2750" /></Field>
-        </div>
-        <Field label="Commercial reference price (GH₵/kg)" hint="What equivalent commercial feed sells for. Savings vs your milling cost use this; left blank we fall back to your 90-day commercial purchase average.">
-          <input type="number" step="0.01" value={f.commercialRefPriceGhs} onChange={(e) => set("commercialRefPriceGhs", e.target.value)} className={inputCls} placeholder="e.g. 9.80" data-testid="fm-form-refprice" />
-        </Field>
-
-        <div className="border border-slate-700 rounded-xl p-3 space-y-2" data-testid="fm-form-items">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Ingredients (% of mix)</span>
-            <span className={`text-[10px] font-bold ${Math.abs(shareTotal - 100) < 0.01 ? "text-emerald-400" : "text-rose-400"}`}>Total: {shareTotal.toFixed(1)}%</span>
-          </div>
-          {items.map((it, idx) => (
-            <div key={idx} className="grid grid-cols-[1fr_90px_28px] gap-2 items-center">
-              <div>
-                <input list="fm-raw-list" value={it.ingredientName}
-                  onChange={(e) => {
-                    const name = e.target.value;
-                    const hit = rawMaterials.find((r: any) => r.name.toLowerCase() === name.toLowerCase());
-                    setItems(items.map((x, i) => i === idx ? { ...x, ingredientName: name, inventoryId: hit ? hit.id : null } : x));
-                  }}
-                  className={inputCls} placeholder="Ingredient (e.g. Maize)" data-testid={`fm-form-item-name-${idx}`} />
-              </div>
-              <input type="number" step="0.1" min={0} max={100} value={it.sharePct}
-                onChange={(e) => setItems(items.map((x, i) => i === idx ? { ...x, sharePct: e.target.value } : x))}
-                className={inputCls} placeholder="%" data-testid={`fm-form-item-share-${idx}`} />
-              <button type="button" onClick={() => setItems(items.filter((_, i) => i !== idx))}
-                className="p-1.5 rounded text-slate-500 hover:text-rose-400"><X className="w-3.5 h-3.5" /></button>
-            </div>
-          ))}
-          <datalist id="fm-raw-list">{rawMaterials.map((r: any) => <option key={r.id} value={r.name} />)}</datalist>
-          <button type="button" onClick={() => setItems([...items, { inventoryId: null, ingredientName: "", sharePct: "" }])}
-            className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300" data-testid="fm-form-add-item">+ add ingredient</button>
-        </div>
-
-        <Field label="Notes"><input value={f.notes} onChange={(e) => set("notes", e.target.value)} className={inputCls} placeholder="Optional — formulation rationale, vet advice…" /></Field>
-        {existing && canDeactivate && (
-          <label className="flex items-center gap-2 text-xs text-slate-300">
-            <input type="checkbox" checked={f.active} onChange={(e) => set("active", e.target.checked)} /> Active (uncheck to retire this formulation — owner authority)
-          </label>
-        )}
-        <SubmitBar busy={busy} label={existing ? "Save Formulation" : "Create Formulation"} testid="fm-form-submit" />
-      </form>
-    </ModalShell>
-  );
-}
-
-/* ═════════════════════════ INTAKE ══════════════════════════════════════ */
-
-function IntakeModal({ rawMaterials, busy, error, currency, onClose, onSubmit }: any) {
-  const [f, setF] = useState<any>({
-    inventoryId: "", itemName: "", qty: "", unit: "BAG50", unitCostGhsPerUnit: "", totalCostGhs: "",
-    supplierName: "", paymentMethod: "CASH", date: new Date().toISOString().split("T")[0], recordExpense: true, minStockThreshold: "",
-  });
-  const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const qtyKg = feedToKg(Number(f.qty) || 0, f.unit);
-  // Cost expressed per displayed unit for the buyer's convenience; converted
-  // to GH₵/kg for the server (single canonical cost basis).
-  const unitKg = FEED_UNITS.find((u) => u.key === f.unit)?.kg || 1;
-  const costPerKg = Number(f.unitCostGhsPerUnit) > 0 ? Number(f.unitCostGhsPerUnit) / unitKg : 0;
-  const total = Number(f.totalCostGhs) > 0 ? Number(f.totalCostGhs) : (qtyKg > 0 && costPerKg > 0 ? qtyKg * costPerKg : 0);
-
-  const handle = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSubmit({
-      inventoryId: f.inventoryId === "" ? null : Number(f.inventoryId),
-      itemName: f.inventoryId === "" ? f.itemName : undefined,
-      qty: Number(f.qty), unit: f.unit,
-      unitCostGhs: +costPerKg.toFixed(4),
-      totalCostGhs: total > 0 ? +total.toFixed(2) : undefined,
-      supplierName: f.supplierName || undefined,
-      date: f.date, paymentMethod: f.paymentMethod,
-      recordExpense: f.recordExpense,
-      minStockThreshold: f.minStockThreshold === "" ? undefined : Number(f.minStockThreshold),
-      description: undefined,
-    });
-  };
-
-  return (
-    <ModalShell title="Raw Material Intake" icon={Truck} onClose={onClose}>
-      <ErrBox error={error} />
-      <form onSubmit={handle} className="space-y-3">
-        <Field label="Ingredient *" hint="Pick an existing mill ingredient or type a new one (maize, wheat bran, soybean meal, fish meal, concentrate, premix…)">
-          <select value={f.inventoryId} onChange={(e) => set("inventoryId", e.target.value)} className={inputCls} data-testid="fm-intake-item">
-            <option value="">— New ingredient —</option>
-            {rawMaterials.map((r: any) => <option key={r.id} value={r.id}>{r.name} ({(r.quantity || 0).toFixed(0)} kg on hand)</option>)}
-          </select>
-        </Field>
-        {f.inventoryId === "" && (
-          <Field label="New ingredient name *"><input required value={f.itemName} onChange={(e) => set("itemName", e.target.value)} className={inputCls} placeholder="e.g. Maize" data-testid="fm-intake-newname" /></Field>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Quantity *"><input required type="number" min={0.1} step={0.1} value={f.qty} onChange={(e) => set("qty", e.target.value)} className={inputCls} data-testid="fm-intake-qty" /></Field>
-          <UnitPicker f={f} set={set} />
-        </div>
-        {qtyKg > 0 && <div className="text-[11px] text-emerald-300 font-semibold">= {fmtKg(qtyKg, { bag: f.unit === "BAG25" ? "BAG25" : "BAG50" })} into mill store</div>}
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={`Cost per ${f.unit === "KG" ? "kg" : f.unit === "BAG25" ? "25-kg bag" : f.unit === "BAG50" ? "50-kg bag" : "tonne"} (GH₵)`}>
-            <input type="number" min={0} step={0.01} value={f.unitCostGhsPerUnit} onChange={(e) => set("unitCostGhsPerUnit", e.target.value)} className={inputCls} placeholder="e.g. 420 per bag" data-testid="fm-intake-cost" />
-          </Field>
-          <Field label="Total paid (GH₵)" hint={total > 0 ? `auto ${formatMoney(total, currency)} — override if negotiated` : "quantity × cost"}>
-            <input type="number" min={0} step="0.01" value={f.totalCostGhs} onChange={(e) => set("totalCostGhs", e.target.value)} className={inputCls} placeholder="auto" data-testid="fm-intake-total" />
-          </Field>
-          <Field label="Supplier"><input value={f.supplierName} onChange={(e) => set("supplierName", e.target.value)} className={inputCls} placeholder="e.g. Olam Grains, Koforidua" data-testid="fm-intake-supplier" /></Field>
-          <Field label="Payment">
-            <select value={f.paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} className={inputCls}>
-              {["CASH", "MOMO", "BANK", "CREDIT"].map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </Field>
-          <Field label="Date"><input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} className={inputCls} /></Field>
-          <Field label="Low-stock threshold (kg)" hint="optional, new ingredients">
-            <input type="number" min={0} step={1} value={f.minStockThreshold} onChange={(e) => set("minStockThreshold", e.target.value)} className={inputCls} placeholder="e.g. 100" />
-          </Field>
-        </div>
-        <label className="flex items-start gap-2 text-xs text-slate-300" data-testid="fm-intake-expense-row">
-          <input type="checkbox" className="mt-0.5" checked={f.recordExpense} onChange={(e) => set("recordExpense", e.target.checked)} />
-          <span>Book the purchase to Finance once (category <b>Poultry · Feed Raw Material</b>). Milling will draw cost from this stock — never re-expensed.</span>
-        </label>
-        <SubmitBar busy={busy} label="Record Intake" testid="fm-intake-submit" />
-      </form>
-    </ModalShell>
-  );
-}
-
-/* ═════════════════════════ BATCH run ═══════════════════════════════════ */
-
-function BatchModal({ formulations, bomOf, stockLeft, rawMaterials, busy, error, currency, onClose, onSubmit }: any) {
-  const [f, setF] = useState<any>({
-    formulationId: formulations[0]?.id || "", plannedInput: "", inputUnit: "KG",
-    actualOutput: "", outputUnit: "KG", labourCostGhs: "", overheadCostGhs: "",
-    operatorName: "", productionDate: new Date().toISOString().split("T")[0], paymentMethod: "CASH", notes: "",
-  });
-  const [draws, setDraws] = useState<any[]>([]); // editable per-line kg draws
-  const set = (k: string, v: any) => setF({ ...f, [k]: v });
-
-  const form = formulations.find((x: any) => Number(x.id) === Number(f.formulationId));
-  const bom = form ? bomOf(form.id) : [];
-  const plannedKg = feedToKg(Number(f.plannedInput || form?.batchSizeKg || 0) || 0, f.inputUnit);
-
-  useEffect(() => {
-    // reset draw lines whenever recipe / planned size changes
-    setDraws(bom.map((line: any) => ({
-      formulationItemId: line.id, ingredientName: line.ingredientName, inventoryId: line.inventoryId,
-      sharePct: line.sharePct, actualKg: +(((line.sharePct || 0) / 100) * plannedKg).toFixed(3),
-    })));
-  }, [form?.id, plannedKg, formulationItemsKey(bom)]);
-
-  const anyShort = draws.some((d) => stockLeft(d.inventoryId) + 1e-9 < d.actualKg);
-  const outputKg = feedToKg(Number(f.actualOutput) || 0, f.outputUnit);
-  const yieldPreview = plannedKg > 0 && outputKg > 0 ? +((outputKg / plannedKg) * 100).toFixed(1) : null;
-
-  const handle = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSubmit({
-      formulationId: Number(f.formulationId),
-      plannedInputKg: plannedKg,
-      actualOutputKg: Number(f.actualOutput), outputUnit: f.outputUnit,
-      inputOverrides: draws.map((d) => ({ formulationItemId: d.formulationItemId, actualKg: d.actualKg })),
-      labourCostGhs: Number(f.labourCostGhs) || 0, overheadCostGhs: Number(f.overheadCostGhs) || 0,
-      operatorName: f.operatorName || undefined, productionDate: f.productionDate,
-      paymentMethod: f.paymentMethod, notes: f.notes || undefined,
-    });
-  };
-
-  if (!formulations.length) {
-    return (
-      <ModalShell title="Run Feed Batch" icon={Scale} onClose={onClose}>
-        <p className="text-xs text-slate-400">No active formulations — create a recipe first.</p>
-      </ModalShell>
-    );
-  }
-
-  return (
-    <ModalShell title="Run Feed Batch" icon={Scale} onClose={onClose} wide>
-      <ErrBox error={error} />
-      <form onSubmit={handle} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Formulation *">
-            <select value={f.formulationId} onChange={(e) => set("formulationId", e.target.value)} className={inputCls} data-testid="fm-batch-formula">
-              {formulations.map((x: any) => <option key={x.id} value={x.id}>{x.name} ({x.feedType.replace(/_/g, " ")})</option>)}
-            </select>
-          </Field>
-          <Field label="Production date"><input type="date" value={f.productionDate} onChange={(e) => set("productionDate", e.target.value)} className={inputCls} /></Field>
-          <Field label="Planned input" hint={`recipe standard: ${form?.batchSizeKg} kg`}>
-            <input type="number" min={1} step={1} value={f.plannedInput || (form?.batchSizeKg ?? "")} onChange={(e) => set("plannedInput", e.target.value)} className={inputCls} data-testid="fm-batch-input" />
-          </Field>
-          <Field label="Input unit">
-            <select value={f.inputUnit} onChange={(e) => set("inputUnit", e.target.value)} className={inputCls}>
-              {FEED_UNITS.map((u) => <option key={u.key} value={u.key}>{u.label}</option>)}
-            </select>
-          </Field>
-        </div>
-
-        <div className="border border-slate-700 rounded-xl p-3" data-testid="fm-batch-draws">
-          <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">Ingredient draw (kg) — stock is deducted when the batch is saved</div>
-          {draws.map((d, idx) => {
-            const left = stockLeft(d.inventoryId);
-            const short = left + 1e-9 < d.actualKg;
-            return (
-              <div key={d.formulationItemId} className="grid grid-cols-[1fr_80px_90px] gap-2 items-center py-1.5 border-b border-slate-800 last:border-0">
-                <div className="text-xs text-slate-200">{d.ingredientName} <span className="text-[9px] text-slate-500">({d.sharePct}%)</span></div>
-                <div className={`text-[10px] text-right ${short ? "text-rose-400 font-bold" : "text-slate-500"}`}>{left.toFixed(0)} kg left{short ? " ⚠" : ""}</div>
-                <input type="number" min={0} step={0.1} value={d.actualKg}
-                  onChange={(e) => setDraws(draws.map((x, i) => i === idx ? { ...x, actualKg: Number(e.target.value) } : x))}
-                  className={inputCls} data-testid={`fm-batch-draw-${idx}`} />
-              </div>
-            );
-          })}
-          {anyShort && <div className="mt-2 text-[10px] font-bold text-rose-400">Some ingredients run short — intake them first or reduce the draws.</div>}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Actual output (weighed) *">
-            <input required type="number" min={0.1} step={0.1} value={f.actualOutput} onChange={(e) => set("actualOutput", e.target.value)} className={inputCls} data-testid="fm-batch-output" />
-          </Field>
-          <Field label="Output unit">
-            <select value={f.outputUnit} onChange={(e) => set("outputUnit", e.target.value)} className={inputCls}>
-              {FEED_UNITS.map((u) => <option key={u.key} value={u.key}>{u.label}</option>)}
-            </select>
-          </Field>
-          <Field label="Labour cost (GH₵)" hint="milling-day crew cost — booked once as Mill Operations expense">
-            <input type="number" min={0} step="0.01" value={f.labourCostGhs} onChange={(e) => set("labourCostGhs", e.target.value)} className={inputCls} data-testid="fm-batch-labour" />
-          </Field>
-          <Field label="Overheads (GH₵)" hint="power, fuel, bags — same single Mill Operations booking">
-            <input type="number" min={0} step="0.01" value={f.overheadCostGhs} onChange={(e) => set("overheadCostGhs", e.target.value)} className={inputCls} data-testid="fm-batch-overhead" />
-          </Field>
-          <Field label="Operator"><input value={f.operatorName} onChange={(e) => set("operatorName", e.target.value)} className={inputCls} placeholder="e.g. Kofi Mensah" /></Field>
-          <Field label="Ops payment">
-            <select value={f.paymentMethod} onChange={(e) => set("paymentMethod", e.target.value)} className={inputCls}>
-              {["CASH", "MOMO", "BANK"].map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </Field>
-        </div>
-        {yieldPreview != null && (
-          <div className={`text-[11px] font-bold ${yieldPreview < 90 ? "text-amber-400" : "text-emerald-400"}`}>
-            Yield preview: {yieldPreview}% {yieldPreview > 102 ? "(output > input — check your weighing)" : yieldPreview < 90 ? "(high milling loss)" : ""}
-          </div>
-        )}
-        <Field label="Notes"><input value={f.notes} onChange={(e) => set("notes", e.target.value)} className={inputCls} placeholder="Optional" /></Field>
-        <SubmitBar busy={busy || anyShort} label={anyShort ? "Insufficient raw stock" : "Run Batch (QC hold)"} testid="fm-batch-submit" />
-      </form>
-    </ModalShell>
-  );
-}
-function formulationItemsKey(bom: any[]) { return bom.map((b: any) => b.id).join(","); }
-
-/* ═════════════════════════ QC check ════════════════════════════════════ */
-
-function QcModal({ batches, preset, busy, error, testerName, testerRole, onClose, onSubmit }: any) {
-  const [f, setF] = useState<any>({
-    batchId: preset?.id || "", stage: preset ? "FINISHED_FEED" : "RAW_MATERIAL",
-    sampleRef: "", testName: "", requiredStandard: "", testResult: "", resultValue: "", resultUnit: "",
-    passFail: "PASS", moisturePct: "", textureGrade: "", contaminantsNote: "", notes: "",
-  });
-  const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  const handle = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSubmit({
-      batchId: f.batchId === "" ? null : Number(f.batchId),
-      stage: f.stage, sampleRef: f.sampleRef || undefined, testName: f.testName,
-      requiredStandard: f.requiredStandard || undefined, testResult: f.testResult || undefined,
-      resultValue: f.resultValue === "" ? undefined : Number(f.resultValue), resultUnit: f.resultUnit || undefined,
-      passFail: f.passFail, moisturePct: f.moisturePct === "" ? undefined : Number(f.moisturePct),
-      textureGrade: f.textureGrade || undefined, contaminantsNote: f.contaminantsNote || undefined,
-      notes: f.notes || undefined, testerName, testerRole,
-    });
-  };
-  return (
-    <ModalShell title={preset ? `QC Check — ${preset.batchNumber}` : "Log QC Check"} icon={FlaskConical} onClose={onClose}>
-      <ErrBox error={error} />
-      <form onSubmit={handle} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Batch (optional)" hint="finished-feed tests gate release">
-            <select value={f.batchId} onChange={(e) => set("batchId", e.target.value)} className={inputCls} data-testid="fm-qc-batch">
-              <option value="">— Raw material / general —</option>
-              {batches.map((b: any) => <option key={b.id} value={b.id}>{b.batchNumber} ({b.status})</option>)}
-            </select>
-          </Field>
-          <Field label="Stage">
-            <select value={f.stage} onChange={(e) => set("stage", e.target.value)} className={inputCls} data-testid="fm-qc-stage">
-              {QC_STAGES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-            </select>
-          </Field>
-          <Field label="Test name *"><input required value={f.testName} onChange={(e) => set("testName", e.target.value)} className={inputCls} placeholder="e.g. Moisture content" data-testid="fm-qc-test" /></Field>
-          <Field label="Verdict">
-            <select value={f.passFail} onChange={(e) => set("passFail", e.target.value)} className={inputCls} data-testid="fm-qc-verdict">
-              <option value="PASS">PASS</option><option value="FAIL">FAIL</option>
-            </select>
-          </Field>
-          <Field label="Sample ref"><input value={f.sampleRef} onChange={(e) => set("sampleRef", e.target.value)} className={inputCls} placeholder="e.g. Top of bin 3" /></Field>
-          <Field label="Required standard"><input value={f.requiredStandard} onChange={(e) => set("requiredStandard", e.target.value)} className={inputCls} placeholder="e.g. ≤ 13% moisture" /></Field>
-          <Field label="Result (text)"><input value={f.testResult} onChange={(e) => set("testResult", e.target.value)} className={inputCls} placeholder="e.g. 11.5% — within spec" /></Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Result value"><input type="number" step={0.01} value={f.resultValue} onChange={(e) => set("resultValue", e.target.value)} className={inputCls} /></Field>
-            <Field label="Unit"><input value={f.resultUnit} onChange={(e) => set("resultUnit", e.target.value)} className={inputCls} placeholder="% / mm" /></Field>
-          </div>
-          <Field label="Moisture %"><input type="number" step={0.1} value={f.moisturePct} onChange={(e) => set("moisturePct", e.target.value)} className={inputCls} data-testid="fm-qc-moisture" /></Field>
-          <Field label="Texture">
-            <select value={f.textureGrade} onChange={(e) => set("textureGrade", e.target.value)} className={inputCls}>
-              <option value="">—</option><option>FINE</option><option>MEDIUM</option><option>COARSE</option>
-            </select>
-          </Field>
-        </div>
-        <Field label="Contaminants seen"><input value={f.contaminantsNote} onChange={(e) => set("contaminantsNote", e.target.value)} className={inputCls} placeholder="mould caking, weevils, foreign matter…" /></Field>
-        <Field label="Notes"><input value={f.notes} onChange={(e) => set("notes", e.target.value)} className={inputCls} placeholder="Optional" /></Field>
-        {f.passFail === "FAIL" && <div className="text-[10px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg p-2">A FAIL fans out a critical management alert. If it is a FINISHED FEED fail and the batch sits on hold, consider rejecting the batch (Owner).</div>}
-        <SubmitBar busy={busy} label="Log QC Check" testid="fm-qc-submit" />
-      </form>
-    </ModalShell>
   );
 }
 
