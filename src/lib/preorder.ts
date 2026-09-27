@@ -279,6 +279,10 @@ export const SUPPLIER_ORDER_STATUSES = [
   "ARRIVED",
   "RECEIVED",
   "CANCELLED",
+  // R1 approvals: a gated PO waits here until an approver releases it; only
+  // the approval engine may move it (to RAISED on approve, CANCELLED on
+  // reject) — the ADVANCE transition map below leaves it frozen.
+  "PENDING_APPROVAL",
 ] as const;
 export type SupplierOrderStatus = (typeof SUPPLIER_ORDER_STATUSES)[number];
 
@@ -290,6 +294,7 @@ export const SUPPLIER_ORDER_NEXT: Record<SupplierOrderStatus, SupplierOrderStatu
   ARRIVED: ["RECEIVED", "CANCELLED"],
   RECEIVED: [],
   CANCELLED: [],
+  PENDING_APPROVAL: [],
 };
 
 /** Stage the linked customer order advances to when the supplier order hits

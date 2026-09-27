@@ -264,7 +264,7 @@ export async function completeLinkedTasksForSource(
 // ─── Linked open items (read-only views over existing systems) ─────────────
 
 export interface LinkedItem {
-  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST";
+  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST" | "APPROVAL";
   id: number;
   businessId: number | null;
   branchCode?: string | null;
@@ -387,6 +387,45 @@ export async function linkedChecklistSummary(
     businessId: Number(r.businessId),
     open: Number(r.total) || 0,
     critical: Number(r.critical) || 0,
+  }));
+}
+
+// ─── R1: pending approvals as linked Action Center items ──────────────────
+
+const APPROVAL_ACTION_LABELS: Record<string, string> = {
+  EXPENSE: "Expense",
+  PURCHASE_ORDER: "Purchase order",
+  PURCHASE_REQUISITION: "Requisition",
+  INVENTORY_ADJUSTMENT: "Stock adjustment",
+  DISCOUNT: "Discount",
+  DELETION: "Deletion",
+  DATA_EXPORT: "Data export",
+};
+
+/** Pending approval requests the caller is entitled to decide — surfaced in
+ *  the Action Center's linked zone so approvers see them beside tasks. */
+export async function linkedApprovals(
+  user: { id: number; role?: string | null; isSuperAdmin?: boolean; organizationIds?: number[] },
+  allowedBusinessIds: number[] | null,
+  limit = 40,
+): Promise<LinkedItem[]> {
+  const { pendingRequestsForApprover } = await import("@/lib/approvals");
+  const rows = await pendingRequestsForApprover(user as any, allowedBusinessIds);
+  return rows.slice(0, limit).map((r) => ({
+    kind: "APPROVAL" as const,
+    id: Number(r.id),
+    businessId: Number(r.businessId),
+    branchCode: r.branchCode,
+    title: `${APPROVAL_ACTION_LABELS[String(r.action).toUpperCase()] || r.action} approval — ${r.targetLabel || `#${r.targetId}`}`,
+    detail: `${r.requestedByName || "Staff"} · ${
+      r.amountGhs != null && Number(r.amountGhs) > 0 ? `GH₵ ${Number(r.amountGhs).toFixed(2)} · ` : ""
+    }awaiting decision`,
+    priority: "HIGH",
+    dueDate: null,
+    assignedUserId: null,
+    assignedUserName: r.requestedByName,
+    openTab: "ACTION_CENTER",
+    openHint: "Approvals inbox",
   }));
 }
 

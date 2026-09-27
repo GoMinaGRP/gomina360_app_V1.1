@@ -15,6 +15,7 @@
 // same scoping server-side.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import ApprovalInbox from "@/components/ApprovalInbox";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -541,6 +542,10 @@ export default function ActionCenter({
           )}
         </div>
       ) : null}
+
+      {/* R1 — approvals (gated records awaiting a decision, my requests,
+          and the OWNER/GM policy manager) */}
+      <ApprovalInbox currentUser={currentUser} businesses={businesses} onChanged={load} />
 
       {toast && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-slate-800 border border-amber-500/40 shadow-2xl text-xs font-semibold text-amber-200 max-w-[90vw]" data-testid="action-toast">

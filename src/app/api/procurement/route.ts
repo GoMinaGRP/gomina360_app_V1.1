@@ -15,6 +15,7 @@ import {
 } from "@/lib/preorder";
 import { auditLog } from "@/lib/audit";
 import { apiError } from "@/lib/apiError";
+import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 
 /** GET: procurement register — scoped supplier orders + receipts. */
 export async function GET(request: NextRequest) {
@@ -148,6 +149,15 @@ export async function POST(request: NextRequest) {
       const pnum = await uniquePurchaseNumber();
       const expectedAt = String(body.expectedAt || "").slice(0, 10) || null;
       const methodKey = String(body.shippingMethodKey || "").trim().toUpperCase().slice(0, 20) || null;
+      // R1 approval gate: gated POs are born PENDING_APPROVAL; approval
+      // releases them to RAISED (rejection cancels them). Without a matching
+      // policy the PO is born RAISED exactly as before.
+      const poGate = await approvalGateCheck({
+        user: me,
+        action: "PURCHASE_ORDER",
+        businessId,
+        amountGhs: Math.round(total * 100) / 100,
+      });
       const [po] = await db
         .insert(supplierOrders)
         .values({
@@ -159,18 +169,34 @@ export async function POST(request: NextRequest) {
           supplierName,
           shippingMethodKey: methodKey,
           trackingLineIds: [...trackingIds],
-          status: "RAISED",
+          status: poGate.gated ? "PENDING_APPROVAL" : "RAISED",
           expectedAt,
           currency: "GHS",
           items,
           totalGhs: Math.round(total * 100) / 100,
-          statusHistory: [{ status: "RAISED", at: new Date().toISOString(), by: me.name || "Staff", byRole: me.role || "WORKER", note: body.note || null }],
+          statusHistory: [{ status: poGate.gated ? "PENDING_APPROVAL" : "RAISED", at: new Date().toISOString(), by: me.name || "Staff", byRole: me.role || "WORKER", note: poGate.gated ? "Awaiting approval before it can be sent" : body.note || null }],
           notes: String(body.notes || "").trim().slice(0, 400) || null,
           createdByUserId: me.id ?? null,
           createdByName: me.name || "Staff",
           createdByRole: me.role || "WORKER",
         })
         .returning();
+
+      if (poGate.gated) {
+        await createApprovalRequest({
+          action: "PURCHASE_ORDER",
+          businessId,
+          branchCode: body.branchCode || null,
+          targetType: "SUPPLIER_ORDER",
+          targetId: Number(po.id),
+          targetLabel: `PO ${pnum} — ${supplierName}`,
+          amountGhs: Math.round(total * 100) / 100,
+          payloadSnapshot: { purchaseNumber: pnum, supplierName, lineCount: items.length },
+          actor: me,
+        });
+        await auditLog(me, "CREATE", "RECORD", `Supplier order ${pnum} (pending approval)`, "SUPPLIER_ORDER", po.id, businessId, null, `Gated raise of ${items.length} line(s) totalling GH₵ ${total.toFixed(2)} with ${supplierName}`, ownerOrg);
+        return NextResponse.json({ success: true, order: po, pendingApproval: true, message: "Purchase order saved as PENDING APPROVAL — the approvers have been notified." });
+      }
 
       // Move linked preorders RECEIVED → CONFIRMED → PROCUREMENT if staff chose
       // “raise immediately” (the PO is the demand commitment the customer waits on).

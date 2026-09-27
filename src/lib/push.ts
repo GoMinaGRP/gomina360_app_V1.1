@@ -55,6 +55,7 @@ export function categoryForType(type: string): PushCategory {
 export function urlForNotification(type: string, opts?: { branchCode?: string | null; issueId?: number | null }): string {
   const t = String(type || "").toUpperCase();
   if (t.startsWith("AUDIT")) return "/?tab=AUDIT";
+  if (t.startsWith("APPROVAL")) return "/?tab=ACTION_CENTER";
   if (t.startsWith("TASK") || t === "DAILY_DIGEST") return "/?tab=ACTION_CENTER";
   if (t === "LOW_STOCK") return "/?tab=INVENTORY";
   if (t.startsWith("ADVISOR")) {

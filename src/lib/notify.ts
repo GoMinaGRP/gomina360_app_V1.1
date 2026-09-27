@@ -452,3 +452,106 @@ export async function notifyChecklistOverdue({
     priority: "HIGH",
   });
 }
+
+// ── R1 Approvals fan-out ──────────────────────────────────────────────────
+
+const APPROVAL_ACTION_LABEL: Record<string, string> = {
+  EXPENSE: "expense",
+  PURCHASE_ORDER: "purchase order",
+  PURCHASE_REQUISITION: "purchase requisition",
+  INVENTORY_ADJUSTMENT: "stock adjustment",
+  DISCOUNT: "discount",
+  DELETION: "deletion",
+  DATA_EXPORT: "data export",
+};
+
+/** Bell + push the entitled approvers that a gated record awaits their
+ *  decision. recordRef `approval:{requestId}` keeps it one row per request.
+ *  The caller (lib/approvals) resolves the approver recipients so this module
+ *  never imports the approvals engine back. */
+export async function notifyApprovalRequest({
+  requestId,
+  businessId,
+  branchCode,
+  action,
+  targetLabel,
+  amountGhs,
+  actorName,
+  recipients,
+}: {
+  requestId: number;
+  businessId: number;
+  branchCode?: string | null;
+  action: string;
+  targetLabel: string;
+  amountGhs?: number | null;
+  actorName?: string | null;
+  ownerId?: number;
+  recipients: { id: number }[];
+}): Promise<number> {
+  try {
+    if (!recipients.length) return 0;
+    const label = APPROVAL_ACTION_LABEL[String(action).toUpperCase()] || String(action).toLowerCase();
+    const amountTxt =
+      amountGhs != null && Number(amountGhs) > 0 ? ` (GH₵ ${Number(amountGhs).toFixed(2)})` : "";
+    return fanOut(recipients, {
+      type: "APPROVAL_REQUESTED",
+      title: `Approval needed: ${label}`,
+      body: `${actorName || "Staff"} requests approval for ${targetLabel}${amountTxt}. Decide in the Action Center → Approvals.`,
+      recordType: "approval_requests",
+      recordId: requestId,
+      recordRef: `approval:${requestId}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: actorName ?? null,
+      priority: "HIGH",
+    });
+  } catch (e) {
+    console.error("[notify] notifyApprovalRequest failed:", e);
+    return 0;
+  }
+}
+
+/** Tell the requester the outcome of their gated record. */
+export async function notifyApprovalDecision({
+  requestId,
+  businessId,
+  branchCode,
+  action,
+  targetLabel,
+  decision,
+  decidedByName,
+  reason,
+  requesterUserId,
+}: {
+  requestId: number;
+  businessId: number;
+  branchCode?: string | null;
+  action: string;
+  targetLabel: string;
+  decision: "APPROVED" | "REJECTED";
+  decidedByName?: string | null;
+  reason?: string | null;
+  ownerId?: number;
+  requesterUserId?: number | null;
+}): Promise<number> {
+  try {
+    if (!requesterUserId) return 0;
+    const label = APPROVAL_ACTION_LABEL[String(action).toUpperCase()] || String(action).toLowerCase();
+    return fanOut([{ id: Number(requesterUserId) }], {
+      type: "APPROVAL_DECIDED",
+      title: `${decision === "APPROVED" ? "Approved" : "Rejected"}: ${label}`,
+      body: `${decidedByName || "Approver"} ${decision === "APPROVED" ? "approved" : "rejected"} ${targetLabel}.${reason ? ` Note: ${reason}` : ""}`,
+      recordType: "approval_requests",
+      recordId: requestId,
+      recordRef: `approval:${requestId}`,
+      businessId,
+      branchCode: branchCode ?? null,
+      actorName: decidedByName ?? null,
+      priority: decision === "APPROVED" ? "MEDIUM" : "HIGH",
+    });
+  } catch (e) {
+    console.error("[notify] notifyApprovalDecision failed:", e);
+    return 0;
+  }
+}

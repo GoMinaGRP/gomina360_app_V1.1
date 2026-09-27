@@ -49,8 +49,11 @@ if (Number(attExisting) === 0) {
   }
 } else console.log("• attendance already present, skipping");
 
-// 2) Seeded run 1 (Aug 2026, Poultry): exact composition → PAID CASH
-const runs1 = (await api("/api/payroll?businessId=22", "GET")).body.runs || [];
+// 2) Seeded run 1 (Aug 2026, Poultry): exact composition → PAID CASH.
+// Resolve the poultry flagship at runtime — the old snapshot carried it as
+// business 22 (cloned-unit era), fresh seeds as POULTRY-01 = id 1.
+const poultryBiz = (await dbc.query("SELECT id::int id FROM businesses WHERE code='POULTRY-01' AND owner_id=1 ORDER BY id LIMIT 1")).rows[0]?.id;
+const runs1 = (await api(`/api/payroll?businessId=${poultryBiz}`, "GET")).body.runs || [];
 const run1 = runs1.find((r) => r.id === 1);
 if (run1 && run1.status !== "PAID") {
   const ent = (run1.entries || [])[0];
@@ -101,18 +104,25 @@ await dbc.query(`UPDATE transactions t SET amount_ghs=4500, description='Payroll
 await dbc.query(`UPDATE transactions t SET amount_ghs=4500, description='Payroll 2026-07 — Doris Ansah (Senior Farm Veterinarian) · base 4500 + allow 0 + OT 0 − ded 0' FROM payroll_entries e WHERE e.transaction_id=t.id AND e.employee_name='Doris Ansah' AND t.description LIKE 'Payroll 2026-07%'`);
 await dbc.query(`UPDATE transactions t SET amount_ghs=5387.50, description='Payroll 2026-08 — Michael Quaye (Solar Systems Engineer) · base 5200 + allow 0 + OT 187.5 − ded 0' FROM payroll_entries e WHERE e.transaction_id=t.id AND e.employee_name='Michael Quaye' AND t.description LIKE 'Payroll 2026-08%'`);
 console.log("✔ legacy payroll amounts normalized (4500 / 4500 / 5387.50)");
+} // end legacy mirror history (fresh seeds skip the block above only)
 
-// 4) Emmanuel's auditor grant → business 2, all 8 modules
+// 4) Emmanuel's auditor grant → Mina Concrete & Blocks, all 8 modules.
+// Business ids are resolved at runtime — the old snapshot had this unit as
+// id 23 (cloned-unit era), fresh seeds carry it as BLOCK-01 = id 2.
+const blockBiz = (await dbc.query("SELECT id::int id FROM businesses WHERE code='BLOCK-01' AND owner_id=1 ORDER BY id LIMIT 1")).rows[0]?.id;
 const grants = (await api("/api/audit", "GET")).body.grants || [];
-if (!grants.some((g) => g.userId === 3 && g.businessId === 23 && g.isActive)) {
-  must("grant Emmanuel → Mina Concrete & Blocks (all 8 modules)", await api("/api/audit", "POST", { action: "GRANT", userId: 3, businessId: 23, modules: AUDIT_MODULES }));
-} else console.log("• Emmanuel grant already active, skipping");
+if (blockBiz && !grants.some((g) => g.userId === 3 && Number(g.businessId) === blockBiz && g.isActive)) {
+  must("grant Emmanuel → Mina Concrete & Blocks (all 8 modules)", await api("/api/audit", "POST", { action: "GRANT", userId: 3, businessId: blockBiz, modules: AUDIT_MODULES }));
+} else console.log(`• Emmanuel grant already active / unit absent (BLOCK-01=${blockBiz}), skipping`);
 
 // 4b) The OWNER revoked Comfort Agbenyega's Auditor grant (2026-08-23) — a
 // sandbox rollback may resurrect the OLD row (id=1) as active. Pin THAT row
 // to revoked on every recovery (any future NEW grant the owner makes carries
 // a new id and is left alone).
-const rev = await dbc.query("UPDATE audit_assignments SET is_active=false, updated_at=now() WHERE id=1 AND user_id=13 AND business_id=22 AND is_active=true RETURNING id");
+const rev = await dbc.query(`UPDATE audit_assignments aa SET is_active=false, updated_at=now()
+   WHERE aa.user_id=13 AND aa.is_active=true AND aa.id=(SELECT min(id) FROM audit_assignments WHERE user_id=13)
+     AND aa.business_id=(SELECT id FROM businesses WHERE code='POULTRY-01' AND owner_id=1 ORDER BY id LIMIT 1)
+   RETURNING aa.id`);
 console.log(rev.rowCount ? "✔ Comfort's revoked audit grant kept revoked (rollback heal)" : "• Comfort grant already revoked / absent");
 
 // 4c) The OWNER's sparse poultry records entered Sun 2026-08-23 (plus one
@@ -156,8 +166,6 @@ await replayOnce(
   "WATER",
   { ...P, volumeLiters: 7, sourceType: "BOREHOLE", recordedDate: "2026-08-23" },
 );
-
-}
 
 await dbc.end();
 console.log("\nRESTORE COMPLETE");

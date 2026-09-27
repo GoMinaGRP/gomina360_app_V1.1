@@ -11,6 +11,7 @@ import {
 import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 
 export async function GET(request: Request) {
   try {
@@ -97,6 +98,20 @@ export async function POST(request: Request) {
       );
     }
 
+    // R1 approval gate: when an active EXPENSE policy matches this amount and
+    // the recorder is not themselves an approver, the expense lands in
+    // PENDING_APPROVAL and the approvers are bell/push-notified. With no
+    // matching policy (or when the recorder may decide it) nothing changes.
+    let expenseGate: Awaited<ReturnType<typeof approvalGateCheck>> = { gated: false };
+    if (String(type).toUpperCase() === "EXPENSE") {
+      expenseGate = await approvalGateCheck({
+        user: session.user,
+        action: "EXPENSE",
+        businessId: Number(businessId),
+        amountGhs: Number(amountGhs) || 0,
+      });
+    }
+
     const now = new Date();
     const trxNum = nextTrxNumber(now);
     const dateStr = now.toISOString().split("T")[0];
@@ -131,7 +146,7 @@ export async function POST(request: Request) {
         description: description || "Transaction logged in GoMina 360",
         date: dateStr,
         createdAt: now,
-        status: status || "COMPLETED",
+        status: expenseGate.gated ? "PENDING_APPROVAL" : status || "COMPLETED",
         recordedBy: session.user.name || recordedBy || "Command Center User",
         recordedByRole: session.user.role || recordedByRole || null,
         recordedByUserId: session.user.id,
@@ -139,6 +154,27 @@ export async function POST(request: Request) {
         receiptImages: body?.receiptImages || null,
       })
       .returning();
+
+    // Request the decision (bell + push the approvers) for gated expenses.
+    if (expenseGate.gated) {
+      await createApprovalRequest({
+        action: "EXPENSE",
+        businessId: Number(businessId),
+        branchCode: resolvedBranchCode,
+        targetType: "TRANSACTION",
+        targetId: Number(newTrx.id),
+        targetLabel: `${category || "Expense"} — GH₵ ${(Number(amountGhs) || 0).toFixed(2)}`,
+        amountGhs: Number(amountGhs) || 0,
+        payloadSnapshot: { transactionNumber: trxNum, category, description },
+        actor: session.user,
+      });
+      return NextResponse.json({
+        success: true,
+        transaction: newTrx,
+        pendingApproval: true,
+        message: "Expense saved as PENDING APPROVAL — the approvers have been notified.",
+      });
+    }
 
     return NextResponse.json({ success: true, transaction: newTrx });
   } catch (error: any) {

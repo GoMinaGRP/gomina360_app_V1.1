@@ -27,6 +27,8 @@ import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } fro
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
+import { approvalRequests } from "@/db/schema";
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
@@ -328,6 +330,76 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // R1 approval gate — INVENTORY_ADJUSTMENT: when an active policy matches
+    // a QUANTITY change and the editor is not an approver, the new quantity
+    // is withheld (the rest of the edit still applies) and an approval
+    // request is raised; approval applies it, rejection keeps the old stock.
+    if (
+      moduleKey === "INVENTORY" &&
+      updates.quantity !== undefined &&
+      Number(updates.quantity) !== Number(existing.quantity)
+    ) {
+      const delta = Math.abs(Number(updates.quantity) - Number(existing.quantity));
+      const unitCost = Number(updates.costPriceGhs ?? existing.costPriceGhs ?? 0) || 0;
+      const adjGate = await approvalGateCheck({
+        user: actor,
+        action: "INVENTORY_ADJUSTMENT",
+        businessId: Number(existing.businessId),
+        amountGhs: delta * unitCost,
+      });
+      if (adjGate.gated) {
+        const newQuantity = Number(updates.quantity);
+        delete updates.quantity;
+        delete updates.status; // recomputed when the approved quantity lands
+        // Withdraw any earlier still-pending adjustment of the same item so
+        // at most one future quantity is queued up.
+        await db
+          .update(approvalRequests)
+          .set({
+            status: "CANCELLED",
+            decisionReason: "Superseded by a newer adjustment request",
+            decidedByName: actor?.name || "Staff",
+            decidedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(approvalRequests.action, "INVENTORY_ADJUSTMENT"),
+              eq(approvalRequests.targetType, "INVENTORY_ITEM"),
+              eq(approvalRequests.targetId, recordId),
+              eq(approvalRequests.status, "PENDING"),
+            )
+          );
+        let applied: any = null;
+        if (Object.keys(updates).length) {
+          [applied] = await db.update(table).set(updates).where(eq(table.id, recordId)).returning();
+        }
+        await createApprovalRequest({
+          action: "INVENTORY_ADJUSTMENT",
+          businessId: Number(existing.businessId),
+          branchCode: existing.branchCode || null,
+          targetType: "INVENTORY_ITEM",
+          targetId: recordId,
+          targetLabel: `${existing.name} (${existing.sku}) — ${existing.quantity} → ${newQuantity}`,
+          amountGhs: delta * unitCost,
+          payloadSnapshot: {
+            inventoryId: recordId,
+            oldQuantity: Number(existing.quantity),
+            newQuantity,
+            reason: d.adjustmentReason || null,
+          },
+          actor,
+        });
+        return NextResponse.json({
+          success: true,
+          item: applied ?? existing,
+          pendingApproval: true,
+          gatedFields: ["quantity"],
+          message: `Quantity change (${existing.quantity} → ${newQuantity}) sent for approval — the approvers have been notified.`,
+        });
+      }
+    }
+
     const [updated] = await db
       .update(table)
       .set(updates)
@@ -434,6 +506,50 @@ export async function DELETE(request: Request) {
         : moduleKey === "INVENTORY"
           ? `${existing.name} (${existing.sku})`
           : `${existing.name} (${existing.role})`;
+
+    // R1 approval gate — DELETION: customer deletions can be held for
+    // approval. The record stays alive until an approver releases the
+    // request; approval then performs the same audited delete this route
+    // performs directly.
+    if (moduleKey === "CUSTOMERS") {
+      let gateBusinessId = existing.businessId != null ? Number(existing.businessId) : 0;
+      if (!gateBusinessId) {
+        const orgId = existing.ownerId != null ? Number(existing.ownerId) : (session.orgId ?? null);
+        const [firstBiz] = orgId
+          ? await db.select({ id: businesses.id }).from(businesses).where(eq(businesses.ownerId, orgId)).limit(1)
+          : [];
+        gateBusinessId = Number(firstBiz?.id) || 0;
+      }
+      if (gateBusinessId) {
+        const delGate = await approvalGateCheck({
+          user: actor,
+          action: "DELETION",
+          businessId: gateBusinessId,
+          amountGhs: null,
+        });
+        if (delGate.gated) {
+          await createApprovalRequest({
+            action: "DELETION",
+            businessId: gateBusinessId,
+            branchCode: existing.branchCode || null,
+            targetType: "CUSTOMER",
+            targetId: recordId,
+            targetLabel: `Delete customer ${existing.name}`,
+            payloadSnapshot: {
+              entityType: "CUSTOMERS",
+              reason: cleanReason,
+              snapshot: { id: existing.id, name: existing.name, type: existing.type, phone: existing.phone },
+            },
+            actor,
+          });
+          return NextResponse.json({
+            success: true,
+            pendingApproval: true,
+            message: `Deletion of ${existing.name} sent for approval — the customer stays active until an approver confirms.`,
+          });
+        }
+      }
+    }
 
     // Immutable audit row BEFORE the delete lands — tenant-stamped.
     const logOwnerId =

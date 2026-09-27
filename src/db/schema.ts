@@ -447,6 +447,9 @@ export const customers = pgTable("customers", {
   town: text("town"),
   totalSpentGhs: doublePrecision("total_spent_ghs").default(0),
   loyaltyPoints: integer("loyalty_points").default(0),
+  // R3 CRM — flexible per-customer preferences (payment terms, comms channel,
+  // notes flags). Additive: null ⇒ the UI simply shows an empty editor.
+  preferences: jsonb("preferences").default(sql`'{}'::jsonb`),
   businessId: integer("business_id"), // null if shared across the Owner's units
   ownerId: integer("owner_id"), // tenant scope (organizations.id)
   createdAt: timestamp("created_at").defaultNow(),
@@ -1001,6 +1004,11 @@ export const supplierOrders = pgTable("supplier_orders", {
   totalGhs: doublePrecision("total_ghs").notNull().default(0),
   statusHistory: jsonb("status_history").notNull().default([]),
   expenseBooked: boolean("expense_booked").notNull().default(false),
+  // R2 procurement chain — additive, defaults keep today's behaviour:
+  // ON_RECEIPT ⇒ GRN books the full expense (pre-approvals behaviour);
+  // ON_CREDIT ⇒ GRN books nothing, the recorded supplier payment books it once.
+  paymentMode: text("payment_mode").notNull().default("ON_RECEIPT"),
+  requisitionId: integer("requisition_id"), // purchase_requisitions.id when created from a PR
   notes: text("notes"),
   createdByUserId: integer("created_by_user_id"),
   createdByName: text("created_by_name"),
@@ -3498,4 +3506,239 @@ export const transportTrackerViolations = pgTable("transport_tracker_violations"
   notifiedManagerUserIds: jsonb("notified_manager_user_ids").default(sql`'[]'::jsonb`),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// R1 — APPROVALS FRAMEWORK (CAPABILITY-AUDIT-REPORT §4)
+//
+// One generic request→decide lifecycle generalizing the proven asset-audit
+// pattern (REQUEST_* → PENDING → APPROVED/REJECTED) to any sensitive action.
+// Gating is POLICY-DRIVEN and off by default: no policy rows ⇒ behaviour is
+// byte-identical to the pre-approvals app (existing data, permissions and
+// suites are untouched). Every transition writes to audit_trail.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** What can be gated. EXPENSE / PURCHASE_ORDER / PURCHASE_REQUISITION /
+ * INVENTORY_ADJUSTMENT / DISCOUNT / DELETION / DATA_EXPORT. */
+export const APPROVAL_ACTIONS = [
+  "EXPENSE",
+  "PURCHASE_ORDER",
+  "PURCHASE_REQUISITION",
+  "INVENTORY_ADJUSTMENT",
+  "DISCOUNT",
+  "DELETION",
+  "DATA_EXPORT",
+] as const;
+export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
+
+export const approvalPolicies = pgTable("approval_policies", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope (organizations.id)
+  action: text("action").notNull(), // APPROVAL_ACTIONS key
+  // null ⇒ applies to every unit of the organization
+  scopeBusinessId: integer("scope_business_id"),
+  // null ⇒ every amount (gate everything); else gate when amount >= threshold
+  thresholdAmountGhs: doublePrecision("threshold_amount_ghs"),
+  // DISCOUNT only: gate when discountPercent >= threshold
+  thresholdPercent: doublePrecision("threshold_percent"),
+  approverRole: text("approver_role").notNull().default("OWNER"), // OWNER | GENERAL_MANAGER
+  // Optional named delegate (overrides role); a specific user who may decide.
+  approverUserId: integer("approver_user_id"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const approvalRequests = pgTable("approval_requests", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  action: text("action").notNull(), // APPROVAL_ACTIONS key
+  targetType: text("target_type").notNull(), // TRANSACTION | SUPPLIER_ORDER | PURCHASE_REQUISITION | INVENTORY_ITEM | SALE_DOCUMENT | CUSTOMER | BUSINESS_DOCUMENT | …
+  targetId: integer("target_id").notNull(),
+  targetLabel: text("target_label"), // human-readable what/who
+  amountGhs: doublePrecision("amount_ghs"), // gated amount (for the inbox row)
+  payloadSnapshot: jsonb("payload_snapshot").notNull().default(sql`'{}'::jsonb`),
+  status: text("status").notNull().default("PENDING"), // PENDING | APPROVED | REJECTED | CANCELLED
+  requestedByUserId: integer("requested_by_user_id"),
+  requestedByName: text("requested_by_name"),
+  requestedByRole: text("requested_by_role"),
+  decidedByUserId: integer("decided_by_user_id"),
+  decidedByName: text("decided_by_name"),
+  decidedByRole: text("decided_by_role"),
+  decidedAt: timestamp("decided_at"),
+  decisionReason: text("decision_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// R2 — PROCUREMENT CHAIN COMPLETION (CAPABILITY-AUDIT-REPORT §5)
+// PR → (approval) → supplier quotations → PO → GRN → supplier invoice →
+// payment. POs keep the existing ON_RECEIPT default (expense booked at GRN —
+// unchanged behaviour); ON_CREDIT POs defer the expense to the recorded
+// supplier payment, giving a true payables ledger without touching any
+// existing flow.
+// ══════════════════════════════════════════════════════════════════════════
+
+export const purchaseRequisitions = pgTable("purchase_requisitions", {
+  id: serial("id").primaryKey(),
+  reqNumber: text("req_number").notNull().unique(), // PR-2026-0001
+  ownerId: integer("owner_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  // [{inventoryId?, description, quantity, unit?, estUnitCostGhs?}]
+  lines: jsonb("lines").notNull().default(sql`'[]'::jsonb`),
+  needBy: text("need_by"), // yyyy-mm-dd
+  source: text("source"), // MANUAL | LOW_STOCK (auto-drafted by the sweep)
+  notes: text("notes"),
+  status: text("status").notNull().default("DRAFT"), // DRAFT | PENDING_APPROVAL | APPROVED | ORDERED | REJECTED | CANCELLED
+  supplierOrderId: integer("supplier_order_id"), // set when converted to a PO
+  approvalRequestId: integer("approval_request_id"),
+  requestedByUserId: integer("requested_by_user_id"),
+  requestedByName: text("requested_by_name"),
+  requestedByRole: text("requested_by_role"),
+  decidedByName: text("decided_by_name"),
+  decidedAt: timestamp("decided_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const supplierQuotes = pgTable("supplier_quotes", {
+  id: serial("id").primaryKey(),
+  quoteNumber: text("quote_number").notNull().unique(), // SQ-2026-0001
+  ownerId: integer("owner_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  requisitionId: integer("requisition_id"), // optional link
+  supplierId: integer("supplier_id"), // suppliers.id (null ⇒ ad-hoc name)
+  supplierName: text("supplier_name").notNull(),
+  // [{description, quantity, unitCostGhs, totalGhs}]
+  lines: jsonb("lines").notNull().default(sql`'[]'::jsonb`),
+  totalGhs: doublePrecision("total_ghs").notNull().default(0),
+  leadTimeDays: integer("lead_time_days"),
+  paymentTerms: text("payment_terms"),
+  validUntil: text("valid_until"),
+  notes: text("notes"),
+  status: text("status").notNull().default("QUOTED"), // QUOTED | SELECTED | REJECTED
+  selectedByName: text("selected_by_name"),
+  selectedAt: timestamp("selected_at"),
+  supplierOrderId: integer("supplier_order_id"), // PO created on selection
+  createdByName: text("created_by_name"),
+  createdByRole: text("created_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const supplierInvoices = pgTable("supplier_invoices", {
+  id: serial("id").primaryKey(),
+  invoiceNumber: text("invoice_number").notNull().unique(), // the supplier's own number
+  ownerId: integer("owner_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  supplierOrderId: integer("supplier_order_id"),
+  supplierId: integer("supplier_id"),
+  supplierName: text("supplier_name").notNull(),
+  invoiceDate: text("invoice_date"),
+  amountGhs: doublePrecision("amount_ghs").notNull(),
+  // MATCHED | VARIANCE | PENDING (no PO to match) | PAID | CANCELLED
+  status: text("status").notNull().default("PENDING"),
+  matchResult: jsonb("match_result").default(sql`'{}'::jsonb`), // {poTotal, receivedQty, orderedQty, varianceGhs, varianceNote}
+  notes: text("notes"),
+  attachmentDocumentId: integer("attachment_document_id"), // business_documents.id (R4 vault)
+  paymentMode: text("payment_mode").notNull().default("ON_RECEIPT"), // mirrors the PO's mode
+  amountPaidGhs: doublePrecision("amount_paid_ghs").notNull().default(0),
+  registeredByName: text("registered_by_name"),
+  registeredByRole: text("registered_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const supplierPayments = pgTable("supplier_payments", {
+  id: serial("id").primaryKey(),
+  paymentNumber: text("payment_number").notNull().unique(), // SPP-2026-123456
+  ownerId: integer("owner_id").notNull(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  invoiceId: integer("invoice_id"), // supplier_invoices.id
+  supplierOrderId: integer("supplier_order_id"), // optional direct PO link
+  supplierName: text("supplier_name").notNull(),
+  amountGhs: doublePrecision("amount_ghs").notNull(),
+  paymentMethod: text("payment_method").notNull(), // CASH | MTN_MOMO | TELECEL_CASH | BANK_TRANSFER | POS_CARD
+  reference: text("reference"),
+  note: text("note"),
+  transactionId: integer("transaction_id"), // the EXPENSE booking (ON_CREDIT invoices only)
+  paidOn: text("paid_on").notNull(), // yyyy-mm-dd
+  recordedByUserId: integer("recorded_by_user_id"),
+  recordedByName: text("recorded_by_name"),
+  recordedByRole: text("recorded_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// R3 — CRM RELATIONAL LAYER (CAPABILITY-AUDIT-REPORT §6)
+// Interactions timeline + per-customer preferences. The 360 view itself is
+// assembled from existing tables (trackings, credit sales, payments, loyalty).
+// ══════════════════════════════════════════════════════════════════════════
+
+export const customerInteractions = pgTable("customer_interactions", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  businessId: integer("business_id"), // null ⇒ org-wide customer note
+  customerId: integer("customer_id").notNull(),
+  type: text("type").notNull().default("NOTE"), // CALL | VISIT | MESSAGE | COMPLAINT | FOLLOW_UP | NOTE
+  summary: text("summary").notNull(),
+  detail: text("detail"),
+  followUpOn: text("follow_up_on"), // yyyy-mm-dd — feeds Action Center via the daily sweep
+  actorUserId: integer("actor_user_id"),
+  actorName: text("actor_name").notNull(),
+  actorRole: text("actor_role"),
+  occurredAt: text("occurred_at"), // yyyy-mm-dd (defaults to today)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// R4 — DOCUMENT VAULT (CAPABILITY-AUDIT-REPORT §3)
+// One registry for business-level documents + generated report documents
+// (vet reports, delivery notes) + attachments to arbitrary records
+// (relatedType/relatedId). Clones the proven employee_documents shape.
+// ══════════════════════════════════════════════════════════════════════════
+
+export const BUSINESS_DOC_TYPES = [
+  "INVOICE",
+  "RECEIPT",
+  "QUOTATION",
+  "VET_REPORT",
+  "DELIVERY_NOTE",
+  "CONTRACT",
+  "CERTIFICATE",
+  "LICENCE_PERMIT",
+  "INSURANCE",
+  "VEHICLE_DOCUMENT",
+  "SUPPLIER_INVOICE",
+  "OTHER",
+] as const;
+export type BusinessDocType = (typeof BUSINESS_DOC_TYPES)[number];
+
+export const businessDocuments = pgTable("business_documents", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull(), // tenant scope
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  docType: text("doc_type").notNull(), // BUSINESS_DOC_TYPES key
+  title: text("title").notNull(),
+  fileName: text("file_name"),
+  fileData: text("file_data").notNull(), // data URL (image/* or application/pdf)
+  issuedOn: text("issued_on"), // yyyy-mm-dd
+  expiresOn: text("expires_on"), // yyyy-mm-dd — the expiry sweep's source
+  // Polymorphic link: FLOCK | AQUA_BATCH | SUPPLIER | CUSTOMER | VEHICLE |
+  // SUPPLIER_ORDER | GOODS_RECEIPT | SALE_DOCUMENT | EMPLOYEE | BUSINESS
+  relatedType: text("related_type"),
+  relatedId: integer("related_id"),
+  notes: text("notes"),
+  uploadedByUserId: integer("uploaded_by_user_id"),
+  uploadedByName: text("uploaded_by_name"),
+  uploadedByRole: text("uploaded_by_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });

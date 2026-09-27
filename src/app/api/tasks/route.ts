@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { createTask, taskStats, todayLocalISO, ACTION_OPEN_STATUSES, isValidISODate, normTaskStatus, normTaskPriority } from "@/lib/actionCenter";
-import { linkedAuditIssues, linkedAdvisorFollowUps, linkedChecklistSummary } from "@/lib/actionCenter";
+import { linkedAuditIssues, linkedAdvisorFollowUps, linkedChecklistSummary, linkedApprovals } from "@/lib/actionCenter";
 import { pushAfterBell } from "@/lib/push";
 import { businessManageIdsOf } from "@/lib/permissions";
 
@@ -103,12 +103,16 @@ export async function GET(request: NextRequest) {
 
     // ── Linked open items (read-only views over existing systems) ──
     const includeLinked = searchParams.get("includeLinked") !== "0";
-    let linked: any = { auditIssues: [], advisorFollowUps: [], checklist: [] };
+    let linked: any = { auditIssues: [], advisorFollowUps: [], checklist: [], approvals: [] };
     if (includeLinked) {
       const linkedScope = role === "WORKER" ? [] : allowedList === null ? null : allowedList;
       linked.auditIssues = await linkedAuditIssues(linkedScope, Number(user.id));
       linked.advisorFollowUps = await linkedAdvisorFollowUps(linkedScope);
       linked.checklist = await linkedChecklistSummary(allowedList, today);
+      // R1: approvers see pending gated records beside their other actions.
+      if (role !== "WORKER") {
+        linked.approvals = await linkedApprovals(user, linkedScope);
+      }
       // Workers additionally see checklist load of their own businesses.
       if (role === "WORKER" && !linked.checklist.length) {
         const ids = new Set<number>();
