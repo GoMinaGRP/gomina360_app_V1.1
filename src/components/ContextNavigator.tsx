@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Compass,
   MapPin,
@@ -402,6 +402,16 @@ export default function ContextNavigator({
 }: NavProps) {
   const [collapsed, setCollapsed] = useState(false);
   const loc = resolveLocation(activeTab, businesses, currentUser);
+
+  // Escape key closes mobile navigation drawer
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && onClose) onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
 
   const body = (
     <PanelBody

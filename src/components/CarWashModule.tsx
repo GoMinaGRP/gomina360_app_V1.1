@@ -950,6 +950,14 @@ function CarWashForm({
   };
 
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   const title =
     type === "WASH" ? "Start Wash (Drive-in)" :
     type === "BOOKING" ? "New Booking" :
@@ -957,13 +965,17 @@ function CarWashForm({
     "Log Expense";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" data-testid="cw-form">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
-          <h3 className="text-lg font-bold text-white">{title}</h3>
-          <button data-testid="cwf-close" onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      data-testid="cw-form"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button data-testid="cwf-close" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
         </div>
-        <form onSubmit={handle} className="p-5 space-y-3">
+        <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
           {type === "WASH" && <>
             <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div>
             <FormField f={f} set={set} label="Vehicle (make / plate)" k="vehicleLabel" placeholder="e.g. Toyota Corolla — GW-1234-24" required />

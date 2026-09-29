@@ -186,6 +186,16 @@ export default function ManageBusinessesModal({
   const [deleteCounts, setDeleteCounts] = useState<any | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
+  // Escape key listener to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   // ── Super Admin cross-owner view: Owner/Org identity + filters ──────────
   const orgNameOf = (orgId: any) =>
     organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
@@ -912,21 +922,22 @@ export default function ManageBusinessesModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
       data-testid="manage-biz-modal"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 sm:px-6 py-3.5 sm:py-4 shrink-0 bg-slate-900">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center shrink-0">
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">
+            <div className="min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">
                 Manage Businesses & Branches
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 line-clamp-2">
                 {mode === "list" &&
                   (isOwner
                     ? "Owner console — add, edit, relocate, change type, online ordering & service areas, deactivate or permanently delete any unit"
@@ -942,11 +953,11 @@ export default function ManageBusinessesModal({
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2 shrink-0">
             {mode !== "list" && (
               <button
                 onClick={resetToList}
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>All Units</span>
@@ -955,7 +966,8 @@ export default function ManageBusinessesModal({
             <button
               onClick={onClose}
               data-testid="manage-biz-close"
-              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              aria-label="Close"
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
             >
               <X className="w-5 h-5" />
             </button>
@@ -963,7 +975,7 @@ export default function ManageBusinessesModal({
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto space-y-4">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
           {!isOwner && !isUnitManager && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 p-3 rounded-lg text-xs">
               Only the OWNER can change business units. You are viewing this console read-only.

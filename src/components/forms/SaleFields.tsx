@@ -173,8 +173,8 @@ export default function SaleFields({
         : "bg-emerald-500/10 border-emerald-500/30 text-emerald-200";
     return (
       <>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
             <label className="block text-[10px] text-slate-400 font-semibold mb-1">{productSelectLabel}</label>
             <select
               required
@@ -224,12 +224,12 @@ export default function SaleFields({
   // ── counter variant ────────────────────────────────────────────────────
   return (
     <>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field f={f} set={set} label="Customer Name" k="customerName" required={requireCustomer} />
         <Field f={f} set={set} label="Customer Phone" k="customerPhone" />
       </div>
       <Select f={f} set={set} label={productLabel} k="inventoryId" opts={counterOptions} />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field f={f} set={set} label="Quantity" k="quantity" t="number" required min={1} />
         <Field
           f={f}
@@ -241,7 +241,7 @@ export default function SaleFields({
           placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : "auto"}
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Select f={f} set={set} label="Payment" k="paymentMethod" opts={PAYMENT_METHODS.map((p) => ({ v: p, l: p }))} />
         <Field f={f} set={set} label="Discount %" k="discountPct" t="number" step="0.5" min={0} max={100} placeholder="auto" />
         {discountFlat && <Field f={f} set={set} label={`Discount (${currency})`} k="discount" t="number" step="0.01" min={0} />}

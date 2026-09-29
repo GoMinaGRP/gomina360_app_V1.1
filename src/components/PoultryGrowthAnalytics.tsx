@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Bird, Egg, Wheat, TrendingUp, TrendingDown, HeartPulse,
   Target, Sliders, RotateCcw, Scale, X, Save,
@@ -311,6 +311,15 @@ export default function PoultryGrowthAnalytics({
   );
   const k = perf.kpis;
 
+  useEffect(() => {
+    if (!weighOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWeighOpen(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [weighOpen]);
+
   return (
     <div
       data-testid="poa-root"
@@ -582,8 +591,12 @@ export default function PoultryGrowthAnalytics({
 
       {/* ── Record Daily Weight modal (bird + egg) ─────────────────────── */}
       {weighOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" data-testid="poaw-modal">
-          <div className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto"
+          data-testid="poaw-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setWeighOpen(false); }}
+        >
+          <div className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="px-5 py-3.5 border-b border-slate-700 flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Scale className="w-4 h-4 text-emerald-400" /> Record Daily Weight

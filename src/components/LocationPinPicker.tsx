@@ -93,14 +93,15 @@ export default function LocationPinPicker({
     try {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          onChange((prev: PinValue | null) => (prev ? prev : { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy ?? null }));
+          if (!pin) {
+            setPin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null);
+          }
         },
         () => {},
         { enableHighAccuracy: false, timeout: 4000, maximumAge: 60000 },
       );
     } catch { /* noop */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pin, setPin]);
 
   useEffect(() => {
     if (pin && !hadPin.current) {

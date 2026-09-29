@@ -271,8 +271,20 @@ export default function FishBenchmarkManager({
     (b) => b.status === "HARVESTED" || b.status === "SOLD" || b.status === "CULLED" || b.status === "GROWING",
   );
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm" data-testid="fibm-root">
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm"
+      data-testid="fibm-root"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div className="w-full max-w-2xl h-full bg-slate-900 border-l border-slate-700 flex flex-col shadow-2xl">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between gap-3">

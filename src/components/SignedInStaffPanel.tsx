@@ -68,6 +68,16 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, [load]);
 
+  // Escape key handler
+  useEffect(() => {
+    if (!confirmRevoke) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmRevoke(null);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [confirmRevoke]);
+
   const act = async (payload: any, keepOpen = false) => {
     setActionBusy(Number(payload.userId));
     setNotice("");
@@ -527,8 +537,12 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
 
       {/* Revoke double-confirm */}
       {confirmRevoke && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" data-testid="sis-revoke-modal">
-          <div className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-5 space-y-3 shadow-2xl">
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="sis-revoke-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setConfirmRevoke(null); }}
+        >
+          <div className="w-full max-w-sm bg-slate-900 border border-rose-500/40 rounded-2xl p-4 sm:p-5 space-y-3 shadow-2xl max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center gap-2">
               <ShieldX className="w-5 h-5 text-rose-400" />
               <h4 className="text-sm font-extrabold text-white">Revoke access for {confirmRevoke.name}?</h4>

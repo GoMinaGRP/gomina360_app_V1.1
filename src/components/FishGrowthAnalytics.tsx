@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Fish, Wheat, TrendingUp, HeartPulse, Target, Scale, Waves,
   RotateCcw, X, Save,
@@ -195,6 +195,15 @@ export default function FishGrowthAnalytics({
     }
   };
 
+  useEffect(() => {
+    if (!weighOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWeighOpen(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [weighOpen]);
+
   return (
     <div
       data-testid="fga-root"
@@ -387,8 +396,12 @@ export default function FishGrowthAnalytics({
 
       {/* ── Record Daily Fish Weight modal ───────────────────────────────── */}
       {weighOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" data-testid="fgaw-modal">
-          <div className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto"
+          data-testid="fgaw-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setWeighOpen(false); }}
+        >
+          <div className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="px-5 py-3.5 border-b border-slate-700 flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Scale className="w-4 h-4 text-cyan-400" /> Record Daily Fish Weight

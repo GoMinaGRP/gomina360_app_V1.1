@@ -180,8 +180,18 @@ function MapInternals({
   }, [zoom, map]);
 
   useEffect(() => {
-    const t = setTimeout(() => map.invalidateSize(), 50);
-    return () => clearTimeout(t);
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 50);
+    const t2 = setTimeout(() => map.invalidateSize(), 250);
+    const onResize = () => map.invalidateSize();
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
   }, [style, map]);
 
   return null;

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   AlertTriangle, BadgeDollarSign, Boxes, Building2, CheckCircle, ClipboardCheck,
@@ -809,14 +809,25 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
   const restockCost = Number(f.unitCostGhs) || 0;
   const restockTotal = qty * restockCost;
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
-          <h3 className="text-lg font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit(type, type === "RESTOCK" ? { ...f, totalCostGhs: restockTotal } : f); }} className="p-5 space-y-3">
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit(type, type === "RESTOCK" ? { ...f, totalCostGhs: restockTotal } : f); }} className="p-4 sm:p-5 space-y-3">
           {type === "SALE" && (
             <SaleFields
               variant="stock"

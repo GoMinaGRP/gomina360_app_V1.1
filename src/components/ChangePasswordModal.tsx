@@ -43,6 +43,16 @@ export default function ChangePasswordModal({ isOpen, onClose, currentUser }: Pr
     }
   }, [isOpen]);
 
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const fieldClass =
@@ -128,9 +138,12 @@ export default function ChangePasswordModal({ isOpen, onClose, currentUser }: Pr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div
-        className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl"
+        className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto"
         data-testid="change-password-modal"
       >
         {/* Header */}

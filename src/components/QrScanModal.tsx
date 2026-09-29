@@ -95,6 +95,16 @@ export default function QrScanModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Escape key listener
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const submitManual = () => {
@@ -103,18 +113,22 @@ export default function QrScanModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" data-testid="qr-scanner">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-700/80 flex items-center justify-between">
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto"
+      data-testid="qr-scanner"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden max-h-[calc(100dvh-2rem)] flex flex-col my-auto">
+        <div className="px-5 py-4 border-b border-slate-700/80 flex items-center justify-between shrink-0">
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <QrCode className="w-5 h-5 text-cyan-400" /> {title}
           </h3>
-          <button onClick={onClose} data-testid="qr-scanner-close" className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-white transition">
+          <button onClick={onClose} data-testid="qr-scanner-close" aria-label="Close" className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-400 hover:text-white transition shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
           <p className="text-xs text-slate-400 leading-relaxed">
             Point the camera at the item or asset QR label. If the code is
             already registered, its record opens; a new code starts a guided

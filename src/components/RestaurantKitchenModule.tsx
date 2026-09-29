@@ -794,7 +794,25 @@ function KitchenForm({ type, busy, onClose, onSubmit, inventory, menu, suppliers
     onSubmit(type, payload);
   };
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} productLabel="Stock Item" productEmptyLabel={inventory.length ? "— select item —" : "— add stock items first —"} productOptionText={(i: any) => `${i.name} (${i.quantity} ${i.unit} left)`} reasonLabel="Custom price reason (optional)" showTotal={false} />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Gas, Utilities, Payroll, Rent..." required list="kit-exp" /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /><datalist id="kit-exp">{["Gas & Fuel", "Utilities", "Payroll", "Rent", "Equipment Repair", "Cleaning Supplies", "Packaging"].map((c) => <option key={c} value={c} />)}</datalist></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Item Name" k="name" required placeholder="e.g. Long Grain Rice 25kg" /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Food & Ingredients" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Kg / Litres / Crates" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} step="0.01" /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} step="0.01" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵/unit)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Expiry Date" k="expiryDate" t="date" /></div><p className="text-[10px] text-slate-500">Expiry dates power the Food Safety & Expiry Alerts card.</p></>}
@@ -826,5 +844,6 @@ function KitchenForm({ type, busy, onClose, onSubmit, inventory, menu, suppliers
     </>}
     {type === "SHIFT_LOG" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Total Orders" k="totalOrders" t="number" min={0} required /><FormField f={f} set={set} label="Most Popular Dish" k="mostPopularDish" placeholder="auto: top dish" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Food Cost %" k="foodCostPercent" t="number" step="0.1" required /><FormField f={f} set={set} label="Waste %" k="wastePercent" t="number" step="0.1" required /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="MoMo Receipts (GH₵)" k="momoReceiptsGhs" t="number" step="0.01" required /><FormField f={f} set={set} label="Cash Receipts (GH₵)" k="cashReceiptsGhs" t="number" step="0.01" required /></div><p className="text-[10px] text-slate-500">Legacy daily ops report — kept identical to the original shared view.</p></>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
-  </form></div></div>;
+  </form></div></div>
+  );
 }

@@ -125,13 +125,26 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  // Escape key handler
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   if (!isOwner && !isDelegated) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3">
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3 my-auto">
           <ShieldCheck className="w-8 h-8 text-rose-400 mx-auto" />
-          <p className="text-sm text-slate-300">Only the OWNER (or a manager the OWNER has trusted with user management) can open Users & Access.</p>
+          <p className="text-sm text-slate-300">Only the OWNER (or a manager the OWNER has trusted with user management) can open Users &amp; Access.</p>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Close</button>
         </div>
       </div>
@@ -538,8 +551,11 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[92vh] overflow-y-auto" data-testid="user-access-console">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto" data-testid="user-access-console">
         <div className="sticky top-0 bg-slate-900/95 backdrop-blur px-5 py-4 border-b border-slate-800 flex items-center justify-between z-10">
           <div>
             <h2 className="text-lg font-black text-white flex items-center gap-2">

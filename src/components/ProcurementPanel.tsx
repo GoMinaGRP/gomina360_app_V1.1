@@ -104,6 +104,20 @@ export default function ProcurementPanel({
 
   useEffect(() => { loadPendingPreorders(); }, [loadPendingPreorders, register]);
 
+  // Escape key handler for modal dialogs
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showReq) setShowReq(false);
+        else if (quoteFor !== null) setQuoteFor(null);
+        else if (invoiceFor) setInvoiceFor(null);
+        else if (showRaise) setShowRaise(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showReq, quoteFor, invoiceFor, showRaise]);
+
   const api = async (payload: any) => {
     const res = await fetch("/api/procurement", {
       method: "POST",
@@ -660,11 +674,15 @@ export default function ProcurementPanel({
 
       {/* ── New-requisition modal ── */}
       {showReq && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="proc-req-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="proc-req-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowReq(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-xl space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">Draft purchase requisition</h4>
-              <button onClick={() => setShowReq(false)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setShowReq(false)} aria-label="Close" className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-2">
               {(reqDraft.lines || []).map((li: any, idx: number) => (
@@ -689,7 +707,7 @@ export default function ProcurementPanel({
               ))}
               <button onClick={() => setReqDraft({ ...reqDraft, lines: [...reqDraft.lines, { inventoryId: null, description: "", quantity: 1, unit: null, estUnitCostGhs: null }] })} className="text-[11px] font-bold text-emerald-300 hover:text-emerald-200">+ Add line</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Needed by</label>
                 <input type="date" value={reqDraft.needBy || ""} onChange={(e) => setReqDraft({ ...reqDraft, needBy: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
@@ -699,7 +717,7 @@ export default function ProcurementPanel({
                 <input value={reqDraft.notes || ""} onChange={(e) => setReqDraft({ ...reqDraft, notes: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
               </div>
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setShowReq(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold">Cancel</button>
               <button onClick={saveRequisition} disabled={busy || !reqDraft.lines.length} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50" data-testid="proc-req-save">Save draft</button>
             </div>
@@ -709,13 +727,17 @@ export default function ProcurementPanel({
 
       {/* ── Add-quote modal ── */}
       {quoteFor !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="proc-quote-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="proc-quote-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setQuoteFor(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-xl space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">{quoteFor ? `Quote for ${quoteFor.reqNumber}` : "Ad-hoc quotation"}</h4>
-              <button onClick={() => setQuoteFor(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setQuoteFor(null)} aria-label="Close" className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Supplier</label>
                 <select value={quoteDraft.supplierId || ""} onChange={(e) => setQuoteDraft({ ...quoteDraft, supplierId: e.target.value, supplierName: e.target.value ? (suppliers.find((s: any) => String(s.id) === e.target.value)?.name || "") : quoteDraft.supplierName })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm">
@@ -750,7 +772,7 @@ export default function ProcurementPanel({
                 </div>
               ))}
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setQuoteFor(null)} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold">Cancel</button>
               <button onClick={saveQuote} disabled={busy || !quoteDraft.lines.length || (!quoteDraft.supplierId && !quoteDraft.supplierName?.trim())} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50" data-testid="proc-quote-save">Save quote</button>
             </div>
@@ -760,11 +782,15 @@ export default function ProcurementPanel({
 
       {/* ── Register-invoice modal ── */}
       {invoiceFor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="proc-invoice-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="proc-invoice-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setInvoiceFor(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-lg space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">Register supplier invoice</h4>
-              <button onClick={() => setInvoiceFor(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setInvoiceFor(null)} aria-label="Close" className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
             <div>
               <label className="block text-[11px] font-semibold text-slate-400 mb-1">Purchase order (received)</label>
@@ -775,7 +801,7 @@ export default function ProcurementPanel({
                 ))}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Invoice number</label>
                 <input value={invoiceFor.invoiceNumber || ""} onChange={(e) => setInvoiceFor({ ...invoiceFor, invoiceNumber: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
@@ -789,7 +815,7 @@ export default function ProcurementPanel({
               <label className="block text-[11px] font-semibold text-slate-400 mb-1">Amount (GH₵)</label>
               <input type="number" min={0} step="any" value={invoiceFor.amountGhs || ""} onChange={(e) => setInvoiceFor({ ...invoiceFor, amountGhs: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" data-testid="proc-inv-amount" />
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setInvoiceFor(null)} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold">Cancel</button>
               <button onClick={saveInvoice} disabled={busy || !invoiceFor.invoiceNumber?.trim() || !Number(invoiceFor.amountGhs)} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50" data-testid="proc-inv-save">Register &amp; match</button>
             </div>
@@ -799,8 +825,12 @@ export default function ProcurementPanel({
 
       {/* ── Raise-PO modal ── */}
       {showRaise && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="proc-raise-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="proc-raise-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowRaise(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-xl space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">Raise purchase order</h4>
               <button onClick={() => setShowRaise(false)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>

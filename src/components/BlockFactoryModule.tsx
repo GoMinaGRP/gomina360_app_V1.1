@@ -861,7 +861,25 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
     onSubmit(type, payload);
   };
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "PRODUCTION" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Batch ID" k="batchId" placeholder="auto if blank" /><FormSelect f={f} set={set} label="Block Type" k="blockType" opts={[...blockTypeOptions, { v: ADD_NEW_TYPE, l: "➕ Add New Block Type…" }]} /><FormField f={f} set={set} label="Bags Cement Used" k="bagsCementUsed" t="number" required min={1} /><FormField f={f} set={set} label="Blocks Molded" k="blocksMolded" t="number" required min={1} /><FormField f={f} set={set} label="Blocks Broken" k="blocksBroken" t="number" min={0} /><FormSelect f={f} set={set} label="Quality" k="qualityGrade" opts={["GRADE_A_STANDARD", "GRADE_B_MINOR_DEFECT", "REJECTED"]} /><FormField f={f} set={set} label="Date" k="recordedDate" t="date" /></div>
     {f.blockType !== ADD_NEW_TYPE && (() => {
       const bt = (blockTypes || []).find((t: any) => t.typeKey === f.blockType);
@@ -978,7 +996,8 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
       <datalist id="blk-item-cats">{["Raw Materials", "Concrete Blocks", "Paving & Bricks", "Spare Parts", "Consumables", "Finished Goods"].map((c) => <option key={c} value={c} />)}</datalist>
     </>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
-  </form></div></div>;
+  </form></div></div>
+  );
 }
 
 /** Inline "Add New Block Type" editor — shared by the Production and Restock

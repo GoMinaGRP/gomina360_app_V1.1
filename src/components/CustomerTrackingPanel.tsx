@@ -1324,9 +1324,21 @@ function NewTrackingModal({
     }
   };
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" data-testid="ct-new-root">
-      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-h-[92vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      data-testid="ct-new-root"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/70 sticky top-0 bg-slate-900 z-10">
           <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
             <Truck className="w-4 h-4 text-cyan-300" /> New Customer Order & Tracking

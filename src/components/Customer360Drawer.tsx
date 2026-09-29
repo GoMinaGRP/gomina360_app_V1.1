@@ -161,13 +161,29 @@ export default function Customer360Drawer({
     doc.save(`statement-${String(data.profile.name || "customer").replace(/\W+/g, "-").toLowerCase()}.pdf`);
   };
 
+  // Escape key listener
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showAdd) setShowAdd(false);
+        else onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showAdd, onClose]);
+
   const p = data?.profile || customer;
   const insights = data?.insights || {};
   const bizName = p.businessId != null ? businesses.find((b) => Number(b.id) === Number(p.businessId))?.name || `Unit #${p.businessId}` : "Shared — all units";
   const overdueCredits = (data?.creditSales || []).filter((s: any) => s.status !== "PAID" && s.dueDate && String(s.dueDate) < today());
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm" data-testid="c360-root">
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm"
+      data-testid="c360-root"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <div className="bg-slate-900 border-l border-slate-700 w-full max-w-2xl h-full overflow-y-auto">
         {/* Header */}
         <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur border-b border-slate-700/80 px-5 py-4 flex items-start justify-between gap-3">
@@ -354,8 +370,12 @@ export default function Customer360Drawer({
 
         {/* ── Add-interaction modal ── */}
         {showAdd && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" data-testid="c360-add-modal">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-md space-y-3">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 overflow-y-auto"
+            data-testid="c360-add-modal"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowAdd(false); }}
+          >
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-md space-y-3 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-extrabold text-white">Log interaction</h4>
                 <button onClick={() => setShowAdd(false)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>

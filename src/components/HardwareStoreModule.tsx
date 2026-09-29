@@ -885,9 +885,28 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
     onSubmit(type, { ...f });
   };
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   const purchaseStatusOpts = [{ v: "ORDERED", l: "Ordered (on the way)" }, { v: "RECEIVED", l: "Received (stock-in + expense booked)" }];
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" data-testid="hw-form"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button data-testid="hwf-close" onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      data-testid="hw-form"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button data-testid="hwf-close" onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} productLabel="Material (in stock)" productEmptyLabel="— select material —" totalTone="text-amber-300" totalTestId="hwf-sale-total" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Forklift Fuel, Yard Rent, Utilities..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Material Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Cement & Mortar" list="hw-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags, Lengths, Sheets…" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="hw-item-cats">{MATERIAL_CATS.map((c) => <option key={c} value={c} />)}</datalist></>}
@@ -920,7 +939,8 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
       <p className="text-[10px] text-slate-500">Posting a GRN tops up the matching stock item (or creates it) — the yard log doubles as the stock-intake ledger.</p>
     </>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" data-testid="hwf-cancel" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button data-testid="hwf-submit" disabled={busy} className="px-5 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
-  </form></div></div>;
+  </form></div></div>
+  );
 }
 
 // ─── Order / Delivery Tracking Modal ─────────────────────────────────────────
@@ -962,9 +982,21 @@ function HardwareTrackModal({
         { label: "Delivered to Site", detail: row.siteAddress ? `Dropped at ${row.siteAddress}` : "Site drop completed", at: fmtTrackDate(row.deliveredDate) },
       ];
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div data-testid="hw-track-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div
+      data-testid="hw-track-modal"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-sky-400">{isOrder ? "Customer Order Tracking" : "Site Delivery Tracking"}</p>

@@ -135,12 +135,24 @@ const inp = "w-full rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-2
  *  keystroke-driven re-render, so React unmounted/remounted all inputs in the
  *  form and focus dropped after a single character. */
 function Modal({ title, onSubmit, submitLabel = "Save", saving = false, onClose, children }: any) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" data-testid="transport-modal">
-      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-800 p-4 shadow-2xl sm:rounded-2xl">
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4 overflow-y-auto"
+      data-testid="transport-modal"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-slate-700 bg-slate-800 p-4 shadow-2xl sm:my-auto">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-white" data-testid="transport-modal-close"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-white transition" data-testid="transport-modal-close"><X className="h-4 w-4" /></button>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</div>
         <div className="mt-4 flex justify-end gap-2">

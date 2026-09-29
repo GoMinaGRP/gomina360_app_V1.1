@@ -345,12 +345,23 @@ export default function BlockMixing({ currentUser, businessInfo, currentCurrency
 /* ═══════════════════════ modals ═══════════════════════ */
 
 function ModalShell({ title, icon: Icon, onClose, children, wide }: any) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`bg-slate-800 border border-slate-700 rounded-2xl w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[90vh] overflow-y-auto p-5`}>
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className={`bg-slate-800 border border-slate-700 rounded-2xl w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto p-4 sm:p-5 my-auto`}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-bold text-white flex items-center gap-2">{Icon && <Icon className="w-4 h-4 text-emerald-400" />} {title}</h3>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition"><X className="w-4 h-4" /></button>
         </div>
         {children}
       </div>

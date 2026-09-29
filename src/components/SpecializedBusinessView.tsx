@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   Egg,
@@ -20,6 +20,7 @@ import {
   BarChart2,
   Calendar,
   WifiOff,
+  X,
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { addToOfflineQueue } from "@/lib/offlineSync";
@@ -221,6 +222,15 @@ export default function SpecializedBusinessView({
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    if (!showLogModal) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowLogModal(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showLogModal]);
 
   const renderIcon = () => {
     if (upperCode.startsWith("POULTRY")) return <Egg className="w-6 h-6 text-emerald-400" />;
@@ -759,21 +769,33 @@ export default function SpecializedBusinessView({
 
       {/* Modal to log specialized operational data */}
       {showLogModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowLogModal(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 {renderIcon()}
-                <h3 className="text-lg font-bold text-white">
+                <h3 className="text-base sm:text-lg font-bold text-white">
                   Log {bizCategory} Operations
                 </h3>
               </div>
-              {!isOnline && (
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-xs font-bold border border-amber-500/30">
-                  <WifiOff className="w-3 h-3" />
-                  <span>Offline Queue</span>
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {!isOnline && (
+                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-xs font-bold border border-amber-500/30">
+                    <WifiOff className="w-3 h-3" />
+                    <span>Offline</span>
+                  </span>
+                )}
+                <button
+                  onClick={() => setShowLogModal(false)}
+                  aria-label="Close"
+                  className="p-1 rounded text-slate-400 hover:text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <form onSubmit={handleAddLog} className="space-y-4">

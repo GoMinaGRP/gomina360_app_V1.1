@@ -139,8 +139,6 @@ export default function ExpenseEntryForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  if (!isOpen) return null;
-
   const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -291,32 +289,52 @@ export default function ExpenseEntryForm({
     }
   };
 
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showAddCategory) setShowAddCategory(false);
+        else onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, showAddCategory, onClose]);
+
   const shownCategories =
     categories.length > 0
       ? categories.map((c: any) => ({ value: c.name, label: `${c.icon || "📋"} ${c.name}` }))
       : defaultCategories;
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" data-testid={`${testid}-modal`}>
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl max-h-[92vh] flex flex-col">
-        <div className="flex items-center justify-between border-b border-slate-800 p-5 shrink-0">
-          <div>
-            <h3 className="text-lg font-bold text-white">{title}</h3>
-            <p className="text-[11px] text-slate-400">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      data-testid={`${testid}-modal`}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 shrink-0 bg-slate-900">
+          <div className="min-w-0 flex-1 pr-2">
+            <h3 className="text-base sm:text-lg font-bold text-white truncate">{title}</h3>
+            <p className="text-[11px] text-slate-400 line-clamp-1">
               {subtitle || `Linked to ${businessName || "this business"} (${branchCode || "—"}) • Categories are shared with GoMina finance`}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"
             data-testid={`${testid}-close`}
+            aria-label="Close"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="overflow-y-auto p-5 space-y-4 flex-1" data-testid={`${testid}-form`}>
+        <form onSubmit={handleSubmit} className="overflow-y-auto p-4 sm:p-5 space-y-4 flex-1" data-testid={`${testid}-form`}>
           {error && (
             <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg text-xs" data-testid={`${testid}-error`}>
               {error}
@@ -499,8 +517,11 @@ export default function ExpenseEntryForm({
 
       {/* ─── Add Category Modal ─── */}
       {showAddCategory && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl p-5 space-y-4" data-testid={`${testid}-cat-modal`}>
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowAddCategory(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl p-4 sm:p-5 space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto" data-testid={`${testid}-cat-modal`}>
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white">Add New Expense Category</h3>
               <button type="button" onClick={() => setShowAddCategory(false)} className="p-1 rounded hover:bg-slate-800 text-slate-400">
