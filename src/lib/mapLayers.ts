@@ -34,30 +34,42 @@ export interface TileLayerDef {
   subdomains?: string;
 }
 
-/** STANDARD road-map failover chain, in preference order. */
+/** STANDARD road-map failover chain, in preference order (100% keyless & open). */
 export const STANDARD_LAYERS: readonly TileLayerDef[] = [
   {
-    // CARTO Voyager — clean Google-Maps-style standard road map; CORS-open,
-    // explicitly usable without an API key, much more tolerant of embedding
-    // than the OSM community CDN (whose usage policy blocks some deployments).
-    key: "carto-voyager",
-    url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
-      'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 20,
-    subdomains: "abcd",
-  },
-  {
+    // OpenStreetMap Standard — the open, community-driven global street map.
+    // Free, open-access, zero API key required, reliable worldwide.
     key: "osm-standard",
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
+    subdomains: "abc",
   },
   {
+    // Humanitarian OpenStreetMap (HOT) — high-contrast street & road view.
+    // Fast, open-access, zero API key required.
+    key: "osm-hot",
+    url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ' +
+      'Tiles style by <a href="https://www.hotosm.org/">Humanitarian OpenStreetMap Team</a> hosted by <a href="https://openstreetmap.fr/">OSM France</a>',
+    maxZoom: 19,
+    subdomains: "abc",
+  },
+  {
+    // Esri World Street Map — high-resolution, commercial-grade street basemap.
+    // CORS-open, zero API key required, highly detailed road/street labels.
     key: "esri-street",
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
     attribution: "Tiles &copy; Esri — Source: Esri, HERE, Garmin, FAO, NOAA, USGS, &copy; OpenStreetMap contributors",
+    maxZoom: 19,
+  },
+  {
+    // Esri World Topo Map — fallback topographic street basemap.
+    key: "esri-topo",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, &copy; OpenStreetMap contributors",
     maxZoom: 19,
   },
 ] as const;
