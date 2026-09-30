@@ -16,14 +16,14 @@ mkdir -p /home/user/pgtooling
   (cd /home/user/pgtooling && npm install pg puppeteer-core puppeteer @sparticuz/chromium fs embedded-postgres)
 
 echo "══ 2) Postgres (embedded binaries)"
-if ! node -e "const pg=require('pg');new pg.Client('$DATABASE_URL').connect().then(c=>process.exit(c.end())).catch(()=>process.exit(1))" 2>/dev/null; then
+if ! node -e "const { Client } = require('pg'); const c = new Client(process.env.DATABASE_URL); c.connect().then(() => c.end()).then(() => process.exit(0)).catch(() => process.exit(1));" 2>/dev/null; then
   nohup node dev-tooling/start-pg.mjs >/tmp/start-pg.log 2>&1 &
   for i in $(seq 1 90); do
-    node -e "const pg=require('pg');new pg.Client('$DATABASE_URL').connect().then(c=>process.exit(c.end())).catch(()=>process.exit(1))" 2>/dev/null && break
+    node -e "const { Client } = require('pg'); const c = new Client(process.env.DATABASE_URL); c.connect().then(() => c.end()).then(() => process.exit(0)).catch(() => process.exit(1));" 2>/dev/null && break
     sleep 2
   done
 fi
-node -e "const pg=require('pg');new pg.Client('$DATABASE_URL').connect().then(c=>process.exit(c.end()))" >/dev/null && echo "  ✔ app_db reachable"
+node -e "const { Client } = require('pg'); const c = new Client(process.env.DATABASE_URL); c.connect().then(() => c.end()).then(() => process.exit(0)).catch(() => process.exit(1));" >/dev/null && echo "  ✔ app_db reachable"
 
 echo "══ 3) schema"
 npx drizzle-kit push --force >/dev/null

@@ -256,10 +256,10 @@ export async function GET(request: Request) {
       // server on dashboard bootstrap. `photo` (the one thumbnail the UI
       // actually renders) stays, and `photoCount` preserves the "N photos"
       // indicator. Full photos still ship in the dedicated detail endpoints.
-      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => {
-        const { photos, ...rest } = item;
-        return { ...rest, photoCount: Array.isArray(photos) ? photos.length : 0 };
-      }),
+      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => ({
+        ...item,
+        photoCount: Number(item.photoCount ?? (Array.isArray(item.photos) ? item.photos.length : 0)),
+      })),
       transactions: filterByAccess(snap.transactions, allowed),
       aiInsights: (allowed === null
         ? snap.aiInsights
