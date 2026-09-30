@@ -41,6 +41,7 @@ import {
 import { auditLog } from "@/lib/audit";
 import { computeStockStatus } from "@/lib/stock";
 import { notifyApprovalDecision, notifyApprovalRequest, ownerOrgOfBusiness } from "@/lib/notify";
+import { ttlInvalidate } from "@/lib/ttlCache";
 
 export { APPROVAL_ACTIONS, type ApprovalAction } from "@/db/schema";
 
@@ -166,6 +167,7 @@ export async function resolveApprovers(policy: ApprovalPolicy, businessId?: numb
       role: users.role,
       isActive: users.isActive,
       assignedBusinessId: users.assignedBusinessId,
+      businessManageIds: users.businessManageIds,
     })
     .from(users)
     .where(inArray(users.id, Array.from(memberIds)));
@@ -176,10 +178,11 @@ export async function resolveApprovers(policy: ApprovalPolicy, businessId?: numb
     if (role === "OWNER") return true; // org owners can always decide
     if (policy.approverUserId != null && Number(policy.approverUserId) === Number(u.id)) return true;
     if (!policy.approverRole || role !== String(policy.approverRole).toUpperCase()) return false;
-    // Role match: for business-scoped policies keep it to staff tied to that
-    // unit (assigned or granted) so cross-branch GMs aren't pulled in blindly.
+    // Role match: for business-scoped policies, include staff assigned, granted management, or GMs
     if (bizId != null && policy.scopeBusinessId != null) {
-      return Number(u.assignedBusinessId) === bizId;
+      if (role === "GENERAL_MANAGER") return true;
+      const manageIds = Array.isArray(u.businessManageIds) ? u.businessManageIds.map(Number) : [];
+      return Number(u.assignedBusinessId) === bizId || manageIds.includes(bizId);
     }
     return true;
   });
@@ -294,11 +297,22 @@ async function applyDecisionEffect(
   const now = new Date();
 
   if (action === "EXPENSE" && targetType === "TRANSACTION") {
+    const isFutureRequest = payload.isPreApproval === true || payload.expenseMode === "REQUEST";
+    const finalStatus =
+      decision === "APPROVED"
+        ? isFutureRequest
+          ? "APPROVED"
+          : "COMPLETED"
+        : decision === "REJECTED"
+        ? "REJECTED"
+        : "CANCELLED";
     await db
       .update(transactions)
-      .set({ status: decision === "APPROVED" ? "COMPLETED" : decision === "REJECTED" ? "REJECTED" : "CANCELLED" })
+      .set({ status: finalStatus })
       .where(eq(transactions.id, Number(request.targetId)));
-    return `Expense marked ${decision === "APPROVED" ? "COMPLETED" : decision === "REJECTED" ? "REJECTED" : "CANCELLED"}`;
+    return isFutureRequest && decision === "APPROVED"
+      ? "Expense pre-approval granted — status is APPROVED (ready to spend & post receipt)"
+      : `Expense marked ${finalStatus}`;
   }
 
   if (action === "PURCHASE_ORDER" && targetType === "SUPPLIER_ORDER") {
@@ -469,6 +483,8 @@ export async function decideApprovalRequest(input: DecideInput) {
     requesterUserId: updated.requestedByUserId,
   });
 
+  ttlInvalidate("init");
+
   return { request: updated, effectNote };
 }
 
@@ -490,6 +506,7 @@ export async function cancelApprovalRequest(requestId: number, actor: { name?: s
     .returning();
   if (updated) {
     await applyDecisionEffect(updated, "CANCELLED");
+    ttlInvalidate("init");
   }
   return updated ?? null;
 }

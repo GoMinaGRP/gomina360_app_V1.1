@@ -262,13 +262,18 @@ try {
 
   // ══ G. Legacy regression ═══════════════════════════════════════════════
   console.log("── G. Legacy data regression ──");
-  const doris = await q1("SELECT employee_no, salary_ghs, phone, photo FROM employees WHERE id=1");
-  ok("G1 Doris untouched (EMP-0001, 4500, no photo)", doris.employee_no === "EMP-0001" && Number(doris.salary_ghs) === 4500 && doris.phone === "+233 24 667 8810" && doris.photo === null);
+  const doris = await q1("SELECT id, employee_no, salary_ghs, phone, photo FROM employees WHERE employee_no='EMP-0001'");
+  ok("G1 Doris untouched (EMP-0001, 4500, no photo)", doris?.employee_no === "EMP-0001" && Number(doris?.salary_ghs) === 4500 && doris?.phone === "+233 24 667 8810" && doris?.photo === null);
   await clickTid("epr-close").catch(() => {});
-  await clickTid("employee-profile-1");
-  await waitSel('[data-testid="epr-root"]');
-  ok("G2 legacy profile opens with seeded ID + history", (await innerHas('[data-testid="epr-empno"]', "EMP-0001")) && (await innerHas('[data-testid="epr-link-history"]', "1 entries")));
-  await clickTid("epr-close");
+  if (doris) {
+    await clickTid(`employee-profile-${doris.id}`);
+    await waitSel('[data-testid="epr-root"]');
+    const empNoText = await textOf('[data-testid="epr-empno"]');
+    const histLinkText = await textOf('[data-testid="epr-link-history"]');
+    console.log("   G2 text found:", { empNoText, histLinkText });
+    ok("G2 legacy profile opens with seeded ID + history", (empNoText || "").includes("EMP-0001") && (histLinkText || "").includes("1 entries"), `empNo: ${empNoText}, hist: ${histLinkText}`);
+    await clickTid("epr-close");
+  }
 } catch (err) {
   console.error("FATAL", err);
   failures++;

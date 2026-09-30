@@ -169,7 +169,13 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
   stmts.push(`SELECT ${selectList(employees)} FROM "employees"${whereIn("business_id", bids)}`);
   stmts.push(`SELECT ${selectList(assets)} FROM "assets"${whereIn("business_id", bids)}`);
   stmts.push(`SELECT ${selectList(inventoryItems)} FROM "inventory_items"${whereIn("business_id", bids)}`);
-  stmts.push(`SELECT ${selectList(transactions)} FROM "transactions"${whereIn("business_id", bids)}`);
+  {
+    const trxScope = whereIn("business_id", bids);
+    const trxStatusFilter = `("status" = 'COMPLETED' OR "status" IS NULL)`;
+    stmts.push(
+      `SELECT ${selectList(transactions)} FROM "transactions"${trxScope ? `${trxScope} AND ${trxStatusFilter}` : ` WHERE ${trxStatusFilter}`}`
+    );
+  }
   stmts.push(`SELECT ${selectList(creditSales)} FROM "credit_sales"${whereIn("business_id", bids)}`);
   // 10 — ai insights
   stmts.push(`SELECT ${selectList(aiInsights)} FROM "ai_insights"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}`);

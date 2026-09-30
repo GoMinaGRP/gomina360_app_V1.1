@@ -86,6 +86,9 @@ interface Props {
   currentCurrency?: string;
   /** Workers open this embedded in their workspace — business is fixed. */
   lockedBusiness?: any | null;
+  focusTrackingCode?: string | null;
+  focusTrackingId?: number | null;
+  onFocusHandled?: () => void;
 }
 
 type PanelView = "ORDERS" | "CONSOLE" | "PREORDER" | "PROCUREMENT";
@@ -110,6 +113,9 @@ export default function CustomerTrackingPanel({
   businesses,
   currentCurrency = "GHS",
   lockedBusiness = null,
+  focusTrackingCode = null,
+  focusTrackingId = null,
+  onFocusHandled,
 }: Props) {
   const [trackings, setTrackings] = useState<any[]>([]);
   const [meta, setMeta] = useState<any>(null);
@@ -131,6 +137,33 @@ export default function CustomerTrackingPanel({
   const [showNew, setShowNew] = useState(false);
   const [liveFor, setLiveFor] = useState<{ id: number; since: number } | null>(null);
   const watchRef = useRef<number | null>(null);
+
+  // Deep-linking: focus on specific tracking code / order
+  useEffect(() => {
+    if ((focusTrackingCode || focusTrackingId) && trackings.length > 0) {
+      const match = trackings.find(
+        (t) =>
+          (focusTrackingCode && (t.trackingCode === focusTrackingCode || t.orderNumber === focusTrackingCode)) ||
+          (focusTrackingId && Number(t.id) === Number(focusTrackingId))
+      );
+      if (match) {
+        setExpanded((prev) => ({ ...prev, [match.id]: true }));
+        if (match.trackingCode) setSearch(match.trackingCode);
+        const timer = setTimeout(() => {
+          const el = document.querySelector(`[data-testid="tracking-card-${match.id}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("ring-2", "ring-cyan-500", "shadow-cyan-500/40");
+            setTimeout(() => {
+              el.classList.remove("ring-2", "ring-cyan-500", "shadow-cyan-500/40");
+            }, 3500);
+          }
+          onFocusHandled?.();
+        }, 200);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [focusTrackingCode, focusTrackingId, trackings, onFocusHandled]);
 
   // Load ALL scoped orders once — the server enforces Business/Branch access;
   // every search & filter below runs client-side on this already-scoped set

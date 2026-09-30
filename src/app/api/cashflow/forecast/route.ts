@@ -117,11 +117,12 @@ export async function GET(request: NextRequest) {
         category: transactions.category,
         amountGhs: transactions.amountGhs,
         transactionNumber: transactions.transactionNumber,
+        status: transactions.status,
       })
       .from(transactions)
       .where(and(inArray(transactions.businessId, bizIds), sql`${transactions.date} >= ${since}`))
       .limit(6000);
-    const liveTxns = txnRows.filter((t) => !isSeededBaseline(t));
+    const liveTxns = txnRows.filter((t) => !isSeededBaseline(t) && (!t.status || t.status === "COMPLETED"));
     const income30 = liveTxns.filter((t) => t.type === "INCOME").reduce((s, t) => s + Number(t.amountGhs || 0), 0);
     const expense30 = liveTxns
       .filter((t) => t.type === "EXPENSE" && !/payroll|salary|wages/i.test(String(t.category || "")))

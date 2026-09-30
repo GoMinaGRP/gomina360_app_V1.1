@@ -51,6 +51,8 @@ import { nextTrxNumber } from "@/lib/idNumbers";
  * draw costs are DERIVED snapshots; consumption NEVER books money.
  */
 
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+
 const RAW_CATEGORY = "Fish Feed Raw Materials";
 const MILL_CATEGORY = "Fish Feed (Milled)";
 const EXP_CAT_INTAKE = "AQUA_FEED_RAW_MATERIAL";
@@ -67,24 +69,20 @@ async function postExpense(me: any, opts: {
   category: string; amountGhs: number; paymentMethod: string; description: string; date: string;
 }) {
   if (!(opts.amountGhs > 0)) return null;
-  const [row] = await db.insert(transactions).values({
-    transactionNumber: trxNum(),
+  const res = await postOrGateExpenseTransaction({
     businessId: opts.businessId,
     branchCode: opts.branchCode,
     branchName: opts.branchName,
-    type: "EXPENSE",
     category: opts.category,
     amountGhs: opts.amountGhs,
     paymentMethod: opts.paymentMethod || "CASH",
     description: opts.description,
     date: opts.date,
-    createdAt: new Date(),
-    status: "COMPLETED",
-    recordedBy: me.name || "Feed Mill User",
-    recordedByRole: me.role || null,
-    recordedByUserId: Number(me.id) || null,
-  }).returning();
-  return row;
+    actor: me,
+    targetLabel: `${opts.category.replace(/_/g, " ")} — GH₵ ${Number(opts.amountGhs).toFixed(2)}`,
+    metadata: { source: "AQUA_FEED_MILL" },
+  });
+  return res.transaction || null;
 }
 
 /** Bell + push fan-out for mill events (never blocks the write itself). */

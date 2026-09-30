@@ -608,54 +608,56 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
               <div className="space-y-2">
                 {[...users].sort((a, b) => a.id - b.id).map((u) => (
                   <div key={u.id} data-testid={`user-row-${u.id}`}
-                    className="bg-slate-800/70 border border-slate-700 rounded-xl p-3.5 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center font-black text-cyan-300 text-sm shrink-0">
-                      {u.name?.charAt(0)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-bold text-white">{u.name}</span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300">
-                          {u.role}
-                        </span>
-                        {u.isActive === false && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                            DEACTIVATED
-                          </span>
-                        )}
-                        {!u.hasPassword && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                            NO PASSWORD
-                          </span>
-                        )}
-                        {(u.businessManageIds?.length ?? 0) > 0 && (
-                          <span
-                            className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                            data-testid={`user-manages-${u.id}`}
-                            title="Owner-equivalent management of the granted units"
-                          >
-                            MANAGES {u.businessManageIds.length} UNIT{u.businessManageIds.length === 1 ? "" : "S"}
-                          </span>
-                        )}
+                    className="bg-slate-800/70 border border-slate-700 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                      <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center font-black text-cyan-300 text-sm shrink-0">
+                        {u.name?.charAt(0)}
                       </div>
-                      <div className="text-[10px] text-slate-400 truncate">
-                        {u.email} · {bizName(u.assignedBusinessId)}
-                        {(u.extraAccessIds?.length ?? 0) > 0 &&
-                          ` · +${u.extraAccessIds.length} extra branch(es)`}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-white">{u.name}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300">
+                            {u.role}
+                          </span>
+                          {u.isActive === false && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                              DEACTIVATED
+                            </span>
+                          )}
+                          {!u.hasPassword && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              NO PASSWORD
+                            </span>
+                          )}
+                          {(u.businessManageIds?.length ?? 0) > 0 && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                              data-testid={`user-manages-${u.id}`}
+                              title="Owner-equivalent management of the granted units"
+                            >
+                              MANAGES {u.businessManageIds.length} UNIT{u.businessManageIds.length === 1 ? "" : "S"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {u.email} · {bizName(u.assignedBusinessId)}
+                          {(u.extraAccessIds?.length ?? 0) > 0 &&
+                            ` · +${u.extraAccessIds.length} extra branch(es)`}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 sm:shrink-0 pt-2 sm:pt-0 border-t border-slate-700/60 sm:border-0 justify-end">
                       {canManageRow(u) && (
                         <button onClick={() => openEdit(u)} data-testid={`user-edit-${u.id}`}
                           title="Edit / assign / reset"
-                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition">
+                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center">
                           <Pencil className="w-4 h-4" />
                         </button>
                       )}
                       {isOwner && u.role !== "OWNER" && (
                         <button onClick={() => handleDelete(u)} data-testid={`user-delete-${u.id}`}
                           title="Delete account"
-                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition">
+                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center">
                           <Trash className="w-4 h-4" />
                         </button>
                       )}

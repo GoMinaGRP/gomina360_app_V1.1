@@ -23,6 +23,7 @@ import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { stageOfFlock } from "@/lib/poultryStages";
 import {
   isPoultryCategory,
@@ -378,35 +379,29 @@ export async function POST(request: NextRequest) {
         .returning();
 
       // Auto-create expense transaction for feed PURCHASE
+      let expenseResult = null;
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = nextTrxNumber();
-        await db.insert(transactions).values({
-          transactionNumber: trxNum,
+        expenseResult = await postOrGateExpenseTransaction({
           businessId,
           branchCode,
           branchName: data.branchName || null,
-          type: "EXPENSE",
           category: "POULTRY_FEED_PURCHASE",
           amountGhs: totalCost,
           paymentMethod: data.paymentMethod || "CASH",
           description: `Feed: ${row.feedType.replace(/_/g, " ")} — ${qty}kg | ${row.brandSupplier || "No supplier"}`,
-          // Book the expense on the feed log's own date so back-dated entries
-          // land on the right ledger day (aquaculture already does this).
           date: data.recordedDate || today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: data.recordedByName || "Poultry Farm User",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          actor: session.user,
+          targetLabel: `Poultry Feed Purchase (${qty}kg ${row.feedType}) — GH₵ ${totalCost.toFixed(2)}`,
+          metadata: { feedLogId: row.id, feedType: row.feedType, quantityKg: qty },
         });
         await auditLog(session.user, "POULTRY_FEED_PURCHASE", "RECORD", `Feed purchase ${qty} kg ${row.feedType}`,
           "OPERATION_LOG", row.id, businessId, branchCode,
-          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"} — expense ${trxNum}`,
+          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"}${expenseResult?.pendingApproval ? " (Pending Approval)" : ""}`,
           (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
         ).catch((e: any) => console.error("[poultry] audit failed:", e));
       }
 
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, expense: expenseResult?.transaction, pendingApproval: expenseResult?.pendingApproval });
     }
 
     // ── WATER ──────────────────────────────────────────────────────
@@ -504,24 +499,20 @@ export async function POST(request: NextRequest) {
         .returning();
 
       // Auto-create expense transaction for health costs
+      let expenseResult = null;
       if (healthCost > 0) {
-        const trxNum = nextTrxNumber();
-        await db.insert(transactions).values({
-          transactionNumber: trxNum,
+        expenseResult = await postOrGateExpenseTransaction({
           businessId,
           branchCode,
           branchName: data.branchName || null,
-          type: "EXPENSE",
           category: row.recordType === "VACCINATION" ? "POULTRY_VACCINATION" : "POULTRY_HEALTH",
           amountGhs: healthCost,
           paymentMethod: data.paymentMethod || "CASH",
           description: `Health: ${row.recordType} — ${row.vaccineOrDrug || row.diseaseOrCondition || "Routine"}${row.administeredBy ? ` | Admin: ${row.administeredBy}` : ""}`,
           date: data.recordedDate || today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: data.recordedByName || "Poultry Farm User",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          actor: session.user,
+          targetLabel: `Poultry Health (${row.recordType}) — GH₵ ${healthCost.toFixed(2)}`,
+          metadata: { healthLogId: row.id, recordType: row.recordType },
         });
       }
 

@@ -702,7 +702,8 @@ export async function GET(request: Request) {
           const partyOrg = ((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId) != null
             ? Number((detail as any)?.record?.ownerId ?? (detail as any)?.ownerId)
             : null;
-          if (partyOrg == null || !myOrgs.has(partyOrg)) {
+          const match = partyOrg == null ? (myOrgs.size === 0 || myOrgs.has(1)) : myOrgs.has(partyOrg);
+          if (!match) {
             return FORBIDDEN("This record belongs to another organization.");
           }
         }

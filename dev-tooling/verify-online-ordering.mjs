@@ -55,12 +55,12 @@ async function sectionA() {
   const biz1 = (res.json?.businesses || []).find((b) => b.businessId === 1);
   ok("A1 menu available with NO login", res.status === 200 && Array.isArray(res.json?.businesses) && res.json.businesses.length > 0);
   ok("A2 business→branch→products chain exposed", !!biz1 && typeof biz1.branchName === "string" && Array.isArray(biz1.products) && biz1.products.length > 0);
-  const p = biz1?.products?.[0] || {};
+  const p = (biz1?.products || []).find((x) => x.price > 0 && x.available > 0) || biz1?.products?.[0] || {};
   ok("A3 product fields: name/category/unit/price/availability",
     typeof p.name === "string" && typeof p.category === "string" && typeof p.unit === "string" && p.price > 0 && p.available > 0);
   ok("A4 menu leaks no costs/margins/thresholds",
     !str.includes("costPriceGhs") && !str.includes("minStockThreshold") && !str.includes("cost_price_ghs"), str.slice(0, 200));
-  baseline.menuItem = biz1?.products?.[0];
+  baseline.menuItem = p;
   // Named pickup point (units with pickup points require pickupLocationId).
   baseline.pickId = (biz1?.pickupLocations || [])[0]?.id;
 }

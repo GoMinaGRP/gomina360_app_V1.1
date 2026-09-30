@@ -27,6 +27,7 @@ import { linkSupplier } from "@/lib/supplierLinks";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
 import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -60,24 +61,20 @@ async function postMixExpense(me: any, opts: {
   category: string; amountGhs: number; paymentMethod: string; description: string; date: string;
 }) {
   if (!(opts.amountGhs > 0)) return null;
-  const [row] = await db.insert(transactions).values({
-    transactionNumber: mixTrxNum(),
+  const res = await postOrGateExpenseTransaction({
     businessId: opts.businessId,
     branchCode: opts.branchCode,
     branchName: opts.branchName,
-    type: "EXPENSE",
     category: opts.category,
     amountGhs: opts.amountGhs,
     paymentMethod: opts.paymentMethod || "CASH",
     description: opts.description,
     date: opts.date,
-    createdAt: new Date(),
-    status: "COMPLETED",
-    recordedBy: me.name || "Block Factory User",
-    recordedByRole: me.role || null,
-    recordedByUserId: Number(me.id) || null,
-  }).returning();
-  return row;
+    actor: me,
+    targetLabel: `${opts.category.replace(/_/g, " ")} — GH₵ ${Number(opts.amountGhs).toFixed(2)}`,
+    metadata: { source: "BLOCK_MIXER" },
+  });
+  return res.transaction || null;
 }
 
 /** Bell + push fan-out for mixer events (never throws). */
@@ -500,25 +497,23 @@ export async function POST(request: NextRequest) {
     }
 
     if (entity === "EXPENSE") {
-      const trxNum = nextTrxNumber();
-      const [row] = await db.insert(transactions).values({
-        transactionNumber: trxNum,
+      const expRes = await postOrGateExpenseTransaction({
         businessId,
         branchCode,
-        branchName,
-        type: "EXPENSE",
+        branchName: biz?.name || null,
         category: data.category || "BLOCK_FACTORY_EXPENSE",
         amountGhs: Number(data.amountGhs) || 0,
         paymentMethod: data.paymentMethod || "CASH",
         description: data.description || "Block factory expense",
         date: data.date || today,
-        createdAt: new Date(),
-        status: "COMPLETED",
-        recordedBy: data.recordedBy || "Block Factory User",
-        recordedByRole: data.recordedByRole || null,
-        recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-      }).returning();
-      return NextResponse.json({ success: true, item: row });
+        actor: __authSession.user,
+        targetLabel: `Block Factory Expense — GH₵ ${(Number(data.amountGhs) || 0).toFixed(2)}`,
+        metadata: { source: "BLOCK_FACTORY_EXPENSE" },
+      });
+      if (!expRes.success) {
+        return NextResponse.json({ success: false, error: expRes.error || "Failed to record expense" }, { status: 400 });
+      }
+      return NextResponse.json({ success: true, item: expRes.transaction, pendingApproval: expRes.pendingApproval });
     }
 
     // ── CHECKLIST (create a day's task list; idempotent per business+branch+date) ──
@@ -706,6 +701,7 @@ export async function POST(request: NextRequest) {
         .returning();
 
       let expenseRow = null;
+      let pendingApproval = false;
       const totalCost = Number(data.totalCostGhs) || (unitCost > 0 ? qty * unitCost : 0);
       // Supplier ledger link (feed-mill pattern, shared via supplierLinks):
       // naming a vendor on a restock creates/refreshes that supplier org-wide.
@@ -719,32 +715,26 @@ export async function POST(request: NextRequest) {
         });
       }
       if (data.recordExpense && totalCost > 0) {
-        const trxNum = nextTrxNumber();
-        [expenseRow] = await db
-          .insert(transactions)
-          .values({
-            transactionNumber: trxNum,
-            businessId,
-            branchCode,
-            branchName,
-            type: "EXPENSE",
-            category: data.category || (blockTypeUsed ? "Stock Purchase (Blocks)" : "Stock Purchase"),
-            amountGhs: totalCost,
-            paymentMethod: data.paymentMethod || "CASH",
-            description:
-              data.description ||
-              `Restock: ${qty}× ${item.name} (${item.sku})${blockTypeUsed ? ` — master list type ${blockTypeUsed}` : ""}`,
-            date: data.date || today,
-            createdAt: new Date(),
-            status: "COMPLETED",
-            recordedBy: data.recordedBy || "Block Factory User",
-            recordedByRole: data.recordedByRole || null,
-            recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-          })
-          .returning();
+        const expRes = await postOrGateExpenseTransaction({
+          businessId,
+          branchCode,
+          branchName: biz?.name || null,
+          category: data.category || (blockTypeUsed ? "Stock Purchase (Blocks)" : "Stock Purchase"),
+          amountGhs: totalCost,
+          paymentMethod: data.paymentMethod || "CASH",
+          description:
+            data.description ||
+            `Restock: ${qty}× ${item.name} (${item.sku})${blockTypeUsed ? ` — master list type ${blockTypeUsed}` : ""}`,
+          date: data.date || today,
+          actor: __authSession.user,
+          targetLabel: `Restock ${item.name} (${qty} ${item.unit || "units"}) — GH₵ ${totalCost.toFixed(2)}`,
+          metadata: { inventoryId: item.id, quantity: qty, blockType: blockTypeUsed },
+        });
+        expenseRow = expRes.transaction || null;
+        pendingApproval = !!expRes.pendingApproval;
       }
 
-      return NextResponse.json({ success: true, item: updated, expense: expenseRow, blockType: blockTypeUsed });
+      return NextResponse.json({ success: true, item: updated, expense: expenseRow, pendingApproval, blockType: blockTypeUsed });
     }
 
     // ── MIX_FORMULATION (mix recipe bound to the block-type master list) ──

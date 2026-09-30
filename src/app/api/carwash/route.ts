@@ -16,6 +16,7 @@ import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Auto Car Wash module API.
@@ -337,19 +338,24 @@ export async function POST(request: NextRequest) {
       if (!data.category || amount <= 0) {
         return NextResponse.json({ success: false, error: "Category and a positive amount are required" }, { status: 400 });
       }
-      await bookTransaction(
-        { id: biz.id, code: biz.code, name: biz.name },
-        "EXPENSE",
-        amount,
-        `CAR_WASH_${String(data.category).toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 30)}`,
-        `Auto Wash expense — ${data.category}${data.description ? `: ${data.description}` : ""}`,
-        data.paymentMethod || "CASH",
-        actor.a,
-        actor.r,
-        data.createdByUserId
-      );
-      await logActivity(biz.id, biz.code, "EXPENSE_LOGGED", `Expense recorded: ${data.category} — GH₵${amount}`, actor.a, actor.r, null);
-      return NextResponse.json({ success: true });
+      const expRes = await postOrGateExpenseTransaction({
+        businessId: biz.id,
+        branchCode: biz.code,
+        branchName: biz.name,
+        category: `CAR_WASH_${String(data.category).toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 30)}`,
+        amountGhs: amount,
+        paymentMethod: data.paymentMethod || "CASH",
+        description: `Auto Wash expense — ${data.category}${data.description ? `: ${data.description}` : ""}`,
+        date: today,
+        actor: __authSession.user,
+        targetLabel: `Auto Wash (${data.category}) — GH₵ ${amount.toFixed(2)}`,
+        metadata: { source: "CAR_WASH_EXPENSE" },
+      });
+      if (!expRes.success) {
+        return NextResponse.json({ success: false, error: expRes.error || "Failed to record expense" }, { status: 400 });
+      }
+      await logActivity(biz.id, biz.code, "EXPENSE_LOGGED", `Expense recorded: ${data.category} — GH₵${amount}${expRes.pendingApproval ? " (Pending Approval)" : ""}`, actor.a, actor.r, null);
+      return NextResponse.json({ success: true, item: expRes.transaction, pendingApproval: expRes.pendingApproval });
     }
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });

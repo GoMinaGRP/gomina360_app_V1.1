@@ -63,10 +63,16 @@ function daysUntil(dateIso: string | null | undefined, today: string): number | 
 export default function ActionCenter({
   currentUser,
   businesses,
+  focusApprovalId = null,
+  focusTaskId = null,
+  onFocusHandled,
   onSelectTab,
 }: {
   currentUser: any;
   businesses: any[];
+  focusApprovalId?: number | null;
+  focusTaskId?: number | null;
+  onFocusHandled?: () => void;
   onSelectTab?: (tab: string) => void;
 }) {
   const [data, setData] = useState<any>(null);
@@ -84,6 +90,27 @@ export default function ActionCenter({
 
   const isWorker = String(currentUser?.role || "").toUpperCase() === "WORKER";
   const today = data?.today || new Date().toLocaleDateString("en-CA");
+
+  // Deep-linking focus for tasks
+  useEffect(() => {
+    if (!focusTaskId || loading || !data) return;
+    const taskIdNum = Number(focusTaskId);
+    const targetTask = (data.tasks || []).find((t: any) => Number(t.id) === taskIdNum);
+    if (targetTask) {
+      const timer = setTimeout(() => {
+        const el = document.querySelector(`[data-testid="action-task-${targetTask.id}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("ring-2", "ring-amber-500", "shadow-amber-500/40");
+          setTimeout(() => {
+            el.classList.remove("ring-2", "ring-amber-500", "shadow-amber-500/40");
+          }, 3500);
+        }
+        onFocusHandled?.();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [focusTaskId, loading, data, onFocusHandled]);
 
   const load = useCallback(async () => {
     try {
@@ -559,7 +586,13 @@ export default function ActionCenter({
 
       {/* R1 — approvals (gated records awaiting a decision, my requests,
           and the OWNER/GM policy manager) */}
-      <ApprovalInbox currentUser={currentUser} businesses={businesses} onChanged={load} />
+      <ApprovalInbox
+        currentUser={currentUser}
+        businesses={businesses}
+        focusRequestId={focusApprovalId}
+        onFocusHandled={onFocusHandled}
+        onChanged={load}
+      />
 
       {toast && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-slate-800 border border-amber-500/40 shadow-2xl text-xs font-semibold text-amber-200 max-w-[90vw]" data-testid="action-toast">

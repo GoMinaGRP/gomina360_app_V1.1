@@ -360,6 +360,8 @@ try {
   );
 
   // ── 13. Low-stock sweep → auto-drafted requisition ──
+  await q(`delete from system_markers where key like $1`, [`low-stock-pr:${BIZ}:%`]);
+  await q(`delete from purchase_requisitions where business_id = $1 and source = 'LOW_STOCK'`, [BIZ]);
   await q(`update inventory_items set quantity = 5, status = 'LOW_STOCK' where id = $1`, [NAILS]);
   const sweep = await api("POST", `/api/low-stock?businessId=${BIZ}&draftPr=1`, ownerTok);
   ok("low-stock sweep with draftPr succeeds", sweep.json?.success);

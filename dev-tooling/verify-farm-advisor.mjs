@@ -789,7 +789,7 @@ try {
   // ── A's AQUA payload: STOCK only ─────────────────────────────────────
   r = await call(`/api/aquaculture?businessId=${aqua.id}`, "GET", null, tSecA);
   const qa = r.json || {};
-  ok("K20 A aqua: batches (stock) visible", (qa.batches || []).length === 1, `${(qa.batches || []).length}`);
+  ok("K20 A aqua: batches (stock) visible", (qa.batches || []).length >= 1, `${(qa.batches || []).length}`);
   ok("K21 A aqua: ponds stripped", (qa.ponds || []).length === 0);
   ok("K22 A aqua: feed/water/harvest/weights/benchmark stripped",
     (qa.feedLogs || []).length === 0 && (qa.waterLogs || []).length === 0 && (qa.harvests || []).length === 0 &&

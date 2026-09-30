@@ -1153,15 +1153,21 @@ export default function FinancialReportSection({
                   </td>
                   <td className="px-4 py-2.5">
                     <span
-                      className={`text-[10px] font-bold ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold ${
                         t.status === "COMPLETED"
-                          ? "text-emerald-400"
+                          ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                          : t.status === "PENDING_APPROVAL"
+                          ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                          : t.status === "REJECTED"
+                          ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                          : t.status === "CANCELLED"
+                          ? "bg-slate-500/15 text-slate-400 border-slate-500/30"
                           : t.status === "OFFLINE_QUEUED"
-                          ? "text-sky-400"
-                          : "text-amber-400"
+                          ? "bg-sky-500/15 text-sky-300 border-sky-500/30"
+                          : "bg-slate-500/15 text-slate-300 border-slate-500/30"
                       }`}
                     >
-                      {(t.status || "").replace(/_/g, " ")}
+                      {(t.status || "COMPLETED").replace(/_/g, " ")}
                     </span>
                   </td>
                   <td

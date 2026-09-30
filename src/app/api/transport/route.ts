@@ -35,6 +35,7 @@ import {
   writeTransportTrail,
 } from "@/lib/transport";
 import { apiError } from "@/lib/apiError";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -84,6 +85,24 @@ async function bookTransaction(
   actor: any,
   refs?: { customerId?: number | null; supplierId?: number | null; dateStr?: string | null },
 ) {
+  if (type === "EXPENSE") {
+    const res = await postOrGateExpenseTransaction({
+      businessId: biz.id,
+      branchCode: biz.code,
+      branchName: biz.name,
+      category,
+      amountGhs: amount,
+      paymentMethod: paymentMethod || "CASH",
+      customerId: refs?.customerId ?? null,
+      supplierId: refs?.supplierId ?? null,
+      description,
+      date: refs?.dateStr || null,
+      actor,
+      targetLabel: `${category} — GH₵ ${Number(amount).toFixed(2)}`,
+      metadata: { source: "TRANSPORT" },
+    });
+    return res.transaction || null;
+  }
   const now = new Date();
   const [row] = await db
     .insert(transactions)

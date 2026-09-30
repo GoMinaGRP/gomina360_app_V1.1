@@ -16,6 +16,7 @@ import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Telecom & Digital Services API — MoMo, airtime, data bundles & Wi-Fi.
@@ -66,6 +67,24 @@ async function bookTransaction(
   actorRole?: string | null,
   actorUserId?: number | null
 ) {
+  if (type === "EXPENSE") {
+    return postOrGateExpenseTransaction({
+      businessId: biz.id,
+      branchCode: biz.code,
+      branchName: biz.name,
+      category,
+      amountGhs: amount,
+      paymentMethod: paymentMethod || "CASH",
+      description,
+      actor: {
+        id: actorUserId ? Number(actorUserId) : null,
+        name: actorName || "Telecom Desk",
+        role: actorRole || null,
+      },
+      targetLabel: `${category} — GH₵ ${Number(amount).toFixed(2)}`,
+      metadata: { source: "TELECOM" },
+    });
+  }
   const now = new Date();
   await db.insert(transactions).values({
     transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}-${crypto.randomInt(10, 99)}`,
@@ -456,7 +475,7 @@ export async function POST(request: NextRequest) {
       if (!data.category || amount <= 0) {
         return NextResponse.json({ success: false, error: "Category and a positive amount are required" }, { status: 400 });
       }
-      await bookTransaction(
+      const expRes = (await bookTransaction(
         biz,
         "EXPENSE",
         amount,
@@ -466,9 +485,9 @@ export async function POST(request: NextRequest) {
         actor.a,
         actor.r,
         actor.u
-      );
-      await logActivity(biz.id, biz.code, "EXPENSE_LOGGED", `Expense recorded: ${data.category} — GH₵${amount}`, actor.a, actor.r, null);
-      return NextResponse.json({ success: true });
+      )) as any;
+      await logActivity(biz.id, biz.code, "EXPENSE_LOGGED", `Expense recorded: ${data.category} — GH₵${amount}${expRes?.pendingApproval ? " (Pending Approval)" : ""}`, actor.a, actor.r, null);
+      return NextResponse.json({ success: true, item: expRes?.transaction, pendingApproval: expRes?.pendingApproval });
     }
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });

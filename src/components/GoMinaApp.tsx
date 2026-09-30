@@ -6,14 +6,7 @@ import LoginScreen from "./LoginScreen";
 import Sidebar, { ActiveTab } from "./Sidebar";
 import ContextNavigator, { ContextBar } from "./ContextNavigator";
 import CommandCenterDashboard from "./CommandCenterDashboard";
-import NewBusinessModal from "./NewBusinessModal";
-import ManageBusinessesModal from "./ManageBusinessesModal";
-import UserAccessConsole from "./UserAccessConsole";
-import CustomerSupportModal from "./CustomerSupportModal";
-import ChangePasswordModal from "./ChangePasswordModal";
-import ProfilePhotoModal from "./ProfilePhotoModal";
 import NotificationBell from "./NotificationBell";
-import NotificationSettingsModal from "./NotificationSettingsModal";
 import PushNotifications from "./PushNotifications";
 import IdleLogout from "./IdleLogout";
 import { CurrencyCode } from "@/lib/currency";
@@ -25,6 +18,14 @@ import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
 import { readCachedBranding, fetchBranding, withBranding } from "@/lib/brandingCache";
 import dynamic from "next/dynamic";
+
+const NewBusinessModal = dynamic(() => import("./NewBusinessModal"), { ssr: false });
+const ManageBusinessesModal = dynamic(() => import("./ManageBusinessesModal"), { ssr: false });
+const UserAccessConsole = dynamic(() => import("./UserAccessConsole"), { ssr: false });
+const CustomerSupportModal = dynamic(() => import("./CustomerSupportModal"), { ssr: false });
+const ChangePasswordModal = dynamic(() => import("./ChangePasswordModal"), { ssr: false });
+const ProfilePhotoModal = dynamic(() => import("./ProfilePhotoModal"), { ssr: false });
+const NotificationSettingsModal = dynamic(() => import("./NotificationSettingsModal"), { ssr: false });
 
 /** Lazy module shells — the nine business modules and the heavy post-login
  *  views are code-split so the login page + Command Center paint without
@@ -93,6 +94,11 @@ export default function GoMinaApp() {
   const [myIssuesOpen, setMyIssuesOpen] = useState(false);
   const [myIssueFocus, setMyIssueFocus] = useState<number | null>(null);
   const [auditFocusIssue, setAuditFocusIssue] = useState<number | null>(null);
+  // Deep-linking focus targets for notifications (approvals, tasks, orders, trackings)
+  const [actionCenterFocusApprovalId, setActionCenterFocusApprovalId] = useState<number | null>(null);
+  const [actionCenterFocusTaskId, setActionCenterFocusTaskId] = useState<number | null>(null);
+  const [trackingFocusCode, setTrackingFocusCode] = useState<string | null>(null);
+  const [trackingFocusId, setTrackingFocusId] = useState<number | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [creditSales, setCreditSales] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -762,6 +768,12 @@ export default function GoMinaApp() {
         <ActionCenter
           currentUser={currentUser}
           businesses={scopedBusinesses}
+          focusApprovalId={actionCenterFocusApprovalId}
+          focusTaskId={actionCenterFocusTaskId}
+          onFocusHandled={() => {
+            setActionCenterFocusApprovalId(null);
+            setActionCenterFocusTaskId(null);
+          }}
           onSelectTab={(tab: string) => handleSelectTab(tab as ActiveTab)}
         />
       );
@@ -1349,6 +1361,12 @@ export default function GoMinaApp() {
           currentUser={currentUser}
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
+          focusTrackingCode={trackingFocusCode}
+          focusTrackingId={trackingFocusId}
+          onFocusHandled={() => {
+            setTrackingFocusCode(null);
+            setTrackingFocusId(null);
+          }}
         />
       );
     }
@@ -1523,44 +1541,152 @@ export default function GoMinaApp() {
             onSummary={setAuditBell}
             onOpenSettings={() => setIsNotifSettingsOpen(true)}
             onOpenRecord={(n) => {
-              // Order/purchase events open Customer Order & Tracking;
-              // anything branch-scoped opens that unit's dashboard.
-              const t = String(n?.type || "");
-              if (t.startsWith("AUDIT")) { setActiveTab("AUDIT"); return; }
-              // Advisor note events: the advisor lands on their console;
-              // staff land on the unit's dashboard (the notes panel lives there).
-              if (t.startsWith("ADVISOR")) {
-                if (currentUser?.role === "FARM_ADVISOR") { setActiveTab("ADVISOR"); return; }
+              if (!n) return;
+              const t = String(n?.type || "").toUpperCase();
+              const recType = String(n?.recordType || "").toLowerCase();
+              const recRef = String(n?.recordRef || "");
+              const recId = n?.recordId != null ? Number(n.recordId) : null;
+
+              // 1. Audit issues & reviews: Direct deep link to Issue / Audit Command Center
+              if (t.startsWith("AUDIT") || recType.startsWith("audit") || n?.issueId) {
+                const reviewerSide = t === "AUDIT_ISSUE_RESPONSE" || t === "AUDIT_ISSUE_RESOLVED";
+              if (reviewerSide && (auditEligible || currentUser?.role === "OWNER" || !!currentUser?.canManageAuditors)) {
+                setAuditFocusIssue(n.issueId || n.recordId || null);
+                setActiveTab("AUDIT");
+              } else {
+                setMyIssueFocus(n.issueId || n.recordId || null);
+                setMyIssuesOpen(true);
+              }
+                return;
+              }
+
+              // 2. Approvals, Expense requests, Requisitions, PO approvals
+              if (
+                t.startsWith("APPROVAL") ||
+                t.includes("EXPENSE") ||
+                recType === "approval_requests" ||
+                recRef.startsWith("approval:")
+              ) {
+                const reqId = recId || (recRef.startsWith("approval:") ? Number(recRef.split(":")[1]) : null);
+                setActionCenterFocusApprovalId(reqId);
+                setActiveTab("ACTION_CENTER");
+                return;
+              }
+
+              // 3. Action Tasks & Follow-ups
+              if (t.startsWith("TASK_") || recType === "action_tasks" || recRef.startsWith("task:")) {
+                const taskId = recId || (recRef.startsWith("task:") ? Number(recRef.split(":")[1]) : null);
+                setActionCenterFocusTaskId(taskId);
+                setActiveTab("ACTION_CENTER");
+                return;
+              }
+
+              // 4. Farm Advisor notes & recommendations
+              if (t.startsWith("ADVISOR") || recType === "advisor_notes") {
+                if (currentUser?.role === "FARM_ADVISOR") {
+                  setActiveTab("ADVISOR");
+                  return;
+                }
                 if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
-                  setActiveTab(n.branchCode as ActiveTab);
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
                   return;
                 }
                 setActiveTab("ADVISOR");
                 return;
               }
+
+              // 5. Orders, Online orders, Dispatch & Live Tracking
               if (
                 t === "ONLINE_ORDER_RECEIVED" ||
                 t === "ORDER_TRACKING_STATUS" ||
-                t === "ORDER_ASSIGNED"
+                t === "ORDER_ASSIGNED" ||
+                t === "ORDER_FULFILLED" ||
+                recType === "customer_trackings" ||
+                recType === "orders" ||
+                recRef.startsWith("TRK-") ||
+                recRef.startsWith("ORD-")
               ) {
+                const code = recRef || (recId ? String(recId) : null);
+                setTrackingFocusCode(code);
+                setTrackingFocusId(recId);
                 setActiveTab("TRACKING");
                 return;
               }
-              if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
-                setActiveTab(n.branchCode as ActiveTab);
+
+              // 6. Pre-orders hub
+              if (t.startsWith("PREORDER") || recType === "preorders" || recRef.startsWith("preorder:")) {
+                setActiveTab("PREORDERS");
                 return;
               }
-              setActiveTab("TRACKING");
+
+              // 7. Transport Module (Maintenance, Violations, Bookings)
+              if (t.startsWith("TRANSPORT") || recType === "transport_vehicles" || recRef.startsWith("transport:")) {
+                const transBiz = businesses.find((b: any) => String(b.code || "").toUpperCase().startsWith("TRANS"));
+                if (transBiz) {
+                  handleSelectTab(transBiz.code as ActiveTab, transBiz.id);
+                  return;
+                }
+                setActiveTab("TRACKING");
+                return;
+              }
+
+              // 8. Low Stock & Inventory alerts
+              if (t === "LOW_STOCK" || t === "INVENTORY_CRITICAL" || recType === "inventory_items") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                if (currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER") {
+                  setActiveTab("INVENTORY");
+                  return;
+                }
+              }
+
+              // 9. Checklists & Stage plans
+              if (t.includes("CHECKLIST") || t.includes("STAGE") || recType === "checklists") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+              }
+
+              // 10. Credit sales & Dunning
+              if (t.includes("CREDIT") || t.includes("DUNNING") || recType === "credit_sales" || recRef.startsWith("dunning:")) {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                if (currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER") {
+                  setActiveTab("BRANCH_SALES");
+                  return;
+                }
+              }
+
+              // 11. Purchases / Supplier Orders
+              if (t.includes("PURCHASE") || recType === "purchases" || recType === "supplier_orders") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+              }
+
+              // 12. Fallback: if branchCode is specified, open that branch dashboard
+              if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                return;
+              }
+
+              setActiveTab("COMMAND_CENTER");
             }}
             onOpenIssue={(n) => {
               // Responses / resolutions go to the reviewer's Audit Center;
               // flags, corrections & closures open the assignee's own inbox.
               const reviewerSide = n.type === "AUDIT_ISSUE_RESPONSE" || n.type === "AUDIT_ISSUE_RESOLVED";
               if (reviewerSide && (auditEligible || currentUser?.role === "OWNER" || !!currentUser?.canManageAuditors)) {
-                setAuditFocusIssue(n.issueId);
+                setAuditFocusIssue(n.issueId || n.recordId || null);
                 setActiveTab("AUDIT");
               } else {
-                setMyIssueFocus(n.issueId ?? null);
+                setMyIssueFocus(n.issueId || n.recordId || null);
                 setMyIssuesOpen(true);
               }
             }}

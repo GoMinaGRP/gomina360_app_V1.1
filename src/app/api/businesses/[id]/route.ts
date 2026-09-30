@@ -4,14 +4,30 @@ import {
   businesses,
   businessMetrics,
   customers,
+  customerInteractions,
+  customerTrackings,
   employees,
+  employeeDocuments,
+  employeeHistory,
   assets,
   assetAuditLogs,
   inventoryItems,
   universalExports,
   transactions,
   expenseCategories,
+  budgets,
   salesDocuments,
+  creditSales,
+  creditPayments,
+  fulfillmentMethods,
+  fulfillmentOptions,
+  orderPayments,
+  goodsReceipts,
+  purchaseRequisitions,
+  supplierOrders,
+  supplierQuotes,
+  supplierInvoices,
+  supplierPayments,
   poultryLogs,
   poultryFlocks,
   poultryFeedLogs,
@@ -20,21 +36,48 @@ import {
   poultryProduction,
   poultryChecklists,
   poultryProducts,
+  poultryWeightLogs,
+  poultryBenchmarkProfiles,
+  poultryFeedFormulations,
+  poultryFeedFormulationItems,
+  poultryFeedBatches,
+  poultryFeedBatchInputs,
+  poultryFeedQcChecks,
   blockFactoryLogs,
   blockFactoryOrders,
   blockFactoryDeliveries,
   blockFactoryChecklists,
   blockTypes,
+  blockQcChecks,
+  blockMixFormulations,
+  blockMixFormulationItems,
+  blockMixBatches,
+  blockMixBatchInputs,
   aquacultureLogs,
   aquaculturePonds,
   aquacultureBatches,
   aquacultureFeedLogs,
   aquacultureWaterQualityLogs,
   aquacultureHarvests,
+  aquacultureWeightLogs,
+  aquacultureBenchmarkProfiles,
   aquacultureChecklists,
+  fishFeedFormulations,
+  fishFeedFormulationItems,
+  fishFeedBatches,
+  fishFeedBatchInputs,
+  fishFeedQcChecks,
   livestockLogs,
   restaurantLogs,
+  restaurantOrders,
+  restaurantMenuItems,
+  restaurantWaste,
+  restaurantPurchases,
   electronicsLogs,
+  electronicsOrders,
+  electronicsSerials,
+  electronicsWarranties,
+  electronicsPurchases,
   carWashLogs,
   carWashServices,
   carWashBookings,
@@ -49,20 +92,42 @@ import {
   hardwareOrders,
   hardwarePurchases,
   hardwareDeliveries,
-  aiInsights,
-  scenarioSimulations,
+  cctvCameras,
+  payrollRuns,
+  payrollEntries,
+  payrollAttendance,
+  attendanceLogs,
+  auditAssignments,
+  auditReviews,
+  auditIssueUpdates,
+  actionTasks,
+  notifications,
+  auditTrail,
   checklistTemplates,
   checklistEntries,
+  checklistPlanTemplates,
+  checklistFlockPlans,
+  dailyNotes,
+  businessInsights,
+  advisorAssignments,
+  advisorNotes,
+  advisorNoteUpdates,
+  transportVehicles,
+  transportTrips,
+  transportBookings,
+  transportFuelLogs,
+  transportMaintenance,
+  transportVehicleChecklists,
+  transportGeofences,
+  transportTrackerViolations,
+  approvalPolicies,
+  approvalRequests,
+  businessDocuments,
+  userBusinessAccess,
+  aiInsights,
+  scenarioSimulations,
   serviceAreas,
   pickupLocations,
-  electronicsOrders,
-  electronicsSerials,
-  electronicsWarranties,
-  electronicsPurchases,
-  restaurantOrders,
-  restaurantMenuItems,
-  restaurantWaste,
-  restaurantPurchases,
   users,
 } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
@@ -144,8 +209,12 @@ async function businessControlLevel(
  *  console to preview exactly what a deletion will remove. */
 async function relatedCounts(businessId: number) {
   const count = async (table: any, col: any) => {
-    const rows = await db.select({ id: table.id }).from(table).where(eq(col, businessId));
-    return rows.length;
+    try {
+      const rows = await db.select({ id: table.id }).from(table).where(eq(col, businessId));
+      return rows.length;
+    } catch {
+      return 0;
+    }
   };
 
   const groups: Record<string, number> = {
@@ -171,6 +240,23 @@ async function relatedCounts(businessId: number) {
       (await count(carWashWashes, carWashWashes.businessId)) +
       (await count(telecomTxns, telecomTxns.businessId)) +
       (await count(telecomVouchers, telecomVouchers.businessId)),
+    procurementAndPayables:
+      (await count(goodsReceipts, goodsReceipts.businessId)) +
+      (await count(supplierInvoices, supplierInvoices.businessId)) +
+      (await count(supplierPayments, supplierPayments.businessId)) +
+      (await count(supplierOrders, supplierOrders.businessId)) +
+      (await count(supplierQuotes, supplierQuotes.businessId)) +
+      (await count(purchaseRequisitions, purchaseRequisitions.businessId)),
+    creditAndReceivables:
+      (await count(creditSales, creditSales.businessId)) +
+      (await count(creditPayments, creditPayments.businessId)),
+    payrollAndHr:
+      (await count(payrollRuns, payrollRuns.businessId)) +
+      (await count(payrollEntries, payrollEntries.businessId)) +
+      (await count(payrollAttendance, payrollAttendance.businessId)) +
+      (await count(attendanceLogs, attendanceLogs.businessId)) +
+      (await count(employeeDocuments, employeeDocuments.businessId)) +
+      (await count(employeeHistory, employeeHistory.businessId)),
     productionAndOps:
       (await count(poultryLogs, poultryLogs.businessId)) +
       (await count(poultryFlocks, poultryFlocks.businessId)) +
@@ -178,18 +264,29 @@ async function relatedCounts(businessId: number) {
       (await count(poultryWaterLogs, poultryWaterLogs.businessId)) +
       (await count(poultryHealthRecords, poultryHealthRecords.businessId)) +
       (await count(poultryProduction, poultryProduction.businessId)) +
+      (await count(poultryWeightLogs, poultryWeightLogs.businessId)) +
       (await count(poultryChecklists, poultryChecklists.businessId)) +
       (await count(poultryProducts, poultryProducts.businessId)) +
+      (await count(poultryFeedFormulations, poultryFeedFormulations.businessId)) +
+      (await count(poultryFeedBatches, poultryFeedBatches.businessId)) +
+      (await count(poultryFeedQcChecks, poultryFeedQcChecks.businessId)) +
       (await count(blockFactoryLogs, blockFactoryLogs.businessId)) +
       (await count(blockFactoryChecklists, blockFactoryChecklists.businessId)) +
       (await count(blockTypes, blockTypes.businessId)) +
+      (await count(blockMixFormulations, blockMixFormulations.businessId)) +
+      (await count(blockMixBatches, blockMixBatches.businessId)) +
+      (await count(blockQcChecks, blockQcChecks.businessId)) +
       (await count(aquacultureLogs, aquacultureLogs.businessId)) +
       (await count(aquaculturePonds, aquaculturePonds.businessId)) +
       (await count(aquacultureBatches, aquacultureBatches.businessId)) +
       (await count(aquacultureFeedLogs, aquacultureFeedLogs.businessId)) +
       (await count(aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId)) +
       (await count(aquacultureHarvests, aquacultureHarvests.businessId)) +
+      (await count(aquacultureWeightLogs, aquacultureWeightLogs.businessId)) +
       (await count(aquacultureChecklists, aquacultureChecklists.businessId)) +
+      (await count(fishFeedFormulations, fishFeedFormulations.businessId)) +
+      (await count(fishFeedBatches, fishFeedBatches.businessId)) +
+      (await count(fishFeedQcChecks, fishFeedQcChecks.businessId)) +
       (await count(livestockLogs, livestockLogs.businessId)) +
       (await count(restaurantLogs, restaurantLogs.businessId)) +
       (await count(restaurantMenuItems, restaurantMenuItems.businessId)) +
@@ -202,15 +299,327 @@ async function relatedCounts(businessId: number) {
       (await count(telecomLines, telecomLines.businessId)) +
       (await count(telecomWifiPackages, telecomWifiPackages.businessId)) +
       (await count(telecomActivities, telecomActivities.businessId)),
+    auditsAndGovernance:
+      (await count(auditReviews, auditReviews.businessId)) +
+      (await count(auditAssignments, auditAssignments.businessId)) +
+      (await count(auditTrail, auditTrail.businessId)) +
+      (await count(actionTasks, actionTasks.businessId)) +
+      (await count(advisorNotes, advisorNotes.businessId)) +
+      (await count(advisorAssignments, advisorAssignments.businessId)) +
+      (await count(approvalRequests, approvalRequests.businessId)) +
+      (await count(approvalPolicies, approvalPolicies.scopeBusinessId)),
+    transportAndFleet:
+      (await count(transportVehicles, transportVehicles.businessId)) +
+      (await count(transportTrips, transportTrips.businessId)) +
+      (await count(transportBookings, transportBookings.businessId)) +
+      (await count(transportFuelLogs, transportFuelLogs.businessId)) +
+      (await count(transportMaintenance, transportMaintenance.businessId)) +
+      (await count(transportVehicleChecklists, transportVehicleChecklists.businessId)) +
+      (await count(transportGeofences, transportGeofences.businessId)) +
+      (await count(transportTrackerViolations, transportTrackerViolations.businessId)),
     checklists:
       (await count(checklistTemplates, checklistTemplates.businessId)) +
-      (await count(checklistEntries, checklistEntries.businessId)),
+      (await count(checklistEntries, checklistEntries.businessId)) +
+      (await count(checklistPlanTemplates, checklistPlanTemplates.businessId)) +
+      (await count(checklistFlockPlans, checklistFlockPlans.businessId)),
     metrics: await count(businessMetrics, businessMetrics.businessId),
     expenseCategories: await count(expenseCategories, expenseCategories.businessId),
     exports: await count(universalExports, universalExports.businessId),
+    userAccessGrants: await count(userBusinessAccess, userBusinessAccess.businessId),
   };
   const totalRecords = Object.values(groups).reduce((a, b) => a + b, 0);
   return { groups, totalRecords };
+}
+
+/**
+ * Cascade-purge all records belonging to a business across every domain in the
+ * exact foreign-key order:
+ *  1. Grandchild tables (referencing assets, inventory, employees, credit sales, formulations, audits, notes).
+ *  2. Direct child tables scoped by business_id.
+ *  3. Master lists (optional).
+ *  4. User assignment cleanup & scenarios.
+ */
+async function purgeBusinessAllRecords(
+  businessId: number,
+  options: { deleteMasterLists?: boolean; unassignUsers?: boolean } = {}
+) {
+  // ── Step 1: Child tables referencing Asset, Inventory, Formulation, Batch, Employee, Credit, Audit, Note IDs ──
+
+  // 1a. Asset child tables
+  const assetRows = await db.select({ id: assets.id }).from(assets).where(eq(assets.businessId, businessId));
+  const assetIds = assetRows.map((a) => a.id);
+  if (assetIds.length > 0) {
+    await db.delete(assetAuditLogs).where(inArray(assetAuditLogs.assetId, assetIds));
+  }
+
+  // 1b. Inventory child tables
+  const invRows = await db.select({ id: inventoryItems.id }).from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
+  const invIds = invRows.map((i) => i.id);
+  if (invIds.length > 0) {
+    await db.delete(fulfillmentOptions).where(inArray(fulfillmentOptions.inventoryId, invIds));
+  }
+
+  // 1c. Poultry Feed Mill formulation items & batch inputs
+  const poultryFormRows = await db.select({ id: poultryFeedFormulations.id }).from(poultryFeedFormulations).where(eq(poultryFeedFormulations.businessId, businessId));
+  const poultryFormIds = poultryFormRows.map((f) => f.id);
+  if (poultryFormIds.length > 0) {
+    await db.delete(poultryFeedFormulationItems).where(inArray(poultryFeedFormulationItems.formulationId, poultryFormIds));
+  }
+  const poultryBatchRows = await db.select({ id: poultryFeedBatches.id }).from(poultryFeedBatches).where(eq(poultryFeedBatches.businessId, businessId));
+  const poultryBatchIds = poultryBatchRows.map((b) => b.id);
+  if (poultryBatchIds.length > 0) {
+    await db.delete(poultryFeedBatchInputs).where(inArray(poultryFeedBatchInputs.batchId, poultryBatchIds));
+  }
+
+  // 1d. Fish Feed formulation items & batch inputs
+  const fishFormRows = await db.select({ id: fishFeedFormulations.id }).from(fishFeedFormulations).where(eq(fishFeedFormulations.businessId, businessId));
+  const fishFormIds = fishFormRows.map((f) => f.id);
+  if (fishFormIds.length > 0) {
+    await db.delete(fishFeedFormulationItems).where(inArray(fishFeedFormulationItems.formulationId, fishFormIds));
+  }
+  const fishBatchRows = await db.select({ id: fishFeedBatches.id }).from(fishFeedBatches).where(eq(fishFeedBatches.businessId, businessId));
+  const fishBatchIds = fishBatchRows.map((b) => b.id);
+  if (fishBatchIds.length > 0) {
+    await db.delete(fishFeedBatchInputs).where(inArray(fishFeedBatchInputs.batchId, fishBatchIds));
+  }
+
+  // 1e. Block Mix formulation items & batch inputs
+  const blockFormRows = await db.select({ id: blockMixFormulations.id }).from(blockMixFormulations).where(eq(blockMixFormulations.businessId, businessId));
+  const blockFormIds = blockFormRows.map((f) => f.id);
+  if (blockFormIds.length > 0) {
+    await db.delete(blockMixFormulationItems).where(inArray(blockMixFormulationItems.formulationId, blockFormIds));
+  }
+  const blockBatchRows = await db.select({ id: blockMixBatches.id }).from(blockMixBatches).where(eq(blockMixBatches.businessId, businessId));
+  const blockBatchIds = blockBatchRows.map((b) => b.id);
+  if (blockBatchIds.length > 0) {
+    await db.delete(blockMixBatchInputs).where(inArray(blockMixBatchInputs.mixBatchId, blockBatchIds));
+  }
+
+  // 1f. Employee child tables
+  const empRows = await db.select({ id: employees.id }).from(employees).where(eq(employees.businessId, businessId));
+  const empIds = empRows.map((e) => e.id);
+  if (empIds.length > 0) {
+    await db.delete(employeeDocuments).where(inArray(employeeDocuments.employeeId, empIds));
+    await db.delete(employeeHistory).where(inArray(employeeHistory.employeeId, empIds));
+    await db.delete(payrollAttendance).where(inArray(payrollAttendance.employeeId, empIds));
+    await db.delete(payrollEntries).where(inArray(payrollEntries.employeeId, empIds));
+    await db.delete(attendanceLogs).where(inArray(attendanceLogs.employeeId, empIds));
+  }
+
+  // 1g. Credit sales & credit payments
+  const creditRows = await db.select({ id: creditSales.id }).from(creditSales).where(eq(creditSales.businessId, businessId));
+  const creditIds = creditRows.map((c) => c.id);
+  if (creditIds.length > 0) {
+    await db.delete(creditPayments).where(inArray(creditPayments.creditSaleId, creditIds));
+  }
+
+  // 1h. Audit reviews & issue updates
+  const reviewRows = await db.select({ id: auditReviews.id }).from(auditReviews).where(eq(auditReviews.businessId, businessId));
+  const reviewIds = reviewRows.map((r) => r.id);
+  if (reviewIds.length > 0) {
+    await db.delete(auditIssueUpdates).where(inArray(auditIssueUpdates.issueId, reviewIds));
+  }
+
+  // 1i. Advisor notes & note updates
+  const noteRows = await db.select({ id: advisorNotes.id }).from(advisorNotes).where(eq(advisorNotes.businessId, businessId));
+  const noteIds = noteRows.map((n) => n.id);
+  if (noteIds.length > 0) {
+    await db.delete(advisorNoteUpdates).where(inArray(advisorNoteUpdates.noteId, noteIds));
+  }
+
+  // 1j. Customer interactions
+  const custRows = await db.select({ id: customers.id }).from(customers).where(eq(customers.businessId, businessId));
+  const custIds = custRows.map((c) => c.id);
+  if (custIds.length > 0) {
+    await db.delete(customerInteractions).where(inArray(customerInteractions.customerId, custIds));
+  }
+  await db.delete(customerInteractions).where(eq(customerInteractions.businessId, businessId));
+
+  // ── Step 2: Delete direct business-scoped tables in FK dependency order ──
+  const scopedTables: Array<[any, any]> = [
+    // 2a. Procurement & supplier transactions
+    [goodsReceipts, goodsReceipts.businessId],
+    [supplierInvoices, supplierInvoices.businessId],
+    [supplierPayments, supplierPayments.businessId],
+    [supplierOrders, supplierOrders.businessId],
+    [supplierQuotes, supplierQuotes.businessId],
+    [purchaseRequisitions, purchaseRequisitions.businessId],
+
+    // 2b. Credit sales & customer operations
+    [creditPayments, creditPayments.businessId],
+    [creditSales, creditSales.businessId],
+    [customerTrackings, customerTrackings.businessId],
+    [orderPayments, orderPayments.businessId],
+    [fulfillmentMethods, fulfillmentMethods.businessId],
+
+    // 2c. Financial & inventory
+    [transactions, transactions.businessId],
+    [salesDocuments, salesDocuments.businessId],
+    [expenseCategories, expenseCategories.businessId],
+    [budgets, budgets.businessId],
+    [universalExports, universalExports.businessId],
+    [inventoryItems, inventoryItems.businessId],
+    [customers, customers.businessId],
+    [employees, employees.businessId],
+    [assets, assets.businessId],
+
+    // 2d. Payroll & HR
+    [payrollAttendance, payrollAttendance.businessId],
+    [payrollEntries, payrollEntries.businessId],
+    [attendanceLogs, attendanceLogs.businessId],
+    [payrollRuns, payrollRuns.businessId],
+    [employeeDocuments, employeeDocuments.businessId],
+    [employeeHistory, employeeHistory.businessId],
+
+    // 2e. Audits, tasks & approvals
+    [actionTasks, actionTasks.businessId],
+    [auditReviews, auditReviews.businessId],
+    [auditAssignments, auditAssignments.businessId],
+    [auditTrail, auditTrail.businessId],
+    [advisorNotes, advisorNotes.businessId],
+    [advisorAssignments, advisorAssignments.businessId],
+    [approvalRequests, approvalRequests.businessId],
+    [approvalPolicies, approvalPolicies.scopeBusinessId],
+    [notifications, notifications.businessId],
+    [dailyNotes, dailyNotes.businessId],
+    [businessDocuments, businessDocuments.businessId],
+    [businessInsights, businessInsights.businessId],
+    [cctvCameras, cctvCameras.businessId],
+
+    // 2f. Formulation batches & QC checks
+    [poultryFeedQcChecks, poultryFeedQcChecks.businessId],
+    [poultryFeedBatches, poultryFeedBatches.businessId],
+    [poultryFeedFormulations, poultryFeedFormulations.businessId],
+    [poultryBenchmarkProfiles, poultryBenchmarkProfiles.businessId],
+
+    [fishFeedQcChecks, fishFeedQcChecks.businessId],
+    [fishFeedBatches, fishFeedBatches.businessId],
+    [fishFeedFormulations, fishFeedFormulations.businessId],
+    [aquacultureBenchmarkProfiles, aquacultureBenchmarkProfiles.businessId],
+
+    [blockQcChecks, blockQcChecks.businessId],
+    [blockMixBatches, blockMixBatches.businessId],
+    [blockMixFormulations, blockMixFormulations.businessId],
+
+    // 2g. Hardware store operations
+    [hardwareLogs, hardwareLogs.businessId],
+    [hardwareOrders, hardwareOrders.businessId],
+    [hardwarePurchases, hardwarePurchases.businessId],
+    [hardwareDeliveries, hardwareDeliveries.businessId],
+
+    // 2h. Block Factory operations
+    [blockFactoryLogs, blockFactoryLogs.businessId],
+    [blockFactoryOrders, blockFactoryOrders.businessId],
+    [blockFactoryDeliveries, blockFactoryDeliveries.businessId],
+    [blockFactoryChecklists, blockFactoryChecklists.businessId],
+
+    // 2i. Poultry operations
+    [poultryLogs, poultryLogs.businessId],
+    [poultryFlocks, poultryFlocks.businessId],
+    [poultryFeedLogs, poultryFeedLogs.businessId],
+    [poultryWaterLogs, poultryWaterLogs.businessId],
+    [poultryHealthRecords, poultryHealthRecords.businessId],
+    [poultryProduction, poultryProduction.businessId],
+    [poultryWeightLogs, poultryWeightLogs.businessId],
+    [poultryChecklists, poultryChecklists.businessId],
+
+    // 2j. Aquaculture operations
+    [aquacultureLogs, aquacultureLogs.businessId],
+    [aquaculturePonds, aquaculturePonds.businessId],
+    [aquacultureBatches, aquacultureBatches.businessId],
+    [aquacultureFeedLogs, aquacultureFeedLogs.businessId],
+    [aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId],
+    [aquacultureHarvests, aquacultureHarvests.businessId],
+    [aquacultureWeightLogs, aquacultureWeightLogs.businessId],
+    [aquacultureChecklists, aquacultureChecklists.businessId],
+
+    // 2k. Livestock operations
+    [livestockLogs, livestockLogs.businessId],
+
+    // 2l. Restaurant operations
+    [restaurantLogs, restaurantLogs.businessId],
+    [restaurantOrders, restaurantOrders.businessId],
+    [restaurantWaste, restaurantWaste.businessId],
+    [restaurantPurchases, restaurantPurchases.businessId],
+
+    // 2m. Electronics operations
+    [electronicsLogs, electronicsLogs.businessId],
+    [electronicsOrders, electronicsOrders.businessId],
+    [electronicsSerials, electronicsSerials.businessId],
+    [electronicsWarranties, electronicsWarranties.businessId],
+    [electronicsPurchases, electronicsPurchases.businessId],
+
+    // 2n. Car Wash operations
+    [carWashLogs, carWashLogs.businessId],
+    [carWashServices, carWashServices.businessId],
+    [carWashBookings, carWashBookings.businessId],
+    [carWashWashes, carWashWashes.businessId],
+    [carWashActivities, carWashActivities.businessId],
+
+    // 2o. Telecom operations
+    [telecomLines, telecomLines.businessId],
+    [telecomTxns, telecomTxns.businessId],
+    [telecomWifiPackages, telecomWifiPackages.businessId],
+    [telecomVouchers, telecomVouchers.businessId],
+    [telecomActivities, telecomActivities.businessId],
+
+    // 2p. Transport & Fleet operations
+    [transportTrackerViolations, transportTrackerViolations.businessId],
+    [transportVehicleChecklists, transportVehicleChecklists.businessId],
+    [transportMaintenance, transportMaintenance.businessId],
+    [transportFuelLogs, transportFuelLogs.businessId],
+    [transportBookings, transportBookings.businessId],
+    [transportTrips, transportTrips.businessId],
+    [transportVehicles, transportVehicles.businessId],
+    [transportGeofences, transportGeofences.businessId],
+
+    // 2q. Checklists & locations
+    [serviceAreas, serviceAreas.businessId],
+    [pickupLocations, pickupLocations.businessId],
+    [checklistEntries, checklistEntries.businessId],
+    [checklistFlockPlans, checklistFlockPlans.businessId],
+    [checklistPlanTemplates, checklistPlanTemplates.businessId],
+
+    // 2r. Executive & metrics
+    [businessMetrics, businessMetrics.businessId],
+    [aiInsights, aiInsights.businessId],
+  ];
+
+  for (const [table, col] of scopedTables) {
+    await db.delete(table).where(eq(col, businessId));
+  }
+
+  // ── Step 3: Master lists (if requested or deleting) ──
+  if (options.deleteMasterLists) {
+    const masters: Array<[any, any]> = [
+      [poultryProducts, poultryProducts.businessId],
+      [blockTypes, blockTypes.businessId],
+      [restaurantMenuItems, restaurantMenuItems.businessId],
+      [checklistTemplates, checklistTemplates.businessId],
+    ];
+    for (const [table, col] of masters) {
+      await db.delete(table).where(eq(col, businessId));
+    }
+  }
+
+  // ── Step 4: User assignments ──
+  if (options.unassignUsers) {
+    await db
+      .update(users)
+      .set({ assignedBusinessId: null })
+      .where(eq(users.assignedBusinessId, businessId));
+
+    const usersWithManage = await db.select({ id: users.id, businessManageIds: users.businessManageIds }).from(users);
+    for (const u of usersWithManage) {
+      if (Array.isArray(u.businessManageIds) && u.businessManageIds.includes(businessId)) {
+        const nextIds = u.businessManageIds.filter((id) => id !== businessId);
+        await db.update(users).set({ businessManageIds: nextIds }).where(eq(users.id, u.id));
+      }
+    }
+  }
+
+  // ── Step 5: Scenarios targeting this unit ──
+  await db.delete(scenarioSimulations).where(eq(scenarioSimulations.targetBusinessId, businessId));
 }
 
 /** GET /api/businesses/[id] — single business + related-record counts. */
@@ -253,6 +662,7 @@ export async function GET(
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   ttlInvalidate("menu");
   ttlInvalidate("init");
+  ttlInvalidate("businesses");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -337,190 +747,118 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       // the per-Owner grant control. Existing (already-owned) units stay
       // fully manageable: only re-typing into a non-granted type is refused.
       {
-        const catSession = await getSessionInfo(request);
-        const catUser = catSession?.user as any;
-        const verdict = await businessTypeAllowed(catSession?.orgId ?? null, category, !!catUser?.isSuperAdmin);
-        if (!verdict.allowed) {
+        const session = await getSessionInfo(request);
+        const typeVerdict = await businessTypeAllowed(
+          session?.orgId ?? null,
+          category,
+          !!session?.user?.isSuperAdmin,
+        );
+        if (!typeVerdict.allowed) {
           return FORBIDDEN(
-            `Your organization is not authorized to operate "${category}" businesses.`,
+            `Your organization is not authorized to operate "${category}" businesses. Ask the platform Super Admin to grant this business type.`,
           );
         }
       }
       updates.category = category;
-      updates.iconName = CATEGORY_ICON[category] || "Building2";
       categoryChanged = true;
+      if (!body.iconName) {
+        updates.iconName = CATEGORY_ICON[category] || "Building2";
+      }
     }
 
-    // Standardized Ghana location — branchLocation derived when not explicit.
-    const region = typeof body.region === "string" ? body.region.trim() : undefined;
-    const district = typeof body.district === "string" ? body.district.trim() : undefined;
-    const town = typeof body.town === "string" ? body.town.trim() : undefined;
-    if (region) updates.region = region;
-    if (district !== undefined) updates.district = district || null;
-    if (town !== undefined) updates.town = town || null;
-    if (typeof body.branchLocation === "string" && body.branchLocation.trim()) {
-      updates.branchLocation = body.branchLocation.trim();
-    } else if (region || district !== undefined || town !== undefined) {
-      const effRegion = region ?? biz.region;
-      const effDistrict = district !== undefined ? district : biz.district;
-      const effTown = town !== undefined ? town : biz.town;
-      updates.branchLocation =
-        [effTown, effDistrict].filter(Boolean).join(", ") || effRegion || biz.branchLocation;
-    }
-
-    if (typeof body.managerName === "string" && body.managerName.trim()) {
-      updates.managerName = body.managerName.trim();
-    }
-    if (typeof body.contactPhone === "string" && body.contactPhone.trim()) {
-      updates.contactPhone = body.contactPhone.trim();
-    }
     if (typeof body.status === "string") {
-      const status = body.status.trim().toUpperCase();
+      const status = body.status.toUpperCase();
       if (!VALID_STATUSES.includes(status)) {
-        return NextResponse.json({ success: false, error: `Invalid status "${status}".` }, { status: 400 });
+        return NextResponse.json(
+          { success: false, error: `Invalid status "${body.status}". Use ACTIVE, EXPANDING, MAINTENANCE or INACTIVE.` },
+          { status: 400 }
+        );
       }
       updates.status = status;
     }
-    // P0.3 — archive / restore (OWNER only): archived units stay fully
-    // auditable but leave the executive comparison scopes and the sidebar.
-    if (body.isArchived !== undefined) {
-      updates.isArchived = !!body.isArchived;
-    }
+
+    if (typeof body.branchLocation === "string") updates.branchLocation = body.branchLocation.trim();
+    if (typeof body.region === "string") updates.region = body.region.trim();
+    if (typeof body.district === "string") updates.district = body.district.trim();
+    if (typeof body.town === "string") updates.town = body.town.trim();
+    if (typeof body.managerName === "string") updates.managerName = body.managerName.trim();
+    if (typeof body.contactPhone === "string") updates.contactPhone = body.contactPhone.trim();
+    if (typeof body.iconName === "string") updates.iconName = body.iconName.trim();
+
     if (body.initialCapitalGhs !== undefined) {
-      const v = Number(body.initialCapitalGhs);
-      if (!Number.isFinite(v) || v < 0) {
-        return NextResponse.json({ success: false, error: "Initial capital must be a positive number." }, { status: 400 });
-      }
-      updates.initialCapitalGhs = v;
+      const num = Number(body.initialCapitalGhs);
+      if (Number.isFinite(num) && num >= 0) updates.initialCapitalGhs = num;
     }
     if (body.monthlyTargetRevenueGhs !== undefined) {
-      const v = Number(body.monthlyTargetRevenueGhs);
-      if (!Number.isFinite(v) || v < 0) {
-        return NextResponse.json({ success: false, error: "Monthly target must be a positive number." }, { status: 400 });
-      }
-      updates.monthlyTargetRevenueGhs = v;
+      const num = Number(body.monthlyTargetRevenueGhs);
+      if (Number.isFinite(num) && num >= 0) updates.monthlyTargetRevenueGhs = num;
     }
 
-    // ── Online ordering & service area (OWNER + authorized manager roles) ──
-    if (body.onlineOrderingEnabled !== undefined) {
-      updates.onlineOrderingEnabled = !!body.onlineOrderingEnabled;
-    }
-    // Pre-order capability toggle — OWNER / Manage-Unit scope only (deliberately
-    // NOT in ONLINE_ORDERING_FIELDS: deferred-sales liability belongs with the
-    // unit owner, never with Online-Storefront grantees).
-    if (body.preOrderEnabled !== undefined) {
-      updates.preOrderEnabled = !!body.preOrderEnabled;
-    }
-    if (body.pickupEnabled !== undefined) {
-      updates.pickupEnabled = !!body.pickupEnabled;
-    }
-    if (body.deliveryEnabled !== undefined) {
-      updates.deliveryEnabled = !!body.deliveryEnabled;
-    }
+    // Online Ordering & Service Settings
+    if (body.onlineOrderingEnabled !== undefined) updates.onlineOrderingEnabled = Boolean(body.onlineOrderingEnabled);
+    if (body.pickupEnabled !== undefined) updates.pickupEnabled = Boolean(body.pickupEnabled);
+    if (body.deliveryEnabled !== undefined) updates.deliveryEnabled = Boolean(body.deliveryEnabled);
     if (body.serviceRadiusKm !== undefined) {
-      if (body.serviceRadiusKm === null || body.serviceRadiusKm === "") {
-        updates.serviceRadiusKm = null; // no geographic limit
-      } else {
-        const v = Number(body.serviceRadiusKm);
-        if (!Number.isFinite(v) || v <= 0 || v > 1000) {
-          return NextResponse.json(
-            { success: false, error: "Service radius must be greater than 0 and at most 1000 km." },
-            { status: 400 },
-          );
-        }
-        updates.serviceRadiusKm = Math.round(v * 100) / 100;
-      }
+      const num = Number(body.serviceRadiusKm);
+      if (Number.isFinite(num) && num >= 0) updates.serviceRadiusKm = num;
     }
-    if (body.serviceNote !== undefined) {
-      const s = typeof body.serviceNote === "string" ? body.serviceNote.trim().slice(0, 160) : "";
-      updates.serviceNote = s || null;
+    if (body.serviceNote !== undefined) updates.serviceNote = body.serviceNote ? String(body.serviceNote).trim() : null;
+    if (body.customerHelpPhone !== undefined) updates.customerHelpPhone = body.customerHelpPhone ? String(body.customerHelpPhone).trim() : null;
+    if (body.momoNumber !== undefined) updates.momoNumber = body.momoNumber ? String(body.momoNumber).trim() : null;
+    if (body.momoName !== undefined) updates.momoName = body.momoName ? String(body.momoName).trim() : null;
+    if (body.gpsLat !== undefined) {
+      const num = Number(body.gpsLat);
+      updates.gpsLat = Number.isFinite(num) ? num : null;
     }
-    // Customer-facing contact points (shown after checkout + on /track).
-    if (body.customerHelpPhone !== undefined) {
-      const s = typeof body.customerHelpPhone === "string" ? body.customerHelpPhone.trim().slice(0, 24) : "";
-      updates.customerHelpPhone = s || null;
+    if (body.gpsLng !== undefined) {
+      const num = Number(body.gpsLng);
+      updates.gpsLng = Number.isFinite(num) ? num : null;
     }
-    if (body.momoNumber !== undefined) {
-      const s = typeof body.momoNumber === "string" ? body.momoNumber.trim().slice(0, 24) : "";
-      updates.momoNumber = s || null;
-    }
-    if (body.momoName !== undefined) {
-      const s = typeof body.momoName === "string" ? body.momoName.trim().slice(0, 60) : "";
-      updates.momoName = s || null;
-    }
-    // Storefront watermarking — display-time overlay only; never touches
-    // stored product photos.
-    if (body.watermarkEnabled !== undefined) {
-      updates.watermarkEnabled = !!body.watermarkEnabled;
-    }
-    if (body.watermarkMode !== undefined) {
-      const mode = String(body.watermarkMode || "").toUpperCase();
-      if (!["AUTO", "LOGO", "NAME"].includes(mode)) {
-        return NextResponse.json(
-          { success: false, error: "Watermark mode must be AUTO, LOGO or NAME." },
-          { status: 400 },
-        );
-      }
-      updates.watermarkMode = mode;
-    }
-    if (body.gpsLat !== undefined || body.gpsLng !== undefined) {
-      if (body.gpsLat === null && body.gpsLng === null) {
-        updates.gpsLat = null;
-        updates.gpsLng = null; // clear the branch pin (never asymmetric)
-      } else {
-        const lat = Number(body.gpsLat);
-        const lng = Number(body.gpsLng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-          return NextResponse.json(
-            { success: false, error: "GPS coordinates look wrong — expected valid latitude/longitude." },
-            { status: 400 },
-          );
-        }
-        updates.gpsLat = lat;
-        updates.gpsLng = lng;
-      }
+    if (body.watermarkEnabled !== undefined) updates.watermarkEnabled = Boolean(body.watermarkEnabled);
+    if (body.watermarkMode !== undefined && ["LIGHT", "BOLD", "SUBTLE"].includes(body.watermarkMode)) {
+      updates.watermarkMode = body.watermarkMode;
     }
 
     if (Object.keys(updates).length === 0) {
-      return NextResponse.json({ success: false, error: "Nothing to update." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "No valid fields to update." }, { status: 400 });
     }
 
-    const [updated] = await db
+    const [updatedBiz] = await db
       .update(businesses)
       .set(updates)
       .where(eq(businesses.id, businessId))
       .returning();
 
-    // Business type changed → re-provision so the unit mounts its new flagship
-    // module with the right checklist templates (never any sample stock —
-    // real units stay clean).
-    let typeChange: any = null;
+    // Re-provision if category changed
+    let reprovisioned: any = null;
     if (categoryChanged) {
-      typeChange = await reprovisionForTypeChange({
-        id: updated.id,
-        code: updated.code,
-        name: updated.name,
-        category: updated.category,
+      reprovisioned = await reprovisionForTypeChange({
+        id: updatedBiz.id,
+        code: updatedBiz.code,
+        name: updatedBiz.name,
+        category: updatedBiz.category,
       });
     }
 
-    return NextResponse.json({ success: true, business: updated, typeChange });
+    return NextResponse.json({
+      success: true,
+      business: updatedBiz,
+      categoryChanged,
+      reprovisioned,
+    });
   } catch (error: any) {
     return apiError(error);
   }
 }
 
 /**
- * DELETE /api/businesses/[id] — OWNER permanent deletion with mandatory
- * confirmation. Removes the unit AND every related operational record
- * (inventory, production, sales, customers, orders, finance/transactions,
- * employees, assets, checklists, metrics, exports) so all dashboards and
- * reports update automatically. Assigned user accounts are un-assigned
- * (never deleted). Body: { confirmCode: "<BUSINESS-CODE>" }.
+ * DELETE /api/businesses/[id] — permanent OWNER deletion with full cascade
+ * across all relational tables.
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   ttlInvalidate("menu");
   ttlInvalidate("init");
+  ttlInvalidate("businesses");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -542,8 +880,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const actor = await requireOwner(request);
     if (!actor) return FORBIDDEN("Only the OWNER can delete businesses.");
     // Tenant boundary FIRST: a non-platform Owner can only ever delete a unit
-    // of their own organization (cross-org deletions are refused outright,
-    // before the public-ish code-confirmation gate runs).
+    // of their own organization (cross-org deletions are refused outright).
     if (!actor.isSuperAdmin && !(await canAccessBusiness(actor, businessId))) {
       return FORBIDDEN("You do not have access to this business.");
     }
@@ -557,105 +894,25 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
     const counts = await relatedCounts(businessId);
 
-    // 1. Asset audit history keys off assetId (not businessId) — purge first.
-    const assetRows = await db
-      .select({ id: assets.id })
-      .from(assets)
-      .where(eq(assets.businessId, businessId));
-    const assetIds = assetRows.map((a) => a.id);
-    if (assetIds.length > 0) {
-      await db.delete(assetAuditLogs).where(inArray(assetAuditLogs.assetId, assetIds));
-    }
+    // 1. Cascade-purge all records across every domain in safe dependency order
+    await purgeBusinessAllRecords(businessId, {
+      deleteMasterLists: true,
+      unassignUsers: true,
+    });
 
-    // 2. Every operational table scoped by businessId.
-    const scoped: Array<[any, any]> = [
-      [businessMetrics, businessMetrics.businessId],
-      [customers, customers.businessId],
-      [employees, employees.businessId],
-      [assets, assets.businessId],
-      [inventoryItems, inventoryItems.businessId],
-      [universalExports, universalExports.businessId],
-      [transactions, transactions.businessId],
-      [expenseCategories, expenseCategories.businessId],
-      [salesDocuments, salesDocuments.businessId],
-      [poultryLogs, poultryLogs.businessId],
-      [poultryFlocks, poultryFlocks.businessId],
-      [poultryFeedLogs, poultryFeedLogs.businessId],
-      [poultryWaterLogs, poultryWaterLogs.businessId],
-      [poultryHealthRecords, poultryHealthRecords.businessId],
-      [poultryProduction, poultryProduction.businessId],
-      [poultryChecklists, poultryChecklists.businessId],
-      [poultryProducts, poultryProducts.businessId],
-      [blockFactoryLogs, blockFactoryLogs.businessId],
-      [blockFactoryOrders, blockFactoryOrders.businessId],
-      [blockFactoryDeliveries, blockFactoryDeliveries.businessId],
-      [blockFactoryChecklists, blockFactoryChecklists.businessId],
-      [blockTypes, blockTypes.businessId],
-      [aquacultureLogs, aquacultureLogs.businessId],
-      [aquaculturePonds, aquaculturePonds.businessId],
-      [aquacultureBatches, aquacultureBatches.businessId],
-      [aquacultureFeedLogs, aquacultureFeedLogs.businessId],
-      [aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId],
-      [aquacultureHarvests, aquacultureHarvests.businessId],
-      [aquacultureChecklists, aquacultureChecklists.businessId],
-      [livestockLogs, livestockLogs.businessId],
-      [restaurantLogs, restaurantLogs.businessId],
-      [electronicsLogs, electronicsLogs.businessId],
-      [carWashLogs, carWashLogs.businessId],
-      [carWashServices, carWashServices.businessId],
-      [carWashBookings, carWashBookings.businessId],
-      [carWashWashes, carWashWashes.businessId],
-      [carWashActivities, carWashActivities.businessId],
-      [telecomLines, telecomLines.businessId],
-      [telecomTxns, telecomTxns.businessId],
-      [telecomWifiPackages, telecomWifiPackages.businessId],
-      [telecomVouchers, telecomVouchers.businessId],
-      [telecomActivities, telecomActivities.businessId],
-      [hardwareLogs, hardwareLogs.businessId],
-      [hardwareOrders, hardwareOrders.businessId],
-      [hardwarePurchases, hardwarePurchases.businessId],
-      [hardwareDeliveries, hardwareDeliveries.businessId],
-      [serviceAreas, serviceAreas.businessId],
-      [pickupLocations, pickupLocations.businessId],
-      [aiInsights, aiInsights.businessId],
-      [checklistTemplates, checklistTemplates.businessId],
-      [checklistEntries, checklistEntries.businessId],
-      [electronicsOrders, electronicsOrders.businessId],
-      [electronicsSerials, electronicsSerials.businessId],
-      [electronicsWarranties, electronicsWarranties.businessId],
-      [electronicsPurchases, electronicsPurchases.businessId],
-      [restaurantOrders, restaurantOrders.businessId],
-      [restaurantMenuItems, restaurantMenuItems.businessId],
-      [restaurantWaste, restaurantWaste.businessId],
-      [restaurantPurchases, restaurantPurchases.businessId],
-    ];
-    for (const [table, col] of scoped) {
-      await db.delete(table).where(eq(col, businessId));
-    }
+    // 2. Remove user business access grants
+    await db.delete(userBusinessAccess).where(eq(userBusinessAccess.businessId, businessId));
 
-    // 3. Scenarios targeting only this unit no longer make sense.
-    await db
-      .delete(scenarioSimulations)
-      .where(eq(scenarioSimulations.targetBusinessId, businessId));
-
-    // 4. User accounts are NEVER deleted — staff assigned to the deleted unit
-    //    are simply un-assigned so they can be re-deployed by the Owner.
-    await db
-      .update(users)
-      .set({ assignedBusinessId: null })
-      .where(eq(users.assignedBusinessId, businessId));
-
-    // 5. Finally remove the unit itself.
+    // 3. Finally remove the unit itself
     await db.delete(businesses).where(eq(businesses.id, businessId));
 
-    // 6. Deletion tombstone: the unit code is recorded in system_markers so
-    //    NO auto-provisioning path (boot seeder "repair-forward", future
-    //    flagship passes) can ever resurrect this unit. OWNER deletion is
-    //    final — this is the root-cause fix for deleted units (e.g. the
-    //    HARDWARE-01 flagship) reappearing after the next server restart.
-    //    Best-effort: a pre-migration database (table absent) skips the
-    //    tombstone rather than failing the deletion itself.
+    // 4. Deletion tombstone: the unit code is recorded in system_markers so
+    //    NO auto-provisioning path can ever resurrect this unit.
     await recordDeletedBusiness(biz.code);
+
+    ttlInvalidate("menu");
+    ttlInvalidate("init");
+    ttlInvalidate("businesses");
 
     return NextResponse.json({
       success: true,
@@ -673,25 +930,14 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
  * Wipes every OPERATIONAL record of the unit (sales, transactions/expenses,
  * stock & inventory, production & activity logs, orders, deliveries, payroll
  * records, customers, assets, checklist history, metrics, AI insights, export
- * manifests) and then re-seeds the exact factory-fresh workspace a brand-new
- * unit gets (zero-based metrics + category starter kit), so the unit appears
- * and behaves precisely as if it has just been created.
- *
- * PRESERVED by default (setup): the unit row itself (type, code, name,
- * location, branch), enterprise suppliers, assigned staff user accounts, and
- * MASTER LISTS (poultry products, block types, restaurant menu items,
- * checklist templates, expense-category structure is reset since it is
- * activity-driven).
- *
- * Optional owner flags:
- *   resetMasterLists=true — also wipe master lists (poultry_products,
- *                           block_types, restaurant_menu_items,
- *                           checklist_templates → re-seeded to type defaults)
- *   resetUsers=true       — also un-assign all staff users from this unit
- *
- * Safety: spoof-proof DB-resolved OWNER gate + mandatory confirmCode echo.
+ * manifests, procurement, credit sales, customer tracking, user access grants)
+ * and then re-seeds the exact factory-fresh workspace a brand-new unit gets
+ * (zero-based metrics + default checklist templates).
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  ttlInvalidate("menu");
+  ttlInvalidate("init");
+  ttlInvalidate("businesses");
   try {
     const { id } = await params;
     const businessId = parseInt(id, 10);
@@ -710,10 +956,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       body = {};
     }
 
-    // Session-verified gate (secure login cookie — no spoofing): the OWNER, or
-    // a user the OWNER granted "Manage Unit" for this business (their own unit
-    // only). Un-assigning staff users (resetUsers) remains OWNER-only; the
-    // type/master-list reset is part of the granted "Reset Business Type".
     const level = await businessControlLevel(request, businessId);
     if (!level) {
       return FORBIDDEN(
@@ -734,115 +976,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const counts = await relatedCounts(businessId);
 
-    // ── Phase 1: wipe operational records ────────────────────────────────
-    // Asset audit history keys off assetId — purge before assets.
-    const assetRows = await db
-      .select({ id: assets.id })
-      .from(assets)
-      .where(eq(assets.businessId, businessId));
-    const assetIds = assetRows.map((a) => a.id);
-    if (assetIds.length > 0) {
-      await db.delete(assetAuditLogs).where(inArray(assetAuditLogs.assetId, assetIds));
-    }
+    // ── Phase 1: Wipe all operational and relational records ──
+    await purgeBusinessAllRecords(businessId, {
+      deleteMasterLists: resetMasterLists,
+      unassignUsers: resetUsersFlag,
+    });
 
-    const operationals: Array<[any, any]> = [
-      // Finance & sales activity
-      [transactions, transactions.businessId],
-      [salesDocuments, salesDocuments.businessId],
-      [expenseCategories, expenseCategories.businessId],
-      [universalExports, universalExports.businessId],
-      // Stock / inventory (starter kit is re-seeded in phase 2)
-      [inventoryItems, inventoryItems.businessId],
-      // People & asset records (fresh unit has none; staff USERS are kept)
-      [customers, customers.businessId],
-      [employees, employees.businessId],
-      [assets, assets.businessId],
-      // Activity logs — per-type operations
-      [poultryLogs, poultryLogs.businessId],
-      [poultryFlocks, poultryFlocks.businessId],
-      [poultryFeedLogs, poultryFeedLogs.businessId],
-      [poultryWaterLogs, poultryWaterLogs.businessId],
-      [poultryHealthRecords, poultryHealthRecords.businessId],
-      [poultryProduction, poultryProduction.businessId],
-      [poultryChecklists, poultryChecklists.businessId],
-      [blockFactoryLogs, blockFactoryLogs.businessId],
-      [blockFactoryOrders, blockFactoryOrders.businessId],
-      [blockFactoryDeliveries, blockFactoryDeliveries.businessId],
-      [blockFactoryChecklists, blockFactoryChecklists.businessId],
-      [aquacultureLogs, aquacultureLogs.businessId],
-      [aquaculturePonds, aquaculturePonds.businessId],
-      [aquacultureBatches, aquacultureBatches.businessId],
-      [aquacultureFeedLogs, aquacultureFeedLogs.businessId],
-      [aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId],
-      [aquacultureHarvests, aquacultureHarvests.businessId],
-      [aquacultureChecklists, aquacultureChecklists.businessId],
-      [livestockLogs, livestockLogs.businessId],
-      [restaurantLogs, restaurantLogs.businessId],
-      [restaurantOrders, restaurantOrders.businessId],
-      [restaurantWaste, restaurantWaste.businessId],
-      [restaurantPurchases, restaurantPurchases.businessId],
-      [electronicsLogs, electronicsLogs.businessId],
-      [electronicsOrders, electronicsOrders.businessId],
-      [electronicsSerials, electronicsSerials.businessId],
-      [electronicsWarranties, electronicsWarranties.businessId],
-      [electronicsPurchases, electronicsPurchases.businessId],
-      [carWashLogs, carWashLogs.businessId],
-      [carWashServices, carWashServices.businessId],
-      [carWashBookings, carWashBookings.businessId],
-      [carWashWashes, carWashWashes.businessId],
-      [carWashActivities, carWashActivities.businessId],
-      [telecomLines, telecomLines.businessId],
-      [telecomTxns, telecomTxns.businessId],
-      [telecomWifiPackages, telecomWifiPackages.businessId],
-      [telecomVouchers, telecomVouchers.businessId],
-      [telecomActivities, telecomActivities.businessId],
-      [hardwareLogs, hardwareLogs.businessId],
-      [hardwareOrders, hardwareOrders.businessId],
-      [hardwarePurchases, hardwarePurchases.businessId],
-      [hardwareDeliveries, hardwareDeliveries.businessId],
-      [serviceAreas, serviceAreas.businessId],
-      [pickupLocations, pickupLocations.businessId],
-      // Checklist completion history (templates are setup — kept unless opted out)
-      [checklistEntries, checklistEntries.businessId],
-      // Executive dashboards — fresh zero-based row re-seeded in phase 2
-      [businessMetrics, businessMetrics.businessId],
-      [aiInsights, aiInsights.businessId],
-    ];
-    for (const [table, col] of operationals) {
-      await db.delete(table).where(eq(col, businessId));
+    if (resetUsersFlag) {
+      await db.delete(userBusinessAccess).where(eq(userBusinessAccess.businessId, businessId));
     }
 
     let masterListsReset: string[] = [];
     if (resetMasterLists) {
-      const masters: Array<[any, any, string]> = [
-        [poultryProducts, poultryProducts.businessId, "poultry_products"],
-        [blockTypes, blockTypes.businessId, "block_types"],
-        [restaurantMenuItems, restaurantMenuItems.businessId, "restaurant_menu_items"],
-        [checklistTemplates, checklistTemplates.businessId, "checklist_templates"],
-      ];
-      for (const [table, col, label] of masters) {
-        await db.delete(table).where(eq(col, businessId));
-        masterListsReset.push(label);
-      }
+      masterListsReset = ["poultry_products", "block_types", "restaurant_menu_items", "checklist_templates"];
     }
 
-    let usersUnassigned = 0;
-    if (resetUsersFlag) {
-      const moved = await db
-        .update(users)
-        .set({ assignedBusinessId: null })
-        .where(eq(users.assignedBusinessId, businessId))
-        .returning({ id: users.id });
-      usersUnassigned = moved.length;
-    }
-
-    // ── Phase 2: re-seed the factory-fresh workspace ─────────────────────
-    // provisionBusiness is idempotent per area — with metrics wiped above it
-    // recreates exactly what a brand-new unit receives TODAY: zero-based
-    // metrics (initial capital intact) and (if master lists were reset) the
-    // default checklist template set. No starter stock / sample rows — a
-    // clean unit, precisely like New Branch / Unit produces. The wipe above
-    // already removed its inventory; nothing is re-added.
+    // ── Phase 2: Re-seed the factory-fresh workspace ──
     const seeded = await provisionBusiness({
       id: biz.id,
       code: biz.code,
@@ -850,6 +999,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       category: biz.category,
       initialCapitalGhs: biz.initialCapitalGhs,
     });
+
+    ttlInvalidate("menu");
+    ttlInvalidate("init");
+    ttlInvalidate("businesses");
 
     return NextResponse.json({
       success: true,
@@ -862,7 +1015,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       },
       removedRecords: counts.totalRecords,
       masterListsReset,
-      usersUnassigned,
+      usersUnassigned: resetUsersFlag,
       reseeded: seeded,
       kept: {
         businessSetup: true,

@@ -66,6 +66,7 @@ export async function POST(request: Request) {
       amountGhs,
       paymentMethod,
       description,
+      date,
       recordedBy,
       recordedByRole,
       recordedByUserId,
@@ -98,18 +99,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // R1 approval gate: when an active EXPENSE policy matches this amount and
-    // the recorder is not themselves an approver, the expense lands in
-    // PENDING_APPROVAL and the approvers are bell/push-notified. With no
-    // matching policy (or when the recorder may decide it) nothing changes.
-    let expenseGate: Awaited<ReturnType<typeof approvalGateCheck>> = { gated: false };
+    // Route all EXPENSE transactions through centralized postOrGateExpenseTransaction
     if (String(type).toUpperCase() === "EXPENSE") {
-      expenseGate = await approvalGateCheck({
-        user: session.user,
-        action: "EXPENSE",
+      const { postOrGateExpenseTransaction } = await import("@/lib/expensePosting");
+      const result = await postOrGateExpenseTransaction({
         businessId: Number(businessId),
+        branchCode,
+        branchName,
+        category,
         amountGhs: Number(amountGhs) || 0,
+        paymentMethod,
+        customerId: customerId ? Number(customerId) : undefined,
+        supplierId: supplierId ? Number(supplierId) : undefined,
+        description,
+        date,
+        receiptImage: body?.receiptImage || null,
+        receiptImages: body?.receiptImages || null,
+        expenseMode: body?.expenseMode || (body?.isPreApproval ? "REQUEST" : "RECORD"),
+        isPreApproval: body?.isPreApproval || body?.expenseMode === "REQUEST",
+        actor: session.user,
       });
+      return NextResponse.json(result);
     }
 
     const now = new Date();
@@ -146,7 +156,7 @@ export async function POST(request: Request) {
         description: description || "Transaction logged in GoMina 360",
         date: dateStr,
         createdAt: now,
-        status: expenseGate.gated ? "PENDING_APPROVAL" : status || "COMPLETED",
+        status: status || "COMPLETED",
         recordedBy: session.user.name || recordedBy || "Command Center User",
         recordedByRole: session.user.role || recordedByRole || null,
         recordedByUserId: session.user.id,
@@ -155,27 +165,7 @@ export async function POST(request: Request) {
       })
       .returning();
 
-    // Request the decision (bell + push the approvers) for gated expenses.
-    if (expenseGate.gated) {
-      await createApprovalRequest({
-        action: "EXPENSE",
-        businessId: Number(businessId),
-        branchCode: resolvedBranchCode,
-        targetType: "TRANSACTION",
-        targetId: Number(newTrx.id),
-        targetLabel: `${category || "Expense"} — GH₵ ${(Number(amountGhs) || 0).toFixed(2)}`,
-        amountGhs: Number(amountGhs) || 0,
-        payloadSnapshot: { transactionNumber: trxNum, category, description },
-        actor: session.user,
-      });
-      return NextResponse.json({
-        success: true,
-        transaction: newTrx,
-        pendingApproval: true,
-        message: "Expense saved as PENDING APPROVAL — the approvers have been notified.",
-      });
-    }
-
+    ttlInvalidate("init");
     return NextResponse.json({ success: true, transaction: newTrx });
   } catch (error: any) {
     console.error("POST /api/transactions error:", error);
@@ -221,14 +211,57 @@ export async function PATCH(request: Request) {
       return FORBIDDEN("That transaction belongs to a business you cannot access.");
     }
 
-    const d = data || {};
+    const d = data || body || {};
     const updates: Record<string, any> = {};
+
+    // Special lifecycle action: Mark as Spent / Post Receipt for an APPROVED expense request
+    if ((d.op === "MARK_SPENT" || d.status === "COMPLETED") && existing.status === "APPROVED") {
+      const isRequester = Number(existing.recordedByUserId) === Number(actor.id);
+      const isManagerOrOwner = canManageExpenses(actor) || canManageBusinessUnit(actor, existing.businessId) || actor.isSuperAdmin;
+      if (!isRequester && !isManagerOrOwner) {
+        return FORBIDDEN("Only the requester (or an authorized manager) can post receipts for this approved expense.");
+      }
+      updates.status = "COMPLETED";
+      if (typeof d.paymentMethod === "string" && d.paymentMethod.trim()) updates.paymentMethod = d.paymentMethod.trim();
+      if (typeof d.date === "string" && d.date.trim()) updates.date = d.date.trim();
+      if (d.receiptImage) updates.receiptImage = d.receiptImage;
+      if (Array.isArray(d.receiptImages)) updates.receiptImages = d.receiptImages;
+      if (typeof d.description === "string" && d.description.trim()) updates.description = d.description.trim();
+
+      const [updated] = await db
+        .update(transactions)
+        .set(updates)
+        .where(eq(transactions.id, recordId))
+        .returning();
+
+      const { auditLog } = await import("@/lib/audit");
+      const { ownerOrgOfBusiness } = await import("@/lib/notify");
+      const ownerOrg = await ownerOrgOfBusiness(Number(existing.businessId)).catch(() => null);
+      await auditLog(
+        actor,
+        "EXPENSE_POSTED",
+        "transactions",
+        `${updated.category} — GH₵ ${Number(updated.amountGhs).toFixed(2)}`,
+        "transactions",
+        Number(updated.id),
+        Number(existing.businessId),
+        existing.branchCode,
+        `Approved expense disbursed & posted to Finance (${updated.paymentMethod || "CASH"})`,
+        ownerOrg ?? null
+      );
+
+      ttlInvalidate("init");
+      return NextResponse.json({ success: true, transaction: updated, message: "Expense posted to Finance." });
+    }
+
     if (typeof d.type === "string" && ["INCOME", "EXPENSE", "INVESTMENT", "TRANSFER"].includes(d.type))
       updates.type = d.type;
     if (typeof d.category === "string" && d.category.trim()) updates.category = d.category.trim();
     if (typeof d.description === "string" && d.description.trim()) updates.description = d.description.trim();
     if (typeof d.paymentMethod === "string" && d.paymentMethod.trim()) updates.paymentMethod = d.paymentMethod.trim();
     if (typeof d.date === "string" && d.date.trim()) updates.date = d.date.trim();
+    if (d.receiptImage !== undefined) updates.receiptImage = d.receiptImage;
+    if (d.receiptImages !== undefined) updates.receiptImages = d.receiptImages;
     if (d.amountGhs !== undefined) {
       const v = Number(d.amountGhs);
       if (!Number.isFinite(v) || v < 0) {

@@ -140,8 +140,8 @@ export default function NotificationBell({
       fetch("/api/notifications", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [n.id] }) }).then(load);
     }
     setOpen(false);
-    if (n.issueId) onOpenIssue(n);
-    else onOpenRecord?.(n);
+    if (onOpenRecord) onOpenRecord(n);
+    else if (n.issueId) onOpenIssue(n);
   };
 
   const ago = (v: any) => {
@@ -150,6 +150,22 @@ export default function NotificationBell({
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
+  };
+
+  const targetTag = (n: Notif) => {
+    const t = String(n.type || "").toUpperCase();
+    const rt = String(n.recordType || "").toLowerCase();
+    if (t.startsWith("APPROVAL") || t.includes("EXPENSE") || rt === "approval_requests" || String(n.recordRef || "").startsWith("approval:")) return "Approval Center";
+    if (t.startsWith("AUDIT") || rt.startsWith("audit") || n.issueId) return "Audit Review";
+    if (t.startsWith("TASK_") || rt === "action_tasks" || String(n.recordRef || "").startsWith("task:")) return "Action Task";
+    if (t.startsWith("ADVISOR") || rt === "advisor_notes") return "Farm Advisor";
+    if (t.includes("ORDER") || t.includes("TRACKING") || rt === "customer_trackings" || rt === "orders") return "Order & Dispatch";
+    if (t.includes("LOW_STOCK") || t.includes("INVENTORY") || rt === "inventory_items") return "Inventory Alert";
+    if (t.includes("CREDIT") || t.includes("DUNNING") || rt === "credit_sales") return "Credit & Sales";
+    if (t.includes("CHECKLIST") || t.includes("STAGE") || rt === "checklists") return "Checklist & Stage";
+    if (t.startsWith("TRANSPORT") || rt === "transport_vehicles") return "Transport Log";
+    if (n.branchCode) return n.branchCode;
+    return "Open Record";
   };
 
   return (
@@ -225,9 +241,13 @@ export default function NotificationBell({
                     )}
                   </div>
                   {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
-                  <div className="text-[9px] text-slate-500 mt-1">
-                    {n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}{n.recordRef ? ` · ${n.recordRef}` : ""}
-                    {n.issueId || onOpenRecord ? " · tap to open" : ""}
+                  <div className="flex items-center gap-1.5 flex-wrap text-[9px] text-slate-500 mt-1">
+                    <span className="font-semibold px-1.5 py-0.5 rounded bg-slate-700/80 text-sky-300 border border-slate-600/50" data-testid="notification-target-tag" data-testid-target={`notif-target-tag-${n.id}`}>
+                      {targetTag(n)}
+                    </span>
+                    <span>{n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}</span>
+                    {n.recordRef && <span className="font-mono text-slate-400">· {n.recordRef}</span>}
+                    <span className="text-slate-400 font-semibold">· tap to view</span>
                   </div>
                 </div>
                 <button

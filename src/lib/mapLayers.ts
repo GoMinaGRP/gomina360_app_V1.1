@@ -34,11 +34,29 @@ export interface TileLayerDef {
   subdomains?: string;
 }
 
-/** STANDARD road-map failover chain, in preference order (100% keyless & open). */
+/** STANDARD road-map failover chain, in preference order (100% keyless & open).
+ * Esri World Street Map is the primary standard basemap: commercial-grade, CORS-open,
+ * keyless, reliable worldwide, and does not block web apps or preview domains with 403s.
+ */
 export const STANDARD_LAYERS: readonly TileLayerDef[] = [
   {
-    // OpenStreetMap Standard — the open, community-driven global street map.
-    // Free, open-access, zero API key required, reliable worldwide.
+    // Esri World Street Map — high-resolution, commercial-grade street basemap.
+    // CORS-open, zero API key required, highly detailed road/street labels worldwide.
+    key: "esri-street",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, &copy; OpenStreetMap contributors",
+    maxZoom: 19,
+  },
+  {
+    // Esri World Topo Map — fallback topographic & road street basemap.
+    key: "esri-topo",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community",
+    maxZoom: 19,
+  },
+  {
+    // OpenStreetMap Standard (fallback).
     key: "osm-standard",
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -46,8 +64,7 @@ export const STANDARD_LAYERS: readonly TileLayerDef[] = [
     subdomains: "abc",
   },
   {
-    // Humanitarian OpenStreetMap (HOT) — high-contrast street & road view.
-    // Fast, open-access, zero API key required.
+    // Humanitarian OpenStreetMap (HOT) (fallback).
     key: "osm-hot",
     url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
     attribution:
@@ -55,22 +72,6 @@ export const STANDARD_LAYERS: readonly TileLayerDef[] = [
       'Tiles style by <a href="https://www.hotosm.org/">Humanitarian OpenStreetMap Team</a> hosted by <a href="https://openstreetmap.fr/">OSM France</a>',
     maxZoom: 19,
     subdomains: "abc",
-  },
-  {
-    // Esri World Street Map — high-resolution, commercial-grade street basemap.
-    // CORS-open, zero API key required, highly detailed road/street labels.
-    key: "esri-street",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-    attribution: "Tiles &copy; Esri — Source: Esri, HERE, Garmin, FAO, NOAA, USGS, &copy; OpenStreetMap contributors",
-    maxZoom: 19,
-  },
-  {
-    // Esri World Topo Map — fallback topographic street basemap.
-    key: "esri-topo",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-    attribution:
-      "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, &copy; OpenStreetMap contributors",
-    maxZoom: 19,
   },
 ] as const;
 
@@ -84,109 +85,134 @@ export const SATELLITE_BASE: TileLayerDef = {
 export const SATELLITE_LABELS: TileLayerDef = {
   key: "esri-hybrid-labels",
   url: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-  attribution: "",
+  attribution: "Tiles &copy; Esri — Reference overlays",
   maxZoom: 19,
 };
 
-declare global {
-  interface Window {
-    __gominaMaps?: {
-      maps: Record<
-        string,
-        {
-          active: string;
-          url: string;
-          control: string;
-          errors: Record<string, number>;
-          loadedAny: boolean;
-          exhausted: boolean;
-          stuckNotice: string | null;
-        }
-      >;
-    };
-  }
-}
+export type MapViewMode = "STANDARD" | "SATELLITE";
 
-/** How many failures on the ACTIVE layer (with zero successes on it) trigger
- *  failover to the next provider. Low enough to recover fast on blocked CDNs,
- *  high enough to ignore isolated 404s at extreme zooms. */
-export const LAYER_FAILOVER_THRESHOLD = 4;
-
-function publish(lane: string, patch: Record<string, unknown>) {
-  if (typeof window === "undefined") return;
-  const root = (window.__gominaMaps ||= { maps: {} });
-  const prev = root.maps[lane] || { errors: {} };
-  root.maps[lane] = { ...prev, ...(patch as any) };
+export interface UseMapLayerState {
+  viewMode: MapViewMode;
+  setViewMode: (mode: MapViewMode) => void;
+  activeStandardIndex: number;
+  activeDef: TileLayerDef;
+  attribution: string;
+  tileLoaded: boolean;
+  allFailed: boolean;
+  onTileLoad: () => void;
+  onTileError: () => void;
+  /** Reset failover state back to the preferred provider (e.g. after network recovered). */
+  resetFailover: () => void;
 }
 
 /**
- * Failover state machine for a DEF chain. Returns the active layer and the
- * Leaflet `eventHandlers` to bind to its TileLayer.
+ * Manages provider failover and publishes per-map diagnostics to window.
  *
- * `tileload` on the active layer: recovery signal — any prior accumulated
- * error state for THAT layer is forgiven (transient bursts must not cause a
- * permanent failover once the provider responds).
- * `tileerror` beyond the threshold with no successes: advance to the next
- * provider (the layer remounts via `key`) and record it.
+ * @param lane Diagnostic lane key under `window.__gominaMaps.maps[lane]`
+ *             (e.g. "storefront", "track", "console", "pin-picker", "area-editor").
  */
-export function useLayerFailover(lane: string, layers: readonly TileLayerDef[]) {
-  const [idx, setIdx] = useState(0);
-  const successes = useRef<Record<string, number>>({});
-  const errors = useRef<Record<string, number>>({});
-  const layer = layers[Math.min(idx, layers.length - 1)];
-  const exhausted = idx >= layers.length - 1 && (errors.current[layer.key] || 0) >= LAYER_FAILOVER_THRESHOLD && !successes.current[layer.key];
+export function useMapLayer(lane: string = "default"): UseMapLayerState {
+  const [viewMode, setViewMode] = useState<MapViewMode>("STANDARD");
+  const [stdIdx, setStdIdx] = useState<number>(0);
+  const [tileLoaded, setTileLoaded] = useState<boolean>(false);
+  const [allFailed, setAllFailed] = useState<boolean>(false);
 
-  // Record the initially-declared layer immediately so a probe can locate the
-  // map's diagnostics FINDABLY without waiting for the first tile outcome.
+  // Per-provider tracking: has this provider EVER loaded a tile in this session?
+  // How many consecutive errors have occurred on the current provider?
+  const errorsRef = useRef<Record<string, number>>({});
+  const successRef = useRef<Record<string, boolean>>({});
+
+  const activeDef: TileLayerDef =
+    viewMode === "SATELLITE"
+      ? SATELLITE_BASE
+      : STANDARD_LAYERS[Math.min(stdIdx, STANDARD_LAYERS.length - 1)];
+
+  // Publish live diagnostic state for the maps audit suite
+  const publishDiag = useCallback(
+    (opts?: { stuck?: boolean }) => {
+      if (typeof window === "undefined") return;
+      const g = ((window as any).__gominaMaps = (window as any).__gominaMaps || { maps: {}, errors: [] });
+      g.maps = g.maps || {};
+      const urlClass = activeDef.url.includes("server.arcgisonline.com")
+        ? "esri"
+        : activeDef.url.includes("openstreetmap")
+        ? "osm"
+        : "other";
+      g.maps[lane] = {
+        lane,
+        viewMode,
+        activeKey: activeDef.key,
+        urlClass,
+        activeUrl: activeDef.url,
+        providerIndex: stdIdx,
+        providerCount: STANDARD_LAYERS.length,
+        tileLoaded,
+        allFailed: opts?.stuck ?? allFailed,
+        errors: { ...errorsRef.current },
+        successes: { ...successRef.current },
+        updatedAt: Date.now(),
+      };
+    },
+    [activeDef, allFailed, lane, stdIdx, tileLoaded, viewMode],
+  );
+
+  // Update diagnostics whenever the active layer or mode changes
   useEffect(() => {
-    publish(lane, {
-      active: layer.key,
-      url: layer.url,
-      control: "leaflet-tilelayer",
-      errors: { ...errors.current },
-      loadedAny: Object.values(successes.current).some((n) => n > 0),
-      exhausted: false,
-      stuckNotice: null,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lane, layer.key, layer.url]);
+    publishDiag();
+  }, [publishDiag]);
 
-  useEffect(() => {
-    if (exhausted) {
-      publish(lane, {
-        exhausted: true,
-        stuckNotice: "tile network unreachable for every standard provider",
-      });
-    }
-  }, [exhausted, lane]);
+  const onTileLoad = useCallback(() => {
+    successRef.current[activeDef.key] = true;
+    setTileLoaded(true);
+    setAllFailed(false);
+    publishDiag({ stuck: false });
+  }, [activeDef.key, publishDiag]);
 
-  const handlers = {
-    tileerror: useCallback(() => {
-      const k = layer.key;
-      errors.current[k] = (errors.current[k] || 0) + 1;
-      publish(lane, { errors: { ...errors.current } });
-      if (
-        (errors.current[k] || 0) >= LAYER_FAILOVER_THRESHOLD &&
-        !(successes.current[k] > 0) &&
-        idx < layers.length - 1
-      ) {
-        setIdx(idx + 1);
+  const onTileError = useCallback(() => {
+    const k = activeDef.key;
+    errorsRef.current[k] = (errorsRef.current[k] || 0) + 1;
+    // Log once per provider into the global audit tray
+    if (typeof window !== "undefined") {
+      const g = ((window as any).__gominaMaps = (window as any).__gominaMaps || { maps: {}, errors: [] });
+      g.errors = g.errors || [];
+      if (!g.errors.some((e: any) => e.provider === k && e.lane === lane)) {
+        g.errors.push({ lane, provider: k, url: activeDef.url, at: Date.now() });
       }
-    }, [idx, layers.length, lane, layer.key]),
-    tileload: useCallback(() => {
-      const k = layer.key;
-      successes.current[k] = (successes.current[k] || 0) + 1;
-      // A loading provider must not be remembered as failing: reset its error
-      // count so a later transient burst doesn't piggyback on stale history.
-      errors.current[k] = 0;
-      publish(lane, {
-        errors: { ...errors.current },
-        loadedAny: true,
-        exhausted: false,
-        stuckNotice: null,
-      });
-    }, [lane, layer.key]),
-  } as const;
+    }
+    // Failover rule: if this provider has NEVER loaded a single tile and has
+    // hit ≥ 2 tile errors, advance to the next provider in the chain.
+    if (viewMode === "STANDARD" && !successRef.current[k] && errorsRef.current[k] >= 2) {
+      if (stdIdx + 1 < STANDARD_LAYERS.length) {
+        setStdIdx((i) => i + 1);
+        setTileLoaded(false);
+      } else {
+        // Every provider has failed
+        setAllFailed(true);
+        publishDiag({ stuck: true });
+      }
+    } else {
+      publishDiag();
+    }
+  }, [activeDef, lane, publishDiag, stdIdx, viewMode]);
 
-  return { layer, handlers, exhausted };
+  const resetFailover = useCallback(() => {
+    errorsRef.current = {};
+    successRef.current = {};
+    setStdIdx(0);
+    setTileLoaded(false);
+    setAllFailed(false);
+  }, []);
+
+  return {
+    viewMode,
+    setViewMode,
+    activeStandardIndex: stdIdx,
+    activeDef,
+    attribution: activeDef.attribution,
+    tileLoaded,
+    allFailed,
+    onTileLoad,
+    onTileError,
+    resetFailover,
+  };
 }
