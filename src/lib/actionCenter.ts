@@ -27,11 +27,15 @@ import { pushAfterBell } from "@/lib/push";
 import {
   actionTasks,
   advisorNotes,
+  approvalRequests,
   auditReviews,
   businesses,
   checklistEntries,
+  customerTrackings,
+  inventoryItems,
   notifications,
   organizationMembers,
+  transportMaintenance,
   users,
 } from "@/db/schema";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -265,7 +269,7 @@ export async function completeLinkedTasksForSource(
 // ─── Linked open items (read-only views over existing systems) ─────────────
 
 export interface LinkedItem {
-  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST" | "APPROVAL";
+  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST" | "APPROVAL" | "LOW_STOCK" | "ORDER" | "MAINTENANCE";
   id: number;
   businessId: number | null;
   branchCode?: string | null;
@@ -436,6 +440,150 @@ export async function linkedApprovals(
   }));
 }
 
+/** Low-stock alerts: items whose stock is at or below reorder threshold. */
+export async function linkedLowStock(
+  allowedBusinessIds: number[] | null,
+  limit = 40,
+): Promise<LinkedItem[]> {
+  const scopeFilter =
+    allowedBusinessIds === null
+      ? undefined
+      : allowedBusinessIds.length
+        ? inArray(inventoryItems.businessId, allowedBusinessIds)
+        : sql`false`;
+
+  const rows = await db
+    .select({
+      id: inventoryItems.id,
+      businessId: inventoryItems.businessId,
+      branchCode: inventoryItems.branchCode,
+      name: inventoryItems.name,
+      sku: inventoryItems.sku,
+      quantity: inventoryItems.quantity,
+      minStockThreshold: inventoryItems.minStockThreshold,
+      unit: inventoryItems.unit,
+      status: inventoryItems.status,
+    })
+    .from(inventoryItems)
+    .where(
+      and(
+        sql`exists (select 1 from businesses b where b.id = ${inventoryItems.businessId})`,
+        sql`((("quantity" <= "min_stock_threshold" AND "min_stock_threshold" > 0) OR "quantity" <= 0) OR "status" = 'OUT_OF_STOCK')`,
+        scopeFilter,
+      ),
+    )
+    .orderBy(inventoryItems.quantity)
+    .limit(limit);
+
+  return rows.map((r) => {
+    const isOut = Number(r.quantity) <= 0 || r.status === "OUT_OF_STOCK";
+    return {
+      kind: "LOW_STOCK" as const,
+      id: r.id,
+      businessId: r.businessId,
+      branchCode: r.branchCode,
+      title: `Low stock alert: ${r.name}`,
+      detail: `${isOut ? "OUT OF STOCK" : `${r.quantity} ${r.unit || "units"} remaining`} · Reorder point: ${r.minStockThreshold || 1} ${r.unit || "units"}${r.sku ? ` · SKU: ${r.sku}` : ""}`,
+      priority: isOut ? "CRITICAL" : "HIGH",
+      dueDate: todayLocalISO(),
+      assignedUserId: null,
+      assignedUserName: null,
+      openTab: r.branchCode || "PROCUREMENT",
+      openHint: "Procurement & Restock",
+    };
+  });
+}
+
+/** Actionable customer orders: unfulfilled or pending confirmation. */
+export async function linkedPendingOrders(
+  allowedBusinessIds: number[] | null,
+  limit = 40,
+): Promise<LinkedItem[]> {
+  const scopeFilter =
+    allowedBusinessIds === null
+      ? undefined
+      : allowedBusinessIds.length
+        ? inArray(customerTrackings.businessId, allowedBusinessIds)
+        : sql`false`;
+
+  const rows = await db
+    .select()
+    .from(customerTrackings)
+    .where(
+      and(
+        sql`exists (select 1 from businesses b where b.id = ${customerTrackings.businessId})`,
+        or(
+          inArray(customerTrackings.status, ["RECEIVED", "CONFIRMED", "PROCESSING"]),
+          eq(customerTrackings.paymentStatus, "PENDING_CONFIRMATION"),
+        ),
+        scopeFilter,
+      ),
+    )
+    .orderBy(desc(customerTrackings.id))
+    .limit(limit);
+
+  return rows.map((r) => {
+    const isMomoPending = r.paymentStatus === "PENDING_CONFIRMATION";
+    const itemsList = Array.isArray(r.items) ? (r.items as any[]) : [];
+    const itemSummary = itemsList.map((it: any) => `${it.quantity || 1}x ${it.description || "item"}`).join(", ");
+    return {
+      kind: "ORDER" as const,
+      id: r.id,
+      businessId: r.businessId,
+      branchCode: r.branchCode,
+      title: `Order ${r.trackingCode || `#${r.id}`} — ${r.customerName || "Customer"}`,
+      detail: `${isMomoPending ? "MoMo payment confirmation needed · " : `Status: ${r.status} · `}${itemSummary || "Items pending fulfillment"}${r.totalGhs ? ` · GH₵ ${Number(r.totalGhs).toFixed(2)}` : ""}`,
+      priority: isMomoPending || r.status === "RECEIVED" ? "HIGH" : "MEDIUM",
+      dueDate: r.preorderExpectedAt ? String(r.preorderExpectedAt).slice(0, 10) : todayLocalISO(),
+      assignedUserId: null,
+      assignedUserName: r.driverName || null,
+      openTab: "TRACKING",
+      openHint: "Customer Order & Tracking",
+    };
+  });
+}
+
+/** Active / scheduled maintenance jobs across transport fleet and assets. */
+export async function linkedMaintenanceJobs(
+  allowedBusinessIds: number[] | null,
+  limit = 30,
+): Promise<LinkedItem[]> {
+  const scopeFilter =
+    allowedBusinessIds === null
+      ? undefined
+      : allowedBusinessIds.length
+        ? inArray(transportMaintenance.businessId, allowedBusinessIds)
+        : sql`false`;
+
+  const rows = await db
+    .select()
+    .from(transportMaintenance)
+    .where(
+      and(
+        sql`exists (select 1 from businesses b where b.id = ${transportMaintenance.businessId})`,
+        inArray(transportMaintenance.status, ["DUE", "SCHEDULED", "IN_PROGRESS"]),
+        scopeFilter,
+      ),
+    )
+    .orderBy(desc(transportMaintenance.id))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    kind: "MAINTENANCE" as const,
+    id: r.id,
+    businessId: r.businessId,
+    branchCode: r.branchCode,
+    title: `Maintenance: ${r.title || "Fleet Service"}`,
+    detail: `${r.status === "IN_PROGRESS" ? "In Progress" : r.status === "DUE" ? "Due for Service" : "Scheduled"} · ${r.vendorName || "Workshop"}${r.estimatedCostGhs ? ` · Est. GH₵ ${Number(r.estimatedCostGhs).toFixed(2)}` : ""}${r.dueDate ? ` · Due ${r.dueDate}` : ""}`,
+    priority: r.status === "IN_PROGRESS" || r.status === "DUE" ? "HIGH" : "MEDIUM",
+    dueDate: r.dueDate ? String(r.dueDate).slice(0, 10) : todayLocalISO(),
+    assignedUserId: null,
+    assignedUserName: null,
+    openTab: "TRANSPORT",
+    openHint: "Transport & Fleet Maintenance",
+  }));
+}
+
 // ─── SLA escalation (daily ops) ────────────────────────────────────────────
 
 /** Re-notify overdue open tasks: the assignee always; the business's
@@ -507,8 +655,9 @@ export async function escalateOverdueTasks(opts?: { businessIds?: number[] | nul
   return notified;
 }
 
-/** Auto-complete open tasks whose linked audit issue / advisor follow-up has
- *  been resolved since the last sweep. Cheap: only open linked tasks. */
+/** Auto-complete open tasks whose linked audit issue / advisor follow-up /
+ *  approval / low stock / order / maintenance has been resolved since the last
+ *  sweep. Cheap: only open linked tasks. */
 export async function autoCompleteLinkedTasks(): Promise<number> {
   const open = await db
     .select()
@@ -516,10 +665,17 @@ export async function autoCompleteLinkedTasks(): Promise<number> {
     .where(
       and(
         inArray(actionTasks.status, ACTION_OPEN_STATUSES),
-        or(eq(actionTasks.sourceType, "AUDIT_ISSUE"), eq(actionTasks.sourceType, "ADVISOR_FOLLOW_UP")),
+        or(
+          eq(actionTasks.sourceType, "AUDIT_ISSUE"),
+          eq(actionTasks.sourceType, "ADVISOR_FOLLOW_UP"),
+          eq(actionTasks.sourceType, "APPROVAL"),
+          eq(actionTasks.sourceType, "LOW_STOCK"),
+          eq(actionTasks.sourceType, "ORDER"),
+          eq(actionTasks.sourceType, "MAINTENANCE"),
+        ),
       ),
     )
-    .limit(300);
+    .limit(400);
   let completed = 0;
   for (const t of open) {
     if (t.sourceType === "AUDIT_ISSUE" && t.sourceId != null) {
@@ -539,6 +695,42 @@ export async function autoCompleteLinkedTasks(): Promise<number> {
         .limit(1);
       if (note && !OPEN_FOLLOWUP_STATUSES.includes(String(note.followUpStatus).toUpperCase())) {
         completed += await completeLinkedTasksForSource("ADVISOR_FOLLOW_UP", Number(t.sourceId), note.authorName || "Advisor", `Follow-up is ${note.followUpStatus}.`);
+      }
+    } else if (t.sourceType === "APPROVAL" && t.sourceId != null) {
+      const [appReq] = await db
+        .select({ status: approvalRequests.status, decidedByName: approvalRequests.decidedByName })
+        .from(approvalRequests)
+        .where(eq(approvalRequests.id, Number(t.sourceId)))
+        .limit(1);
+      if (appReq && String(appReq.status).toUpperCase() !== "PENDING") {
+        completed += await completeLinkedTasksForSource("APPROVAL", Number(t.sourceId), appReq.decidedByName || "Approver", `Approval request is ${appReq.status}.`);
+      }
+    } else if (t.sourceType === "LOW_STOCK" && t.sourceId != null) {
+      const [inv] = await db
+        .select({ quantity: inventoryItems.quantity, minStockThreshold: inventoryItems.minStockThreshold, status: inventoryItems.status })
+        .from(inventoryItems)
+        .where(eq(inventoryItems.id, Number(t.sourceId)))
+        .limit(1);
+      if (inv && Number(inv.quantity) > (Number(inv.minStockThreshold) || 0) && inv.status !== "OUT_OF_STOCK") {
+        completed += await completeLinkedTasksForSource("LOW_STOCK", Number(t.sourceId), "Inventory System", "Stock replenished above reorder threshold.");
+      }
+    } else if (t.sourceType === "ORDER" && t.sourceId != null) {
+      const [ord] = await db
+        .select({ status: customerTrackings.status, driverName: customerTrackings.driverName })
+        .from(customerTrackings)
+        .where(eq(customerTrackings.id, Number(t.sourceId)))
+        .limit(1);
+      if (ord && ["DELIVERED", "COMPLETED", "CANCELLED"].includes(String(ord.status).toUpperCase())) {
+        completed += await completeLinkedTasksForSource("ORDER", Number(t.sourceId), ord.driverName || "Fulfillment", `Order is ${ord.status}.`);
+      }
+    } else if (t.sourceType === "MAINTENANCE" && t.sourceId != null) {
+      const [maint] = await db
+        .select({ status: transportMaintenance.status, createdByName: transportMaintenance.createdByName })
+        .from(transportMaintenance)
+        .where(eq(transportMaintenance.id, Number(t.sourceId)))
+        .limit(1);
+      if (maint && ["DONE", "COMPLETED", "CANCELLED"].includes(String(maint.status).toUpperCase())) {
+        completed += await completeLinkedTasksForSource("MAINTENANCE", Number(t.sourceId), maint.createdByName || "Fleet Workshop", `Maintenance is ${maint.status}.`);
       }
     }
   }

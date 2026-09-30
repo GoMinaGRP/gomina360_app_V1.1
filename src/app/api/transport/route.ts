@@ -777,6 +777,10 @@ export async function POST(request: NextRequest) {
           }
         }
         await writeTransportTrail(actor, { action: "UPDATE", targetType: "TRANSPORT", targetLabel: `Maint #${id} done`, recordType: "TRANSPORT_MAINTENANCE", recordId: id, businessId, branchCode: m.branchCode, detail: `GH₵ ${cost}${txn ? ` · txn ${txn.transactionNumber}` : ""}` });
+        try {
+          const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+          await completeLinkedTasksForSource("MAINTENANCE", id, user.name, "Fleet maintenance completed.");
+        } catch {}
         return NextResponse.json({ success: true, maintenance: u, transaction: txn });
       }
       if (action === "UPDATE") {

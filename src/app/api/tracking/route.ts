@@ -437,6 +437,13 @@ export async function POST(request: NextRequest) {
         .where(eq(customerTrackings.id, id))
         .returning();
 
+      if (["DELIVERED", "COMPLETED", "CANCELLED"].includes(target)) {
+        try {
+          const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+          await completeLinkedTasksForSource("ORDER", id, me.name, `Order marked ${target.toLowerCase()}.`);
+        } catch {}
+      }
+
       // Staff notification (bell) for the order creator when someone else advanced it.
       try {
         if (row.createdByUserId && row.createdByUserId !== me.id) {

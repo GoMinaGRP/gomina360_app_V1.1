@@ -1477,6 +1477,10 @@ export async function PATCH(request: Request) {
         action: "VERIFY", statusFrom: from, statusTo: "VERIFIED", note,
       });
       await writeTrail(user, { action: "VERIFY", targetType: "RECORD", targetLabel: row.recordRef || row.recordTitle, recordType: row.recordType, recordId: row.recordId, businessId: row.businessId, branchCode: row.branchCode, reason: row.reason, detail: `Verified & closed (${from} → VERIFIED): ${note}` });
+      try {
+        const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+        await completeLinkedTasksForSource("AUDIT_ISSUE", row.id, user.name, note);
+      } catch {}
       if (row.assignedUserId && row.assignedUserId !== user.id) {
         await notify(row.assignedUserId, {
           type: "AUDIT_ISSUE_VERIFIED", title: `Verified & closed [${PRIORITY_LABEL[normPriority(row.priority)]}]: ${row.issueTitle || row.recordRef}`,

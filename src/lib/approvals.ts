@@ -483,6 +483,11 @@ export async function decideApprovalRequest(input: DecideInput) {
     requesterUserId: updated.requestedByUserId,
   });
 
+  try {
+    const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+    await completeLinkedTasksForSource("APPROVAL", Number(updated.id), input.user.name ?? null, `Approval request ${decision.toLowerCase()}.`);
+  } catch {}
+
   ttlInvalidate("init");
 
   return { request: updated, effectNote };
@@ -506,6 +511,10 @@ export async function cancelApprovalRequest(requestId: number, actor: { name?: s
     .returning();
   if (updated) {
     await applyDecisionEffect(updated, "CANCELLED");
+    try {
+      const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+      await completeLinkedTasksForSource("APPROVAL", Number(requestId), actor?.name || "Staff", "Approval request cancelled/withdrawn.");
+    } catch {}
     ttlInvalidate("init");
   }
   return updated ?? null;

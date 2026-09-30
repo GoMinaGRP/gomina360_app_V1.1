@@ -737,6 +737,12 @@ export async function PATCH(request: Request) {
         ownerId: session.orgId ?? null, reason: reason,
         detail: `Follow-up moved ${note.followUpStatus} → ${statusTo} by ${actor.name}`,
       });
+      if (["ADDRESSED", "CLOSED"].includes(statusTo)) {
+        try {
+          const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+          await completeLinkedTasksForSource("ADVISOR_FOLLOW_UP", id, actor.name, `Follow-up moved to ${statusTo.toLowerCase()}.`);
+        } catch {}
+      }
       // Notify both sides of the follow-up.
       try {
         const targets = new Set<number>();

@@ -451,6 +451,12 @@ export async function postGoodsReceipt({
       })
       .where(eq(inventoryItems.id, inv.id));
     li.newQty = newQty;
+    if (newQty > (inv.minStockThreshold || 0)) {
+      try {
+        const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+        await completeLinkedTasksForSource("LOW_STOCK", inv.id, staff.name || "Procurement", "Stock replenished above reorder threshold.");
+      } catch {}
+    }
   }
 
   const [rec] = await db

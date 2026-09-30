@@ -39,6 +39,22 @@ export default function NotificationBell({
   const toTask = async (n: Notif) => {
     setConvertingId(Number(n.id));
     try {
+      const resolvedSourceType = n.issueId
+        ? "AUDIT_ISSUE"
+        : String(n.type || "").startsWith("APPROVAL") || String(n.recordType || "") === "approval_requests"
+        ? "APPROVAL"
+        : String(n.type || "").startsWith("ADVISOR") || String(n.recordType || "") === "advisor_notes"
+        ? "ADVISOR_FOLLOW_UP"
+        : String(n.type || "").includes("LOW_STOCK") || String(n.recordType || "") === "inventory_items"
+        ? "LOW_STOCK"
+        : String(n.type || "").includes("ORDER") || String(n.recordType || "") === "customer_trackings"
+        ? "ORDER"
+        : String(n.type || "").startsWith("TRANSPORT") || String(n.recordType || "") === "transport_vehicles"
+        ? "MAINTENANCE"
+        : "NOTIFICATION";
+
+      const resolvedSourceId = n.issueId || n.recordId || n.id;
+
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -50,10 +66,10 @@ export default function NotificationBell({
           assignedUserId: currentUser?.id,
           priority: n.priority || "MEDIUM",
           dueDate: new Date(Date.now() + 2 * 86400000).toLocaleDateString("en-CA"),
-          sourceType: "NOTIFICATION",
-          sourceId: n.id,
-          sourceRef: n.recordRef || `notification:${n.id}`,
-          sourceLabel: "Notification follow-up",
+          sourceType: resolvedSourceType,
+          sourceId: resolvedSourceId,
+          sourceRef: n.recordRef || `${resolvedSourceType.toLowerCase()}:${resolvedSourceId}`,
+          sourceLabel: n.title ? String(n.title).slice(0, 40) : "Notification follow-up",
         }),
       });
       if (res.ok) {

@@ -175,8 +175,17 @@ try {
     dueNotif ? `body(len=${(dueNotif.body || "").length})=${(dueNotif.body || "").slice(-140)}` : "no AUDIT_ISSUE_ASSIGNED row");
   if (dueNotif) created.notifs.push(dueNotif.id);
 
-  // Linked zone shows the dated issue
+  // Linked zone shows all actionable systems (audit, advisor, approvals, low stock, orders, maintenance, checklists)
   const g4 = await api(ownerS.cookie, "GET", "/api/tasks?includeLinked=1");
+  ok("linked items carry all comprehensive categories",
+    Array.isArray(g4.data?.linked?.auditIssues) &&
+    Array.isArray(g4.data?.linked?.advisorFollowUps) &&
+    Array.isArray(g4.data?.linked?.approvals) &&
+    Array.isArray(g4.data?.linked?.lowStock) &&
+    Array.isArray(g4.data?.linked?.orders) &&
+    Array.isArray(g4.data?.linked?.maintenance) &&
+    Array.isArray(g4.data?.linked?.checklist));
+
   const linkedIssue = (g4.data?.linked?.auditIssues || []).find((i) => i.id === reviewId);
   ok("linked zone shows the open audit issue with its due date", !!linkedIssue && linkedIssue.dueDate === in2days);
 
@@ -193,6 +202,54 @@ try {
   });
   ok("mirror task created", track.status === 200 && track.data?.task?.sourceType === "AUDIT_ISSUE");
   if (track.data?.task) created.tasks.push(track.data.task.id);
+
+  // ── 8b. Track an Approval request as task, then decide it → auto-complete ──
+  const appReq = await q1("insert into approval_requests (business_id, owner_id, action, target_type, target_id, target_label, amount_ghs, status, requested_by_user_id, requested_by_name) values ($1, 1, 'EXPENSE', 'TRANSACTION', 99999, 'TEST Action Center Expense', 250, 'PENDING', $2, 'Kwame Mina') returning id", [biz.id, (await q1("select id from users where email = $1", [OWNER.email])).id]);
+  if (appReq) {
+    const trackApp = await api(ownerS.cookie, "POST", "/api/tasks", {
+      title: "TEST mirror of approval",
+      businessId: biz.id,
+      assignedUserId: Number((await q1("select id from users where email = $1", [OWNER.email])).id),
+      priority: "HIGH",
+      dueDate: in2days,
+      sourceType: "APPROVAL",
+      sourceId: appReq.id,
+      sourceLabel: "Expense Approval",
+    });
+    ok("mirror approval task created", trackApp.status === 200 && trackApp.data?.task?.sourceType === "APPROVAL");
+    if (trackApp.data?.task) created.tasks.push(trackApp.data.task.id);
+
+    // Resolve approval
+    await client.query("update approval_requests set status = 'APPROVED', decided_by_name = 'Kwame Mina', decided_at = now() where id = $1", [appReq.id]);
+    await api(ownerS.cookie, "GET", "/api/cron/daily?force=1");
+    const mirroredApp = await q1("select * from action_tasks where id = $1", [trackApp.data?.task?.id]);
+    ok("mirror approval task auto-completed when decided", mirroredApp?.status === "DONE");
+    await client.query("delete from approval_requests where id = $1", [appReq.id]);
+  }
+
+  // ── 8c. Track an Order as task, then deliver it → auto-complete ──
+  const ordRow = await q1("insert into customer_trackings (business_id, tracking_code, status, customer_name, total_ghs) values ($1, 'GM-TEST-ORD', 'CONFIRMED', 'TEST Customer', 120) returning id", [biz.id]);
+  if (ordRow) {
+    const trackOrd = await api(ownerS.cookie, "POST", "/api/tasks", {
+      title: "TEST mirror of order",
+      businessId: biz.id,
+      assignedUserId: Number((await q1("select id from users where email = $1", [OWNER.email])).id),
+      priority: "HIGH",
+      dueDate: in2days,
+      sourceType: "ORDER",
+      sourceId: ordRow.id,
+      sourceLabel: "Customer Order",
+    });
+    ok("mirror order task created", trackOrd.status === 200 && trackOrd.data?.task?.sourceType === "ORDER");
+    if (trackOrd.data?.task) created.tasks.push(trackOrd.data.task.id);
+
+    // Deliver order
+    await client.query("update customer_trackings set status = 'DELIVERED', updated_at = now() where id = $1", [ordRow.id]);
+    await api(ownerS.cookie, "GET", "/api/cron/daily?force=1");
+    const mirroredOrd = await q1("select * from action_tasks where id = $1", [trackOrd.data?.task?.id]);
+    ok("mirror order task auto-completed when order delivered", mirroredOrd?.status === "DONE");
+    await client.query("delete from customer_trackings where id = $1", [ordRow.id]);
+  }
 
   // Resolve the issue: the assignee responds (when it is our worker), then
   // the owner verifies & closes via the issue PATCH path.
