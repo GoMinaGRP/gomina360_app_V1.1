@@ -360,7 +360,6 @@ export default function ExpenseEntryForm({
           className="overflow-y-auto p-3.5 sm:p-5 space-y-3.5 sm:space-y-4 flex-1 overscroll-contain"
           data-testid={`${testid}-form`}
         >
->>>>>>> c22348e (audit: complete comprehensive A-Z audit fixes, performance optimizations, and verification suite reconciliation)
           {error && (
             <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg text-xs" data-testid={`${testid}-error`}>
               {error}
