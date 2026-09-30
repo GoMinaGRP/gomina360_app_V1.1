@@ -15,6 +15,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 // NOTE: the Restaurant menu master list starts EMPTY for every business — no
 // sample dishes are auto-seeded (owner directive: new / reset units begin with
@@ -62,23 +63,24 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
 }
 
 // Book the purchase expense into the shared Finance ledger.
-async function bookExpense(businessId: number, biz: any, branchCode: string | null, data: any, purchaseNumber: string, total: number, date: string) {
-  const now = new Date();
-  await db.insert(transactions).values({
+async function bookExpense(businessId: number, biz: any, branchCode: string | null, data: any, purchaseNumber: string, total: number, date: string, actorObj?: any) {
+  const actor = actorObj || {
+    id: data.createdByUserId ? Number(data.createdByUserId) : null,
+    name: data.createdByName || "Kitchen Staff",
+    role: data.createdByRole || null,
+  };
+  return postOrGateExpenseTransaction({
     businessId,
     branchCode,
     branchName: biz?.name || null,
-    transactionNumber: nextTrxNumber(now),
-    type: "EXPENSE",
     category: "Stock Purchase (Kitchen)",
     amountGhs: total,
     paymentMethod: data.paymentMethod || "CASH",
     description: `Purchase ${purchaseNumber} — ${data.quantity} ${data.unit || "Kg"} ${data.itemName} from ${data.supplierName}`,
     date,
-    recordedBy: data.createdByName || "Kitchen Staff",
-    recordedByRole: data.createdByRole || null,
-    recordedByUserId: data.createdByUserId ? Number(data.createdByUserId) : null,
-    status: "COMPLETED",
+    actor,
+    targetLabel: `Kitchen Purchase (${data.quantity} ${data.unit || "Kg"} ${data.itemName}) — GH₵ ${Number(total).toFixed(2)}`,
+    metadata: { purchaseNumber, supplierName: data.supplierName },
   });
 }
 

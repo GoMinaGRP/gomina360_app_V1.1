@@ -79,12 +79,25 @@ export default function CustomerSupportModal({
     })();
   }, [isOpen]);
 
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   if (!allowed) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3">
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3 my-auto">
           <ShieldCheck className="w-8 h-8 text-rose-400 mx-auto" />
           <p className="text-sm text-slate-300">
             Only the OWNER — or a user the OWNER granted Customer Support access — can edit the storefront HELP information.
@@ -132,13 +145,14 @@ export default function CustomerSupportModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
       data-testid="support-modal"
       role="dialog"
       aria-modal="true"
       aria-label="Customer Support — storefront HELP editor"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100dvh-2rem)] sm:max-h-[92vh] flex flex-col my-auto">
         <div className="flex items-center gap-2.5 px-5 py-4 border-b border-slate-800 shrink-0">
           <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0">
             <LifeBuoy className="w-5 h-5 text-slate-950" />

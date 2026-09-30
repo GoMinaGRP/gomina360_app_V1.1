@@ -125,13 +125,13 @@ try {
   await setTid("prl-set-ssnit-ee", "6");
   await clickTid("prl-set-save");
   await page.waitForFunction(() => document.querySelector('[data-testid="prl-notice"]') || document.querySelector('[data-testid="prl-set-error"]'), { timeout: 15000 });
-  const cfgMid = await q1("SELECT ssnit_employee_pct p, updated_by_name u FROM payroll_statutory_config WHERE id=1");
+  const cfgMid = await q1("SELECT ssnit_employee_pct p, updated_by_name u FROM payroll_statutory_config WHERE organization_id=1 OR organization_id IS NULL ORDER BY organization_id NULLS LAST LIMIT 1");
   ok("A5 rate edit persists (6%) + stamped", num(cfgMid.p) === 6 && !!cfgMid.u, `${cfgMid.p} by ${cfgMid.u}`);
   await setTid("prl-set-ssnit-ee", "5.5");
   await clickTid("prl-set-save");
   await page.waitForFunction(() => !document.querySelector('[data-testid="prl-set-save"]:disabled') || true, { timeout: 5000 }).catch(() => {});
   await sleep(1200);
-  const cfgBack = await q1("SELECT ssnit_employee_pct p FROM payroll_statutory_config WHERE id=1");
+  const cfgBack = await q1("SELECT ssnit_employee_pct p FROM payroll_statutory_config WHERE organization_id=1 OR organization_id IS NULL ORDER BY organization_id NULLS LAST LIMIT 1");
   ok("A6 rate reverted to 5.5", num(cfgBack.p) === 5.5);
   await page.screenshot({ path: SHOT("1-settings") });
 

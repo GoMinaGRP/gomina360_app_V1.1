@@ -47,11 +47,16 @@ export default function AttendanceClock({ currentUser }: { currentUser: any }) {
 
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
-    const h = (e: MouseEvent) => { if (pop.current && !pop.current.contains(e.target as Node)) setOpen(false); };
+    const h = (e: MouseEvent | TouchEvent) => { if (pop.current && !pop.current.contains(e.target as Node)) setOpen(false); };
     const k = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", h);
+    document.addEventListener("touchstart", h, { passive: true });
     document.addEventListener("keydown", k);
-    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); };
+    return () => {
+      document.removeEventListener("mousedown", h);
+      document.removeEventListener("touchstart", h);
+      document.removeEventListener("keydown", k);
+    };
   }, [pop]);
 
   const anchorOf = useMemo(

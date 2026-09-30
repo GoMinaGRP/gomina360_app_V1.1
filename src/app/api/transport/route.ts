@@ -6,6 +6,7 @@ import {
   aiInsights,
   assets,
   businesses,
+  checklistTemplates,
   customers,
   employees,
   inventoryItems,
@@ -35,6 +36,7 @@ import {
   writeTransportTrail,
 } from "@/lib/transport";
 import { apiError } from "@/lib/apiError";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -84,6 +86,24 @@ async function bookTransaction(
   actor: any,
   refs?: { customerId?: number | null; supplierId?: number | null; dateStr?: string | null },
 ) {
+  if (type === "EXPENSE") {
+    const res = await postOrGateExpenseTransaction({
+      businessId: biz.id,
+      branchCode: biz.code,
+      branchName: biz.name,
+      category,
+      amountGhs: amount,
+      paymentMethod: paymentMethod || "CASH",
+      customerId: refs?.customerId ?? null,
+      supplierId: refs?.supplierId ?? null,
+      description,
+      date: refs?.dateStr || null,
+      actor,
+      targetLabel: `${category} — GH₵ ${Number(amount).toFixed(2)}`,
+      metadata: { source: "TRANSPORT" },
+    });
+    return res.transaction || null;
+  }
   const now = new Date();
   const [row] = await db
     .insert(transactions)
@@ -227,7 +247,7 @@ export async function GET(request: NextRequest) {
     await sweepOfflineTrackers();
     await scanTransportRisks(businessId);
 
-    const [vehicles, drivers, trips, bookings, fuels, maint, checks, fences, violations, txns, inv, insights] = await Promise.all([
+    const [vehicles, drivers, trips, bookings, fuels, maint, checks, templates, fences, violations, txns, inv, insights] = await Promise.all([
       db.select().from(transportVehicles).where(eq(transportVehicles.businessId, businessId)).orderBy(desc(transportVehicles.id)),
       db.select().from(employees).where(eq(employees.businessId, businessId)).orderBy(desc(employees.id)),
       db.select().from(transportTrips).where(eq(transportTrips.businessId, businessId)).orderBy(desc(transportTrips.id)).limit(300),
@@ -235,6 +255,7 @@ export async function GET(request: NextRequest) {
       db.select().from(transportFuelLogs).where(eq(transportFuelLogs.businessId, businessId)).orderBy(desc(transportFuelLogs.id)).limit(300),
       db.select().from(transportMaintenance).where(eq(transportMaintenance.businessId, businessId)).orderBy(desc(transportMaintenance.id)).limit(300),
       db.select().from(transportVehicleChecklists).where(eq(transportVehicleChecklists.businessId, businessId)).orderBy(desc(transportVehicleChecklists.id)).limit(200),
+      db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId)).orderBy(checklistTemplates.sortOrder, checklistTemplates.id),
       db.select().from(transportGeofences).where(eq(transportGeofences.businessId, businessId)).orderBy(desc(transportGeofences.id)),
       db.select().from(transportTrackerViolations).where(eq(transportTrackerViolations.businessId, businessId)).orderBy(desc(transportTrackerViolations.id)).limit(300),
       db.select().from(transactions).where(eq(transactions.businessId, businessId)).orderBy(desc(transactions.id)).limit(400),
@@ -299,6 +320,7 @@ export async function GET(request: NextRequest) {
       vehicles: vehicles.map(strip),
       drivers,
       trips, bookings, fuelLogs: fuels, maintenance: maint, checklists: checks,
+      checklistTemplates: templates,
       geofences: fences,
       violations,
       transactions: txns,
@@ -758,6 +780,10 @@ export async function POST(request: NextRequest) {
           }
         }
         await writeTransportTrail(actor, { action: "UPDATE", targetType: "TRANSPORT", targetLabel: `Maint #${id} done`, recordType: "TRANSPORT_MAINTENANCE", recordId: id, businessId, branchCode: m.branchCode, detail: `GH₵ ${cost}${txn ? ` · txn ${txn.transactionNumber}` : ""}` });
+        try {
+          const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+          await completeLinkedTasksForSource("MAINTENANCE", id, user.name, "Fleet maintenance completed.");
+        } catch {}
         return NextResponse.json({ success: true, maintenance: u, transaction: txn });
       }
       if (action === "UPDATE") {
@@ -773,46 +799,239 @@ export async function POST(request: NextRequest) {
       return bad("Unknown maintenance action.");
     }
 
-    // ── DAILY CHECKLIST & NOTES ───────────────────────────────────────────
-    if (entity === "CHECKLIST") {
-      if (action !== "SUBMIT") return bad("Unknown checklist action.");
-      const vehicleId = Number(body.vehicleId);
-      const [veh] = await db.select().from(transportVehicles).where(and(eq(transportVehicles.id, vehicleId), eq(transportVehicles.businessId, businessId)));
-      if (!veh) return bad("Vehicle not in this business.", 404);
-      const odo = num(body.odometerKm, Number(veh.odometerKm || 0));
-      const bool = (k: string) => body[k] === true || body[k] === "true";
-      const [row] = await db.insert(transportVehicleChecklists).values({
-        businessId, branchCode: biz.code, ownerId,
-        vehicleId, tripId: body.tripId ? Number(body.tripId) : null,
-        shiftDate: day(body.shiftDate || null), odometerKm: odo,
-        fuelLevelPct: body.fuelLevelPct != null ? Math.min(100, Math.max(0, Number(body.fuelLevelPct))) : null,
-        lightsOk: bool("lightsOk"), brakesOk: bool("brakesOk"), tyresOk: bool("tyresOk"), oilOk: bool("oilOk"),
-        coolantOk: bool("coolantOk"), beltsOk: bool("beltsOk"), mirrorsOk: bool("mirrorsOk"), hornOk: bool("hornOk"),
-        fireExtinguisherOk: bool("fireExtinguisherOk"), firstAidOk: bool("firstAidOk"),
-        documentationOk: bool("documentationOk"), cleaningOk: bool("cleaningOk"),
-        notes: body.notes ? String(body.notes) : null,
-        photo: body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null,
-        userName: user.name, userRole: user.role,
-        employeeId: body.employeeId ? Number(body.employeeId) : null,
-      }).returning();
-      if (odo > Number(veh.odometerKm || 0)) {
-        await db.update(transportVehicles).set({ odometerKm: odo, updatedAt: new Date() }).where(eq(transportVehicles.id, vehicleId));
-      }
-      const fails = ["brakesOk", "lightsOk", "tyresOk", "oilOk"].filter((k) => !bool(k));
-      if (fails.length > 0) {
-        await raiseTransportAi({
-          businessId, branchCode: biz.code ?? null,
-          title: `Checklist failures — ${veh.licensePlate}`,
-          category: "RISK", impact: "HIGH",
-          recommendation: `Daily checklist for ${veh.licensePlate} failed: ${fails.join(", ").replace(/Ok/g, "")}. Ground the vehicle until a mechanic signs off.`,
-          metricAffected: "Vehicle safety",
+    // ── DAILY CHECKLIST & CUSTOM TEMPLATES ────────────────────────────────
+    if (entity === "CHECKLIST" || entity === "CHECKLIST_TEMPLATE") {
+      const canManageTemplates = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER", "SUPER_ADMIN", "ADMIN"].includes(String(user.role || "").toUpperCase()) || Boolean(user.isOwner);
+
+      // Create custom checklist template/task
+      if (action === "CREATE_TEMPLATE" || (entity === "CHECKLIST_TEMPLATE" && action === "CREATE")) {
+        if (!canManageTemplates) return FORBIDDEN("Only managers and owners can customize checklist templates.");
+        const taskLabel = String(body.taskLabel || body.name || "").trim();
+        if (!taskLabel) return bad("Task label is required.");
+        const category = String(body.category || "GENERAL").toUpperCase();
+        const priority = String(body.priority || "ROUTINE").toUpperCase() === "CRITICAL" ? "CRITICAL" : "ROUTINE";
+        const rawKey = String(body.taskKey || taskLabel).toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 30);
+        const taskKey = body.taskKey ? String(body.taskKey).toUpperCase().replace(/[^A-Z0-9_]+/g, "") : `TRANS_${rawKey}_${Date.now().toString(36).slice(-4).toUpperCase()}`;
+
+        const [tpl] = await db.insert(checklistTemplates).values({
+          businessId,
+          branchCode: biz.code,
+          taskKey,
+          taskLabel,
+          category,
+          priority,
+          assignedToRole: body.assignedRole ? String(body.assignedRole) : null,
+          createdByName: user.name,
+          createdByRole: user.role,
+          origin: "CUSTOM",
+          isActive: true,
+          sortOrder: num(body.sortOrder, 100),
+        }).returning();
+
+        await writeTransportTrail(actor, {
+          action: "CREATE",
+          targetType: "TRANSPORT",
+          targetLabel: `Checklist task “${tpl.taskLabel}”`,
+          recordType: "CHECKLIST_TEMPLATE",
+          recordId: tpl.id,
+          businessId,
+          branchCode: biz.code,
+          detail: `Created custom checklist task “${tpl.taskLabel}” (${tpl.priority})`,
         });
+
+        return NextResponse.json({ success: true, template: tpl });
       }
-      await writeTransportTrail(actor, { action: "CREATE", targetType: "TRANSPORT", targetLabel: `Checklist ${veh.licensePlate} ${row.shiftDate}`, recordType: "TRANSPORT_CHECKLIST", recordId: row.id, businessId, branchCode: biz.code, detail: fails.length ? `FAILED ${fails.join(",")}` : "all checks passed" });
-      return NextResponse.json({ success: true, checklist: row });
+
+      // Update custom checklist template/task
+      if (action === "UPDATE_TEMPLATE" || (entity === "CHECKLIST_TEMPLATE" && action === "UPDATE")) {
+        if (!canManageTemplates) return FORBIDDEN("Only managers and owners can customize checklist templates.");
+        const id = Number(body.id || body.templateId);
+        const [existing] = await db.select().from(checklistTemplates).where(and(eq(checklistTemplates.id, id), eq(checklistTemplates.businessId, businessId)));
+        if (!existing) return bad("Checklist template not found.", 404);
+
+        const upd: any = { updatedAt: new Date() };
+        if (body.taskLabel) upd.taskLabel = String(body.taskLabel).trim();
+        if (body.category) upd.category = String(body.category).toUpperCase();
+        if (body.priority) upd.priority = String(body.priority).toUpperCase() === "CRITICAL" ? "CRITICAL" : "ROUTINE";
+        if (body.assignedRole !== undefined) upd.assignedToRole = body.assignedRole ? String(body.assignedRole) : null;
+        if (body.isActive !== undefined) upd.isActive = body.isActive === true || body.isActive === "true";
+        if (body.sortOrder !== undefined) upd.sortOrder = Number(body.sortOrder);
+
+        const [u] = await db.update(checklistTemplates).set(upd).where(eq(checklistTemplates.id, id)).returning();
+        await writeTransportTrail(actor, {
+          action: "UPDATE",
+          targetType: "TRANSPORT",
+          targetLabel: `Checklist task “${u.taskLabel}”`,
+          recordType: "CHECKLIST_TEMPLATE",
+          recordId: u.id,
+          businessId,
+          branchCode: biz.code,
+          detail: `Updated checklist task “${u.taskLabel}”`,
+        });
+
+        return NextResponse.json({ success: true, template: u });
+      }
+
+      // Delete custom checklist template/task
+      if (action === "DELETE_TEMPLATE" || (entity === "CHECKLIST_TEMPLATE" && action === "DELETE")) {
+        if (!canManageTemplates) return FORBIDDEN("Only managers and owners can customize checklist templates.");
+        const id = Number(body.id || body.templateId);
+        const [existing] = await db.select().from(checklistTemplates).where(and(eq(checklistTemplates.id, id), eq(checklistTemplates.businessId, businessId)));
+        if (!existing) return bad("Checklist template not found.", 404);
+
+        if (existing.origin === "SYSTEM") {
+          const [u] = await db.update(checklistTemplates).set({ isActive: false, updatedAt: new Date() }).where(eq(checklistTemplates.id, id)).returning();
+          await writeTransportTrail(actor, {
+            action: "DEACTIVATE",
+            targetType: "TRANSPORT",
+            targetLabel: `Checklist task “${u.taskLabel}”`,
+            recordType: "CHECKLIST_TEMPLATE",
+            recordId: u.id,
+            businessId,
+            branchCode: biz.code,
+            detail: `Deactivated system checklist task “${u.taskLabel}”`,
+          });
+          return NextResponse.json({ success: true, template: u, deactivated: true });
+        }
+
+        await db.delete(checklistTemplates).where(eq(checklistTemplates.id, id));
+        await writeTransportTrail(actor, {
+          action: "DELETE",
+          targetType: "TRANSPORT",
+          targetLabel: `Checklist task “${existing.taskLabel}”`,
+          recordType: "CHECKLIST_TEMPLATE",
+          recordId: id,
+          businessId,
+          branchCode: biz.code,
+          detail: `Deleted custom checklist task “${existing.taskLabel}”`,
+        });
+
+        return NextResponse.json({ success: true, id });
+      }
+
+      // Toggle active status
+      if (action === "TOGGLE_ACTIVE" || (entity === "CHECKLIST_TEMPLATE" && action === "TOGGLE_ACTIVE")) {
+        if (!canManageTemplates) return FORBIDDEN("Only managers and owners can customize checklist templates.");
+        const id = Number(body.id || body.templateId);
+        const [existing] = await db.select().from(checklistTemplates).where(and(eq(checklistTemplates.id, id), eq(checklistTemplates.businessId, businessId)));
+        if (!existing) return bad("Checklist template not found.", 404);
+
+        const nextActive = body.isActive !== undefined ? (body.isActive === true || body.isActive === "true") : !existing.isActive;
+        const [u] = await db.update(checklistTemplates).set({ isActive: nextActive, updatedAt: new Date() }).where(eq(checklistTemplates.id, id)).returning();
+        await writeTransportTrail(actor, {
+          action: nextActive ? "ACTIVATE" : "DEACTIVATE",
+          targetType: "TRANSPORT",
+          targetLabel: `Checklist task “${u.taskLabel}”`,
+          recordType: "CHECKLIST_TEMPLATE",
+          recordId: u.id,
+          businessId,
+          branchCode: biz.code,
+          detail: `${nextActive ? "Activated" : "Deactivated"} checklist task “${u.taskLabel}”`,
+        });
+
+        return NextResponse.json({ success: true, template: u });
+      }
+
+      // Submit daily inspection checklist
+      if (action === "SUBMIT") {
+        const vehicleId = Number(body.vehicleId);
+        const [veh] = await db.select().from(transportVehicles).where(and(eq(transportVehicles.id, vehicleId), eq(transportVehicles.businessId, businessId)));
+        if (!veh) return bad("Vehicle not in this business.", 404);
+        const odo = num(body.odometerKm, Number(veh.odometerKm || 0));
+        const bool = (k: string) => body[k] === true || body[k] === "true";
+
+        // Parse custom checks if provided
+        const customFailedList: string[] = [];
+        const customCriticalFailedList: string[] = [];
+        const customSummaryList: string[] = [];
+
+        if (Array.isArray(body.customChecks)) {
+          for (const cc of body.customChecks) {
+            if (!cc) continue;
+            const isOk = cc.ok === true || cc.ok === "true";
+            const label = cc.label || cc.taskLabel || cc.key || "Custom check";
+            const isCrit = String(cc.priority || "").toUpperCase() === "CRITICAL";
+            customSummaryList.push(`${label}: ${isOk ? "PASS" : "FAIL"}`);
+            if (!isOk) {
+              customFailedList.push(label);
+              if (isCrit) customCriticalFailedList.push(label);
+            }
+          }
+        } else if (body.customChecks && typeof body.customChecks === "object") {
+          for (const [k, v] of Object.entries(body.customChecks as Record<string, any>)) {
+            if (!v) continue;
+            const isOk = typeof v === "boolean" ? v : (v.ok === true || v.ok === "true");
+            const label = (typeof v === "object" && (v.label || v.taskLabel)) ? (v.label || v.taskLabel) : k;
+            const isCrit = typeof v === "object" && String(v.priority || "").toUpperCase() === "CRITICAL";
+            customSummaryList.push(`${label}: ${isOk ? "PASS" : "FAIL"}`);
+            if (!isOk) {
+              customFailedList.push(label);
+              if (isCrit) customCriticalFailedList.push(label);
+            }
+          }
+        }
+
+        let finalNotes = body.notes ? String(body.notes).trim() : "";
+        if (customSummaryList.length > 0) {
+          const customBlock = `[Custom Tasks: ${customSummaryList.join(" | ")}]`;
+          finalNotes = finalNotes ? `${finalNotes}\n${customBlock}` : customBlock;
+        }
+
+        const [row] = await db.insert(transportVehicleChecklists).values({
+          businessId, branchCode: biz.code, ownerId,
+          vehicleId, tripId: body.tripId ? Number(body.tripId) : null,
+          shiftDate: day(body.shiftDate || null), odometerKm: odo,
+          fuelLevelPct: body.fuelLevelPct != null ? Math.min(100, Math.max(0, Number(body.fuelLevelPct))) : null,
+          lightsOk: bool("lightsOk"), brakesOk: bool("brakesOk"), tyresOk: bool("tyresOk"), oilOk: bool("oilOk"),
+          coolantOk: bool("coolantOk"), beltsOk: bool("beltsOk"), mirrorsOk: bool("mirrorsOk"), hornOk: bool("hornOk"),
+          fireExtinguisherOk: bool("fireExtinguisherOk"), firstAidOk: bool("firstAidOk"),
+          documentationOk: bool("documentationOk"), cleaningOk: bool("cleaningOk"),
+          notes: finalNotes || null,
+          photo: body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null,
+          userName: user.name, userRole: user.role,
+          employeeId: body.employeeId ? Number(body.employeeId) : null,
+        }).returning();
+
+        if (odo > Number(veh.odometerKm || 0)) {
+          await db.update(transportVehicles).set({ odometerKm: odo, updatedAt: new Date() }).where(eq(transportVehicles.id, vehicleId));
+        }
+
+        const defaultFails = ["brakesOk", "lightsOk", "tyresOk", "oilOk"].filter((k) => !bool(k));
+        const allCriticalFails = [...defaultFails.map((k) => k.replace(/Ok$/, "")), ...customCriticalFailedList];
+        const allFails = [
+          ...defaultFails.map((k) => k.replace(/Ok$/, "")),
+          ...["coolantOk", "beltsOk", "mirrorsOk", "hornOk", "fireExtinguisherOk", "firstAidOk", "documentationOk", "cleaningOk"].filter((k) => !bool(k)).map((k) => k.replace(/Ok$/, "")),
+          ...customFailedList,
+        ];
+
+        if (allCriticalFails.length > 0) {
+          await raiseTransportAi({
+            businessId, branchCode: biz.code ?? null,
+            title: `Checklist failures — ${veh.licensePlate}`,
+            category: "RISK", impact: "HIGH",
+            recommendation: `Daily checklist for ${veh.licensePlate} failed: ${allCriticalFails.join(", ")}. Ground the vehicle until a mechanic signs off.`,
+            metricAffected: "Vehicle safety",
+          });
+        }
+
+        await writeTransportTrail(actor, {
+          action: "CREATE",
+          targetType: "TRANSPORT",
+          targetLabel: `Checklist ${veh.licensePlate} ${row.shiftDate}`,
+          recordType: "TRANSPORT_CHECKLIST",
+          recordId: row.id,
+          businessId,
+          branchCode: biz.code,
+          detail: allFails.length ? `FAILED (${allFails.join(", ")})` : "all checks passed",
+        });
+
+        return NextResponse.json({ success: true, checklist: row });
+      }
+
+      return bad("Unknown checklist action. Use SUBMIT|CREATE_TEMPLATE|UPDATE_TEMPLATE|DELETE_TEMPLATE|TOGGLE_ACTIVE.");
     }
 
-    return bad("Unknown entity. Use VEHICLE|TRIP|BOOKING|FUEL|MAINTENANCE|CHECKLIST.");
+    return bad("Unknown entity. Use VEHICLE|TRIP|BOOKING|FUEL|MAINTENANCE|CHECKLIST|CHECKLIST_TEMPLATE.");
   } catch (e: any) {
     console.error("transport POST error:", e);
     return NextResponse.json({ success: false, error: e.message || "Server error" }, { status: 500 });

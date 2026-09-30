@@ -125,13 +125,26 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  // Escape key handler
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   if (!isOwner && !isDelegated) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3">
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm text-center space-y-3 my-auto">
           <ShieldCheck className="w-8 h-8 text-rose-400 mx-auto" />
-          <p className="text-sm text-slate-300">Only the OWNER (or a manager the OWNER has trusted with user management) can open Users & Access.</p>
+          <p className="text-sm text-slate-300">Only the OWNER (or a manager the OWNER has trusted with user management) can open Users &amp; Access.</p>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Close</button>
         </div>
       </div>
@@ -538,8 +551,11 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[92vh] overflow-y-auto" data-testid="user-access-console">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto" data-testid="user-access-console">
         <div className="sticky top-0 bg-slate-900/95 backdrop-blur px-5 py-4 border-b border-slate-800 flex items-center justify-between z-10">
           <div>
             <h2 className="text-lg font-black text-white flex items-center gap-2">
@@ -592,54 +608,56 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
               <div className="space-y-2">
                 {[...users].sort((a, b) => a.id - b.id).map((u) => (
                   <div key={u.id} data-testid={`user-row-${u.id}`}
-                    className="bg-slate-800/70 border border-slate-700 rounded-xl p-3.5 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center font-black text-cyan-300 text-sm shrink-0">
-                      {u.name?.charAt(0)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-bold text-white">{u.name}</span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300">
-                          {u.role}
-                        </span>
-                        {u.isActive === false && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                            DEACTIVATED
-                          </span>
-                        )}
-                        {!u.hasPassword && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                            NO PASSWORD
-                          </span>
-                        )}
-                        {(u.businessManageIds?.length ?? 0) > 0 && (
-                          <span
-                            className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                            data-testid={`user-manages-${u.id}`}
-                            title="Owner-equivalent management of the granted units"
-                          >
-                            MANAGES {u.businessManageIds.length} UNIT{u.businessManageIds.length === 1 ? "" : "S"}
-                          </span>
-                        )}
+                    className="bg-slate-800/70 border border-slate-700 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                      <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center font-black text-cyan-300 text-sm shrink-0">
+                        {u.name?.charAt(0)}
                       </div>
-                      <div className="text-[10px] text-slate-400 truncate">
-                        {u.email} · {bizName(u.assignedBusinessId)}
-                        {(u.extraAccessIds?.length ?? 0) > 0 &&
-                          ` · +${u.extraAccessIds.length} extra branch(es)`}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-white">{u.name}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300">
+                            {u.role}
+                          </span>
+                          {u.isActive === false && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                              DEACTIVATED
+                            </span>
+                          )}
+                          {!u.hasPassword && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              NO PASSWORD
+                            </span>
+                          )}
+                          {(u.businessManageIds?.length ?? 0) > 0 && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                              data-testid={`user-manages-${u.id}`}
+                              title="Owner-equivalent management of the granted units"
+                            >
+                              MANAGES {u.businessManageIds.length} UNIT{u.businessManageIds.length === 1 ? "" : "S"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {u.email} · {bizName(u.assignedBusinessId)}
+                          {(u.extraAccessIds?.length ?? 0) > 0 &&
+                            ` · +${u.extraAccessIds.length} extra branch(es)`}
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 sm:shrink-0 pt-2 sm:pt-0 border-t border-slate-700/60 sm:border-0 justify-end">
                       {canManageRow(u) && (
                         <button onClick={() => openEdit(u)} data-testid={`user-edit-${u.id}`}
                           title="Edit / assign / reset"
-                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition">
+                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center">
                           <Pencil className="w-4 h-4" />
                         </button>
                       )}
                       {isOwner && u.role !== "OWNER" && (
                         <button onClick={() => handleDelete(u)} data-testid={`user-delete-${u.id}`}
                           title="Delete account"
-                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition">
+                          className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center">
                           <Trash className="w-4 h-4" />
                         </button>
                       )}

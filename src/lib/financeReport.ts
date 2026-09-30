@@ -120,6 +120,7 @@ export function recoverBaseline(metric: any, txns: any[], label = "Q1-2026 basel
   for (const t of txns || []) {
     if ((t.id || 0) <= cutoff) continue;
     if (t.businessId !== metric.businessId) continue;
+    if (t.status && t.status !== "COMPLETED") continue;
     const amt = t.amountGhs || 0;
     if (t.type === "INCOME") inc += amt;
     else if (t.type === "EXPENSE") exp += amt;
@@ -169,6 +170,7 @@ export interface FinanceReport {
   trend: TrendBucket[];
   trendGranularity: FinanceGranularity;
   pendingCollections: { id: any; label: string; status: string; method: string; amount: number; date: string }[];
+  pendingExpenses?: { id: any; label: string; status: string; method: string; amount: number; date: string }[];
   branchesKey: { code: string; revenue: number; expenses: number; profit: number; sales: number }[];
   ledger: any[];
   liveTxnCount: number;
@@ -236,7 +238,9 @@ export function computeFinancialReport(input: FinanceReportInput): FinanceReport
 
   // 2. Live ledger: money movements excluding the seeded quarter-close rows
   //    (those are already inside the metrics baseline).
-  const ledgerAll = scoped.filter((t) => MONEY_TYPES.has(t.type) && !isSeededBaselineTxn(t));
+  //    STRICT FILTER: only COMPLETED transactions affect realized financials.
+  const isCompletedTxn = (t: any) => !t.status || t.status === "COMPLETED";
+  const ledgerAll = scoped.filter((t) => MONEY_TYPES.has(t.type) && isCompletedTxn(t) && !isSeededBaselineTxn(t));
 
   // 3. Range partition.
   const inSel = ledgerAll.filter((t) => inRange(t.date, period.start, period.end));
@@ -364,6 +368,19 @@ export function computeFinancialReport(input: FinanceReportInput): FinanceReport
     }))
     .sort((a, b) => b.amount - a.amount);
 
+  // 6b. Pending expenses awaiting approval — separate from realized expenses
+  const pendingExpenses = scoped
+    .filter((t) => t.type === "EXPENSE" && t.status === "PENDING_APPROVAL")
+    .map((t) => ({
+      id: t.id,
+      label: t.description || t.category,
+      status: String(t.status),
+      method: String(t.paymentMethod || "CASH").replace(/_/g, " "),
+      amount: t.amountGhs || 0,
+      date: t.date,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+
   // 7. Per-branch split inside the scope (ledger, range-bound).
   const branchMap: Record<string, { revenue: number; expenses: number; sales: number }> = {};
   for (const t of inSel) {
@@ -415,6 +432,7 @@ export function computeFinancialReport(input: FinanceReportInput): FinanceReport
     trend,
     trendGranularity: granularity,
     pendingCollections,
+    pendingExpenses,
     branchesKey,
     ledger: [...inSel].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 15),
     liveTxnCount: ledgerAll.length,

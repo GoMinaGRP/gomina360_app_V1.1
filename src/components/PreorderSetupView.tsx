@@ -98,6 +98,18 @@ export default function PreorderSetupView({
     loadCatalogue();
   }, [loadCatalogue]);
 
+  // Escape key handler
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showMethod) { setShowMethod(false); setEditMethod(null); setMethodDraft({}); }
+        else if (showOption) { setShowOption(false); setEditOption(null); }
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showMethod, showOption]);
+
   const methodsForScope = useMemo(
     () => methods.filter((m) => m.active && (m.businessId == null || Number(m.businessId) === Number(bizId))),
     [methods, bizId],
@@ -434,11 +446,15 @@ export default function PreorderSetupView({
 
       {/* ── New-method modal ── */}
       {showMethod && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" data-testid="po-method-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-md space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="po-method-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowMethod(false); setEditMethod(null); setMethodDraft({}); } }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-md space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">{editMethod ? "Edit fulfilment method" : "New fulfilment method"}</h4>
-              <button onClick={() => setShowMethod(false)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => { setShowMethod(false); setEditMethod(null); setMethodDraft({}); }} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-3">
               <div><label className="block text-[11px] font-semibold text-slate-400 mb-1">Key (short word)</label>
@@ -487,11 +503,15 @@ export default function PreorderSetupView({
 
       {/* ── New/edit-option modal ── */}
       {showOption && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="po-option-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="po-option-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowOption(false); setEditOption(null); } }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-lg space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">{editOption ? "Edit pre-order option" : "New pre-order option"}</h4>
-              <button onClick={() => { setShowOption(false); setEditOption(null); }} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => { setShowOption(false); setEditOption(null); }} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-4 h-4" /></button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">

@@ -229,6 +229,18 @@ export default function BranchManagerSalesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBiz?.id]);
 
+  // Escape key listener for open modals in BranchManagerSalesView
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (creditModalSale) { setCreditModalSale(null); setCreditError(""); setCreditFlash(""); }
+        else if (viewDoc) setViewDoc(null);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [creditModalSale, viewDoc]);
+
   const branchInvoices = salesDocuments.filter((d) => d.documentType === "INVOICE");
   const branchQuotations = salesDocuments.filter((d) => d.documentType === "QUOTATION");
   const branchReceipts = salesDocuments.filter((d) => d.documentType === "RECEIPT");
@@ -752,6 +764,14 @@ export default function BranchManagerSalesView({
 
   // ─────── Quick Receipt Modal (Enhanced with company info + issuer) ───────
   const InvoiceModal = ({ info, onClose }: { info: any; onClose: () => void }) => {
+    useEffect(() => {
+      const handleKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") onClose();
+      };
+      window.addEventListener("keydown", handleKey);
+      return () => window.removeEventListener("keydown", handleKey);
+    }, [onClose]);
+
     // Build a receipt document for print/download
     const receiptDoc = {
       documentNumber: info.invoiceNo,
@@ -770,8 +790,11 @@ export default function BranchManagerSalesView({
     };
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center space-x-2">
               <Receipt className="w-5 h-5 text-purple-400" />
@@ -2455,8 +2478,12 @@ export default function BranchManagerSalesView({
       {/* ────── Invoice Modal ────── */}
       {/* ────── Credit sale detail & installment collection modal ────── */}
       {creditModalSale && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" data-testid="bm-credit-modal">
-          <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl max-w-lg w-full p-5 space-y-4 max-h-[92vh] overflow-y-auto shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 overflow-y-auto"
+          data-testid="bm-credit-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) { setCreditModalSale(null); setCreditError(""); setCreditFlash(""); } }}
+        >
+          <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl max-w-lg w-full p-4 sm:p-5 space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto shadow-2xl my-auto">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -2610,41 +2637,45 @@ export default function BranchManagerSalesView({
 
       {/* ────── Document Preview Modal ────── */}
       {viewDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[92vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-800 p-5">
-              <div>
-                <h3 className="text-lg font-bold text-white">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setViewDoc(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 shrink-0 bg-slate-900">
+              <div className="min-w-0 flex-1 pr-2">
+                <h3 className="text-base sm:text-lg font-bold text-white truncate">
                   {viewDoc.documentType} — {viewDoc.documentNumber}
                 </h3>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-400 truncate">
                   {viewDoc.branchName} • {viewDoc.customerName} • Created{" "}
                   {new Date(viewDoc.createdAt).toLocaleDateString()}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => handlePrintDoc(viewDoc)}
                   className="flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold"
                 >
-                  <Printer className="w-3.5 h-3.5" /> Print
+                  <Printer className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Print</span>
                 </button>
                 <button
                   onClick={() => handleDownloadDoc(viewDoc)}
                   className="flex items-center gap-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
                 >
-                  <Download className="w-3.5 h-3.5" /> Download PDF
+                  <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Download</span> PDF
                 </button>
                 <button
                   onClick={() => setViewDoc(null)}
-                  className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                  aria-label="Close"
+                  className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            <div className="overflow-y-auto p-6 space-y-4">
+            <div className="overflow-y-auto p-4 sm:p-6 space-y-4 flex-1">
               {/* Company information */}
               <div className="text-center pb-3 border-b border-slate-800">
                 <div className="text-base font-extrabold text-white">{COMPANY_INFO.name}</div>

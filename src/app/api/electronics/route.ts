@@ -16,6 +16,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Complete a delivered electronics order as a real sale:
@@ -303,23 +304,20 @@ export async function POST(request: NextRequest) {
         }
 
         // Optionally book the purchase as an expense in the shared Finance ledger
-        if (data.recordExpense !== false) {
-          const now = new Date();
-          await db.insert(transactions).values({
+        let expResult = null;
+        if (data.recordExpense !== false && (qty * cost) > 0) {
+          expResult = await postOrGateExpenseTransaction({
             businessId,
             branchCode,
             branchName: biz?.name || null,
-            transactionNumber: nextTrxNumber(now),
-            type: "EXPENSE",
             category: "Stock Purchase (Electronics)",
             amountGhs: qty * cost,
             paymentMethod: data.paymentMethod || "BANK_TRANSFER",
             description: `Purchase ${row.purchaseNumber} — ${qty} x ${data.itemName} from ${data.supplierName}`,
             date: data.receivedDate || today,
-            recordedBy: data.createdByName || "Electronics Shop User",
-            recordedByRole: data.createdByRole || null,
-            recordedByUserId: data.createdByUserId ? Number(data.createdByUserId) : null,
-            status: "COMPLETED",
+            actor: __authSession.user,
+            targetLabel: `Electronics Purchase (${qty}× ${data.itemName}) — GH₵ ${(qty * cost).toFixed(2)}`,
+            metadata: { purchaseId: row.id, purchaseNumber: row.purchaseNumber, supplierName: data.supplierName },
           });
         }
       }

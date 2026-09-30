@@ -119,9 +119,21 @@ export function AdvisorNoteComposer({
     }
   };
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-6 bg-slate-950/70 backdrop-blur-sm" data-testid="advisor-note-composer">
-      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl border border-teal-500/30 bg-slate-900 shadow-2xl">
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-2 sm:p-6 bg-slate-950/70 backdrop-blur-sm overflow-y-auto"
+      data-testid="advisor-note-composer"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto rounded-2xl border border-teal-500/30 bg-slate-900 shadow-2xl my-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 rounded-t-2xl">
           <div className="flex items-center gap-2">
             <BookOpenCheck className="w-4 h-4 text-teal-400" />

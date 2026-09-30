@@ -33,7 +33,7 @@
  * follows is preserved unchanged — the reconciler only guarantees the columns
  * and tables it depends on physically exist first.
  */
-import { config as loadEnv } from "dotenv";
+import fs from "node:fs";
 import pg from "pg";
 import { is, SQL } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
@@ -41,8 +41,17 @@ import * as appSchema from "../src/db/schema.ts";
 
 const { Client } = pg;
 
-loadEnv({ path: ".env.local", quiet: true });
-loadEnv({ path: ".env", quiet: true });
+for (const envFile of [".env.production", ".env.local", ".env"]) {
+  try {
+    const envContent = fs.readFileSync(envFile, "utf8");
+    for (const line of envContent.split("\n")) {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match && !process.env[match[1]]) {
+        process.env[match[1]] = match[2]?.replace(/^['"]|['"]$/g, "").trim();
+      }
+    }
+  } catch {}
+}
 
 const DB_URL_ENV_NAMES = [
   "DATABASE_URL",
@@ -402,6 +411,7 @@ try {
     ["ai_insights", "business_id"], ["ai_insights", "owner_id"],
     ["scenario_simulations", "target_business_id"], ["scenario_simulations", "owner_id"],
     ["checklist_templates", "business_id"], ["checklist_entries", "business_id"],
+    ["checklist_entries", "checklist_date"],
     ["checklist_plan_templates", "business_id"], ["checklist_flock_plans", "business_id"],
     ["checklist_flock_plans", "flock_id"],
     ["poultry_logs", "business_id"], ["block_factory_logs", "business_id"],
@@ -411,6 +421,28 @@ try {
     ["organization_members", "organization_id"], ["organization_members", "user_id"],
     ["user_sessions", "user_id"],
     ["audit_trail", "owner_id"],
+    ["goods_receipts", "business_id"],
+    ["supplier_orders", "business_id"],
+    ["supplier_invoices", "business_id"],
+    ["supplier_payments", "business_id"],
+    ["customer_trackings", "business_id"],
+    ["order_payments", "business_id"],
+    ["payroll_runs", "business_id"],
+    ["payroll_entries", "business_id"],
+    ["payroll_entries", "employee_id"],
+    ["attendance_logs", "business_id"],
+    ["attendance_logs", "employee_id"],
+    ["audit_reviews", "business_id"],
+    ["action_tasks", "business_id"],
+    ["advisor_notes", "business_id"],
+    ["advisor_assignments", "user_id"],
+    ["advisor_assignments", "business_id"],
+    ["transport_vehicles", "business_id"],
+    ["transport_trips", "business_id"],
+    ["transport_fuel_logs", "business_id"],
+    ["transport_maintenance", "business_id"],
+    ["user_business_access", "user_id"],
+    ["user_business_access", "business_id"],
   ];
   for (const [tbl, col] of perfIndexes) {
     const t = await client.query("select to_regclass($1) as name", [`public.${tbl}`]);
@@ -420,6 +452,9 @@ try {
       );
     }
   }
+
+  // Composite multi-column performance accelerator for checklist date queries
+  await client.query(`create index if not exists checklist_entries_date_biz_idx on public.checklist_entries (checklist_date, business_id)`);
 
   // ── Backfill: single existing Owner ⇒ org #1 owns everything it does today ──
   await client.query(`insert into public.organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
@@ -499,7 +534,18 @@ try {
 
   // singleton settings become per-org rows (existing row = org 1)
   for (const t of ["company_settings", "customer_support_info", "payroll_statutory_config"]) {
+    await client.query(`
+      DELETE FROM public.${t}
+      WHERE organization_id IS NULL AND EXISTS (
+        SELECT 1 FROM public.${t} sub WHERE sub.organization_id = 1
+      )
+    `);
     await client.query(`update public.${t} set organization_id = 1 where organization_id is null`);
+    await client.query(`
+      DELETE FROM public.${t} a
+      USING public.${t} b
+      WHERE a.organization_id = b.organization_id AND a.id < b.id
+    `);
   }
   await client.query(`create unique index if not exists company_settings_org_uq on public.company_settings (organization_id)`);
   await client.query(`create unique index if not exists customer_support_info_org_uq on public.customer_support_info (organization_id)`);

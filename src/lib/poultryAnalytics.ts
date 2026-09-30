@@ -389,8 +389,9 @@ export function analyzePoultry(data: PoultryAnalyticsInput): {
   }
 
   // ── 9. EXPENSES & PROFITABILITY ─────────────────────────────────
-  const expenses = transactions.filter((tr) => tr.businessId === (transactions[0]?.businessId) && tr.type === "EXPENSE");
-  const income = transactions.filter((tr) => tr.businessId === (transactions[0]?.businessId) && tr.type === "INCOME");
+  const isCompleted = (t: any) => !t.status || t.status === "COMPLETED";
+  const expenses = transactions.filter((tr) => tr.businessId === (transactions[0]?.businessId) && tr.type === "EXPENSE" && isCompleted(tr));
+  const income = transactions.filter((tr) => tr.businessId === (transactions[0]?.businessId) && tr.type === "INCOME" && isCompleted(tr));
   const expensesWeek = expenses.filter((tr) => tr.date >= lastWeek).reduce((s, t) => s + (t.amountGhs || 0), 0);
   const incomeWeek = income.filter((tr) => tr.date >= lastWeek).reduce((s, t) => s + (t.amountGhs || 0), 0);
   const expensesMonth = expenses.filter((tr) => tr.date >= lastMonth).reduce((s, t) => s + (t.amountGhs || 0), 0);

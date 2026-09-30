@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Download,
   FileSpreadsheet,
@@ -127,6 +128,7 @@ function dashboardSummary(records: any[]) {
 }
 
 export default function UniversalExportCenter({ activeModule, currentUser, businesses, data }: Props) {
+  const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<"CREATE" | "AUDIT">("CREATE");
   const [format, setFormat] = useState<UniversalExportFormat>("PDF");
@@ -138,6 +140,10 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
   const [message, setMessage] = useState("");
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const role = currentUser?.role || "WORKER";
   const isExecutive = role === "OWNER" || role === "GENERAL_MANAGER";
@@ -178,6 +184,16 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
   useEffect(() => {
     if (open) loadAudit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Outside click / Escape listener to dismiss the Export / Audit modal
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
   }, [open]);
 
   async function loadRecords(
@@ -527,42 +543,70 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
         onClick={() => { setMessage(""); setOpen(true); }}
         className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 shadow-lg transition"
         title={`Export ${moduleLabel}`}
+        data-testid="universal-export-btn"
       >
         <Download className="w-4 h-4 text-emerald-400" />
         <span>Export / Audit</span>
       </button>
 
-      {toast && (
-        <div className="fixed right-5 top-20 z-[100] max-w-sm rounded-xl border border-emerald-500/40 bg-slate-900/95 px-4 py-3 text-xs font-semibold text-emerald-300 shadow-2xl backdrop-blur animate-in fade-in slide-in-from-right-3">
-          <CheckCircle className="mr-2 inline h-4 w-4" />
-          {toast}
-        </div>
-      )}
+      {mounted && toast &&
+        createPortal(
+          <div className="fixed right-3 sm:right-5 top-16 sm:top-20 z-[10000] max-w-sm rounded-xl border border-emerald-500/40 bg-slate-900/95 px-4 py-3 text-xs font-semibold text-emerald-300 shadow-2xl backdrop-blur animate-in fade-in slide-in-from-right-3">
+            <CheckCircle className="mr-2 inline h-4 w-4" />
+            {toast}
+          </div>,
+          document.body
+        )}
 
-      {open && (
-        <div className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm p-4 flex items-center justify-center">
-          <div className="w-full max-w-4xl max-h-[92vh] overflow-hidden bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col">
-            <div className="p-5 border-b border-slate-800 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-bold text-white">Universal Export & Audit Center</h2>
-                <p className="text-xs text-slate-400 mt-0.5">{moduleLabel} • PDF, Excel and CSV • QR verified</p>
+      {mounted && open &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md p-2 sm:p-4 sm:p-6 flex items-center justify-center overflow-y-auto"
+            onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+          >
+            <div
+              className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-hidden bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col my-auto ring-1 ring-white/10"
+              data-testid="universal-export-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Universal Export & Audit Center"
+            >
+              <div className="p-4 sm:p-5 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0 bg-slate-900">
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-base sm:text-lg font-bold text-white truncate">Universal Export &amp; Audit Center</h2>
+                  <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 line-clamp-2">{moduleLabel} • PDF, Excel and CSV • QR verified</p>
+                </div>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"
+                  aria-label="Close export center"
+                  data-testid="universal-export-close-btn"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button onClick={() => setOpen(false)} className="p-1 rounded hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
-            </div>
 
-            <div className="px-5 pt-3 flex items-center gap-1">
-              <button onClick={() => setPanel("CREATE")} className={`px-3 py-2 rounded-lg text-xs font-bold ${panel === "CREATE" ? "bg-emerald-600 text-white" : "text-slate-400 hover:bg-slate-800"}`}>
-                <Download className="w-3.5 h-3.5 inline mr-1" />Create Export
+            <div className="px-4 sm:px-5 pt-3 flex items-center gap-2 border-b border-slate-800/60 pb-2 overflow-x-auto shrink-0">
+              <button
+                onClick={() => setPanel("CREATE")}
+                data-testid="universal-export-tab-create"
+                className={`px-3 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${panel === "CREATE" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-400 hover:bg-slate-800"}`}
+              >
+                <Download className="w-3.5 h-3.5 inline mr-1.5" />Create Export
               </button>
-              <button onClick={() => { setPanel("AUDIT"); loadAudit(); }} className={`px-3 py-2 rounded-lg text-xs font-bold ${panel === "AUDIT" ? "bg-emerald-600 text-white" : "text-slate-400 hover:bg-slate-800"}`}>
-                <History className="w-3.5 h-3.5 inline mr-1" />Audit / Approvals
+              <button
+                onClick={() => { setPanel("AUDIT"); loadAudit(); }}
+                data-testid="universal-export-tab-audit"
+                className={`px-3 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${panel === "AUDIT" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-400 hover:bg-slate-800"}`}
+              >
+                <History className="w-3.5 h-3.5 inline mr-1.5" />Audit / Approvals
                 {isExecutive && history.filter((h) => h.status === "PENDING").length > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[9px]">{history.filter((h) => h.status === "PENDING").length}</span>
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[9px] font-bold">{history.filter((h) => h.status === "PENDING").length}</span>
                 )}
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto flex-1">
+            <div className="p-4 sm:p-5 overflow-y-auto flex-1">
               {message && (
                 <div className={`mb-4 p-3 rounded-lg text-xs border ${/failed|error|reject|not/i.test(message) ? "bg-rose-500/10 border-rose-500/30 text-rose-300" : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"}`}>
                   {message}
@@ -570,11 +614,11 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
               )}
 
               {panel === "CREATE" ? (
-                <div className="space-y-5">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-4 sm:space-y-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-400 mb-1">Module</label>
-                      <div className="px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white">{moduleLabel}</div>
+                      <div className="px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-xs sm:text-sm text-white truncate">{moduleLabel}</div>
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-400 mb-1">Business / Branch Scope</label>
@@ -582,9 +626,9 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                         value={scopeBusinessId}
                         disabled={branchLocked}
                         onChange={(e) => setScopeBusinessId(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white disabled:opacity-60"
+                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-xs sm:text-sm text-white disabled:opacity-60 focus:outline-none focus:border-emerald-500"
                       >
-                        {isExecutive && !activeBusiness && <option value="ALL">All Businesses & Branches</option>}
+                        {isExecutive && !activeBusiness && <option value="ALL">All Businesses &amp; Branches</option>}
                         {businesses
                           .filter((b) => isExecutive || b.id === currentUser?.assignedBusinessId)
                           .map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
@@ -593,27 +637,37 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-400 mb-2">Export Content</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1.5">Export Content</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {(["DASHBOARD", "REPORT"] as UniversalExportType[]).map((type) => (
-                          <button key={type} onClick={() => setExportType(type)} className={`p-3 rounded-xl border text-left ${exportType === type ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" : "bg-slate-800 border-slate-700 text-slate-300"}`}>
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => setExportType(type)}
+                            className={`p-2.5 sm:p-3 rounded-xl border text-left transition ${exportType === type ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 ring-1 ring-emerald-500/30" : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750"}`}
+                          >
                             <div className="font-bold text-xs">{type === "DASHBOARD" ? "Dashboard Summary" : "Detailed Report"}</div>
-                            <div className="text-[10px] opacity-70 mt-1">{type === "DASHBOARD" ? "KPIs and section totals" : "Full underlying records"}</div>
+                            <div className="text-[10px] opacity-70 mt-0.5">{type === "DASHBOARD" ? "KPIs and section totals" : "Full underlying records"}</div>
                           </button>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-400 mb-2">File Format</label>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1.5">File Format</label>
                       <div className="grid grid-cols-3 gap-2">
                         {([
                           ["PDF", FileText],
                           ["EXCEL", FileSpreadsheet],
                           ["CSV", FileType],
                         ] as any[]).map(([value, Icon]) => (
-                          <button key={value} onClick={() => setFormat(value)} className={`p-3 rounded-xl border text-center ${format === value ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-300" : "bg-slate-800 border-slate-700 text-slate-300"}`}>
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setFormat(value)}
+                            className={`p-2.5 sm:p-3 rounded-xl border text-center transition ${format === value ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-300 ring-1 ring-cyan-500/30" : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750"}`}
+                          >
                             <Icon className="w-5 h-5 mx-auto" />
                             <div className="text-[10px] font-bold mt-1">{value}</div>
                           </button>
@@ -623,19 +677,25 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                   </div>
 
                   <div>
-                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 mb-2"><Filter className="w-3.5 h-3.5" />Optional Date Filter</label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white" />
-                      <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white" />
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 mb-1.5"><Filter className="w-3.5 h-3.5 text-emerald-400" />Optional Date Filter</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <span className="block text-[10px] text-slate-500 mb-0.5">From Date</span>
+                        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-slate-500 mb-0.5">To Date</span>
+                        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-slate-800/70 border border-slate-700 text-[11px] text-slate-400 space-y-1">
+                  <div className="p-3 sm:p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 text-[11px] text-slate-400 space-y-1">
                     <div><strong className="text-slate-200">Export identity:</strong> automatic unique Export ID</div>
                     <div><strong className="text-slate-200">Audit metadata:</strong> {currentUser?.name} ({role}), business, branch, date and time</div>
                     <div><strong className="text-slate-200">QR verification:</strong> embedded image in PDF/Excel and embedded SVG/data in CSV</div>
-                    {isWorker && <div className="text-amber-300"><Clock className="w-3 h-3 inline mr-1" />Worker exports are submitted for approval before download.</div>}
-                    {isBranchManager && <div className="text-cyan-300"><ShieldCheck className="w-3 h-3 inline mr-1" />Branch Manager export is automatically restricted to the assigned branch.</div>}
+                    {isWorker && <div className="text-amber-300 font-semibold"><Clock className="w-3 h-3 inline mr-1" />Worker exports are submitted for approval before download.</div>}
+                    {isBranchManager && <div className="text-cyan-300 font-semibold"><ShieldCheck className="w-3 h-3 inline mr-1" />Branch Manager export is automatically restricted to the assigned branch.</div>}
                   </div>
 
                   {!hasExportPermission ? (
@@ -644,14 +704,15 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                       You do not have export permission. {isWorker ? "Ask your Branch Manager to enable export access for your account." : "Please contact the Owner or General Manager to grant export access."}
                     </div>
                   ) : (
-                    <div className="flex justify-end">
+                    <div className="flex flex-col sm:flex-row sm:justify-end pt-2">
                       <button
                         onClick={isWorker ? requestWorkerExport : directExport}
                         disabled={busy}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg disabled:opacity-50"
+                        data-testid="universal-export-submit-btn"
+                        className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg disabled:opacity-50 transition"
                       >
                         {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : isWorker ? <Clock className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                        {isWorker ? "Request Export Approval" : "Generate & Download"}
+                        <span>{isWorker ? "Request Export Approval" : "Generate & Download"}</span>
                       </button>
                     </div>
                   )}
@@ -659,10 +720,10 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
               ) : (
                 <div className="space-y-3">
                   {history.length ? history.map((row) => (
-                    <div key={row.id} className="p-3 rounded-xl bg-slate-800/70 border border-slate-700 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                      <div className="min-w-0">
+                    <div key={row.id} className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-[10px] text-emerald-300">{row.exportId}</span>
+                          <span className="font-mono text-[10px] text-emerald-300 font-bold">{row.exportId}</span>
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.status === "COMPLETED" ? "bg-emerald-500/20 text-emerald-300" : row.status === "APPROVED" ? "bg-cyan-500/20 text-cyan-300" : row.status === "REJECTED" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300"}`}>{row.status}</span>
                           <span className="px-2 py-0.5 rounded bg-slate-700 text-[9px] font-bold text-slate-300">{row.format}</span>
                         </div>
@@ -672,15 +733,15 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                         </div>
                         {row.approvedByName && <div className="text-[10px] text-cyan-400">Decision by {row.approvedByName}</div>}
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
                         {isExecutive && row.status === "PENDING" && (
                           <>
-                            <button onClick={() => decision(row, "REJECT")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-rose-500/15 text-rose-300 hover:bg-rose-500 hover:text-white text-[10px] font-bold"><XCircle className="w-3 h-3 inline mr-1" />Reject</button>
-                            <button onClick={() => decision(row, "APPROVE")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 text-[10px] font-bold"><CheckCircle className="w-3 h-3 inline mr-1" />Approve</button>
+                            <button onClick={() => decision(row, "REJECT")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-rose-500/15 text-rose-300 hover:bg-rose-500 hover:text-white text-[10px] font-bold transition"><XCircle className="w-3 h-3 inline mr-1" />Reject</button>
+                            <button onClick={() => decision(row, "APPROVE")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 text-[10px] font-bold transition"><CheckCircle className="w-3 h-3 inline mr-1" />Approve</button>
                           </>
                         )}
                         {isWorker && row.status === "APPROVED" && (
-                          <button onClick={() => downloadApproved(row)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 text-[10px] font-bold"><Download className="w-3 h-3 inline mr-1" />Download Approved</button>
+                          <button onClick={() => downloadApproved(row)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 text-[10px] font-bold transition"><Download className="w-3 h-3 inline mr-1" />Download Approved</button>
                         )}
                         {row.qrCodeData && <img src={row.qrCodeData} alt="Export QR" className="w-12 h-12 rounded border border-slate-600 bg-white" />}
                       </div>
@@ -692,7 +753,8 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

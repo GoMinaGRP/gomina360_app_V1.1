@@ -222,39 +222,53 @@ export default function SalesDocumentBuilder({
     }
   };
 
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const isInvoice = documentType === "INVOICE";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 p-5">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+        <div className="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 shrink-0 bg-slate-900">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
               isInvoice ? "bg-emerald-500/20 text-emerald-400" : "bg-blue-500/20 text-blue-400"
             }`}>
               {isInvoice ? <FileText className="w-5 h-5" /> : <ClipboardEdit className="w-5 h-5" />}
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">
+            <div className="min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">
                 Create {isInvoice ? "Invoice" : "Quotation"}
               </h3>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-400 truncate">
                 {activeBiz?.name} ({activeBiz?.code})
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+            aria-label="Close"
+            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="overflow-y-auto p-5 space-y-5">
+        <div className="overflow-y-auto p-4 sm:p-5 space-y-5 flex-1">
           {errorMsg && (
             <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg text-xs">
               {errorMsg}

@@ -241,7 +241,7 @@ export async function inventoryOfBusiness(businessId: number) {
 export async function resolveSupplier(ownerId: number, supplierId: number | null, supplierName: string) {
   if (supplierId != null) {
     const [sup] = await db.select().from(suppliers).where(eq(suppliers.id, Number(supplierId)));
-    if (sup && Number(sup.ownerId) === Number(ownerId)) {
+    if (sup && ((sup.ownerId == null && Number(ownerId) === 1) || Number(sup.ownerId) === Number(ownerId))) {
       return { supplierId: Number(sup.id), supplierName: sup.name };
     }
   }

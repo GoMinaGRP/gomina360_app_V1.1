@@ -254,8 +254,6 @@ export default function AssetRegistrationModal({
   const finalAssetType =
     assetType === "OTHER" ? customAssetType.trim().toUpperCase() : assetType;
 
-  if (!isOpen) return null;
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
@@ -350,24 +348,39 @@ export default function AssetRegistrationModal({
     }
   };
 
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <div className="flex items-center space-x-2">
-            <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center">
+          <div className="flex items-center space-x-2 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
               <Wrench className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">Register Asset</h3>
-              <p className="text-[11px] text-slate-400">
-                Link to a Business and Branch to power reports & analytics
+            <div className="min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">Register Asset</h3>
+              <p className="text-[11px] text-slate-400 truncate">
+                Link to a Business and Branch to power reports &amp; analytics
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"
             aria-label="Close"
           >
             <X className="w-5 h-5" />

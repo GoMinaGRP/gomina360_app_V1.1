@@ -110,6 +110,15 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
     }
   };
 
+  // Escape key listener
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   const issues: any[] = data?.issues || [];
   const threads: Record<number, any[]> = data?.threads || {};
   const bizMap: Record<number, { name: string; code: string }> = data?.bizMap || {};
@@ -117,8 +126,11 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
   const labelCls = "block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1";
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88dvh] overflow-y-auto p-5 space-y-4" data-testid="myi-root" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[calc(100dvh-2rem)] sm:max-h-[88dvh] overflow-y-auto p-4 sm:p-5 space-y-4 my-auto" data-testid="myi-root" role="dialog" aria-modal="true">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg">
             <Flag className="w-5 h-5 text-white" />

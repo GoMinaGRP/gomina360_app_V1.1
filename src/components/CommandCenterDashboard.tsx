@@ -146,8 +146,43 @@ export default function CommandCenterDashboard({
         assetsValueGhs: 0,
         inventoryValueGhs: 0,
         growthRatePercent: 0,
-        riskScore: 0,
+        riskScore: 20,
       };
+
+    // Dynamic operational risk calculation based on live unit health & stock signals
+    const bizInv = inventory.filter((i) => i.businessId === biz.id);
+    const outOfStockCount = bizInv.filter((i) => i.status === "OUT_OF_STOCK" || (i.quantity || 0) <= 0).length;
+    const lowStockCount = bizInv.filter((i) => i.status === "LOW_STOCK" || ((i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStockThreshold || 0))).length;
+
+    const bizTxns = transactions.filter((t) => t.businessId === biz.id);
+    const bizIncome = bizTxns.filter((t) => t.type === "INCOME").reduce((s, t) => s + (Number(t.amountGhs) || 0), 0);
+    const bizExpense = bizTxns.filter((t) => t.type === "EXPENSE").reduce((s, t) => s + (Number(t.amountGhs) || 0), 0);
+
+    const bizChecklistEntries = (checklists?.entries || []).filter((e) => Number(e.businessId) === Number(biz.id));
+    const openChecklists = bizChecklistEntries.filter((e) => !e.isCompleted).length;
+    const criticalFails = bizChecklistEntries.filter((e) => !e.isCompleted && String(e.priority).toUpperCase() === "CRITICAL").length;
+
+    const baseRisk = Number(bizMetrics.riskScore) > 0 ? Number(bizMetrics.riskScore) : 20;
+
+    let dynamicRisk = baseRisk;
+    // Stockout penalty: stockouts directly harm revenue and customer fulfillment
+    dynamicRisk += Math.min(25, outOfStockCount * 6 + lowStockCount * 2);
+    // Checklist compliance penalty: incomplete/critical operational tasks
+    dynamicRisk += Math.min(20, criticalFails * 8 + openChecklists * 2);
+    // Financial strain penalty: operating loss or high expense ratio
+    const currentRev = bizMetrics.revenueGhs + bizIncome;
+    const currentExp = bizMetrics.expensesGhs + bizExpense;
+    if (currentExp > currentRev && currentRev > 0) {
+      dynamicRisk += 10;
+    } else if (currentRev > 0 && currentExp / currentRev > 0.85) {
+      dynamicRisk += 5;
+    }
+    // Healthy operations bonus: zero stockouts & clean checklists
+    if (outOfStockCount === 0 && lowStockCount === 0 && openChecklists === 0 && currentRev >= currentExp) {
+      dynamicRisk -= 3;
+    }
+    // Clamp between 1 and 100
+    const computedRisk = Math.min(100, Math.max(1, Math.round(dynamicRisk)));
 
     return {
       id: biz.id,
@@ -168,7 +203,7 @@ export default function CommandCenterDashboard({
       assetsValueGhs: bizMetrics.assetsValueGhs,
       inventoryValueGhs: bizMetrics.inventoryValueGhs,
       growthRatePercent: bizMetrics.growthRatePercent,
-      riskScore: bizMetrics.riskScore,
+      riskScore: computedRisk,
       salesCount: salesCountByBiz(biz.id),
       liveInventoryValueGhs: liveInventoryValueByBiz(biz.id),
     };
@@ -537,14 +572,52 @@ export default function CommandCenterDashboard({
         <div className="bg-slate-800/90 border border-slate-700/80 p-4 rounded-xl shadow-lg">
           <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
             <span>Avg Risk Score (1-100)</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <ShieldCheck
+              className={`w-4 h-4 ${
+                avgRisk < 35
+                  ? "text-emerald-400"
+                  : avgRisk < 60
+                  ? "text-amber-400"
+                  : "text-rose-400"
+              }`}
+            />
           </div>
-          <div className="text-lg sm:text-xl font-black text-emerald-400 mt-1">
+          <div
+            className={`text-lg sm:text-xl font-black mt-1 ${
+              avgRisk < 35
+                ? "text-emerald-400"
+                : avgRisk < 60
+                ? "text-amber-400"
+                : "text-rose-400"
+            }`}
+          >
             {avgRisk} / 100
           </div>
-          <div className="flex items-center text-[10px] text-emerald-400 mt-1 font-medium">
-            <CheckCircle className="w-3 h-3 mr-0.5 inline" />
-            <span>Low Enterprise Risk</span>
+          <div
+            className={`flex items-center text-[10px] mt-1 font-medium ${
+              avgRisk < 35
+                ? "text-emerald-400"
+                : avgRisk < 60
+                ? "text-amber-400"
+                : "text-rose-400"
+            }`}
+          >
+            {avgRisk < 35 ? (
+              <>
+                <CheckCircle className="w-3 h-3 mr-0.5 inline" />
+                <span>Low Enterprise Risk</span>
+              </>
+            ) : avgRisk < 60 ? (
+              <>
+                <AlertTriangle className="w-3 h-3 mr-0.5 inline" />
+                <span>Moderate Operational Risk</span>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="w-3 h-3 mr-0.5 inline" />
+                <span>Elevated Risk Action Required</span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1095,9 +1168,11 @@ export default function CommandCenterDashboard({
                         className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${
                           biz.riskScore < 25
                             ? "bg-emerald-500/20 text-emerald-400"
-                            : biz.riskScore < 35
+                            : biz.riskScore < 45
                             ? "bg-teal-500/20 text-teal-300"
-                            : "bg-amber-500/20 text-amber-400"
+                            : biz.riskScore < 65
+                            ? "bg-amber-500/20 text-amber-400"
+                            : "bg-rose-500/20 text-rose-400"
                         }`}
                       >
                         {biz.riskScore} / 100

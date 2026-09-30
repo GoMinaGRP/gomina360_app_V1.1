@@ -114,10 +114,11 @@ export async function POST(request: Request) {
     if (!Number.isFinite(businessId) || businessId <= 0) {
       return NextResponse.json({ success: false, error: "businessId is required." }, { status: 400 });
     }
-    const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
-    if (!biz) return NextResponse.json({ success: false, error: "Business not found." }, { status: 404 });
     const g = await gate(request, businessId);
     if (g.error) return g.error;
+
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
+    if (!biz) return NextResponse.json({ success: false, error: "Business not found." }, { status: 404 });
 
     const name = String(body.name || "").trim().slice(0, 60);
     if (name.length < 2) {
@@ -185,6 +186,8 @@ export async function POST(request: Request) {
 /* ─────────────────────────────── PATCH (edit) ────────────────────────── */
 export async function PATCH(request: Request) {
   try {
+    const session = await getSessionInfo(request);
+    if (!session) return UNAUTHENTICATED();
     const kind = kindFrom(request);
     const body = await request.json();
     const id = Number(body.id);
@@ -264,6 +267,8 @@ export async function PATCH(request: Request) {
 /* ─────────────────────────────── DELETE (remove) ─────────────────────── */
 export async function DELETE(request: Request) {
   try {
+    const session = await getSessionInfo(request);
+    if (!session) return UNAUTHENTICATED();
     const kind = kindFrom(request);
     const body = await request.json().catch(() => ({}));
     const id = Number(body.id);

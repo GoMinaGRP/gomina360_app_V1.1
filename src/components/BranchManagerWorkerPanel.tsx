@@ -52,6 +52,18 @@ export default function BranchManagerWorkerPanel({
   const [permRecordSales, setPermRecordSales] = useState(true);
   const [permRecordExpenses, setPermRecordExpenses] = useState(false);
   const [permManageStock, setPermManageStock] = useState(false);
+
+  // Escape key handler
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showPermissionModal) setShowPermissionModal(null);
+        else if (showCreateModal) setShowCreateModal(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showPermissionModal, showCreateModal]);
   const [isUpdatingPerms, setIsUpdatingPerms] = useState(false);
 
   const fetchWorkers = async () => {
@@ -385,15 +397,19 @@ export default function BranchManagerWorkerPanel({
 
       {/* Create Worker Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCreateModal(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <UserPlus className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-lg font-bold text-white">Add Sales Person</h3>
+                <h3 className="text-base sm:text-lg font-bold text-white">Add Sales Person</h3>
               </div>
               <button
                 onClick={() => setShowCreateModal(false)}
+                aria-label="Close"
                 className="text-slate-400 hover:text-white text-xl leading-none"
               >
                 ×
@@ -500,15 +516,19 @@ export default function BranchManagerWorkerPanel({
 
       {/* Edit Permissions Modal */}
       {showPermissionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowPermissionModal(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-sm shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <Shield className="w-5 h-5 text-cyan-400" />
-                <h3 className="text-lg font-bold text-white">Edit Permissions</h3>
+                <h3 className="text-base sm:text-lg font-bold text-white">Edit Permissions</h3>
               </div>
               <button
                 onClick={() => setShowPermissionModal(null)}
+                aria-label="Close"
                 className="text-slate-400 hover:text-white text-xl leading-none"
               >
                 ×

@@ -34,30 +34,43 @@ export interface TileLayerDef {
   subdomains?: string;
 }
 
-/** STANDARD road-map failover chain, in preference order. */
+/** STANDARD road-map failover chain, in preference order (100% keyless & open).
+ * Esri World Street Map is the primary standard basemap: commercial-grade, CORS-open,
+ * keyless, reliable worldwide, and does not block web apps or preview domains with 403s.
+ */
 export const STANDARD_LAYERS: readonly TileLayerDef[] = [
   {
-    // CARTO Voyager — clean Google-Maps-style standard road map; CORS-open,
-    // explicitly usable without an API key, much more tolerant of embedding
-    // than the OSM community CDN (whose usage policy blocks some deployments).
-    key: "carto-voyager",
-    url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
-      'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 20,
-    subdomains: "abcd",
+    // Esri World Street Map — high-resolution, commercial-grade street basemap.
+    // CORS-open, zero API key required, highly detailed road/street labels worldwide.
+    key: "esri-street",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, &copy; OpenStreetMap contributors",
+    maxZoom: 19,
   },
   {
+    // OpenStreetMap Standard — open, community-driven global street map.
     key: "osm-standard",
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
+    subdomains: "abc",
   },
   {
-    key: "esri-street",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-    attribution: "Tiles &copy; Esri — Source: Esri, HERE, Garmin, FAO, NOAA, USGS, &copy; OpenStreetMap contributors",
+    // Humanitarian OpenStreetMap (HOT) — high-contrast street & road view.
+    key: "osm-hot",
+    url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ' +
+      'Tiles style by <a href="https://www.hotosm.org/">Humanitarian OpenStreetMap Team</a> hosted by <a href="https://openstreetmap.fr/">OSM France</a>',
+    maxZoom: 19,
+    subdomains: "abc",
+  },
+  {
+    // Esri World Topo Map — fallback topographic street basemap.
+    key: "esri-topo",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      "Tiles &copy; Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, &copy; OpenStreetMap contributors",
     maxZoom: 19,
   },
 ] as const;
@@ -110,12 +123,6 @@ function publish(lane: string, patch: Record<string, unknown>) {
 /**
  * Failover state machine for a DEF chain. Returns the active layer and the
  * Leaflet `eventHandlers` to bind to its TileLayer.
- *
- * `tileload` on the active layer: recovery signal — any prior accumulated
- * error state for THAT layer is forgiven (transient bursts must not cause a
- * permanent failover once the provider responds).
- * `tileerror` beyond the threshold with no successes: advance to the next
- * provider (the layer remounts via `key`) and record it.
  */
 export function useLayerFailover(lane: string, layers: readonly TileLayerDef[]) {
   const [idx, setIdx] = useState(0);
@@ -124,8 +131,6 @@ export function useLayerFailover(lane: string, layers: readonly TileLayerDef[]) 
   const layer = layers[Math.min(idx, layers.length - 1)];
   const exhausted = idx >= layers.length - 1 && (errors.current[layer.key] || 0) >= LAYER_FAILOVER_THRESHOLD && !successes.current[layer.key];
 
-  // Record the initially-declared layer immediately so a probe can locate the
-  // map's diagnostics FINDABLY without waiting for the first tile outcome.
   useEffect(() => {
     publish(lane, {
       active: layer.key,
@@ -164,8 +169,6 @@ export function useLayerFailover(lane: string, layers: readonly TileLayerDef[]) 
     tileload: useCallback(() => {
       const k = layer.key;
       successes.current[k] = (successes.current[k] || 0) + 1;
-      // A loading provider must not be remembered as failing: reset its error
-      // count so a later transient burst doesn't piggyback on stale history.
       errors.current[k] = 0;
       publish(lane, {
         errors: { ...errors.current },

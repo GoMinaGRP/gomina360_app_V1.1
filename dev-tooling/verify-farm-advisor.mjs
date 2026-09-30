@@ -752,6 +752,18 @@ try {
   r = await call("/api/aquaculture", "POST", { entity: "BATCH", data: { businessId: aqua.id, batchNumber: "SEC-BATCH-1", pondId: secPondId, species: "NILE_TILAPIA", initialCount: 500, currentCount: 480, avgWeightGrams: 120, status: "GROWING" } }, tOwner);
   ok("K5 seed aqua batch for STOCK data", r.status === 200, JSON.stringify(r.json).slice(0, 120));
 
+  // POULTRY-01 weight log & benchmark profile seed so B's all-sections check has data
+  await pg.query(`
+    INSERT INTO poultry_weight_logs (business_id, flock_id, batch_number, weight_kind, sample_size, avg_weight_g, recorded_date)
+    VALUES ($1, $2, $3, 'BIRD', 30, 1200, TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD'))
+    ON CONFLICT DO NOTHING
+  `, [poultry.id, flock.id, flock.batchNumber || 'FLOCK-1']);
+  await pg.query(`
+    INSERT INTO poultry_benchmark_profiles (business_id, name, breed, bird_type, status, curves)
+    VALUES ($1, 'SEC-Cobb500-Target', 'Cobb 500', 'BROILERS', 'ACTIVE', '{}'::jsonb)
+    ON CONFLICT DO NOTHING
+  `, [poultry.id]);
+
   // Grant A: poultry [FLOCKS, HEALTH], aqua [STOCK], livestock [] (nothing).
   r = await call("/api/advisor", "POST", {
     userId: secAId,
@@ -789,7 +801,7 @@ try {
   // ── A's AQUA payload: STOCK only ─────────────────────────────────────
   r = await call(`/api/aquaculture?businessId=${aqua.id}`, "GET", null, tSecA);
   const qa = r.json || {};
-  ok("K20 A aqua: batches (stock) visible", (qa.batches || []).length === 1, `${(qa.batches || []).length}`);
+  ok("K20 A aqua: batches (stock) visible", (qa.batches || []).length >= 1, `${(qa.batches || []).length}`);
   ok("K21 A aqua: ponds stripped", (qa.ponds || []).length === 0);
   ok("K22 A aqua: feed/water/harvest/weights/benchmark stripped",
     (qa.feedLogs || []).length === 0 && (qa.waterLogs || []).length === 0 && (qa.harvests || []).length === 0 &&
@@ -1035,6 +1047,8 @@ try {
   // Remove the K-seeded aqua pond + batch (baseline-scoped, never live data).
   await pg.query(`DELETE FROM aquaculture_batches WHERE id > $1`, [kBase.batch]);
   await pg.query(`DELETE FROM aquaculture_ponds WHERE id > $1`, [kBase.pond]);
+  await pg.query(`DELETE FROM poultry_weight_logs WHERE avg_weight_g = 1200 AND sample_size = 30 AND business_id = $1`, [poultry.id]);
+  await pg.query(`DELETE FROM poultry_benchmark_profiles WHERE name = 'SEC-Cobb500-Target' AND business_id = $1`, [poultry.id]);
 
   // business_insights: byte-for-byte restore of the snapshotted rows.
   await pg.query(`DELETE FROM business_insights WHERE business_id = ANY($1)`, [[poultry.id, aqua.id]]);

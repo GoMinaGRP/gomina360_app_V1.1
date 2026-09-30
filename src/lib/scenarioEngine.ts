@@ -76,7 +76,7 @@ const ghs = (n: number) => `GH₵ ${Math.round(Math.abs(n)).toLocaleString("en-U
 /** Live overlay = everything EXCEPT the seeded ledger rows that the
  *  quarterly metrics already contain (TRX-<year>-1001..1006 — the same
  *  predicate financeReport's isSeededBaselineTxn applies client-side). */
-const LIVE_TX_WHERE = `transaction_number !~ '^TRX-\\d{4}-100[1-6]$' AND status <> 'CANCELLED'`;
+const LIVE_TX_WHERE = `transaction_number !~ '^TRX-\\d{4}-100[1-6]$' AND (status IS NULL OR status = 'COMPLETED')`;
 
 export async function computeScenarioBaseline(scope?: number | number[] | null): Promise<ScenarioBaseline> {
   // scope: undefined/null ⇒ whole platform; number ⇒ one unit; number[] ⇒ the

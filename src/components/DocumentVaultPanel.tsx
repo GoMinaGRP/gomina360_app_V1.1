@@ -86,6 +86,17 @@ export default function DocumentVaultPanel({
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showUpload) setShowUpload(false);
+        else if (genOpen) setGenOpen(null);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showUpload, genOpen]);
+
   const api = async (method: string, path: string, body?: any) => {
     const res = await fetch(path, {
       method,
@@ -254,13 +265,17 @@ export default function DocumentVaultPanel({
 
       {/* ── Upload modal ── */}
       {showUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto" data-testid="vault-upload-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg space-y-3">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="vault-upload-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowUpload(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-lg space-y-3 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">File a document</h4>
-              <button onClick={() => setShowUpload(false)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setShowUpload(false)} aria-label="Close" className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Type</label>
                 <select value={uploadDraft.docType} onChange={(e) => setUploadDraft({ ...uploadDraft, docType: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" data-testid="vault-up-type">
@@ -283,7 +298,7 @@ export default function DocumentVaultPanel({
               <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => onFile(e.target.files?.[0] || null)} />
               {fileErr && <p className="text-[11px] text-rose-300 mt-1">{fileErr}</p>}
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">Issued on</label>
                 <input type="date" value={uploadDraft.issuedOn} onChange={(e) => setUploadDraft({ ...uploadDraft, issuedOn: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
@@ -297,7 +312,7 @@ export default function DocumentVaultPanel({
               <label className="block text-[11px] font-semibold text-slate-400 mb-1">Notes (optional)</label>
               <input value={uploadDraft.notes} onChange={(e) => setUploadDraft({ ...uploadDraft, notes: e.target.value })} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setShowUpload(false)} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold">Cancel</button>
               <button onClick={saveUpload} disabled={busy || !uploadDraft.title.trim() || !uploadDraft.fileData} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50" data-testid="vault-up-save">File in vault</button>
             </div>
@@ -307,11 +322,15 @@ export default function DocumentVaultPanel({
 
       {/* ── Generate modals ── */}
       {genOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" data-testid="vault-gen-modal">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-md space-y-3">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          data-testid="vault-gen-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setGenOpen(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-md space-y-3 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-extrabold text-white">{genOpen === "VET" ? "Generate vet report" : "Generate delivery note"}</h4>
-              <button onClick={() => setGenOpen(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setGenOpen(null)} aria-label="Close" className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
             </div>
             <p className="text-[11px] text-slate-400">
               {genOpen === "VET"
@@ -329,7 +348,7 @@ export default function DocumentVaultPanel({
               />
               <p className="text-[10px] text-slate-500 mt-1">Find the ID in the Poultry health log / Orders console of this unit.</p>
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-1">
               <button onClick={() => setGenOpen(null)} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold">Cancel</button>
               <button onClick={() => generate(genOpen)} disabled={busy || !(genOpen === "VET" ? Number(genSource.healthRecordId) : Number(genSource.trackingId))} className="px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold disabled:opacity-50" data-testid="vault-gen-save">Generate PDF</button>
             </div>

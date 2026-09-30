@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ShieldCheck, AlertTriangle, Camera, RotateCcw, X, Save, Scale, Ruler,
   Gauge, Layers, TrendingUp, CheckCircle2, XCircle, Activity, Boxes, Truck,
@@ -329,6 +329,16 @@ export default function BlockQcCenter({
     <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">{children}</label>
   );
 
+  // Escape key handler
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open]);
+
   return (
     <section data-testid="bqc-root" className="space-y-4 min-w-0">
       {/* Header + actions */}
@@ -618,8 +628,12 @@ export default function BlockQcCenter({
 
       {/* ── Record QC Check modal ── */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4" data-testid="bqcm-modal">
-          <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto bg-slate-950 border border-slate-700 rounded-t-2xl sm:rounded-2xl p-4 space-y-3">
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 overflow-y-auto"
+          data-testid="bqcm-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div className="w-full max-w-lg max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto bg-slate-950 border border-slate-700 rounded-t-2xl sm:rounded-2xl p-4 space-y-3 sm:my-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-amber-400" /> Record QC Check

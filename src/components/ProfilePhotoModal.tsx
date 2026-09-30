@@ -31,6 +31,12 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setCamOn(false);
+  }, []);
+
   // Reset ONLY when the dialog opens (avatarUrl is deliberately NOT a dep —
   // after a save, onSaved refreshes the app user and would otherwise wipe the
   // "saved to your profile" confirmation while the dialog is still open).
@@ -45,13 +51,20 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
       stopCamera();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [isOpen, stopCamera]);
 
-  const stopCamera = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    setCamOn(false);
-  }, []);
+  // Escape key listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        stopCamera();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose, stopCamera]);
 
   useEffect(() => () => stopCamera(), [stopCamera]);
 
@@ -158,8 +171,12 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
   const shown = pending ?? current;
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" data-testid="ppm-root">
-      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto"
+      data-testid="ppm-root"
+      onClick={(e) => { if (e.target === e.currentTarget) { stopCamera(); onClose(); } }}
+    >
+      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
           <div className="flex items-center gap-2">
             <UserRound className="w-4 h-4 text-emerald-400" />

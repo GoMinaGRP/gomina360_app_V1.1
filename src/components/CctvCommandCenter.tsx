@@ -144,6 +144,20 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
     load();
   }, []);
 
+  // Escape key handler
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (monitorCam) setMonitorCam(null);
+        else if (formOpen) setFormOpen(false);
+        else if (confirmDel !== null) setConfirmDel(null);
+        else onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [monitorCam, formOpen, confirmDel, onClose]);
+
   const scopedBusinesses = useMemo(() => {
     const list = scope.businessIds === null && scope.isOwner
       ? businesses
@@ -311,10 +325,11 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-5"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4 overflow-y-auto"
       data-testid="cctv-modal"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-slate-950 border border-slate-700 rounded-2xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[94vh] overflow-hidden">
+      <div className="bg-slate-950 border border-slate-700 rounded-2xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[calc(100dvh-1rem)] sm:max-h-[94vh] overflow-hidden my-auto">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/80 flex flex-wrap items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-red-700 flex items-center justify-center text-white shadow-lg shrink-0">
@@ -578,14 +593,17 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
 
       {/* ── Add / Edit form ─────────────────────────────────────────────── */}
       {formOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg shadow-2xl max-h-[92vh] overflow-y-auto space-y-4" data-testid="cctv-form">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setFormOpen(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto space-y-4 my-auto" data-testid="cctv-form">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h4 className="text-base font-bold text-white flex items-center gap-2">
                 <Camera className="w-4 h-4 text-rose-400" />
                 {editing ? `Edit — ${editing.name}` : "Register CCTV Camera"}
               </h4>
-              <button onClick={() => setFormOpen(false)} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white" data-testid="cctv-cancel">
+              <button onClick={() => setFormOpen(false)} aria-label="Close" className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition" data-testid="cctv-cancel">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -722,19 +740,22 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
 
       {/* ── Live Monitor (data-driven successor of the Hub's 24/7 viewer) ── */}
       {monitorCam && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden w-full max-w-4xl shadow-2xl" data-testid="cctv-monitor">
-            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></div>
-                <h4 className="text-sm font-bold text-white">
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/90 backdrop-blur-md p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setMonitorCam(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden w-full max-w-4xl shadow-2xl max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto" data-testid="cctv-monitor">
+            <div className="px-4 sm:px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0"></div>
+                <h4 className="text-sm font-bold text-white truncate">
                   {label(BRANDS, monitorCam.brand)} Live Monitor — {monitorCam.branchCode}
                 </h4>
-                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/30">LIVE</span>
+                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/30 shrink-0">LIVE</span>
               </div>
               <button
                 onClick={() => setMonitorCam(null)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition shrink-0 ml-2"
                 data-testid="cctv-monitor-close"
               >
                 Close Monitor

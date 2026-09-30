@@ -22,6 +22,7 @@ import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -265,30 +266,28 @@ export async function POST(request: NextRequest) {
       }).returning();
 
       // Expense for PURCHASE entries
+      let expenseResult = null;
       if ((data.entryType || "CONSUMPTION") === "PURCHASE" && totalCost > 0) {
-        const trxNum = nextTrxNumber();
-        await db.insert(transactions).values({
-          transactionNumber: trxNum,
-          businessId, branchCode, branchName: data.branchName || null,
-          type: "EXPENSE",
+        expenseResult = await postOrGateExpenseTransaction({
+          businessId,
+          branchCode,
+          branchName: data.branchName || null,
           category: "AQUA_FEED_PURCHASE",
           amountGhs: totalCost,
           paymentMethod: data.paymentMethod || "CASH",
           description: `Fish feed: ${row.feedType} — ${qty}kg | ${row.brandSupplier || "No supplier"}`,
           date: data.recordedDate || today,
-          createdAt: now,
-          status: "COMPLETED",
-          recordedBy: data.recordedByName || "Aquaculture User",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          actor: me,
+          targetLabel: `Fish Feed Purchase (${qty}kg ${row.feedType}) — GH₵ ${totalCost.toFixed(2)}`,
+          metadata: { feedLogId: row.id, feedType: row.feedType, quantityKg: qty },
         });
         await auditLog(me, "AQUA_FEED_PURCHASE", "RECORD", `Fish feed purchase ${qty} kg ${row.feedType}`,
           "OPERATION_LOG", row.id, businessId, branchCode,
-          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"} — expense ${trxNum}`,
+          `${qty} kg @ GH₵ ${costPerKg.toFixed(2)}/kg = GH₵ ${totalCost.toFixed(2)} · ${row.brandSupplier || "no supplier"}${expenseResult?.pendingApproval ? " (Pending Approval)" : ""}`,
           orgId ?? null).catch((e: any) => console.error("[aqua] audit failed:", e));
       }
 
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, expense: expenseResult?.transaction, pendingApproval: expenseResult?.pendingApproval });
     }
 
     // ─────────────────────────────────────────────────────────────────

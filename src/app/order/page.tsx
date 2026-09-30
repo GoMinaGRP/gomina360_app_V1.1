@@ -1215,8 +1215,7 @@ function OrderInner() {
               {locPinOpen && !custLoc && (
                 <LocationPinPicker
                   value={null}
-                  onChange={(p) => {
-                    const next = typeof p === "function" ? (p as any)(null) : p;
+                  onChange={(next) => {
                     if (next && typeof next === "object") {
                       setCustLoc({ lat: next.lat, lng: next.lng, accuracyM: next.accuracyM ?? null, source: "PIN" });
                       setNearOnly(true);

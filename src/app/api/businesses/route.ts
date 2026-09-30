@@ -11,6 +11,7 @@ import { resolveOwnerActor } from "@/lib/recordPermissions";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { businessTypeAllowed, businessTypeLabelOf } from "@/lib/businessTypes";
 import { ttlInvalidate } from "@/lib/ttlCache";
+import { clearDeletedBusiness } from "@/lib/systemMarkers";
 import { apiError } from "@/lib/apiError";
 
 export async function GET(request: Request) {
@@ -129,6 +130,9 @@ export async function POST(request: Request) {
         ownerId: session.orgId ?? null,
       })
       .returning();
+
+    // Clear any tombstone if a business with this code previously existed and was deleted
+    await clearDeletedBusiness(resolvedCode);
 
     // Auto-provision the full workspace (idempotent per area).
     const provisioned = await provisionBusiness({

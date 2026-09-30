@@ -45,7 +45,7 @@ const inScope = (scope: AssistantScope, bizId: any) =>
 /* ── shared grounded queries ──────────────────────────────────────────── */
 
 async function financeSnapshot(scope: AssistantScope) {
-  const rows = (await db.select().from(transactions)).filter((t: any) => inScope(scope, t.businessId));
+  const rows = (await db.select().from(transactions)).filter((t: any) => inScope(scope, t.businessId) && (!t.status || t.status === "COMPLETED"));
   const month = thisMonth();
   const sum = (list: any[], type: string, when: (t: any) => boolean) =>
     r2(list.filter((t) => String(t.type) === type && when(t)).reduce((s, t) => s + (Number(t.amountGhs) || 0), 0));
@@ -356,7 +356,7 @@ export async function answerQuestion(question: string, scope: AssistantScope): P
       };
     }
     const actualByCategory: Record<string, number> = {};
-    for (const t of (await db.select().from(transactions)).filter((t: any) => inScope(scope, t.businessId) && String(t.date || "").startsWith(month))) {
+    for (const t of (await db.select().from(transactions)).filter((t: any) => inScope(scope, t.businessId) && (!t.status || t.status === "COMPLETED") && String(t.date || "").startsWith(month))) {
       const key = String(t.category || "Other");
       actualByCategory[key] = r2((actualByCategory[key] || 0) + (String(t.type) === "EXPENSE" ? Number(t.amountGhs) || 0 : 0));
     }

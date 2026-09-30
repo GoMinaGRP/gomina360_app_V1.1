@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
 import { asc, eq, gt, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
+import { compressJsonBody } from "@/lib/httpGzip";
 
 /**
  * PUBLIC online-ordering menu — NO login required.
@@ -39,17 +40,19 @@ function snapshotOf(catalog: unknown): MenuSnapshot {
   return { body, etag };
 }
 
-function menuResponse(snap: MenuSnapshot, cacheMark: "hit" | "miss", ifNoneMatch: string | null) {
-  const headers = {
-    "Content-Type": "application/json",
+function menuResponse(request: Request, snap: MenuSnapshot, cacheMark: "hit" | "miss", ifNoneMatch: string | null) {
+  const extraHeaders: Record<string, string> = {
     "Cache-Control": MENU_CLIENT_CACHE,
     ETag: snap.etag,
     "X-Menu-Cache": cacheMark,
   };
   if (ifNoneMatch && ifNoneMatch === snap.etag) {
-    return new Response(null, { status: 304, headers });
+    return new Response(null, { status: 304, headers: { ...extraHeaders, "Content-Type": "application/json" } });
   }
-  return new Response(snap.body, { status: 200, headers });
+  const compressed = compressJsonBody(request, snap.body, extraHeaders);
+  const bodyInit: BodyInit =
+    typeof compressed.body === "string" ? compressed.body : new Uint8Array(compressed.body);
+  return new Response(bodyInit, { status: 200, headers: compressed.headers });
 }
 
 export async function GET(request: Request) {
@@ -57,9 +60,9 @@ export async function GET(request: Request) {
     const ifNoneMatch = request.headers.get("if-none-match");
     const cached = ttlGet<MenuSnapshot>(MENU_CACHE_KEY);
     if (cached !== undefined) {
-      return menuResponse(cached, "hit", ifNoneMatch);
+      return menuResponse(request, cached, "hit", ifNoneMatch);
     }
-    const [bizRows, itemRows, areaRows, pickupRows, orgRows] = await Promise.all([
+    const [bizRows, itemRows, areaRows, pickupRows, orgRows, optsRows, methodsRows] = await Promise.all([
       db.select().from(businesses).orderBy(asc(businesses.id)),
       // Every catalogue row — including OUT_OF_STOCK products that carry an
       // active pre-order option (that is the whole point of pre-orders: sell
@@ -72,6 +75,8 @@ export async function GET(request: Request) {
       db.select().from(serviceAreas).where(eq(serviceAreas.active, true)),
       db.select().from(pickupLocations).where(eq(pickupLocations.active, true)),
       db.select().from(organizations),
+      db.select().from(fulfillmentOptions).where(eq(fulfillmentOptions.active, true)),
+      db.select().from(fulfillmentMethods).where(eq(fulfillmentMethods.active, true)),
     ]);
 
     const invHasStock = (i: any) => (i.quantity || 0) > 0 && i.status !== "OUT_OF_STOCK";
@@ -79,16 +84,8 @@ export async function GET(request: Request) {
     // only) — scoped to units whose OWNER switched pre-orders ON, and the
     // catalogue is org-scoped, so no other tenant's options leak.
     const preorderBizIds = new Set(bizRows.filter((b: any) => b.preOrderEnabled === true).map((b: any) => Number(b.id)));
-    const invIdsAll = itemRows.map((i) => i.id);
-    const optsRows = invIdsAll.length
-      ? await db.select().from(fulfillmentOptions).where(inArray(fulfillmentOptions.inventoryId, invIdsAll))
-      : [];
     const activeOpts = optsRows.filter((o) => o.active && preorderBizIds.has(Number(o.businessId)));
-    const methodIds = [...new Set(activeOpts.map((o) => o.methodId))];
-    const methods = methodIds.length
-      ? await db.select().from(fulfillmentMethods).where(inArray(fulfillmentMethods.id, methodIds))
-      : [];
-    const methodById = new Map(methods.filter((m) => m.active).map((m) => [m.id, m]));
+    const methodById = new Map(methodsRows.filter((m) => m.active).map((m) => [m.id, m]));
     const optsByInventory = new Map<number, any[]>();
     for (const o of activeOpts) {
       const m = methodById.get(o.methodId);
@@ -249,7 +246,7 @@ export async function GET(request: Request) {
 
     const snap = snapshotOf(result);
     ttlSet(MENU_CACHE_KEY, snap, MENU_TTL_MS);
-    return menuResponse(snap, "miss", ifNoneMatch);
+    return menuResponse(request, snap, "miss", ifNoneMatch);
   } catch (error: any) {
     console.error("GET /api/menu error:", error);
     return NextResponse.json({ success: false, error: "Could not load the menu." }, { status: 500 });

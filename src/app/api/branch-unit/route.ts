@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
@@ -79,55 +80,46 @@ export async function POST(request: NextRequest) {
         .returning();
 
       let expenseRow = null;
+      let pendingApproval = false;
       const totalCost = Number(data.totalCostGhs) || (unitCost > 0 ? qty * unitCost : 0);
       if (data.recordExpense && totalCost > 0) {
-        [expenseRow] = await db
-          .insert(transactions)
-          .values({
-            transactionNumber: trxNum(),
-            businessId,
-            branchCode,
-            branchName,
-            type: "EXPENSE",
-            category: data.category || "Stock Purchase",
-            amountGhs: totalCost,
-            paymentMethod: data.paymentMethod || "CASH",
-            description: data.description || `Restock: ${qty}× ${item.name} (${item.sku})`,
-            date: data.date || today,
-            createdAt: new Date(),
-            status: "COMPLETED",
-            recordedBy: data.recordedBy || "Branch Staff",
-            recordedByRole: data.recordedByRole || null,
-            recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-          })
-          .returning();
+        const expRes = await postOrGateExpenseTransaction({
+          businessId,
+          branchCode,
+          branchName: biz?.name || null,
+          category: data.category || "Stock Purchase",
+          amountGhs: totalCost,
+          paymentMethod: data.paymentMethod || "CASH",
+          description: data.description || `Restock: ${qty}× ${item.name} (${item.sku})`,
+          date: data.date || today,
+          actor: __authSession.user,
+          targetLabel: `Restock ${item.name} (${qty} ${item.unit || "units"}) — GH₵ ${totalCost.toFixed(2)}`,
+          metadata: { inventoryId: item.id, quantity: qty },
+        });
+        expenseRow = expRes.transaction || null;
+        pendingApproval = !!expRes.pendingApproval;
       }
-      return NextResponse.json({ success: true, item: updated, expense: expenseRow });
+      return NextResponse.json({ success: true, item: updated, expense: expenseRow, pendingApproval });
     }
 
     // ── EXPENSE (operating cost straight into Finance) ──────────────
     if (entity === "EXPENSE") {
-      const [row] = await db
-        .insert(transactions)
-        .values({
-          transactionNumber: trxNum(),
-          businessId,
-          branchCode,
-          branchName,
-          type: "EXPENSE",
-          category: data.category || "Operating Expense",
-          amountGhs: Number(data.amountGhs) || 0,
-          paymentMethod: data.paymentMethod || "CASH",
-          description: data.description || "Operating expense",
-          date: data.date || today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: data.recordedBy || "Branch Staff",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-        })
-        .returning();
-      return NextResponse.json({ success: true, item: row });
+      const expRes = await postOrGateExpenseTransaction({
+        businessId,
+        branchCode,
+        branchName: biz?.name || null,
+        category: data.category || "Operating Expense",
+        amountGhs: Number(data.amountGhs) || 0,
+        paymentMethod: data.paymentMethod || "CASH",
+        description: data.description || "Operating expense",
+        date: data.date || today,
+        actor: __authSession.user,
+        targetLabel: `Operating Expense — GH₵ ${(Number(data.amountGhs) || 0).toFixed(2)}`,
+      });
+      if (!expRes.success) {
+        return NextResponse.json({ success: false, error: expRes.error || "Failed to record expense" }, { status: 400 });
+      }
+      return NextResponse.json({ success: true, item: expRes.transaction, pendingApproval: expRes.pendingApproval });
     }
 
     // ── OPS_LOG (daily operational activity, zero-amount feed entry) ─

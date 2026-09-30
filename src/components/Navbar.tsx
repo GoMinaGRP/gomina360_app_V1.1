@@ -75,11 +75,11 @@ export default function Navbar({
   const currencyMenu = useClampedDropdown(showCurrencyDropdown, 224);
   const userMenu = useClampedDropdown(showUserDropdown, 288);
 
-  // Close both menus on outside click / Escape (they also toggle on their
+  // Close both menus on outside click/tap / Escape (they also toggle on their
   // own buttons). rootRef wraps trigger+panel, so "inside" checks are exact.
   useEffect(() => {
     if (!showCurrencyDropdown && !showUserDropdown) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent | TouchEvent) => {
       const t = e.target as Node;
       if (showCurrencyDropdown && currencyMenu.rootRef.current && !currencyMenu.rootRef.current.contains(t)) {
         setShowCurrencyDropdown(false);
@@ -95,9 +95,11 @@ export default function Navbar({
       }
     };
     document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown, { passive: true });
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
       document.removeEventListener("keydown", onKey);
     };
   }, [showCurrencyDropdown, showUserDropdown, currencyMenu.rootRef, userMenu.rootRef]);

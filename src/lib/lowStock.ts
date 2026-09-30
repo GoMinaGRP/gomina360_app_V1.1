@@ -54,7 +54,7 @@ export async function lowStockItemsForBusiness(businessId: number): Promise<LowS
     .where(
       and(
         eq(inventoryItems.businessId, Number(businessId)),
-        sql`(${inventoryItems.quantity} <= ${inventoryItems.minStockThreshold} and ${inventoryItems.minStockThreshold} > 0) or ${inventoryItems.quantity} <= 0`,
+        sql`(((${inventoryItems.quantity} <= ${inventoryItems.minStockThreshold} and ${inventoryItems.minStockThreshold} > 0) or ${inventoryItems.quantity} <= 0))`,
       ),
     );
   return rows

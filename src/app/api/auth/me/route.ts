@@ -9,7 +9,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Not signed in." }, { status: 401 });
     }
     const { passwordHash, failedLoginAttempts, lockedUntil, passwordChangedAt, ...safe } = info.user;
-    const access = await accessibleBusinessIds(info.user);
+    const access = await accessibleBusinessIds(info.user, info.orgIds);
     return NextResponse.json({ success: true, user: safe, accessibleBusinessIds: access });
   } catch (error: any) {
     // DB/driver failures must return JSON (same message as /api/auth/login),

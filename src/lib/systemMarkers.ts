@@ -1,5 +1,6 @@
 import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import { systemMarkers } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
 
 /**
  * Persistent system markers + business-deletion tombstones.
@@ -48,10 +49,8 @@ async function ensureTable(): Promise<boolean> {
 export async function getSystemMarker(key: string): Promise<string | null> {
   try {
     if (!(await ensureTable())) return null;
-    const res = await db.execute(sql`SELECT value FROM system_markers WHERE key = ${key} LIMIT 1`);
-    const rows = (res as any).rows ?? res;
-    const first = Array.isArray(rows) ? rows[0] : null;
-    return first ? (first.value ?? "") : null;
+    const [row] = await db.select().from(systemMarkers).where(eq(systemMarkers.key, key)).limit(1);
+    return row ? (row.value ?? "") : null;
   } catch {
     return null;
   }
@@ -61,10 +60,7 @@ export async function getSystemMarker(key: string): Promise<string | null> {
 export async function setSystemMarker(key: string, value = "1"): Promise<void> {
   try {
     if (!(await ensureTable())) return;
-    await db.execute(
-      sql`INSERT INTO system_markers (key, value) VALUES (${key}, ${value})
-          ON CONFLICT (key) DO NOTHING`
-    );
+    await db.insert(systemMarkers).values({ key, value }).onConflictDoNothing();
   } catch {
     /* marker bookkeeping is best-effort — never break the caller */
   }
@@ -74,6 +70,17 @@ export async function setSystemMarker(key: string, value = "1"): Promise<void> {
 export async function recordDeletedBusiness(code: string): Promise<void> {
   if (!code) return;
   await setSystemMarker(`${DELETED_BIZ_PREFIX}${code.toUpperCase()}`, new Date().toISOString());
+}
+
+/** Clear a deletion tombstone when a business is intentionally created/re-created. */
+export async function clearDeletedBusiness(code: string): Promise<void> {
+  if (!code) return;
+  try {
+    if (!(await ensureTable())) return;
+    await db.delete(systemMarkers).where(eq(systemMarkers.key, `${DELETED_BIZ_PREFIX}${code.toUpperCase()}`));
+  } catch {
+    /* marker bookkeeping is best-effort — never break the caller */
+  }
 }
 
 /** True when a business with this code was permanently deleted by the OWNER. */

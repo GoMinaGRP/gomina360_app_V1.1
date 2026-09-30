@@ -15,6 +15,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { notifyPurchase } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 /**
  * Hardware & Building Materials store API.
@@ -67,25 +68,25 @@ async function bookExpense(
   paymentMethod: string,
   actorName?: string | null,
   actorRole?: string | null,
-  actorUserId?: number | null
+  actorUserId?: number | null,
+  actorObj?: any
 ) {
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(now),
+  const actor = actorObj || {
+    id: actorUserId ? Number(actorUserId) : null,
+    name: actorName || "Hardware Store",
+    role: actorRole || null,
+  };
+  return postOrGateExpenseTransaction({
     businessId,
     branchCode,
     branchName,
-    type: "EXPENSE",
     category,
     amountGhs: amount,
     paymentMethod: paymentMethod || "BANK_TRANSFER",
     description,
-    date: now.toISOString().split("T")[0],
-    createdAt: new Date(),
-    status: "COMPLETED",
-    recordedBy: actorName || "Hardware Store",
-    recordedByRole: actorRole || null,
-    recordedByUserId: actorUserId ? Number(actorUserId) : null,
+    actor,
+    targetLabel: `${category} — GH₵ ${Number(amount).toFixed(2)}`,
+    metadata: { source: "HARDWARE_STORE" },
   });
 }
 

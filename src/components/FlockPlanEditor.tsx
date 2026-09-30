@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   X,
   Check,
@@ -268,9 +268,21 @@ export default function FlockPlanEditor({
   const selCls = "px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs";
   const stageOptions = isPlanType ? stagesOfBirdType(birdType) : [];
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm p-3 md:p-4" data-testid="flock-plan-editor">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[94vh] flex flex-col">
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      data-testid="flock-plan-editor"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[94vh] flex flex-col my-auto overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between gap-2 border-b border-slate-800 p-4 md:p-5">
           <div className="min-w-0">

@@ -152,6 +152,21 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
   };
   useEffect(() => { load(); }, []);
 
+  // Escape key handler for PayrollCenter and its child modals
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (slip) setSlip(null);
+        else if (editSlip) setEditSlip(null);
+        else if (runFormOpen) setRunFormOpen(false);
+        else if (confirmDelRun !== null) setConfirmDelRun(null);
+        else onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [slip, editSlip, runFormOpen, confirmDelRun, onClose]);
+
   const canManageBiz = (bid: number) =>
     scope.isOwner || (scope.canManage && (scope.businessIds === null ? true : (scope.businessIds ?? []).includes(bid)));
 
@@ -515,8 +530,12 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-5" data-testid="prl-root">
-      <div className="bg-slate-950 border border-slate-700 rounded-2xl w-full max-w-7xl shadow-2xl flex flex-col max-h-[94vh] overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4 overflow-y-auto"
+      data-testid="prl-root"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-950 border border-slate-700 rounded-2xl w-full max-w-7xl shadow-2xl flex flex-col max-h-[calc(100dvh-1rem)] sm:max-h-[94vh] overflow-hidden my-auto">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/80 flex flex-wrap items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-700 flex items-center justify-center text-white shadow-lg shrink-0">
@@ -1136,8 +1155,11 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
 
       {/* ── New Run modal ─────────────────────────────────────────── */}
       {runFormOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-md shadow-2xl space-y-4" data-testid="prl-run-form">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setRunFormOpen(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto" data-testid="prl-run-form">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h4 className="text-base font-bold text-white flex items-center gap-2"><Banknote className="w-4 h-4 text-teal-400" /> New Payroll Run</h4>
               <button onClick={() => setRunFormOpen(false)} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white" data-testid="prl-run-cancel"><X className="w-4 h-4" /></button>
@@ -1177,8 +1199,11 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
 
       {/* ── Manual entry adjustment modal ─────────────────────────── */}
       {editSlip && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" data-testid="prl-edit">
+        <div
+          className="fixed inset-0 z-[65] flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setEditSlip(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-lg shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto" data-testid="prl-edit">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h4 className="text-base font-bold text-white flex items-center gap-2"><Pencil className="w-4 h-4 text-teal-400" /> Adjust — {editSlip.entry.employeeName}</h4>
               <button onClick={() => setEditSlip(null)} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white" data-testid="prl-edit-cancel"><X className="w-4 h-4" /></button>
@@ -1261,8 +1286,11 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
 
       {/* ── Payslip modal ─────────────────────────────────────────── */}
       {slip && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-white text-slate-900 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden" data-testid="prl-slip">
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setSlip(null); }}
+        >
+          <div className="bg-white text-slate-900 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[calc(100dvh-1rem)] overflow-y-auto my-auto" data-testid="prl-slip">
             <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 {(() => { const l = resolveLogo(businesses.find((b) => b.id === slip.entry.businessId), slip.entry.branchCode); return l ? <img src={l} alt="logo" className="h-10 w-10 rounded-lg object-contain bg-white p-0.5" data-testid="prl-slip-logo" /> : null; })()}

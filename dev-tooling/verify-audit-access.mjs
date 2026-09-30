@@ -37,6 +37,7 @@ const pageErrors = [];
 const browser = await puppeteer.launch({ executablePath: "/tmp/al2023/chromium", headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--window-size=1500,950"] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+await client.query("DELETE FROM audit_reviews WHERE reason LIKE 'TEST%' OR comment LIKE 'TEST%'");
 const B = {
   sessionMax: (await q1("SELECT COALESCE(max(id),0) m FROM user_sessions")).m,
   grantsMax: (await q1("SELECT COALESCE(max(id),0) m FROM audit_assignments")).m,

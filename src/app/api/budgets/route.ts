@@ -82,11 +82,12 @@ export async function GET(request: NextRequest) {
         category: transactions.category,
         amountGhs: transactions.amountGhs,
         transactionNumber: transactions.transactionNumber,
+        status: transactions.status,
       })
       .from(transactions)
       .where(and(inArray(transactions.businessId, bizIds), like(transactions.date, `${period}-%`)))
       .limit(4000);
-    const live = txnRows.filter((t) => !isSeededBaseline(t));
+    const live = txnRows.filter((t) => !isSeededBaseline(t) && (!t.status || t.status === "COMPLETED"));
 
     const lines = rows.map((b) => {
       const branchKey = (b.branchCode || "").toUpperCase();

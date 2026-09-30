@@ -26,11 +26,14 @@ import {
   ClipboardList,
   ListTodo,
   Loader2,
+  Package,
   Plus,
   RefreshCw,
   RotateCcw,
   ShieldAlert,
   Stethoscope,
+  Truck,
+  Wrench,
   X,
 } from "lucide-react";
 
@@ -50,6 +53,10 @@ const SOURCE_LABELS: Record<string, string> = {
   AUDIT_ISSUE: "Audit issue",
   ADVISOR_FOLLOW_UP: "Advisor follow-up",
   LOW_STOCK: "Stock alert",
+  ORDER: "Customer order",
+  MAINTENANCE: "Maintenance",
+  APPROVAL: "Approval request",
+  CHECKLIST: "Checklist item",
   BUDGET_BREACH: "Budget breach",
   AI_INSIGHT: "AI insight",
 };
@@ -63,10 +70,16 @@ function daysUntil(dateIso: string | null | undefined, today: string): number | 
 export default function ActionCenter({
   currentUser,
   businesses,
+  focusApprovalId = null,
+  focusTaskId = null,
+  onFocusHandled,
   onSelectTab,
 }: {
   currentUser: any;
   businesses: any[];
+  focusApprovalId?: number | null;
+  focusTaskId?: number | null;
+  onFocusHandled?: () => void;
   onSelectTab?: (tab: string) => void;
 }) {
   const [data, setData] = useState<any>(null);
@@ -84,6 +97,27 @@ export default function ActionCenter({
 
   const isWorker = String(currentUser?.role || "").toUpperCase() === "WORKER";
   const today = data?.today || new Date().toLocaleDateString("en-CA");
+
+  // Deep-linking focus for tasks
+  useEffect(() => {
+    if (!focusTaskId || loading || !data) return;
+    const taskIdNum = Number(focusTaskId);
+    const targetTask = (data.tasks || []).find((t: any) => Number(t.id) === taskIdNum);
+    if (targetTask) {
+      const timer = setTimeout(() => {
+        const el = document.querySelector(`[data-testid="action-task-${targetTask.id}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("ring-2", "ring-amber-500", "shadow-amber-500/40");
+          setTimeout(() => {
+            el.classList.remove("ring-2", "ring-amber-500", "shadow-amber-500/40");
+          }, 3500);
+        }
+        onFocusHandled?.();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [focusTaskId, loading, data, onFocusHandled]);
 
   const load = useCallback(async () => {
     try {
@@ -470,7 +504,7 @@ export default function ActionCenter({
       )}
 
       {/* Linked open items */}
-      {!isWorker && (linked.auditIssues?.length || linked.advisorFollowUps?.length || linked.checklist?.length) ? (
+      {(linked.auditIssues?.length || linked.advisorFollowUps?.length || linked.lowStock?.length || linked.orders?.length || linked.maintenance?.length || linked.checklist?.length) ? (
         <div className="rounded-2xl border border-slate-700/70 bg-slate-900/60 p-4 sm:p-5 space-y-4" data-testid="action-linked">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-black text-slate-200 flex items-center gap-2">
@@ -525,6 +559,75 @@ export default function ActionCenter({
             </div>
           )}
 
+          {linked.lowStock?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-rose-400 mb-1.5 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" /> Low-stock & reorder alerts ({linked.lowStock.length})
+              </p>
+              <div className="space-y-1.5">
+                {linked.lowStock.slice(0, 8).map((i: LinkedItem) => (
+                  <LinkedRow
+                    key={`ls-${i.id}`}
+                    item={i}
+                    icon={<AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />}
+                    tracked={alreadyTracked("LOW_STOCK", i.id)}
+                    busy={busy}
+                    onTrack={() => trackLinked(i, "LOW_STOCK")}
+                    onOpen={() => onSelectTab?.(String(i.openTab || "PROCUREMENT"))}
+                    openLabel="Open Restock & Inventory"
+                    today={today}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {linked.orders?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-cyan-400 mb-1.5 flex items-center gap-1.5">
+                <Package className="w-3.5 h-3.5" /> Actionable customer orders ({linked.orders.length})
+              </p>
+              <div className="space-y-1.5">
+                {linked.orders.slice(0, 8).map((i: LinkedItem) => (
+                  <LinkedRow
+                    key={`ord-${i.id}`}
+                    item={i}
+                    icon={<Package className="w-3.5 h-3.5 text-cyan-400 shrink-0 mt-0.5" />}
+                    tracked={alreadyTracked("ORDER", i.id)}
+                    busy={busy}
+                    onTrack={() => trackLinked(i, "ORDER")}
+                    onOpen={() => onSelectTab?.("TRACKING")}
+                    openLabel="Open Order Tracking"
+                    today={today}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {linked.maintenance?.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-amber-400 mb-1.5 flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5" /> Fleet & asset maintenance ({linked.maintenance.length})
+              </p>
+              <div className="space-y-1.5">
+                {linked.maintenance.slice(0, 6).map((i: LinkedItem) => (
+                  <LinkedRow
+                    key={`mnt-${i.id}`}
+                    item={i}
+                    icon={<Wrench className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />}
+                    tracked={alreadyTracked("MAINTENANCE", i.id)}
+                    busy={busy}
+                    onTrack={() => trackLinked(i, "MAINTENANCE")}
+                    onOpen={() => onSelectTab?.(String(i.openTab || "TRANSPORT"))}
+                    openLabel="Open Maintenance"
+                    today={today}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           {linked.checklist?.length > 0 && (
             <div>
               <p className="text-[10px] font-black uppercase tracking-wider text-emerald-400 mb-1.5">Today&apos;s incomplete checklists</p>
@@ -559,7 +662,13 @@ export default function ActionCenter({
 
       {/* R1 — approvals (gated records awaiting a decision, my requests,
           and the OWNER/GM policy manager) */}
-      <ApprovalInbox currentUser={currentUser} businesses={businesses} onChanged={load} />
+      <ApprovalInbox
+        currentUser={currentUser}
+        businesses={businesses}
+        focusRequestId={focusApprovalId}
+        onFocusHandled={onFocusHandled}
+        onChanged={load}
+      />
 
       {toast && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-slate-800 border border-amber-500/40 shadow-2xl text-xs font-semibold text-amber-200 max-w-[90vw]" data-testid="action-toast">

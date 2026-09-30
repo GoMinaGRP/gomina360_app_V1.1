@@ -18,6 +18,7 @@ import { stockOut, computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN, isFarmAdvisor, advisorSectionsForBusiness } from "@/lib/auth";
 import { anySectionAllowed, farmModuleOfBusiness } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { nextTrxNumber } from "@/lib/idNumbers";
 
@@ -417,22 +418,22 @@ export async function POST(
 
       // ── Finance linkage: landed cost books as an EXPENSE ──
       if (qty > 0 && unitCost > 0 && body.recordExpense !== false) {
-        await db.insert(transactions).values({
-          transactionNumber: nextTrxNumber(),
+        await postOrGateExpenseTransaction({
           businessId: biz.id,
           branchCode: biz.code,
           branchName: biz.name,
-          type: "EXPENSE",
           category: "HARDWARE_STOCK_RECEIPT",
           amountGhs: qty * unitCost,
           paymentMethod: body.paymentMethod || "BANK_TRANSFER",
           description: `GRN ${inserted.receiveNoteNumber}: ${qty} ${inserted.unit} ${inserted.itemName} from ${inserted.supplierName}`,
           date: today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: body.receivedBy || body.createdByName || "Hardware Depot",
-          recordedByRole: body.recordedByRole || body.createdByRole || null,
-          recordedByUserId: body.recordedByUserId ? Number(body.recordedByUserId) : null,
+          actor: {
+            id: body.recordedByUserId ? Number(body.recordedByUserId) : session.user.id,
+            name: body.receivedBy || body.createdByName || session.user.name || "Hardware Depot",
+            role: body.recordedByRole || body.createdByRole || session.user.role || null,
+          },
+          targetLabel: `GRN Receipt (${qty} ${inserted.unit} ${inserted.itemName}) — GH₵ ${(qty * unitCost).toFixed(2)}`,
+          metadata: { receiveNoteNumber: inserted.receiveNoteNumber, supplierName: inserted.supplierName },
         }).catch((e) => console.error("hardware receipt txn warning:", e));
       }
 

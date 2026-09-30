@@ -9,7 +9,7 @@
  * These parts are the single source for those blocks — lifted verbatim from
  * the two hand-rolled copies that preceded this lib.
  */
-import React from "react";
+import React, { useEffect } from "react";
 import { AlertTriangle, CheckCircle2, X, XCircle } from "lucide-react";
 import { FmAlert } from "@/lib/feedMillAnalytics";
 import { FEED_UNITS } from "@/lib/feedUnits";
@@ -76,14 +76,25 @@ export function Alerts({ alerts, testid = "fm-alerts" }: { alerts: FmAlert[]; te
 }
 
 export function ModalShell({ title, icon: Icon, onClose, children, wide }: any) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${wide ? "max-w-2xl" : "max-w-lg"} shadow-2xl max-h-[92vh] flex flex-col`}>
-        <div className="flex items-center justify-between border-b border-slate-800 p-5">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${wide ? "max-w-2xl" : "max-w-lg"} shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden`}>
+        <div className="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 shrink-0 bg-slate-900">
           <h3 className="text-base font-bold text-white flex items-center gap-2">{Icon && <Icon className="w-4 h-4 text-emerald-400" />} {title}</h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0"><X className="w-5 h-5" /></button>
         </div>
-        <div className="overflow-y-auto p-5">{children}</div>
+        <div className="overflow-y-auto p-4 sm:p-5 flex-1">{children}</div>
       </div>
     </div>
   );

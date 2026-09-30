@@ -34,6 +34,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { pushAfterBell } from "@/lib/push";
 import { PREORDER_CHAIN, TRACK_STATUS_LABELS } from "@/lib/tracking";
+import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 export type PreorderMode = "STOCK" | "PREORDER" | "MIXED";
 
@@ -450,6 +451,12 @@ export async function postGoodsReceipt({
       })
       .where(eq(inventoryItems.id, inv.id));
     li.newQty = newQty;
+    if (newQty > (inv.minStockThreshold || 0)) {
+      try {
+        const { completeLinkedTasksForSource } = await import("@/lib/actionCenter");
+        await completeLinkedTasksForSource("LOW_STOCK", inv.id, staff.name || "Procurement", "Stock replenished above reorder threshold.");
+      } catch {}
+    }
   }
 
   const [rec] = await db
@@ -475,21 +482,18 @@ export async function postGoodsReceipt({
   const poPaymentMode = String((po as any).paymentMode || "ON_RECEIPT").toUpperCase();
   if (poPaymentMode === "ON_RECEIPT" && !po.expenseBooked && Number(po.totalGhs) > 0) {
     const dateStr = new Date().toISOString().split("T")[0];
-    await db.insert(transactions).values({
-      transactionNumber: `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
+    await postOrGateExpenseTransaction({
       businessId: po.businessId,
       branchCode: po.branchCode || null,
       branchName: null,
-      type: "EXPENSE",
       category: "Supplier Procurement",
       amountGhs: Number(po.totalGhs) || 0,
       paymentMethod: "CASH",
       description: `[PO:${po.purchaseNumber}] Supplier order receivable — ${po.supplierName} (${po.shippingMethodKey || "custom"})`,
       date: dateStr,
-      status: "COMPLETED",
-      recordedBy: staff.name || "Staff",
-      recordedByRole: staff.role || null,
-      recordedByUserId: staff.id ?? null,
+      actor: staff,
+      targetLabel: `Supplier Order (${po.purchaseNumber}) — GH₵ ${Number(po.totalGhs).toFixed(2)}`,
+      metadata: { purchaseNumber: po.purchaseNumber, supplierName: po.supplierName },
     });
   }
   return { receiptId: receiptNumber, receiptRecordId: rec.id, problems: [] };

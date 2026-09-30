@@ -142,6 +142,7 @@ async function main() {
     await q(`DELETE FROM audit_trail WHERE action LIKE 'FEED_%' AND target_label LIKE '%TFM%'`);
     await q(`DELETE FROM checklist_templates WHERE business_id=$1 AND task_key LIKE 'MILL_%'`, [BIZ]);
     await q(`DELETE FROM inventory_items WHERE business_id=$1 AND name LIKE 'TFM%'`, [BIZ]);
+    await q(`DELETE FROM poultry_feed_logs WHERE business_id=$1 AND (brand_supplier LIKE 'TFM%' OR brand_supplier LIKE 'Own mill · FDB%')`, [BIZ]);
 
     // baselines (taken AFTER the purge so they reflect a stable slate)
     const maxId = async (t) => n((await q1(`SELECT COALESCE(MAX(id),0) m FROM ${t}`)).m);
@@ -327,7 +328,9 @@ async function main() {
 
     // ══ E. QC gate ═════════════════════════════════════════════════════
     console.log("── E. QC hard gate, override, FAIL bell, REJECT ──");
-    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: 1, qty: 10, unit: "KG", recordedDate: TODAY });
+    const fL01 = (await q1(`SELECT id FROM poultry_flocks WHERE business_id=$1 AND batch_number='BATCH-2026-L01'`, [BIZ]))?.id || 1;
+    const fB02 = (await q1(`SELECT id FROM poultry_flocks WHERE business_id=$1 AND batch_number='BATCH-2026-B02'`, [BIZ]))?.id || 2;
+    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: fL01, qty: 10, unit: "KG", recordedDate: TODAY });
     check("E1 consumption from a QC_HOLD batch is refused (409 NOT_RELEASED)", r.status === 409 && r.body.code === "NOT_RELEASED", `HTTP ${r.status}`);
     r = await fmPost(op, "RELEASE", { businessId: BIZ, batchId: B1.id, note: "" });
     check("E2 release without finished-feed PASS is refused (400 QC_GATE)", r.status === 400 && r.body.code === "QC_GATE", JSON.stringify(r.body).slice(0, 160));
@@ -376,7 +379,7 @@ async function main() {
     // ══ F. Consumption (single-booking) ════════════════════════════════
     console.log("── F. Consumption: released-only, per-batch ledger, no re-booking ──");
     const txFeedBefore = n((await q1(`SELECT count(*) c FROM transactions WHERE business_id=$1`, [BIZ])).c);
-    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: 1, batchNumber: "BATCH-2026-L01", qty: 55, unit: "KG", recordedDate: TODAY, notes: "TFM morning feeding" });
+    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: fL01, batchNumber: "BATCH-2026-L01", qty: 55, unit: "KG", recordedDate: TODAY, notes: "TFM morning feeding" });
     check("F1 feeding 55 kg from released batch 1", r.body.success && n(r.body.item.quantityKg) === 55, JSON.stringify(r.body).slice(0, 160));
     created.feedLogIds.push(r.body.item?.id);
     check("F2 remaining ledger reported (490−55=435 kg)", Math.abs(n(r.body.batchRemainingKg) - 435) < 0.001, String(r.body.batchRemainingKg));
@@ -388,7 +391,7 @@ async function main() {
     check("F4 feeding booked NO transaction (single-booking principle)", txFeedAfter === txFeedBefore, `Δ=${txFeedAfter - txFeedBefore}`);
     check("F5 finished-feed stock drawn 55 kg", (await invQty(B1.finishedInventoryId)) === 490 - 55 + 245 + 148 - 148 + 245 - 245 ||
       (await invQty(B1.finishedInventoryId)) === 490 - 55 + 245 + 148 - 148, `qty=${await invQty(B1.finishedInventoryId)}`);
-    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: 1, qty: 436, unit: "KG", recordedDate: TODAY });
+    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B1.id, flockId: fL01, qty: 436, unit: "KG", recordedDate: TODAY });
     check("F6 drawing beyond the batch ledger is refused (400 BATCH_EXHAUSTED)", r.status === 400 && r.body.code === "BATCH_EXHAUSTED", `HTTP ${r.status}`);
 
     // ══ G+J(pre). UI flows ═════════════════════════════════════════════
@@ -447,10 +450,10 @@ async function main() {
     check("J9 UI release persisted (batch 2 RELEASED by owner)", b2db.status === "RELEASED" && b2db.released_by_name === "Kwame Mina", JSON.stringify(b2db));
 
     // consumption post-UI-release (KG + BAG25 conversion) + tables
-    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B2.id, flockId: 2, batchNumber: "BATCH-2026-B02", qty: 30, unit: "KG", recordedDate: TODAY });
+    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B2.id, flockId: fB02, batchNumber: "BATCH-2026-B02", qty: 30, unit: "KG", recordedDate: TODAY });
     check("J10 feeding from the UI-released batch works", r.body.success === true, JSON.stringify(r.body).slice(0, 120));
     created.feedLogIds.push(r.body.item?.id);
-    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B2.id, flockId: 2, batchNumber: "BATCH-2026-B02", qty: 1, unit: "BAG25", recordedDate: TODAY });
+    r = await fmPost(op, "CONSUMPTION", { businessId: BIZ, batchId: B2.id, flockId: fB02, batchNumber: "BATCH-2026-B02", qty: 1, unit: "BAG25", recordedDate: TODAY });
     check("J11 BAG25 conversion on consumption (1 bag = 25 kg)", r.body.success && n(r.body.item.quantityKg) === 25, JSON.stringify(r.body).slice(0, 140));
     created.feedLogIds.push(r.body.item?.id);
     await fmRefresh(op);
@@ -552,7 +555,8 @@ async function main() {
     await q(`DELETE FROM poultry_feed_batches WHERE id IN (${bIds})`);
     await q(`DELETE FROM poultry_feed_formulation_items WHERE formulation_id IN (${fIds})`);
     await q(`DELETE FROM poultry_feed_formulations WHERE id IN (${fIds})`);
-    await q(`DELETE FROM poultry_feed_logs WHERE business_id=$1 AND (brand_supplier LIKE 'TFM%' OR brand_supplier LIKE 'Own mill · FDB%')`, [BIZ]);
+    const validFeedLogIds = created.feedLogIds.filter(Boolean);
+    await q(`DELETE FROM poultry_feed_logs WHERE business_id=$1 AND (id = ANY($2) OR brand_supplier LIKE 'TFM%' OR brand_supplier LIKE 'Own mill%' OR brand_supplier LIKE '%FDB%' OR feed_batch_id IN (${bIds}))`, [BIZ, validFeedLogIds.length ? validFeedLogIds : [-1]]);
     const suiteBatchNos = [B1.batchNumber, B2.batchNumber, B3.batchNumber];
     await q(`DELETE FROM transactions WHERE id > $2 AND business_id=$1 AND (description LIKE '%TFM%' OR description LIKE ANY($3))`, [BIZ, b0.txnMax, suiteBatchNos.map((x) => `%${x}%`)]);
     await q(`DELETE FROM audit_issue_updates WHERE issue_id > $1`, [b0.reviewMax]);

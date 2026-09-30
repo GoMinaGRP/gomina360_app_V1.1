@@ -526,22 +526,24 @@ export async function generateEntriesForDate(
 // In-process guard so a single server run never re-announces the same
 // (flock, date, stage) transition when generateEntriesForDate re-runs.
 const STAGE_TRANSITION_ANNOUNCED = new Set<string>();
+const verifiedTodayBiz = new Set<string>();
 
 /**
  * ensureTodayFor — the /api/init hook: guarantee every scoped business has
  * its daily checklist for `today` (plus template defaults). Called BEFORE the
  * big parallel select so the same response already carries the fresh rows.
- * One tiny aggregate probe decides whether any work is needed, so steady-state
- * cost is ~1 query (generates only on the first init of the day per business).
+ * In-process memoization skips the query completely after the first pass of the day.
  */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function ensureTodayFor(businessIds: number[] | null, today: string) {
   if (typeof today !== "string" || !DATE_RE.test(today)) return; // never interpolate anything else
+  if (businessIds !== null && businessIds.length > 0 && businessIds.every((id) => verifiedTodayBiz.has(`${today}:${id}`))) {
+    return;
+  }
   // One round trip for the whole convergence check: the scoped business list
   // AND the set of businesses that already have entries for today, in a single
-  // multi-statement query. (This used to be 1 + N sequential selects — with a
-  // remote database that alone added ~1 s to every cold dashboard load.)
+  // multi-statement query.
   const ids =
     businessIds === null
       ? ""
@@ -560,9 +562,11 @@ export async function ensureTodayFor(businessIds: number[] | null, today: string
     (results[1].rows as any[]).map((r) => Number(r.business_id)).filter(Number.isFinite)
   );
   for (const b of scoped) {
-    if (!have.has(Number(b.id))) {
-      await generateEntriesForDate(Number(b.id), b?.code || null, today, b?.code, b?.category);
+    const bid = Number(b.id);
+    if (!have.has(bid)) {
+      await generateEntriesForDate(bid, b?.code || null, today, b?.code, b?.category);
     }
+    verifiedTodayBiz.add(`${today}:${bid}`);
   }
 }
 

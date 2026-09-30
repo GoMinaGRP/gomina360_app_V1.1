@@ -167,7 +167,8 @@ export function analyzeAquaculture(data: AquaAnalyticsInput): {
   }
 
   // ── 7. FINANCIAL RISKS ──────────────────────────────────────────
-  const bizTrx = transactions;
+  const isCompleted = (t: any) => !t.status || t.status === "COMPLETED";
+  const bizTrx = (transactions || []).filter(isCompleted);
   const incomeMonth = bizTrx.filter((tr) => tr.type === "INCOME" && tr.date >= lastMonth).reduce((s, tr) => s + (tr.amountGhs || 0), 0);
   const expensesMonth = bizTrx.filter((tr) => tr.type === "EXPENSE" && tr.date >= lastMonth).reduce((s, tr) => s + (tr.amountGhs || 0), 0);
   const profit = incomeMonth - expensesMonth;

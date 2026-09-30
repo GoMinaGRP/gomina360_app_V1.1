@@ -878,9 +878,27 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
     onSubmit(type, { ...f });
   };
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   const purchaseStatusOpts = [{ v: "ORDERED", l: "Ordered (on the way)" }, { v: "RECEIVED", l: "Received (stock-in + expense booked)" }];
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"><div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto"><div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><h3 className="text-lg font-bold text-white">{title}</h3><button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button></div><form onSubmit={handle} className="p-5 space-y-3">
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-y-auto my-auto">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <h3 className="text-base sm:text-lg font-bold text-white">{title}</h3>
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} totalTone="text-cyan-300" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Rent, Fuel, Utilities, Repair..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
     {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Product Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Electronics & Solar" list="tec-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Units" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="tec-item-cats">{["Electronics & Solar", "Phones & Accessories", "Computers", "Home Appliances", "TV & Audio"].map((c) => <option key={c} value={c} />)}</datalist></>}
@@ -904,5 +922,6 @@ function ElectronicsForm({ type, busy, onClose, onSubmit, inventory, serials, su
     </>}
     {type === "LOG" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Serial Number" k="serialNumber" placeholder="SN-… auto if blank" /><FormField f={f} set={set} label="Brand" k="brand" placeholder="Felicity Solar" /></div><FormField f={f} set={set} label="Product Name" k="productName" required placeholder="5kVA Solar Hybrid Inverter + Smart BMS" /><div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Warranty (months)" k="warrantyMonths" t="number" min={0} placeholder="24" /><FormField f={f} set={set} label="Retail Price (GH₵)" k="retailPriceGhs" t="number" step="0.01" /><FormSelect f={f} set={set} label="In Stock" k="inStock" opts={[{ v: "true", l: "Yes" }, { v: "false", l: "No" }]} /></div><p className="text-[10px] text-slate-500">This is the legacy electronics ops log — unit registry with warranty terms and stock check date.</p></>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
-  </form></div></div>;
+  </form></div></div>
+  );
 }

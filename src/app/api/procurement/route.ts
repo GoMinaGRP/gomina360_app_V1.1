@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     // Suppliers for the Raise-PO dropdown — org-scoped like everything else.
     const myOrgIds: number[] = Array.isArray(me.organizationIds) ? me.organizationIds.map(Number) : [];
     let supplierRows = await db.select().from(suppliers);
-    if (!me.isSuperAdmin) supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? -1)));
+    if (!me.isSuperAdmin) supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? (myOrgIds.includes(1) ? 1 : -1))));
     const suppliersOut = supplierRows.map((sp) => ({
       id: sp.id, name: sp.name, category: sp.category,
       contactPhone: sp.phone, contactPerson: sp.contactPerson, paymentTerms: sp.paymentTerms,
@@ -751,29 +751,22 @@ export async function POST(request: NextRequest) {
       // the same insert chain as the payment row and linked by id.
       let transactionId: number | null = null;
       if (String(inv.paymentMode) === "ON_CREDIT") {
-        const { nextTrxNumber } = await import("@/lib/idNumbers");
-        const [trx] = await db
-          .insert(transactions)
-          .values({
-            transactionNumber: nextTrxNumber(),
-            businessId: Number(inv.businessId),
-            branchCode: inv.branchCode,
-            branchName: null,
-            type: "EXPENSE",
-            category: "Supplier Payment",
-            amountGhs: amount,
-            paymentMethod,
-            supplierId: inv.supplierId,
-            description: `Supplier payment — ${inv.supplierName} invoice ${inv.invoiceNumber}`,
-            date: paidOn,
-            createdAt: new Date(),
-            status: "COMPLETED",
-            recordedBy: me.name || "Staff",
-            recordedByRole: me.role || "WORKER",
-            recordedByUserId: me.id ?? null,
-          })
-          .returning();
-        transactionId = Number(trx.id);
+        const { postOrGateExpenseTransaction } = await import("@/lib/expensePosting");
+        const expRes = await postOrGateExpenseTransaction({
+          businessId: Number(inv.businessId),
+          branchCode: inv.branchCode,
+          branchName: null,
+          category: "Supplier Payment",
+          amountGhs: amount,
+          paymentMethod,
+          supplierId: inv.supplierId,
+          description: `Supplier payment — ${inv.supplierName} invoice ${inv.invoiceNumber}`,
+          date: paidOn,
+          actor: me,
+          targetLabel: `Supplier Payment (${inv.supplierName}) — GH₵ ${amount.toFixed(2)}`,
+          metadata: { invoiceNumber: inv.invoiceNumber, supplierName: inv.supplierName },
+        });
+        transactionId = expRes.transaction ? Number(expRes.transaction.id) : null;
       }
       const [payment] = await db
         .insert(supplierPayments)

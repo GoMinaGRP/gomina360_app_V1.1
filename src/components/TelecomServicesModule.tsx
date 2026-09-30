@@ -848,15 +848,26 @@ function TelecomForm({
     EXPENSE: "Log Branch Expense",
   };
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <form data-testid="telf-form" onClick={(e) => e.stopPropagation()} onSubmit={handle}
-        className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-800/70">
-          <h3 className="text-sm font-bold text-white">{TITLES[type]}</h3>
-          <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" data-testid="telf-close"><X className="w-4 h-4" /></button>
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <form data-testid="telf-form" onSubmit={handle}
+        className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden max-h-[calc(100dvh-1rem)] flex flex-col my-auto">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 border-b border-slate-800 bg-slate-800/70 shrink-0">
+          <h3 className="text-sm font-bold text-white truncate pr-2">{TITLES[type]}</h3>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition shrink-0" data-testid="telf-close"><X className="w-4 h-4" /></button>
         </div>
-        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-3 max-h-[calc(100dvh-6rem)] sm:max-h-[75vh] overflow-y-auto flex-1">
           {type === "LINE" && (
             <>
               <FormField f={f} set={set} label="Line name *" k="label" required placeholder="e.g. MTN MoMo Agent Till 2" />

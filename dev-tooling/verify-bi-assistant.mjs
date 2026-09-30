@@ -171,7 +171,7 @@ try {
     `select
        coalesce(sum(case when type='INCOME' then amount_ghs end),0) as income,
        coalesce(sum(case when type='EXPENSE' then amount_ghs end),0) as expense
-     from transactions where business_id in (select id from businesses where owner_id = 1) and date like $1`,
+     from transactions where (status is null or status = 'COMPLETED') and date like $1`,
     [`${month}%`],
   );
   const finItem = feed.find((f) => f.kind === "MONTH_SUMMARY");

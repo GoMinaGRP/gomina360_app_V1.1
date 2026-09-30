@@ -120,11 +120,12 @@ async function run(label, viewport) {
     await sleep(4000);
     const diag2 = await page.evaluate(() => window.__gominaMaps?.maps || null);
     const lane2 = diag2 && Object.values(diag2)[0];
+    const firstLayerKey = lane2 ? Object.keys(lane2.errors || {})[0] || "osm-standard" : "osm-standard";
     if (wantDiag && lane2 && !Object.values(lane2.errors || {}).some((n) => n > 0) && !lane2.loadedAny) {
       console.log("   [info] tiles unreachable: no outcomes yet, failover asserted via banner"); }
-    else if (wantDiag && (lane2?.errors || {})["carto-voyager"] >= 1) {
+    else if (wantDiag && (lane2?.errors || {})[firstLayerKey] >= 1) {
       // sandbox: no tile bytes at all → provider must have failed over
-      t(`maps.${label}.failover-advances`, lane2 && lane2.active !== "carto-voyager",
+      t(`maps.${label}.failover-advances`, lane2 && lane2.active !== firstLayerKey,
         `active=${lane2?.active} errors=${JSON.stringify(lane2?.errors)}`);
     } else if (wantDiag) {
       console.log(`   [info] tiles partially reachable here — failover path skipped (active=${lane2?.active})`);

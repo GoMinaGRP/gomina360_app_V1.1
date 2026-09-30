@@ -11,6 +11,7 @@ import {
   ArrowDownRight,
   DollarSign,
   Zap,
+  X,
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 
@@ -114,6 +115,16 @@ export default function ScenarioPlannerView({
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
   }, [liveVariable, livePercent, liveScope]);
+
+  // Escape key handler
+  useEffect(() => {
+    if (!showModal) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowModal(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showModal]);
 
   const liveProf = liveImpact.profitImpact;
   const liveRev = liveImpact.revenueImpact;
@@ -399,11 +410,23 @@ export default function ScenarioPlannerView({
 
       {/* Modal for adding scenario */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
-            <h3 className="text-lg font-bold text-white">
-              Create What-If Simulation
-            </h3>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] overflow-y-auto my-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <h3 className="text-base sm:text-lg font-bold text-white">
+                Create What-If Simulation
+              </h3>
+              <button
+                onClick={() => setShowModal(false)}
+                aria-label="Close"
+                className="p-1 rounded text-slate-400 hover:text-white transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
             <form onSubmit={handleCreateScenario} className="space-y-3">
               <div>

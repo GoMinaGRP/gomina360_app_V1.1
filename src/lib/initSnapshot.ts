@@ -168,8 +168,19 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
   // 5-9 — business-stamped tables
   stmts.push(`SELECT ${selectList(employees)} FROM "employees"${whereIn("business_id", bids)}`);
   stmts.push(`SELECT ${selectList(assets)} FROM "assets"${whereIn("business_id", bids)}`);
-  stmts.push(`SELECT ${selectList(inventoryItems)} FROM "inventory_items"${whereIn("business_id", bids)}`);
-  stmts.push(`SELECT ${selectList(transactions)} FROM "transactions"${whereIn("business_id", bids)}`);
+  stmts.push(
+    `SELECT ${selectList(inventoryItems, {
+      exclude: ["photos"],
+      extra: [`coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos else '[]'::jsonb end), 0) AS "photoCount"`],
+    })} FROM "inventory_items"${whereIn("business_id", bids)}`
+  );
+  {
+    const trxScope = whereIn("business_id", bids);
+    const trxStatusFilter = `("status" = 'COMPLETED' OR "status" IS NULL)`;
+    stmts.push(
+      `SELECT ${selectList(transactions)} FROM "transactions"${trxScope ? `${trxScope} AND ${trxStatusFilter}` : ` WHERE ${trxStatusFilter}`}`
+    );
+  }
   stmts.push(`SELECT ${selectList(creditSales)} FROM "credit_sales"${whereIn("business_id", bids)}`);
   // 10 — ai insights
   stmts.push(`SELECT ${selectList(aiInsights)} FROM "ai_insights"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}`);

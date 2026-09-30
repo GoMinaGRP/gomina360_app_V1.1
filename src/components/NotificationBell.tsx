@@ -39,6 +39,22 @@ export default function NotificationBell({
   const toTask = async (n: Notif) => {
     setConvertingId(Number(n.id));
     try {
+      const resolvedSourceType = n.issueId
+        ? "AUDIT_ISSUE"
+        : String(n.type || "").startsWith("APPROVAL") || String(n.recordType || "") === "approval_requests"
+        ? "APPROVAL"
+        : String(n.type || "").startsWith("ADVISOR") || String(n.recordType || "") === "advisor_notes"
+        ? "ADVISOR_FOLLOW_UP"
+        : String(n.type || "").includes("LOW_STOCK") || String(n.recordType || "") === "inventory_items"
+        ? "LOW_STOCK"
+        : String(n.type || "").includes("ORDER") || String(n.recordType || "") === "customer_trackings"
+        ? "ORDER"
+        : String(n.type || "").startsWith("TRANSPORT") || String(n.recordType || "") === "transport_vehicles"
+        ? "MAINTENANCE"
+        : "NOTIFICATION";
+
+      const resolvedSourceId = n.issueId || n.recordId || n.id;
+
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -50,10 +66,10 @@ export default function NotificationBell({
           assignedUserId: currentUser?.id,
           priority: n.priority || "MEDIUM",
           dueDate: new Date(Date.now() + 2 * 86400000).toLocaleDateString("en-CA"),
-          sourceType: "NOTIFICATION",
-          sourceId: n.id,
-          sourceRef: n.recordRef || `notification:${n.id}`,
-          sourceLabel: "Notification follow-up",
+          sourceType: resolvedSourceType,
+          sourceId: resolvedSourceId,
+          sourceRef: n.recordRef || `${resolvedSourceType.toLowerCase()}:${resolvedSourceId}`,
+          sourceLabel: n.title ? String(n.title).slice(0, 40) : "Notification follow-up",
         }),
       });
       if (res.ok) {
@@ -113,12 +129,22 @@ export default function NotificationBell({
   }, [load]);
 
   useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent | TouchEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
+    document.addEventListener("touchstart", onDoc, { passive: true });
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, panelRef]);
 
   const markAll = async () => {
     await fetch("/api/notifications", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
@@ -130,8 +156,8 @@ export default function NotificationBell({
       fetch("/api/notifications", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [n.id] }) }).then(load);
     }
     setOpen(false);
-    if (n.issueId) onOpenIssue(n);
-    else onOpenRecord?.(n);
+    if (onOpenRecord) onOpenRecord(n);
+    else if (n.issueId) onOpenIssue(n);
   };
 
   const ago = (v: any) => {
@@ -140,6 +166,22 @@ export default function NotificationBell({
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
+  };
+
+  const targetTag = (n: Notif) => {
+    const t = String(n.type || "").toUpperCase();
+    const rt = String(n.recordType || "").toLowerCase();
+    if (t.startsWith("APPROVAL") || t.includes("EXPENSE") || rt === "approval_requests" || String(n.recordRef || "").startsWith("approval:")) return "Approval Center";
+    if (t.startsWith("AUDIT") || rt.startsWith("audit") || n.issueId) return "Audit Review";
+    if (t.startsWith("TASK_") || rt === "action_tasks" || String(n.recordRef || "").startsWith("task:")) return "Action Task";
+    if (t.startsWith("ADVISOR") || rt === "advisor_notes") return "Farm Advisor";
+    if (t.includes("ORDER") || t.includes("TRACKING") || rt === "customer_trackings" || rt === "orders") return "Order & Dispatch";
+    if (t.includes("LOW_STOCK") || t.includes("INVENTORY") || rt === "inventory_items") return "Inventory Alert";
+    if (t.includes("CREDIT") || t.includes("DUNNING") || rt === "credit_sales") return "Credit & Sales";
+    if (t.includes("CHECKLIST") || t.includes("STAGE") || rt === "checklists") return "Checklist & Stage";
+    if (t.startsWith("TRANSPORT") || rt === "transport_vehicles") return "Transport Log";
+    if (n.branchCode) return n.branchCode;
+    return "Open Record";
   };
 
   return (
@@ -215,9 +257,13 @@ export default function NotificationBell({
                     )}
                   </div>
                   {n.body && <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5">{n.body}</div>}
-                  <div className="text-[9px] text-slate-500 mt-1">
-                    {n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}{n.recordRef ? ` · ${n.recordRef}` : ""}
-                    {n.issueId || onOpenRecord ? " · tap to open" : ""}
+                  <div className="flex items-center gap-1.5 flex-wrap text-[9px] text-slate-500 mt-1">
+                    <span className="font-semibold px-1.5 py-0.5 rounded bg-slate-700/80 text-sky-300 border border-slate-600/50" data-testid="notification-target-tag" data-testid-target={`notif-target-tag-${n.id}`}>
+                      {targetTag(n)}
+                    </span>
+                    <span>{n.actorName ? `${n.actorName} · ` : ""}{ago(n.createdAt)}</span>
+                    {n.recordRef && <span className="font-mono text-slate-400">· {n.recordRef}</span>}
+                    <span className="text-slate-400 font-semibold">· tap to view</span>
                   </div>
                 </div>
                 <button

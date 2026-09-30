@@ -376,6 +376,20 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
   };
   const closeDetail = () => { setDetail(null); setDetailStack([]); setDetailData(null); setDetailErr(""); };
 
+  // Escape key handler for modal dialogs
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (actionModal) setActionModal(null);
+        else if (verifyModal) setVerifyModal(null);
+        else if (correctModal) setCorrectModal(null);
+        else if (detail) closeDetail();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [actionModal, verifyModal, correctModal, detail]);
+
   const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1318,8 +1332,12 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
       {/* ── Record detail drawer: complete underlying record ────── */}
       {detail && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" data-testid="aud-detail-overlay">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[88dvh] flex flex-col overflow-hidden" data-testid="aud-detail" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          data-testid="aud-detail-overlay"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDetail(); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[88dvh] flex flex-col overflow-hidden my-auto" data-testid="aud-detail" role="dialog" aria-modal="true">
             <div className="flex items-start gap-3 px-5 py-4 border-b border-slate-800">
               {detailStack.length > 0 && (
                 <button onClick={backDetail} aria-label="Back to previous record" className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0" title="Back" data-testid="aud-detail-back"><ArrowLeft className="w-4 h-4" /></button>
@@ -1408,8 +1426,11 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
       {/* ── Action modal ────────────────────────────────────────── */}
       {actionModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-action" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setActionModal(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[88dvh] overflow-y-auto p-4 sm:p-5 space-y-3 my-auto" data-testid="aud-action" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">
@@ -1523,15 +1544,18 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
       {/* ── Verify & close modal (review the response, then close) ── */}
       {verifyModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-verify" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setVerifyModal(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[88dvh] overflow-y-auto p-4 sm:p-5 space-y-3 my-auto" data-testid="aud-verify" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">Review response & verify</h3>
                 <p className="text-[11px] text-slate-400 mt-0.5"><span className="font-mono text-cyan-300">{verifyModal.recordRef}</span> — {verifyModal.issueTitle || verifyModal.reason}</p>
                 <p className="text-[10px] text-slate-500">Assigned to {verifyModal.assignedUserName || verifyModal.workerName || "—"} · current status {STEP_LABEL[verifyModal.status] || verifyModal.status}</p>
               </div>
-              <button onClick={() => setVerifyModal(null)} aria-label="Close dialog" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400" data-testid="aud-verify-close"><X className="w-4 h-4" /></button>
+              <button onClick={() => setVerifyModal(null)} aria-label="Close dialog" title="Close" className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white" data-testid="aud-verify-close"><X className="w-4 h-4" /></button>
             </div>
             {verifyModal.responseNote && (
               <div className="rounded-lg bg-cyan-500/5 border border-cyan-500/20 px-3 py-2">
@@ -1554,8 +1578,11 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
 
       {/* ── Request correction modal (sends it back to the assignee) ─ */}
       {correctModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[88dvh] overflow-y-auto p-5 space-y-3" data-testid="aud-correct" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setCorrectModal(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[88dvh] overflow-y-auto p-4 sm:p-5 space-y-3 my-auto" data-testid="aud-correct" role="dialog" aria-modal="true">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-sm font-black text-white">Request correction</h3>

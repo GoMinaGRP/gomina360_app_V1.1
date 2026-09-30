@@ -186,6 +186,16 @@ export default function ManageBusinessesModal({
   const [deleteCounts, setDeleteCounts] = useState<any | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
+  // Escape key listener to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   // ── Super Admin cross-owner view: Owner/Org identity + filters ──────────
   const orgNameOf = (orgId: any) =>
     organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
@@ -912,21 +922,22 @@ export default function ManageBusinessesModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
       data-testid="manage-biz-modal"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[92vh] flex flex-col my-auto overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 sm:px-6 py-3.5 sm:py-4 shrink-0 bg-slate-900">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center shrink-0">
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">
+            <div className="min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">
                 Manage Businesses & Branches
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400 line-clamp-2">
                 {mode === "list" &&
                   (isOwner
                     ? "Owner console — add, edit, relocate, change type, online ordering & service areas, deactivate or permanently delete any unit"
@@ -942,11 +953,11 @@ export default function ManageBusinessesModal({
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2 shrink-0">
             {mode !== "list" && (
               <button
                 onClick={resetToList}
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>All Units</span>
@@ -955,7 +966,8 @@ export default function ManageBusinessesModal({
             <button
               onClick={onClose}
               data-testid="manage-biz-close"
-              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              aria-label="Close"
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
             >
               <X className="w-5 h-5" />
             </button>
@@ -963,7 +975,7 @@ export default function ManageBusinessesModal({
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto space-y-4">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
           {!isOwner && !isUnitManager && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 p-3 rounded-lg text-xs">
               Only the OWNER can change business units. You are viewing this console read-only.
@@ -1088,17 +1100,17 @@ export default function ManageBusinessesModal({
                           : "bg-slate-800/60 border-slate-700"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start space-x-3 min-w-0">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                        <div className="flex items-start space-x-3 min-w-0 flex-1">
                           {biz.logo ? (
                             <img
                               src={biz.logo}
                               alt={`${biz.name} crest`}
                               data-testid={`manage-biz-logo-${biz.code}`}
-                              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
+                              className="w-10 h-10 rounded-xl object-cover shrink-0 border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
                           ) : (
                           <div
-                            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                               inactive
                                 ? "bg-rose-500/15 text-rose-300"
                                 : "bg-emerald-500/15 text-emerald-300"
@@ -1107,23 +1119,23 @@ export default function ManageBusinessesModal({
                             <Building2 className="w-5 h-5" />
                           </div>
                           )}
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                               <span
-                                className={`font-bold text-sm truncate ${
+                                className={`font-bold text-sm truncate max-w-full sm:max-w-xs ${
                                   inactive ? "text-slate-400 line-through" : "text-white"
                                 }`}
                               >
                                 {biz.name}
                               </span>
-                              <span className="text-[10px] font-black bg-slate-700/70 text-slate-300 px-1.5 py-0.5 rounded border border-slate-600">
+                              <span className="text-[10px] font-black bg-slate-700/70 text-slate-300 px-1.5 py-0.5 rounded border border-slate-600 shrink-0">
                                 {biz.code}
                               </span>
                               {isSuperAdmin && (
                                 <span
                                   data-testid={`manage-biz-org-${biz.code}`}
                                   title="Owning Owner / Organization"
-                                  className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                                  className={`text-[10px] font-black px-1.5 py-0.5 rounded border shrink-0 ${
                                     Number(biz.ownerId) === 1
                                       ? "bg-violet-500/15 text-violet-300 border-violet-500/40"
                                       : "bg-sky-500/15 text-sky-300 border-sky-500/40"
@@ -1134,7 +1146,7 @@ export default function ManageBusinessesModal({
                               )}
                               <span
                                 data-testid={`manage-status-${biz.code}`}
-                                className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${
+                                className={`text-[10px] font-black px-1.5 py-0.5 rounded border shrink-0 ${
                                   STATUS_STYLE[(biz.status || "ACTIVE").toUpperCase()] ||
                                   STATUS_STYLE.ACTIVE
                                 }`}
@@ -1144,7 +1156,7 @@ export default function ManageBusinessesModal({
                               {!isOwner && canFullyManage(biz) && (
                                 <span
                                   data-testid={`manage-biz-granted-${biz.code}`}
-                                  className="text-[10px] font-black bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40"
+                                  className="text-[10px] font-black bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/40 shrink-0"
                                   title="The OWNER granted you management of this unit"
                                 >
                                   YOU MANAGE
@@ -1154,8 +1166,8 @@ export default function ManageBusinessesModal({
                             <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                               <span>{displayCategory(biz.category)}</span>
                               <span className="inline-flex items-center gap-1">
-                                <MapPin className="w-3 h-3" />
-                                {biz.branchLocation}
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                <span className="truncate max-w-[200px] sm:max-w-none">{biz.branchLocation}</span>
                                 {biz.region ? ` • ${biz.region}` : ""}
                               </span>
                               <span>Manager: {biz.managerName}</span>
@@ -1164,12 +1176,12 @@ export default function ManageBusinessesModal({
                         </div>
 
                         {isOwner && (
-                          <div className="flex items-center gap-1.5 shrink-0">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 pt-2 sm:pt-0 border-t border-slate-700/60 sm:border-0 justify-start sm:justify-end w-full sm:w-auto">
                             <button
                               onClick={() => openOnline(biz)}
                               data-testid={`manage-biz-online-${biz.code}`}
                               title="Online ordering, service area & share QR/links"
-                              className={`p-2 rounded-lg transition ${
+                              className={`p-2 rounded-lg transition min-h-[36px] min-w-[36px] flex items-center justify-center ${
                                 biz.onlineOrderingEnabled === false
                                   ? "bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
                                   : "bg-slate-700/70 hover:bg-emerald-500/30 text-slate-200 hover:text-emerald-300"
@@ -1181,7 +1193,7 @@ export default function ManageBusinessesModal({
                               onClick={() => downloadBusinessBackup(biz)}
                               data-testid={`manage-biz-export-${biz.code}`}
                               title="Export / backup this entire business — restorable ZIP (all data, history, settings, analytics)"
-                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-violet-500/30 text-slate-200 hover:text-violet-300 transition"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-violet-500/30 text-slate-200 hover:text-violet-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                             >
                               <HardDriveDownload className="w-4 h-4" />
                             </button>
@@ -1189,7 +1201,7 @@ export default function ManageBusinessesModal({
                               onClick={() => openEdit(biz)}
                               data-testid={`manage-biz-edit-${biz.code}`}
                               title="Edit / rename / relocate / change type"
-                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-500/30 text-slate-200 hover:text-indigo-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                             >
                               <Pencil className="w-4 h-4" />
                             </button>
@@ -1197,7 +1209,7 @@ export default function ManageBusinessesModal({
                               onClick={() => openLogos(biz)}
                               data-testid={`manage-biz-logos-${biz.code}`}
                               title="Company & business logos — shown on invoices, receipts, quotations, payslips, reports & PDFs"
-                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-fuchsia-500/30 text-slate-200 hover:text-fuchsia-300 transition"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-fuchsia-500/30 text-slate-200 hover:text-fuchsia-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                             >
                               <ImageIcon className="w-4 h-4" />
                             </button>
@@ -1206,7 +1218,7 @@ export default function ManageBusinessesModal({
                               disabled={busy}
                               data-testid={`manage-biz-deactivate-${biz.code}`}
                               title={inactive ? "Re-activate unit" : "Deactivate unit"}
-                              className={`px-2 py-2 rounded-lg text-[10px] font-black transition flex items-center gap-1 ${
+                              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black transition flex items-center gap-1 min-h-[36px] ${
                                 armed
                                   ? "bg-amber-500/30 text-amber-200 border border-amber-400/50"
                                   : inactive
@@ -1215,20 +1227,22 @@ export default function ManageBusinessesModal({
                               }`}
                             >
                               <Power className="w-4 h-4" />
-                              {armed
-                                ? inactive
-                                  ? "Confirm Re-activate"
-                                  : "Confirm Deactivate"
-                                : inactive
-                                ? "Re-activate"
-                                : "Deactivate"}
+                              <span>
+                                {armed
+                                  ? inactive
+                                    ? "Confirm Re-activate"
+                                    : "Confirm Deactivate"
+                                  : inactive
+                                  ? "Re-activate"
+                                  : "Deactivate"}
+                              </span>
                             </button>
                             <button
                               onClick={() => handleToggleArchive(biz)}
                               disabled={busy}
                               data-testid={`manage-biz-archive-${biz.code}`}
                               title={biz.isArchived ? "Restore archived unit (back into navigation & dashboards)" : "Archive unit — hides it from navigation & executive dashboards; all data preserved"}
-                              className={`px-2 py-2 rounded-lg text-[10px] font-black transition flex items-center gap-1 ${
+                              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black transition flex items-center gap-1 min-h-[36px] ${
                                 armed
                                   ? "bg-amber-500/30 text-amber-200 border border-amber-400/50"
                                   : biz.isArchived
@@ -1237,19 +1251,21 @@ export default function ManageBusinessesModal({
                               }`}
                             >
                               <Archive className="w-4 h-4" />
-                              {armed
-                                ? biz.isArchived
-                                  ? "Confirm Restore"
-                                  : "Confirm Archive"
-                                : biz.isArchived
-                                ? "Restore"
-                                : "Archive"}
+                              <span>
+                                {armed
+                                  ? biz.isArchived
+                                    ? "Confirm Restore"
+                                    : "Confirm Archive"
+                                  : biz.isArchived
+                                  ? "Restore"
+                                  : "Archive"}
+                              </span>
                             </button>
                             <button
                               onClick={() => openReset(biz)}
                               data-testid={`manage-biz-reset-${biz.code}`}
                               title="Reset to new business state — clears all operational records"
-                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-cyan-500/30 text-slate-200 hover:text-cyan-300 transition"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-cyan-500/30 text-slate-200 hover:text-cyan-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                             >
                               <RotateCcw className="w-4 h-4" />
                             </button>
@@ -1257,7 +1273,7 @@ export default function ManageBusinessesModal({
                               onClick={() => openDelete(biz)}
                               data-testid={`manage-biz-delete-${biz.code}`}
                               title="Permanently delete unit"
-                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition"
+                              className="p-2 rounded-lg bg-slate-700/70 hover:bg-rose-500/30 text-slate-200 hover:text-rose-300 transition min-h-[36px] min-w-[36px] flex items-center justify-center"
                             >
                               <Trash className="w-4 h-4" />
                             </button>
@@ -1268,7 +1284,7 @@ export default function ManageBusinessesModal({
                             Online ordering & service settings, and Reset.
                             Deactivate & Delete stay OWNER-only (not rendered). */}
                         {!isOwner && canFullyManage(biz) && (
-                          <div className="flex items-center gap-1.5 shrink-0" data-testid={`manage-biz-manage-${biz.code}`}>
+                          <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 pt-2 sm:pt-0 border-t border-slate-700/60 sm:border-0 justify-start sm:justify-end w-full sm:w-auto" data-testid={`manage-biz-manage-${biz.code}`}>
                             <button
                               onClick={() => openOnline(biz)}
                               data-testid={`manage-biz-online-${biz.code}`}

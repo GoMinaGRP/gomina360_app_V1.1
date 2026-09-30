@@ -293,6 +293,20 @@ export default function SharedEnterpriseModule({
   const [accessUsers, setAccessUsers] = useState<any[]>([]);
   const [accessBusy, setAccessBusy] = useState<string | null>(null);
 
+  // Escape key handler for open modals in SharedEnterpriseModule
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showAccessModal) setShowAccessModal(false);
+        else if (deletingRecord) { setDeletingRecord(null); setDeleteReason(""); }
+        else if (editingRecord) setEditingRecord(null);
+        else if (showModal) setShowModal(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showAccessModal, deletingRecord, editingRecord, showModal]);
+
   const refreshDeletionLogs = useCallback(async () => {
     if (!MANAGEABLE) return;
     try {
@@ -2596,7 +2610,10 @@ export default function SharedEnterpriseModule({
           long forms (Inventory registration) can be scrolled smoothly and
           submitted on phones instead of running off-screen. */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/75 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/75 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}
+        >
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto overscroll-contain">
             <h3 className="text-lg font-bold text-white">
               {config.buttonLabel}
@@ -3176,8 +3193,11 @@ export default function SharedEnterpriseModule({
 
       {/* ─── Record edit modal (OWNER or OWNER-granted manager) ─── */}
       {editingRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setEditingRecord(null); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto">
             <h3 className="text-lg font-bold text-white">
               Edit {moduleType === "TRANSACTIONS" ? "Transaction" : moduleType === "SUPPLIERS" ? "Supplier" : moduleType === "INVENTORY" ? "Stock Item" : moduleType === "CUSTOMERS" ? "Customer" : "Employee"} —{" "}
               <span className="text-indigo-300">{recordLabel(editingRecord)}</span>
@@ -3607,8 +3627,11 @@ export default function SharedEnterpriseModule({
 
       {/* ─── Delete confirmation — mandatory reason, permanently audited ─── */}
       {deletingRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4" data-testid="delete-confirm-modal">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) { setDeletingRecord(null); setDeleteReason(""); } }}
+        >
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-4 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto" data-testid="delete-confirm-modal">
             <div className="flex items-center gap-2 text-rose-300 font-bold text-base">
               <AlertTriangle className="w-5 h-5" />
               Confirm permanent deletion
@@ -3654,8 +3677,11 @@ export default function SharedEnterpriseModule({
 
       {/* ─── OWNER access-control console ─── */}
       {showAccessModal && isOwnerUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4" data-testid="record-access-modal">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowAccessModal(false); }}
+        >
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-6 w-full max-w-lg shadow-2xl space-y-4 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto" data-testid="record-access-modal">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-5 h-5 text-indigo-300" />
