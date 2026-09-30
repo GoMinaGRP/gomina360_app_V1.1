@@ -6,7 +6,7 @@ import {
   Truck, Users, Route, CalendarClock, Fuel, Wrench, ShieldAlert, ClipboardList,
   BarChart3, LayoutDashboard, MapPin, X, Plus, CheckCircle2, AlertTriangle,
   RefreshCw, Gauge, Navigation, Radio, CircleDot, Shield, Satellite, KeyRound,
-  PlayCircle, StopCircle, ChevronRight, FileWarning, Clock, Landmark,
+  PlayCircle, StopCircle, ChevronRight, FileWarning, Clock, Landmark, Edit2, Trash2,
 } from "lucide-react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis,
@@ -31,7 +31,7 @@ type Tab =
   | "DASHBOARD" | "FLEET" | "DRIVERS" | "TRIPS" | "BOOKINGS" | "FUEL"
   | "MAINTENANCE" | "GPS" | "TRACKERS" | "COMPLIANCE" | "CHECKLIST" | "REPORTS";
 
-type FormType = null | "VEHICLE" | "TRIP" | "BOOKING" | "FUEL" | "MAINT" | "CHECKLIST" | "GEOFENCE" | "REVENUE";
+type FormType = null | "VEHICLE" | "TRIP" | "BOOKING" | "FUEL" | "MAINT" | "CHECKLIST" | "GEOFENCE" | "REVENUE" | "CHECKLIST_TEMPLATE";
 
 const TABS: { key: Tab; label: string; icon: any }[] = [
   { key: "DASHBOARD", label: "Dashboard", icon: LayoutDashboard },
@@ -52,6 +52,18 @@ const VEHICLE_TYPES = ["TRUCK", "VAN", "CAR", "MOTORCYCLE", "MINIBUS", "TANKER",
 const FUEL_TYPES = ["DIESEL", "PETROL", "LPG", "ELECTRIC"];
 const MAINT_CATEGORIES = ["PREVENTIVE", "REPAIR", "INSPECTION", "TIRES", "BODYWORK", "ELECTRICAL", "OTHER"];
 const TRIP_PURPOSES = ["DELIVERY", "PASSENGER", "HAULAGE", "PICKUP", "FIELD", "OTHER"];
+const CHECKLIST_CATEGORIES = [
+  "SAFETY",
+  "MECHANICAL",
+  "EQUIPMENT",
+  "CARGO",
+  "CABIN",
+  "TIRES",
+  "ELECTRICAL",
+  "COMPLIANCE",
+  "HYGIENE",
+  "GENERAL",
+];
 // Mirrors REVENUE_KINDS in /api/transport/route.ts (presentation list for the
 // Daily Revenue form; the server validates and re-labels authoritatively).
 const REVENUE_KINDS: Record<string, string> = {
@@ -254,6 +266,8 @@ export default function TransportModule(props: Props) {
   const fuels: any[] = useMemo(() => [...(data?.fuelLogs || [])].sort((a, b) => String(b.loggedDate).localeCompare(String(a.loggedDate))), [data]);
   const maint: any[] = data?.maintenance || [];
   const checks: any[] = data?.checklists || [];
+  const checklistTemplates: any[] = data?.checklistTemplates || [];
+  const [checklistSubTab, setChecklistSubTab] = useState<"RECORDS" | "TEMPLATES">("RECORDS");
   const fences: any[] = data?.geofences || [];
   const violations: any[] = data?.violations || [];
   const insights: any[] = data?.insights || [];
@@ -349,8 +363,50 @@ export default function TransportModule(props: Props) {
     if (j.success) done(`✓ Maintenance · ${j.maintenance?.title}`);
   };
   const submitChecklist = async () => {
-    const j = await post({ entity: "CHECKLIST", action: "SUBMIT", ...draft });
+    const activeCustom = checklistTemplates.filter((t) => t.isActive !== false);
+    const customChecks: any[] = activeCustom.map((t) => ({
+      key: t.taskKey,
+      label: t.taskLabel,
+      priority: t.priority,
+      ok: draft[t.taskKey] === true || draft[t.taskKey] === undefined,
+    }));
+    const j = await post({ entity: "CHECKLIST", action: "SUBMIT", ...draft, customChecks });
     if (j.success) done(`✓ Daily checklist submitted for ${vehById(draft.vehicleId)?.licensePlate || "vehicle"}`);
+  };
+  const submitChecklistTemplate = async () => {
+    const isEdit = Boolean(draft.id);
+    const j = await post({
+      entity: "CHECKLIST_TEMPLATE",
+      action: isEdit ? "UPDATE" : "CREATE",
+      ...draft,
+    });
+    if (j.success) {
+      done(isEdit ? `✓ Checklist task “${j.template?.taskLabel || draft.taskLabel}” updated` : `✓ Custom task “${j.template?.taskLabel || draft.taskLabel}” saved`);
+    }
+  };
+  const toggleChecklistTemplate = async (tpl: any) => {
+    const j = await post({
+      entity: "CHECKLIST_TEMPLATE",
+      action: "TOGGLE_ACTIVE",
+      id: tpl.id,
+      isActive: !tpl.isActive,
+    });
+    if (j.success) {
+      flash(`✓ Task “${tpl.taskLabel}” ${tpl.isActive ? "deactivated" : "activated"}`);
+      load();
+    }
+  };
+  const deleteChecklistTemplate = async (tpl: any) => {
+    if (!confirm(`Delete custom task “${tpl.taskLabel}”?`)) return;
+    const j = await post({
+      entity: "CHECKLIST_TEMPLATE",
+      action: "DELETE",
+      id: tpl.id,
+    });
+    if (j.success) {
+      flash(`✓ Custom task “${tpl.taskLabel}” deleted`);
+      load();
+    }
   };
   const submitGeofence = async () => {
     const j = await patchFx({ entity: "GEOFENCE", action: "CREATE", ...draft });
@@ -1051,27 +1107,271 @@ export default function TransportModule(props: Props) {
       )}
 
       {data && tab === "CHECKLIST" && (
-        <div className="space-y-3" data-testid="transport-checklist">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-white">Daily Checklist & Notes · {checks.length} submitted</h2>
-            {canEdit && vehicles.length > 0 && <button onClick={() => { setDraft({ shiftDate: new Date().toISOString().slice(0, 10) }); setForm("CHECKLIST"); }} className="flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white" data-testid="transport-add-checklist"><Plus className="h-3.5 w-3.5" /> Submit today</button>}
+        <div className="space-y-4" data-testid="transport-checklist">
+          {/* Header */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-white">Daily Vehicle Inspection & Checklist Tasks</h2>
+              <p className="text-[11px] text-slate-400">
+                12 permanent system default mechanical/safety checks + {checklistTemplates.length} custom business tasks
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {canEdit && (
+                <button
+                  onClick={() => {
+                    setDraft({ category: "SAFETY", priority: "ROUTINE", isActive: true });
+                    setForm("CHECKLIST_TEMPLATE");
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-bold text-sky-300 hover:bg-sky-500/20"
+                  data-testid="transport-add-custom-task"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add Custom Task
+                </button>
+              )}
+              {canEdit && vehicles.length > 0 && (
+                <button
+                  onClick={() => {
+                    setDraft({ shiftDate: new Date().toISOString().slice(0, 10) });
+                    setForm("CHECKLIST");
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500"
+                  data-testid="transport-add-checklist"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Submit Inspection
+                </button>
+              )}
+            </div>
           </div>
-          {checks.length === 0 && <p className={`${rowCls} text-sm text-slate-400`}>No pre-trip checklists yet. A failed critical check grounds recommendations into AI alerts.</p>}
-          {checks.slice(0, 20).map((c) => {
-            const fails = CHECK_ITEMS.filter((k) => (c as any)[k.key] === false);
-            return (
-              <div key={c.id} className={rowCls} data-testid={`transport-checkrow-${c.id}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-bold text-white">{vehById(c.vehicleId)?.licensePlate} · {c.shiftDate}</p>
-                    <p className="text-[10px] text-slate-400">by {c.userName || "—"} · odo {Number(c.odometerKm || 0).toLocaleString()} km{c.fuelLevelPct != null ? ` · fuel ${c.fuelLevelPct}%` : ""}{c.notes ? ` · “${c.notes}”` : ""}</p>
+
+          {/* Sub-tab Navigation */}
+          <div className="flex border-b border-slate-700/80 gap-4">
+            <button
+              onClick={() => setChecklistSubTab("RECORDS")}
+              className={`pb-2 text-xs font-bold transition border-b-2 ${
+                checklistSubTab === "RECORDS"
+                  ? "border-sky-400 text-sky-300"
+                  : "border-transparent text-slate-400 hover:text-slate-200"
+              }`}
+              data-testid="transport-checklist-subtab-records"
+            >
+              Inspection Submissions ({checks.length})
+            </button>
+            <button
+              onClick={() => setChecklistSubTab("TEMPLATES")}
+              className={`pb-2 text-xs font-bold transition border-b-2 ${
+                checklistSubTab === "TEMPLATES"
+                  ? "border-sky-400 text-sky-300"
+                  : "border-transparent text-slate-400 hover:text-slate-200"
+              }`}
+              data-testid="transport-checklist-subtab-templates"
+            >
+              Checklist Tasks & Templates ({12 + checklistTemplates.length})
+            </button>
+          </div>
+
+          {checklistSubTab === "RECORDS" && (
+            <div className="space-y-3">
+              {checks.length === 0 && (
+                <p className={`${rowCls} text-sm text-slate-400`}>
+                  No pre-trip inspection records submitted yet. A failed critical check grounds recommendations into AI safety alerts.
+                </p>
+              )}
+              {checks.slice(0, 30).map((c) => {
+                const fails = CHECK_ITEMS.filter((k) => (c as any)[k.key] === false);
+                const hasCustomFails = c.notes && c.notes.includes("FAIL");
+                return (
+                  <div key={c.id} className={rowCls} data-testid={`transport-checkrow-${c.id}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-bold text-white">
+                          {vehById(c.vehicleId)?.licensePlate || "Vehicle"} · {c.shiftDate}
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          by {c.userName || "—"} · odo {Number(c.odometerKm || 0).toLocaleString()} km
+                          {c.fuelLevelPct != null ? ` · fuel ${c.fuelLevelPct}%` : ""}
+                          {c.notes ? ` · “${c.notes}”` : ""}
+                        </p>
+                      </div>
+                      <Badge
+                        text={fails.length === 0 && !hasCustomFails ? "PASSED" : `${fails.length || 1} FAILS`}
+                        map={{ PASSED: STATUS_STYLE.ACTIVE, [`${fails.length || 1} FAILS`]: STATUS_STYLE.UNRESOLVED }}
+                      />
+                    </div>
+                    {fails.length > 0 && (
+                      <p className="mt-1 text-[10px] text-rose-300">
+                        ⚠ Failed checks: {fails.map((f) => f.label).join(", ")}
+                      </p>
+                    )}
                   </div>
-                  <Badge text={fails.length === 0 ? "PASSED" : `${fails.length} FAILS`} map={{ PASSED: STATUS_STYLE.ACTIVE, [`${fails.length} FAILS`]: STATUS_STYLE.UNRESOLVED }} />
-                </div>
-                {fails.length > 0 && <p className="mt-1 text-[10px] text-rose-300">⚠ {fails.map((f) => f.label).join(", ")}</p>}
+                );
+              })}
+            </div>
+          )}
+
+          {checklistSubTab === "TEMPLATES" && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-sky-500/20 bg-sky-950/20 p-3 text-xs text-sky-200">
+                <p className="font-semibold text-white">Transportation Checklist Architecture:</p>
+                <p className="mt-1 text-slate-300">
+                  The fleet checklist includes 12 core system default mechanical & safety verification points that are always active.
+                  As an Owner or Manager, you can define, edit, activate, and deactivate custom checklist tasks specifically for this transport unit (such as cargo tie-downs, refrigeration checks, or driver breathalyzer).
+                </p>
               </div>
-            );
-          })}
+
+              {/* System Defaults Section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    System Default Inspection Points (12 Standard Points — Protected)
+                  </h3>
+                  <span className="text-[10px] text-slate-400 font-medium">Permanent Fleet Baseline</span>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {CHECK_ITEMS.map((c) => (
+                    <div key={c.key} className="rounded-lg border border-slate-700/80 bg-slate-800/80 p-2.5">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="text-xs font-semibold text-white">{c.label}</span>
+                        <div className="flex items-center gap-1">
+                          {c.critical ? (
+                            <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-300">Critical</span>
+                          ) : (
+                            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[9px] font-bold text-slate-300">Routine</span>
+                          )}
+                          <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[9px] font-bold text-sky-300">System</span>
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400">Pre-trip vehicle roadworthiness check</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Templates Section */}
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Custom Enterprise Tasks ({checklistTemplates.length})
+                  </h3>
+                  {canEdit && (
+                    <button
+                      onClick={() => {
+                        setDraft({ category: "SAFETY", priority: "ROUTINE", isActive: true });
+                        setForm("CHECKLIST_TEMPLATE");
+                      }}
+                      className="text-xs font-semibold text-sky-400 hover:text-sky-300"
+                    >
+                      + Add Task
+                    </button>
+                  )}
+                </div>
+
+                {checklistTemplates.length === 0 ? (
+                  <div className={`${rowCls} text-center py-6`}>
+                    <p className="text-xs text-slate-400">No custom inspection tasks created yet.</p>
+                    {canEdit && (
+                      <button
+                        onClick={() => {
+                          setDraft({ category: "SAFETY", priority: "ROUTINE", isActive: true });
+                          setForm("CHECKLIST_TEMPLATE");
+                        }}
+                        className="mt-2 inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Create First Custom Task
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {checklistTemplates.map((t) => (
+                      <div
+                        key={t.id}
+                        className={`rounded-lg border p-3 transition ${
+                          t.isActive !== false
+                            ? "border-slate-700/80 bg-slate-800/80"
+                            : "border-slate-800 bg-slate-900/50 opacity-60"
+                        }`}
+                        data-testid={`transport-tpl-${t.id}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-bold text-white">{t.taskLabel}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px]">
+                              <span className="rounded bg-slate-700 px-1.5 py-0.5 font-bold text-slate-300">
+                                {t.category || "GENERAL"}
+                              </span>
+                              {t.priority === "CRITICAL" ? (
+                                <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-bold text-rose-300">
+                                  Critical
+                                </span>
+                              ) : (
+                                <span className="rounded bg-slate-700 px-1.5 py-0.5 font-bold text-slate-300">
+                                  Routine
+                                </span>
+                              )}
+                              <span
+                                className={`rounded px-1.5 py-0.5 font-bold ${
+                                  t.isActive !== false
+                                    ? "bg-emerald-500/20 text-emerald-300"
+                                    : "bg-amber-500/20 text-amber-300"
+                                }`}
+                              >
+                                {t.isActive !== false ? "Active" : "Inactive"}
+                              </span>
+                            </div>
+                          </div>
+                          {canEdit && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setDraft({
+                                    id: t.id,
+                                    taskLabel: t.taskLabel,
+                                    category: t.category,
+                                    priority: t.priority,
+                                    defaultNotes: t.defaultNotes,
+                                    isActive: t.isActive,
+                                  });
+                                  setForm("CHECKLIST_TEMPLATE");
+                                }}
+                                className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-white"
+                                title="Edit Task"
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => toggleChecklistTemplate(t)}
+                                className={`rounded p-1 ${
+                                  t.isActive !== false
+                                    ? "text-emerald-400 hover:text-emerald-300"
+                                    : "text-slate-500 hover:text-slate-300"
+                                }`}
+                                title={t.isActive !== false ? "Deactivate" : "Activate"}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => deleteChecklistTemplate(t)}
+                                className="rounded p-1 text-rose-400 hover:bg-rose-500/20 hover:text-rose-300"
+                                title="Delete Task"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {t.defaultNotes && (
+                          <p className="mt-2 text-[10px] text-slate-400 leading-snug">
+                            {t.defaultNotes}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1254,8 +1554,10 @@ export default function TransportModule(props: Props) {
           <Field label="Odometer (km)"><input className={inp} type="number" value={draft.odometerKm ?? ""} onChange={(e) => setDraft({ ...draft, odometerKm: Number(e.target.value) })} /></Field>
           <Field label="Fuel level (%)"><input className={inp} type="number" value={draft.fuelLevelPct ?? ""} onChange={(e) => setDraft({ ...draft, fuelLevelPct: Number(e.target.value) })} /></Field>
           <Field label="Driver (employee)"><select className={inp} value={draft.employeeId || ""} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value ? Number(e.target.value) : undefined })}><option value="">—</option>{drivers.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></Field>
+          
+          {/* 12 System Default Inspection Points */}
           <div className="sm:col-span-2">
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">12-point check — tap to confirm</p>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">12-Point System Inspection — tap to confirm</p>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {CHECK_ITEMS.map((c) => {
                 const on = draft[c.key] === true || draft[c.key] === undefined ? true : false;
@@ -1274,7 +1576,90 @@ export default function TransportModule(props: Props) {
             </div>
             <p className="mt-1 text-[9px] text-slate-500">* critical — any failure raises a HIGH AI risk alert.</p>
           </div>
+
+          {/* Custom Inspection Points */}
+          {checklistTemplates.filter((t: any) => t.isActive !== false).length > 0 && (
+            <div className="sm:col-span-2 border-t border-slate-700/80 pt-2">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sky-400">
+                Custom Enterprise Inspection Tasks ({checklistTemplates.filter((t: any) => t.isActive !== false).length})
+              </p>
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {checklistTemplates.filter((t: any) => t.isActive !== false).map((t: any) => {
+                  const on = draft[t.taskKey] === true || draft[t.taskKey] === undefined ? true : false;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, [t.taskKey]: !on })}
+                      className={`rounded-lg border px-2 py-1.5 text-left text-[10px] font-semibold transition ${
+                        on ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                      }`}
+                      data-testid={`transport-custom-check-${t.id}`}
+                    >
+                      {on ? "✓" : "✗"} {t.taskLabel}{t.priority === "CRITICAL" ? " *" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <Field label="Notes" span><input className={inp} placeholder="Anything the mechanic should know…" value={draft.notes || ""} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></Field>
+        </Modal>
+      )}
+
+      {form === "CHECKLIST_TEMPLATE" && (
+        <Modal
+          onClose={() => setForm(null)}
+          saving={saving}
+          title={draft.id ? "Edit Checklist Task" : "Add Custom Checklist Task"}
+          onSubmit={submitChecklistTemplate}
+          submitLabel={draft.id ? "Update Task" : "Save Custom Task"}
+        >
+          <Field label="Task / Inspection Label *" span>
+            <input
+              className={inp}
+              placeholder="e.g. Cargo Straps & Tarpaulin Secure"
+              value={draft.taskLabel || ""}
+              onChange={(e) => setDraft({ ...draft, taskLabel: e.target.value })}
+              data-testid="transport-f-tpl-label"
+              autoFocus
+            />
+          </Field>
+          <Field label="Category">
+            <select
+              className={inp}
+              value={draft.category || "SAFETY"}
+              onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+              data-testid="transport-f-tpl-cat"
+            >
+              {CHECKLIST_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Priority / Severity">
+            <select
+              className={inp}
+              value={draft.priority || "ROUTINE"}
+              onChange={(e) => setDraft({ ...draft, priority: e.target.value })}
+              data-testid="transport-f-tpl-priority"
+            >
+              <option value="ROUTINE">ROUTINE (Standard check)</option>
+              <option value="CRITICAL">CRITICAL (* Triggers AI Risk alert if failed)</option>
+            </select>
+          </Field>
+          <Field label="Instructions / Notes for Driver" span>
+            <input
+              className={inp}
+              placeholder="e.g. Ensure all 4 ratchets tightened and hook locks engaged"
+              value={draft.defaultNotes || ""}
+              onChange={(e) => setDraft({ ...draft, defaultNotes: e.target.value })}
+              data-testid="transport-f-tpl-notes"
+            />
+          </Field>
         </Modal>
       )}
 
