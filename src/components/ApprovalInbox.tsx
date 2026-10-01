@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, XCircle, ShieldCheck, Clock, Trash2, Plus, ChevronDown, ChevronRight, Receipt, X } from "lucide-react";
+import { CurrencyCode, formatMoney } from "@/lib/currency";
 
 const ACTION_LABEL: Record<string, string> = {
   EXPENSE: "Expense",
@@ -32,19 +33,21 @@ const STATUS_STYLE: Record<string, string> = {
   CANCELLED: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
 
-function money(n: number | null | undefined): string {
-  return n != null && Number(n) > 0 ? `GH₵ ${Number(n).toFixed(2)}` : "";
+function money(n: number | null | undefined, currency: CurrencyCode): string {
+  return n != null && Number(n) > 0 ? formatMoney(Number(n), currency) : "";
 }
 
 export default function ApprovalInbox({
   currentUser,
   businesses,
+  currentCurrency = "GHS",
   focusRequestId = null,
   onFocusHandled,
   onChanged,
 }: {
   currentUser: any;
   businesses: any[];
+  currentCurrency?: CurrencyCode;
   focusRequestId?: number | null;
   onFocusHandled?: () => void;
   onChanged?: () => void;
@@ -337,7 +340,7 @@ export default function ApprovalInbox({
                       <p className="text-[11px] text-slate-400 mt-1">
                         {bizName.get(Number(r.businessId)) || "(deleted unit)"}
                         {r.branchCode ? ` · ${r.branchCode}` : ""} · by {r.requestedByName || "staff"}
-                        {money(r.amountGhs) ? ` · ${money(r.amountGhs)}` : ""}
+                        {money(r.amountGhs, currentCurrency) ? ` · ${money(r.amountGhs, currentCurrency)}` : ""}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
@@ -420,7 +423,7 @@ export default function ApprovalInbox({
                     </div>
                     <p className="text-[10px] text-slate-400 mt-0.5">
                       {bizName.get(Number(r.businessId)) || "(deleted unit)"}
-                      {money(r.amountGhs) ? ` · ${money(r.amountGhs)}` : ""}
+                      {money(r.amountGhs, currentCurrency) ? ` · ${money(r.amountGhs, currentCurrency)}` : ""}
                       {r.decidedByName ? ` · ${r.status === "PENDING" ? "with" : "by"} ${r.decidedByName}` : ""}
                       {r.decisionReason ? ` — “${r.decisionReason}”` : ""}
                     </p>
@@ -618,7 +621,7 @@ export default function ApprovalInbox({
                   <span className="truncate">Disburse & Post Receipt</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                  {postModalRequest.targetLabel} ({money(postModalRequest.amountGhs)})
+                  {postModalRequest.targetLabel} ({money(postModalRequest.amountGhs, currentCurrency)})
                 </p>
               </div>
               <button

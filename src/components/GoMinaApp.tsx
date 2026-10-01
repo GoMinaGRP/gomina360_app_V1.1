@@ -9,7 +9,15 @@ import CommandCenterDashboard from "./CommandCenterDashboard";
 import NotificationBell from "./NotificationBell";
 import PushNotifications from "./PushNotifications";
 import IdleLogout from "./IdleLogout";
-import { CurrencyCode } from "@/lib/currency";
+import {
+  applyCurrencyRates,
+  cacheCurrencyRates,
+  CurrencyCode,
+  normalizeCurrencyCode,
+  readCachedCurrencyRates,
+  readStoredCurrencyCode,
+  storeCurrencyCode,
+} from "@/lib/currency";
 import { isSeededBaselineTxn } from "@/lib/financeReport";
 import { getOfflineQueue } from "@/lib/offlineSync";
 import { installSessionBridge, setSessionToken, clearSessionToken } from "@/lib/sessionBridge";
@@ -137,7 +145,13 @@ export default function GoMinaApp() {
     if (bizId) lastOpenedBizIdRef.current = Number(bizId);
     setActiveTab(tab);
   };
-  const [currentCurrency, setCurrentCurrency] = useState<CurrencyCode>("GHS");
+  const [currentCurrency, setCurrentCurrencyState] = useState<CurrencyCode>("GHS");
+  const [, setCurrencyRatesVersion] = useState(0);
+  const setCurrentCurrency = useCallback((code: CurrencyCode) => {
+    const normalized = normalizeCurrencyCode(code);
+    setCurrentCurrencyState(normalized);
+    storeCurrencyCode(normalized);
+  }, []);
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
   const [isNewBusinessModalOpen, setIsNewBusinessModalOpen] = useState(false);
@@ -390,6 +404,33 @@ export default function GoMinaApp() {
   // fire (the cookie stays primary; the header saves embedded contexts whose
   // browsers block third-party cookie storage).
   useEffect(() => { installSessionBridge(); }, []);
+  // Operating-currency rates: financial records remain stored in GHS; this
+  // refreshes display-only rates in the background using /api/currency/rates.
+  // A local cached copy paints immediately, and static fallbacks keep the UI
+  // available if the external exchange-rate source is down.
+  useEffect(() => {
+    const storedCode = readStoredCurrencyCode();
+    if (storedCode) setCurrentCurrencyState(storedCode);
+
+    const cached = readCachedCurrencyRates();
+    if (cached?.rates && applyCurrencyRates(cached.rates)) {
+      setCurrencyRatesVersion((v) => v + 1);
+    }
+
+    const controller = new AbortController();
+    fetch("/api/currency/rates", { cache: "no-store", signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!payload?.rates) return;
+        cacheCurrencyRates(payload);
+        if (applyCurrencyRates(payload.rates)) setCurrencyRatesVersion((v) => v + 1);
+      })
+      .catch(() => {
+        // Non-blocking: fallback rates remain active.
+      });
+    return () => controller.abort();
+  }, []);
+
 
   // Presence heartbeat — powers the live ONLINE chip in Signed-In Staff.
   // Beat "active" on sign-in/page-show/visibility-return; park the session
@@ -751,6 +792,7 @@ export default function GoMinaApp() {
         <AuditCommandCenter
           currentUser={currentUser}
           businesses={scopedBusinesses}
+          currentCurrency={currentCurrency}
           focusIssueId={auditFocusIssue}
           onFocusHandled={() => setAuditFocusIssue(null)}
         />
@@ -768,6 +810,7 @@ export default function GoMinaApp() {
         <ActionCenter
           currentUser={currentUser}
           businesses={scopedBusinesses}
+          currentCurrency={currentCurrency}
           focusApprovalId={actionCenterFocusApprovalId}
           focusTaskId={actionCenterFocusTaskId}
           onFocusHandled={() => {

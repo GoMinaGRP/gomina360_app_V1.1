@@ -59,10 +59,11 @@ const STAGE_ICONS: Record<string, any> = {
 /** Preorder-only stages get the indigo treatment, everything else the standard emerald. */
 const PREORDER_GLOW = "bg-indigo-500/15 border-indigo-400 text-indigo-300";
 
-function fmtMoney(amount: number | null | undefined, currency: string) {
+function fmtMoney(amount: number | null | undefined, _currency: string) {
+  // Public customer tracking remains in GHS to match marketplace checkout and
+  // the stored order ledger, regardless of the internal Operating Currency.
   if (amount == null) return "—";
-  if (currency === "GHS") return `GH₵ ${Number(amount).toFixed(2)}`;
-  return `${currency} ${Number(amount).toFixed(2)}`;
+  return `GH₵ ${Number(amount).toFixed(2)}`;
 }
 
 function ago(iso: string | null) {

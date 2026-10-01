@@ -15,13 +15,18 @@ import type { NextConfig } from "next";
 const extraFrameAncestors = (process.env.FRAME_ANCESTORS || "").split(",").map((s) => s.trim()).filter(Boolean);
 const frameAncestors = ["'self'", "https://*.e2b.app", ...extraFrameAncestors].join(" ");
 
+const isDev = process.env.NODE_ENV !== "production";
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  // Next.js dev mode uses React Refresh/webpack eval wrappers. Keep eval
+  // disabled in production, but allow it locally so the Arena preview can
+  // hydrate instead of sitting forever on the server-rendered "Initializing" shell.
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "media-src 'self' data: blob:",
-  "connect-src 'self' data:",
+  `connect-src 'self' data:${isDev ? " ws: wss:" : ""}`,
   "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'self'",

@@ -41,10 +41,11 @@ import MiniLeafletMap from "@/components/MiniLeafletMap";
 import { businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
-function fmtMoney(amount: number | null | undefined, currency = "GHS") {
+function fmtMoney(amount: number | null | undefined, _currency = "GHS") {
+  // Customer marketplace/order checkout is permanently Ghana Cedi. Operating
+  // Currency is an internal dashboard display preference only.
   if (amount == null) return "—";
-  if (currency === "GHS") return `GH₵ ${Number(amount).toFixed(2)}`;
-  return `${currency} ${Number(amount).toFixed(2)}`;
+  return `GH₵ ${Number(amount).toFixed(2)}`;
 }
 
 /** All images registered for a product (primary photo + extras), as the
