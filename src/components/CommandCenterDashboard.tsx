@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   TrendingUp,
@@ -43,6 +43,13 @@ import { CurrencyCode, formatMoney, convertGhs } from "@/lib/currency";
 import { rollupsByOrg } from "@/lib/orgGrouping";
 import { ActiveTab } from "./Sidebar";
 import FinancialReportSection from "./FinancialReportSection";
+import { businessTypeKeyOf, businessTypeLabelOf } from "@/lib/businessTypeKeys";
+import {
+  averageRiskScore,
+  commandCenterRiskBand,
+  computeCommandCenterBusinessRisk,
+  latestBusinessMetric,
+} from "@/lib/commandCenterRisk";
 
 interface CommandCenterDashboardProps {
   businesses: any[];
@@ -110,34 +117,81 @@ export default function CommandCenterDashboard({
   >("PROFIT_BAR");
   // P0.3 — archived units never take part in executive comparisons,
   // matrices or compliance roll-ups (their history stays in Audit/Finance).
-  const activeBusinesses = (businesses || []).filter((b) => !b?.isArchived);
-  // Which businesses to include in the comparison (default: all selected)
-  const [selectedBizIds, setSelectedBizIds] = useState<number[]>(
-    activeBusinesses.map((b) => b.id)
+  const activeBusinesses = useMemo(
+    () => (businesses || []).filter((b) => !b?.isArchived),
+    [businesses]
   );
+
+  // Business type filter + explicit business selection.  `selectedBizIds === null`
+  // means "all businesses in the current type scope".  This avoids the old
+  // zero-length-array ambiguity where Clear displayed all rows while saying
+  // "0 selected" and deployed selects could not reliably reset the scope.
+  const [businessTypeFilter, setBusinessTypeFilter] = useState<string>("ALL");
+  const [selectedBizIds, setSelectedBizIds] = useState<number[] | null>(null);
   // Compare by individual Business, or roll up by Branch (region)
   const [groupBy, setGroupBy] = useState<"BUSINESS" | "BRANCH">("BUSINESS");
 
-  // Keep selection in sync if the business list changes
-  const allBizIds = activeBusinesses.map((b) => b.id);
-  const effectiveSelected = selectedBizIds.filter((id) => allBizIds.includes(id));
-  const selectedSet = effectiveSelected.length > 0 ? new Set(effectiveSelected) : new Set(allBizIds);
+  const businessTypeOptions = useMemo(() => {
+    const byKey = new Map<string, { key: string; label: string; count: number }>();
+    for (const b of activeBusinesses) {
+      const key = businessTypeKeyOf(b?.category || "Other");
+      const label = businessTypeLabelOf(b?.category || "Other");
+      const row = byKey.get(key) || { key, label, count: 0 };
+      row.count += 1;
+      byKey.set(key, row);
+    }
+    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [activeBusinesses]);
+  const businessTypeOptionsKey = businessTypeOptions.map((t) => t.key).join("|");
+  useEffect(() => {
+    if (businessTypeFilter !== "ALL" && !businessTypeOptions.some((t) => t.key === businessTypeFilter)) {
+      setBusinessTypeFilter("ALL");
+      setSelectedBizIds(null);
+    }
+  }, [businessTypeFilter, businessTypeOptions, businessTypeOptionsKey]);
+
+  const typeScopedBusinesses = useMemo(
+    () =>
+      businessTypeFilter === "ALL"
+        ? activeBusinesses
+        : activeBusinesses.filter((b) => businessTypeKeyOf(b?.category || "Other") === businessTypeFilter),
+    [activeBusinesses, businessTypeFilter]
+  );
+
+  const allBizIds = useMemo(() => typeScopedBusinesses.map((b) => Number(b.id)).filter(Number.isFinite), [typeScopedBusinesses]);
+  const allBizIdsKey = allBizIds.join("|");
+  useEffect(() => {
+    setSelectedBizIds((prev) => {
+      if (prev === null) return null;
+      const inScope = prev.filter((id) => allBizIds.includes(id));
+      // If data refreshes and the custom selection now equals the whole scope,
+      // collapse back to the unambiguous "all" sentinel.
+      return inScope.length === allBizIds.length ? null : inScope;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allBizIdsKey]);
+
+  const effectiveSelected = selectedBizIds === null ? allBizIds : selectedBizIds.filter((id) => allBizIds.includes(id));
+  const effectiveSelectedKey = effectiveSelected.join("|");
+  const selectedSet = useMemo(() => new Set<number>(effectiveSelected), [effectiveSelectedKey]);
+  const selectedBusinessesInScope = typeScopedBusinesses.filter((b) => selectedSet.has(Number(b.id)));
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const metricValue = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
   // Live sales counts per business from transactions
   const salesCountByBiz = (bizId: number) =>
-    transactions.filter((t) => t.businessId === bizId && t.type === "INCOME").length;
+    transactions.filter((t) => t.businessId === bizId && t.type === "INCOME" && (!t.status || t.status === "COMPLETED")).length;
   const liveInventoryValueByBiz = (bizId: number) =>
     inventory
       .filter((i) => i.businessId === bizId)
       .reduce((acc, i) => acc + (i.quantity || 0) * (i.costPriceGhs || 0), 0);
 
-  // Merge businesses with their metrics
-  const comparisonData = activeBusinesses.map((biz) => {
+  // Merge businesses with their metrics and recalculate risk from CURRENT,
+  // scoped production data (ledger + stock + checklists + live metrics).
+  const comparisonData = typeScopedBusinesses.map((biz) => {
     const bizMetrics =
-      // No quarterly metric row (brand-new unit): honest ZEROS — never
-      // invent GH₵50k/30k phantom figures for an empty business. Its live
-      // activity layers in via liveMetrics from the first recorded entry.
-      metrics.find((m) => m.businessId === biz.id) || {
+      latestBusinessMetric(metrics, Number(biz.id)) || {
+        businessId: biz.id,
         revenueGhs: 0,
         expensesGhs: 0,
         netProfitGhs: 0,
@@ -146,43 +200,17 @@ export default function CommandCenterDashboard({
         assetsValueGhs: 0,
         inventoryValueGhs: 0,
         growthRatePercent: 0,
-        riskScore: 20,
+        riskScore: 0,
       };
 
-    // Dynamic operational risk calculation based on live unit health & stock signals
-    const bizInv = inventory.filter((i) => i.businessId === biz.id);
-    const outOfStockCount = bizInv.filter((i) => i.status === "OUT_OF_STOCK" || (i.quantity || 0) <= 0).length;
-    const lowStockCount = bizInv.filter((i) => i.status === "LOW_STOCK" || ((i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStockThreshold || 0))).length;
-
-    const bizTxns = transactions.filter((t) => t.businessId === biz.id);
-    const bizIncome = bizTxns.filter((t) => t.type === "INCOME").reduce((s, t) => s + (Number(t.amountGhs) || 0), 0);
-    const bizExpense = bizTxns.filter((t) => t.type === "EXPENSE").reduce((s, t) => s + (Number(t.amountGhs) || 0), 0);
-
-    const bizChecklistEntries = (checklists?.entries || []).filter((e) => Number(e.businessId) === Number(biz.id));
-    const openChecklists = bizChecklistEntries.filter((e) => !e.isCompleted).length;
-    const criticalFails = bizChecklistEntries.filter((e) => !e.isCompleted && String(e.priority).toUpperCase() === "CRITICAL").length;
-
-    const baseRisk = Number(bizMetrics.riskScore) > 0 ? Number(bizMetrics.riskScore) : 20;
-
-    let dynamicRisk = baseRisk;
-    // Stockout penalty: stockouts directly harm revenue and customer fulfillment
-    dynamicRisk += Math.min(25, outOfStockCount * 6 + lowStockCount * 2);
-    // Checklist compliance penalty: incomplete/critical operational tasks
-    dynamicRisk += Math.min(20, criticalFails * 8 + openChecklists * 2);
-    // Financial strain penalty: operating loss or high expense ratio
-    const currentRev = bizMetrics.revenueGhs + bizIncome;
-    const currentExp = bizMetrics.expensesGhs + bizExpense;
-    if (currentExp > currentRev && currentRev > 0) {
-      dynamicRisk += 10;
-    } else if (currentRev > 0 && currentExp / currentRev > 0.85) {
-      dynamicRisk += 5;
-    }
-    // Healthy operations bonus: zero stockouts & clean checklists
-    if (outOfStockCount === 0 && lowStockCount === 0 && openChecklists === 0 && currentRev >= currentExp) {
-      dynamicRisk -= 3;
-    }
-    // Clamp between 1 and 100
-    const computedRisk = Math.min(100, Math.max(1, Math.round(dynamicRisk)));
+    const risk = computeCommandCenterBusinessRisk({
+      business: biz,
+      metric: bizMetrics,
+      transactions,
+      inventory,
+      checklistEntries: checklists?.entries || [],
+      todayISO: todayStr,
+    });
 
     return {
       id: biz.id,
@@ -195,15 +223,17 @@ export default function CommandCenterDashboard({
       district: biz.district,
       town: biz.town,
       managerName: biz.managerName,
-      revenueGhs: bizMetrics.revenueGhs,
-      expensesGhs: bizMetrics.expensesGhs,
-      netProfitGhs: bizMetrics.netProfitGhs,
-      roiPercent: bizMetrics.roiPercent,
-      cashFlowGhs: bizMetrics.cashFlowGhs,
-      assetsValueGhs: bizMetrics.assetsValueGhs,
-      inventoryValueGhs: bizMetrics.inventoryValueGhs,
-      growthRatePercent: bizMetrics.growthRatePercent,
-      riskScore: computedRisk,
+      revenueGhs: metricValue(bizMetrics.revenueGhs),
+      expensesGhs: metricValue(bizMetrics.expensesGhs),
+      netProfitGhs: metricValue(bizMetrics.netProfitGhs),
+      roiPercent: metricValue(bizMetrics.roiPercent),
+      cashFlowGhs: metricValue(bizMetrics.cashFlowGhs),
+      assetsValueGhs: metricValue(bizMetrics.assetsValueGhs),
+      inventoryValueGhs: metricValue(bizMetrics.inventoryValueGhs),
+      growthRatePercent: metricValue(bizMetrics.growthRatePercent),
+      riskScore: risk.riskScore,
+      riskBand: risk.band,
+      riskDrivers: risk.drivers,
       salesCount: salesCountByBiz(biz.id),
       liveInventoryValueGhs: liveInventoryValueByBiz(biz.id),
     };
@@ -297,10 +327,8 @@ export default function CommandCenterDashboard({
         )
       : 0;
 
-  const avgRisk =
-    displayData.length > 0
-      ? Math.round(displayData.reduce((acc, b) => acc + b.riskScore, 0) / displayData.length)
-      : 0;
+  const avgRisk = averageRiskScore(displayData);
+  const avgRiskBand = avgRisk > 0 ? commandCenterRiskBand(avgRisk) : null;
 
   // Chart dataset formatted in current currency
   const chartDataset = displayData.map((d) => ({
@@ -318,16 +346,26 @@ export default function CommandCenterDashboard({
 
   // Selection helpers
   const toggleBiz = (id: number) => {
-    setSelectedBizIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelectedBizIds((prev) => {
+      const current = prev === null ? allBizIds : prev.filter((x) => allBizIds.includes(x));
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      return next.length === allBizIds.length ? null : next;
+    });
   };
-  const selectAllBiz = () => setSelectedBizIds(allBizIds);
-  const clearBiz = () => setSelectedBizIds([]);
+  const selectAllBiz = () => setSelectedBizIds(null);
+  const clearBiz = () => {
+    setBusinessTypeFilter("ALL");
+    setSelectedBizIds(null);
+  };
+  const handleBusinessTypeFilterChange = (value: string) => {
+    setBusinessTypeFilter(value);
+    // Changing the select is a scope reset: immediately show every business of
+    // that type instead of carrying over a hidden previous checkbox subset.
+    setSelectedBizIds(null);
+  };
 
-  const todayStr = new Date().toISOString().split("T")[0];
   const clEntries = checklists?.entries || [];
-  const checklistStats = activeBusinesses.map((b) => {
+  const checklistStats = selectedBusinessesInScope.map((b) => {
     const rows = clEntries.filter((e) => e.businessId === b.id && e.checklistDate === todayStr);
     const done = rows.filter((e) => e.isCompleted).length;
     return {
@@ -343,6 +381,14 @@ export default function CommandCenterDashboard({
     { done: 0, total: 0 }
   );
   const checklistTotalsPct = checklistTotals.total ? Math.round((checklistTotals.done / checklistTotals.total) * 100) : 0;
+  const avgRiskColorClass =
+    avgRiskBand === "LOW"
+      ? "text-emerald-400"
+      : avgRiskBand === "MODERATE"
+      ? "text-amber-400"
+      : avgRiskBand === "ELEVATED"
+      ? "text-rose-400"
+      : "text-slate-400";
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100" data-testid="command-center-root">
@@ -572,51 +618,36 @@ export default function CommandCenterDashboard({
         <div className="bg-slate-800/90 border border-slate-700/80 p-4 rounded-xl shadow-lg">
           <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
             <span>Avg Risk Score (1-100)</span>
-            <ShieldCheck
-              className={`w-4 h-4 ${
-                avgRisk < 35
-                  ? "text-emerald-400"
-                  : avgRisk < 60
-                  ? "text-amber-400"
-                  : "text-rose-400"
-              }`}
-            />
+            <ShieldCheck className={`w-4 h-4 ${avgRiskColorClass}`} />
           </div>
           <div
-            className={`text-lg sm:text-xl font-black mt-1 ${
-              avgRisk < 35
-                ? "text-emerald-400"
-                : avgRisk < 60
-                ? "text-amber-400"
-                : "text-rose-400"
-            }`}
+            className={`text-lg sm:text-xl font-black mt-1 ${avgRiskColorClass}`}
+            data-testid="cc-kpi-risk"
+            data-value={avgRisk}
           >
             {avgRisk} / 100
           </div>
           <div
-            className={`flex items-center text-[10px] mt-1 font-medium ${
-              avgRisk < 35
-                ? "text-emerald-400"
-                : avgRisk < 60
-                ? "text-amber-400"
-                : "text-rose-400"
-            }`}
+            className={`flex items-center text-[10px] mt-1 font-medium ${avgRiskColorClass}`}
+            data-testid="cc-kpi-risk-label"
           >
-            {avgRisk < 35 ? (
+            {avgRiskBand === "LOW" ? (
               <>
                 <CheckCircle className="w-3 h-3 mr-0.5 inline" />
                 <span>Low Enterprise Risk</span>
               </>
-            ) : avgRisk < 60 ? (
+            ) : avgRiskBand === "MODERATE" ? (
               <>
                 <AlertTriangle className="w-3 h-3 mr-0.5 inline" />
                 <span>Moderate Operational Risk</span>
               </>
-            ) : (
+            ) : avgRiskBand === "ELEVATED" ? (
               <>
                 <AlertTriangle className="w-3 h-3 mr-0.5 inline" />
                 <span>Elevated Risk Action Required</span>
               </>
+            ) : (
+              <span>No active businesses selected</span>
             )}
           </div>
         </div>
@@ -624,10 +655,11 @@ export default function CommandCenterDashboard({
 
       {/* Stock Alerts — low / out-of-stock products across every business */}
       {(() => {
-        const low = inventory.filter((i) => i.status === "LOW_STOCK" || ((i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStockThreshold || 0)));
-        const out = inventory.filter((i) => i.status === "OUT_OF_STOCK" || (i.quantity || 0) <= 0);
+        const scopedInventoryAlerts = inventory.filter((i) => selectedSet.has(Number(i.businessId)));
+        const low = scopedInventoryAlerts.filter((i) => i.status === "LOW_STOCK" || ((i.quantity || 0) > 0 && (i.quantity || 0) <= (i.minStockThreshold || 0)));
+        const out = scopedInventoryAlerts.filter((i) => i.status === "OUT_OF_STOCK" || (i.quantity || 0) <= 0);
         if (low.length === 0 && out.length === 0) return null;
-        const bizName = (id: number) => businesses.find((b) => b.id === id)?.name || ""; // labels may resolve archived units too
+        const bizName = (id: number) => activeBusinesses.find((b) => Number(b.id) === Number(id))?.name || "";
         return (
           <div className="bg-slate-800/90 border border-amber-500/30 rounded-2xl p-5 shadow-xl" data-testid="command-stock-alerts">
             <div className="flex items-center justify-between mb-3">
@@ -671,14 +703,19 @@ export default function CommandCenterDashboard({
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <ClipboardCheck className="w-4 h-4 text-teal-400" />
             Daily Checklist Compliance
-            <span className="text-[10px] font-semibold text-slate-400">today • all businesses</span>
+            <span className="text-[10px] font-semibold text-slate-400">today • selected scope</span>
           </h3>
           <div className="text-xs text-slate-400">
-            Enterprise: <span className="text-teal-300 font-black">{checklistTotals.done}/{checklistTotals.total}</span> tasks
+            Selected scope: <span className="text-teal-300 font-black">{checklistTotals.done}/{checklistTotals.total}</span> tasks
             <span className={`ml-2 font-black ${checklistTotalsPct === 100 && checklistTotals.total > 0 ? "text-emerald-400" : "text-teal-300"}`}>{checklistTotalsPct}%</span>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {checklistStats.length === 0 && (
+            <div className="col-span-full p-3 rounded-xl bg-slate-900/70 border border-slate-700 text-xs text-slate-400">
+              No businesses selected in the current scope.
+            </div>
+          )}
           {checklistStats.map((c) => (
             <div key={c.id} className="p-3 rounded-xl bg-slate-900/70 border border-slate-700">
               <div className="flex items-center justify-between gap-2">
@@ -734,31 +771,56 @@ export default function CommandCenterDashboard({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={selectAllBiz}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold"
-          >
-            Select All
-          </button>
-          <button
-            onClick={clearBiz}
-            className="px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-300 border border-slate-700 text-xs font-semibold"
-          >
-            Clear
-          </button>
-          <span className="text-[11px] text-slate-400 self-center ml-1">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="sr-only" htmlFor="cc-business-type-filter">Business Type</label>
+            <select
+              id="cc-business-type-filter"
+              data-testid="cc-business-type-filter"
+              value={businessTypeFilter}
+              onChange={(e) => handleBusinessTypeFilterChange(e.target.value)}
+              className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold min-w-[180px]"
+              title="Filter Command Center businesses by type"
+            >
+              <option value="ALL">All business types</option>
+              {businessTypeOptions.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label} ({t.count})
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={selectAllBiz}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold"
+            >
+              Select All
+            </button>
+            <button
+              onClick={clearBiz}
+              data-testid="cc-clear-business-scope"
+              className="px-3 py-1.5 rounded-lg bg-slate-700/60 text-slate-300 border border-slate-700 text-xs font-semibold"
+            >
+              Clear
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-400 self-center sm:self-auto">
             {effectiveSelected.length} of {allBizIds.length} selected
+            {businessTypeFilter !== "ALL" ? ` • ${businessTypeOptions.find((t) => t.key === businessTypeFilter)?.label || "Filtered type"}` : ""}
           </span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {businesses.map((biz) => {
-            const active = selectedSet.has(biz.id);
+          {typeScopedBusinesses.length === 0 && (
+            <div className="col-span-full p-3 rounded-xl bg-slate-900/70 border border-slate-700 text-xs text-slate-400">
+              No active businesses match this business type filter. Click Clear to reset.
+            </div>
+          )}
+          {typeScopedBusinesses.map((biz) => {
+            const active = selectedSet.has(Number(biz.id));
             return (
               <button
                 key={biz.id}
-                onClick={() => toggleBiz(biz.id)}
+                onClick={() => toggleBiz(Number(biz.id))}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition text-left ${
                   active
                     ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
@@ -1165,6 +1227,7 @@ export default function CommandCenterDashboard({
                     </td>
                     <td className="px-4 py-3.5 text-center">
                       <span
+                        title={!isGroup && Array.isArray(biz.riskDrivers) && biz.riskDrivers.length ? `Risk drivers: ${biz.riskDrivers.slice(0, 4).join(", ")}` : undefined}
                         className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${
                           biz.riskScore < 25
                             ? "bg-emerald-500/20 text-emerald-400"
