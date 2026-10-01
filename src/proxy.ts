@@ -62,7 +62,7 @@ const ADVISOR_API_ALLOWLIST: AdvisorApiRule[] = [
   { prefix: "/api/push", methods: null }, // own push subscriptions
 ];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   try {
     const info = await getSessionInfo(request);
     // Only FARM_ADVISOR sessions are policy-checked; everyone else passes.
@@ -91,6 +91,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  runtime: "nodejs",
   matcher: ["/api/:path*"],
 };

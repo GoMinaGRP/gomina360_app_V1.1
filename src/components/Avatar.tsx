@@ -3,10 +3,11 @@
 import React, { useEffect, useState } from "react";
 
 /**
- * Avatar — renders a user's profile photo (uploaded data URL or legacy
- * external URL) and, if the image is missing/unreachable (offline, dead
- * link), falls back automatically to the initial-letter circle so the UI
- * never shows a broken image.
+ * Avatar — renders an uploaded/same-origin profile photo and otherwise falls
+ * back to the initial-letter circle.  Legacy demo records used third-party
+ * image URLs; loading them during dashboard bootstrap adds an unreliable
+ * external network request to every login, so remote URLs are treated as
+ * missing instead of being fetched.
  *
  * The img branch keeps `data-testid` so tests/tooling can assert a real
  * photo is being shown; the fallback carries no testid.
@@ -28,13 +29,18 @@ export default function Avatar({
   fallbackTestid?: string;
 }) {
   const [broken, setBroken] = useState(false);
+  const normalizedUrl = typeof url === "string" ? url.trim() : "";
+  const isRenderableUrl =
+    normalizedUrl.startsWith("data:image/") ||
+    normalizedUrl.startsWith("blob:") ||
+    normalizedUrl.startsWith("/");
   // A NEW url (fresh upload, different profile) always retries as an image.
-  useEffect(() => { setBroken(false); }, [url]);
-  if (url && !broken) {
+  useEffect(() => { setBroken(false); }, [normalizedUrl]);
+  if (normalizedUrl && isRenderableUrl && !broken) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={url}
+        src={normalizedUrl}
         alt={name || "Staff"}
         className={imgClass}
         data-testid={testid}

@@ -5,7 +5,6 @@ import Navbar from "./Navbar";
 import LoginScreen from "./LoginScreen";
 import Sidebar, { ActiveTab } from "./Sidebar";
 import ContextNavigator, { ContextBar } from "./ContextNavigator";
-import CommandCenterDashboard from "./CommandCenterDashboard";
 import NotificationBell from "./NotificationBell";
 import PushNotifications from "./PushNotifications";
 import IdleLogout from "./IdleLogout";
@@ -50,6 +49,7 @@ function ModuleLoading() {
 const lazyMod = (loader: () => Promise<{ default: React.ComponentType<any> }>) =>
   dynamic(loader, { ssr: false, loading: () => <ModuleLoading /> });
 
+const CommandCenterDashboard = lazyMod(() => import("./CommandCenterDashboard"));
 const LivestockModule = lazyMod(() => import("./LivestockModule"));
 const SharedEnterpriseModule = lazyMod(() => import("./SharedEnterpriseModule"));
 const CustomerTrackingPanel = lazyMod(() => import("./CustomerTrackingPanel"));
@@ -313,6 +313,7 @@ export default function GoMinaApp() {
       }
       const data = await res.json();
       if (data.success) {
+        setSignedIn(true);
         // A healthy response must clear any previously displayed error —
         // otherwise a stale notice would keep covering the working app.
         setError(null);
@@ -338,11 +339,13 @@ export default function GoMinaApp() {
         setMetrics(data.metrics || []);
         setUsersList(data.users || []);
         // Keep the signed-in user object in sync with freshly fetched rows
-        // (permission changes apply instantly) — never auto-pick users[0]:
-        // identity comes from the secure login session only.
+        // (permission changes apply instantly). /api/init also carries the
+        // server-resolved currentUser so returning users no longer need a
+        // separate /api/auth/me round trip before the dashboard bootstrap.
         setCurrentUser((prev: any) => {
-          if (!prev) return prev;
-          const fresh = (data.users || []).find((u: any) => u.id === prev.id);
+          const identity = prev || data.currentUser;
+          if (!identity) return prev;
+          const fresh = (data.users || []).find((u: any) => u.id === identity.id) || data.currentUser;
           return fresh ? { ...fresh } : prev;
         });
         setCustomers(data.customers || []);
@@ -404,10 +407,10 @@ export default function GoMinaApp() {
   // fire (the cookie stays primary; the header saves embedded contexts whose
   // browsers block third-party cookie storage).
   useEffect(() => { installSessionBridge(); }, []);
-  // Operating-currency rates: financial records remain stored in GHS; this
-  // refreshes display-only rates in the background using /api/currency/rates.
-  // A local cached copy paints immediately, and static fallbacks keep the UI
-  // available if the external exchange-rate source is down.
+  // Operating-currency rates: financial records remain stored in GHS.  Local
+  // cache is applied immediately on page load; the network refresh waits until
+  // a signed-in dashboard actually needs it so the public login/storefront path
+  // does not cold-start the currency API unnecessarily.
   useEffect(() => {
     const storedCode = readStoredCurrencyCode();
     if (storedCode) setCurrentCurrencyState(storedCode);
@@ -416,7 +419,10 @@ export default function GoMinaApp() {
     if (cached?.rates && applyCurrencyRates(cached.rates)) {
       setCurrencyRatesVersion((v) => v + 1);
     }
+  }, []);
 
+  useEffect(() => {
+    if (!signedIn) return;
     const controller = new AbortController();
     fetch("/api/currency/rates", { cache: "no-store", signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
@@ -429,8 +435,7 @@ export default function GoMinaApp() {
         // Non-blocking: fallback rates remain active.
       });
     return () => controller.abort();
-  }, []);
-
+  }, [signedIn]);
 
   // Presence heartbeat — powers the live ONLINE chip in Signed-In Staff.
   // Beat "active" on sign-in/page-show/visibility-return; park the session
@@ -473,17 +478,10 @@ export default function GoMinaApp() {
   // the app renders the sign-in screen and fetches NOTHING else.
   useEffect(() => {
     (async () => {
-      try {
-        const res = await fetch("/api/auth/me");
-        const d = await res.json().catch(() => null);
-        if (res.ok && d?.success) {
-          setCurrentUser(d.user);
-          setSignedIn(true);
-          await refreshAllData();
-        } else {
-          setLoading(false);
-        }
-      } catch {
+      const status = await refreshAllData();
+      if (status === "ok") {
+        setSignedIn(true);
+      } else {
         setLoading(false);
       }
     })();
