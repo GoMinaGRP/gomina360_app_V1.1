@@ -462,7 +462,7 @@ export default function AquacultureModule({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card title="Harvest & Revenue Trend" icon={TrendingUp}>
               <div className="p-4"><ResponsiveContainer width="100%" height={220}>
-                <BarChart data={harvestTrend}><XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 10 }} /><YAxis yAxisId="left" orientation="left" stroke="#10b981" style={{ fontSize: 10 }} /><YAxis yAxisId="right" orientation="right" stroke="#06b6d4" style={{ fontSize: 10 }} /><Tooltip contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155" }} /><Bar yAxisId="left" dataKey="weight" name="Weight (kg)" fill="#06b6d4" radius={[3, 3, 0, 0]} /><Bar yAxisId="right" dataKey="revenue" name="Revenue (GH₵)" fill="#10b981" radius={[3, 3, 0, 0]} /></BarChart>
+                <BarChart data={harvestTrend}><XAxis dataKey="date" stroke="#94a3b8" style={{ fontSize: 10 }} /><YAxis yAxisId="left" orientation="left" stroke="#10b981" style={{ fontSize: 10 }} /><YAxis yAxisId="right" orientation="right" stroke="#06b6d4" style={{ fontSize: 10 }} /><Tooltip contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155" }} formatter={(value: any, name: any) => name === "Revenue" ? formatMoney(Number(value), currentCurrency) : [Number(value).toLocaleString(), name]} /><Bar yAxisId="left" dataKey="weight" name="Weight (kg)" fill="#06b6d4" radius={[3, 3, 0, 0]} /><Bar yAxisId="right" dataKey="revenue" name="Revenue" fill="#10b981" radius={[3, 3, 0, 0]} /></BarChart>
               </ResponsiveContainer></div>
             </Card>
             <Card title="Water Quality Trends" icon={HeartPulse}>

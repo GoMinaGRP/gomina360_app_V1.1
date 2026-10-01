@@ -39,6 +39,7 @@ const ADVISOR_API_ALLOWLIST: AdvisorApiRule[] = [
   { prefix: "/api/auth", methods: null }, // login / logout / me / change-password
   { prefix: "/api/session", methods: null }, // idle heartbeat (park/un-park)
   { prefix: "/api/health", methods: ["GET"] },
+  { prefix: "/api/currency", methods: ["GET"] }, // public display-only exchange rates
   { prefix: "/api/profile", methods: null }, // own profile
   { prefix: "/api/branding", methods: ["GET"] },
   { prefix: "/api/menu", methods: ["GET"] }, // public storefront catalogue
@@ -61,7 +62,7 @@ const ADVISOR_API_ALLOWLIST: AdvisorApiRule[] = [
   { prefix: "/api/push", methods: null }, // own push subscriptions
 ];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   try {
     const info = await getSessionInfo(request);
     // Only FARM_ADVISOR sessions are policy-checked; everyone else passes.
@@ -90,6 +91,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  runtime: "nodejs",
   matcher: ["/api/:path*"],
 };

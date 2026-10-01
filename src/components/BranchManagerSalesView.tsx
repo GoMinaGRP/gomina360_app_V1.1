@@ -2146,7 +2146,7 @@ export default function BranchManagerSalesView({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Refund Amount ({currentCurrency}) *
+                      Refund Amount (GH₵) *
                     </label>
                     <input
                       type="number"
@@ -2575,7 +2575,7 @@ export default function BranchManagerSalesView({
                     step="0.01"
                     value={creditPayAmount}
                     onChange={(e) => setCreditPayAmount(e.target.value)}
-                    placeholder={`Amount (≤ ${formatMoney(creditModalSale.balanceGhs, currentCurrency)})`}
+                    placeholder={`Amount in GH₵ (≤ GH₵ ${Number(creditModalSale.balanceGhs || 0).toFixed(2)})`}
                     data-testid="bm-credit-pay-amount"
                     className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
                   />

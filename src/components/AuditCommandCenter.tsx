@@ -23,6 +23,7 @@ import {
   PieChart, Pie, Cell, LineChart, Line,
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
+import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { csvSafeCell } from "@/lib/universalExport";
 
 const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
@@ -116,7 +117,7 @@ function PipelineSteps({ status }: { status: string }) {
   );
 }
 const DONUT_COLORS = ["#34d399", "#f87171", "#fbbf24", "#94a3b8"];
-const money = (n: number) => `GH₵ ${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
+const money = (n: number, currency: CurrencyCode) => formatMoney(Number(n || 0), currency);
 const fmtTs = (v: any) => (v ? new Date(v).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const dayOnly = (v: any) => String(v ?? "").slice(0, 10);
 
@@ -143,7 +144,7 @@ function fieldList(rec: any): { key: string; label: string; value: string; kind:
 type Rec = any;
 type Rev = any;
 
-export default function AuditCommandCenter({ currentUser, businesses, focusIssueId, onFocusHandled }: { currentUser: any; businesses: any[]; focusIssueId?: number | null; onFocusHandled?: () => void }) {
+export default function AuditCommandCenter({ currentUser, businesses, currentCurrency = "GHS", focusIssueId, onFocusHandled }: { currentUser: any; businesses: any[]; currentCurrency?: CurrencyCode; focusIssueId?: number | null; onFocusHandled?: () => void }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -575,7 +576,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
     { label: "Verified", value: report.totals.verified.toLocaleString(), sub: "records confirmed", tint: "text-emerald-300" },
     { label: "Open issues", value: report.totals.openIssues.toLocaleString(), sub: `${report.totals.flaggedNow} flagged · ${report.totals.underReview} in review · ${report.totals.correctionsRequired} corrections`, tint: "text-amber-300" },
     { label: "Resolved · awaiting verify", value: report.totals.resolvedIssues.toLocaleString(), sub: `${report.totals.verifiedIssues} verified & closed${report.avgResolveHrs != null ? ` · avg ${report.avgResolveHrs}h` : ""}`, tint: "text-emerald-300" },
-    { label: "Flagged amount", value: money(report.totals.flaggedAmount), sub: "open financial flags", tint: "text-rose-300" },
+    { label: "Flagged amount", value: money(report.totals.flaggedAmount, currentCurrency), sub: "open financial flags", tint: "text-rose-300" },
   ] : [];
 
   return (
@@ -1102,7 +1103,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
           <div className="bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden" data-testid="aud-disc">
             <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 bg-slate-950/60 border-b border-slate-800">
               <div className="text-[11px] font-bold text-slate-400 uppercase">Financial discrepancies — open flags & corrections on the books</div>
-              <div className="text-rose-300 font-black text-sm" data-testid="aud-disc-total">{money(report.totals.flaggedAmount)}</div>
+              <div className="text-rose-300 font-black text-sm" data-testid="aud-disc-total">{money(report.totals.flaggedAmount, currentCurrency)}</div>
             </div>
             {isWide ? (
               <div className="overflow-x-auto">
@@ -1118,7 +1119,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                         <td className="px-3 py-2 text-amber-200">{d.reason || "—"}</td>
                         <td className="px-3 py-2">{bizName(d.businessId)}</td>
                         <td className="px-3 py-2">{d.raisedBy} · {fmtTs(d.raisedAt)}</td>
-                        <td className="px-3 py-2 text-right font-bold text-rose-300">{d.amountGhs != null ? money(d.amountGhs) : "—"}</td>
+                        <td className="px-3 py-2 text-right font-bold text-rose-300">{d.amountGhs != null ? money(d.amountGhs, currentCurrency) : "—"}</td>
                       </tr>
                     ))}
                     {report.discrepancies.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No open discrepancies — clean books.</td></tr>}
@@ -1133,7 +1134,7 @@ export default function AuditCommandCenter({ currentUser, businesses, focusIssue
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${ACTION_TINT[d.action]}`}>{d.action}</span>
                       <span className="font-mono text-[10px] text-cyan-300">{d.ref}</span>
-                      <span className="ml-auto font-bold text-rose-300 text-xs">{d.amountGhs != null ? money(d.amountGhs) : "—"}</span>
+                      <span className="ml-auto font-bold text-rose-300 text-xs">{d.amountGhs != null ? money(d.amountGhs, currentCurrency) : "—"}</span>
                     </div>
                     <div className="font-semibold text-slate-100 text-xs">{d.title}</div>
                     {d.reason && <div className="text-[11px] text-amber-200">{d.reason}</div>}

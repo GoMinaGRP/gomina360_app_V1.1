@@ -12,6 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { convertGhs, CurrencyCode, formatMoney } from "@/lib/currency";
 
 /**
  * Customer 360 drawer (R3) — one customer's whole relationship in one slide-over:
@@ -36,17 +37,19 @@ const TYPE_STYLE: Record<string, string> = {
   NOTE: "bg-slate-600/40 text-slate-300",
 };
 
-const money = (n: any) => `GH₵ ${Number(n || 0).toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (n: any, currency: CurrencyCode) => formatMoney(Number(n || 0), currency);
 const today = () => new Date().toLocaleDateString("en-CA");
 
 export default function Customer360Drawer({
   customer,
   businesses,
+  currentCurrency = "GHS",
   onClose,
   onUpdated,
 }: {
   customer: any;
   businesses: any[];
+  currentCurrency?: CurrencyCode;
   onClose: () => void;
   onUpdated?: () => void;
 }) {
@@ -143,21 +146,21 @@ export default function Customer360Drawer({
     doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 43);
     autoTable(doc, {
       startY: 49,
-      head: [["Date", "Reference", "Description", "Debit (GH₵)", "Credit (GH₵)", "Balance (GH₵)"]],
+      head: [["Date", "Reference", "Description", `Debit (${currentCurrency})`, `Credit (${currentCurrency})`, `Balance (${currentCurrency})`]],
       body: (data.statement || []).map((l: any) => [
         l.date || "",
         l.reference || "",
         l.description || "",
-        l.debitGhs ? Number(l.debitGhs).toFixed(2) : "",
-        l.creditGhs ? Number(l.creditGhs).toFixed(2) : "",
-        Number(l.balanceGhs || 0).toFixed(2),
+        l.debitGhs ? convertGhs(Number(l.debitGhs), currentCurrency).toFixed(2) : "",
+        l.creditGhs ? convertGhs(Number(l.creditGhs), currentCurrency).toFixed(2) : "",
+        convertGhs(Number(l.balanceGhs || 0), currentCurrency).toFixed(2),
       ]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [15, 23, 42] },
     });
     const finalY = (doc as any).lastAutoTable?.finalY || 60;
     doc.setFontSize(11);
-    doc.text(`Closing balance: GH₵ ${Number(data.statementBalanceGhs || 0).toFixed(2)}`, 14, finalY + 8);
+    doc.text(`Closing balance: ${money(data.statementBalanceGhs, currentCurrency)}`, 14, finalY + 8);
     doc.save(`statement-${String(data.profile.name || "customer").replace(/\W+/g, "-").toLowerCase()}.pdf`);
   };
 
@@ -209,7 +212,7 @@ export default function Customer360Drawer({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="bg-slate-800/80 border border-slate-700/70 rounded-xl p-3">
               <p className="text-[10px] uppercase font-bold text-slate-500">Lifetime spend</p>
-              <p className="text-sm font-black text-emerald-300">{money(insights.monetaryGhs)}</p>
+              <p className="text-sm font-black text-emerald-300">{money(insights.monetaryGhs, currentCurrency)}</p>
             </div>
             <div className="bg-slate-800/80 border border-slate-700/70 rounded-xl p-3">
               <p className="text-[10px] uppercase font-bold text-slate-500">Orders</p>
@@ -221,7 +224,7 @@ export default function Customer360Drawer({
             </div>
             <div className="bg-slate-800/80 border border-slate-700/70 rounded-xl p-3">
               <p className="text-[10px] uppercase font-bold text-slate-500">Open credit</p>
-              <p className={`text-sm font-black ${Number(insights.openCreditGhs) > 0 ? "text-amber-300" : "text-white"}`}>{money(insights.openCreditGhs)}</p>
+              <p className={`text-sm font-black ${Number(insights.openCreditGhs) > 0 ? "text-amber-300" : "text-white"}`}>{money(insights.openCreditGhs, currentCurrency)}</p>
             </div>
           </div>
 
@@ -302,10 +305,10 @@ export default function Customer360Drawer({
                       <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${s.status === "PAID" ? "bg-green-500/15 text-green-300 border-green-500/30" : overdue ? "bg-rose-500/15 text-rose-300 border-rose-500/30" : "bg-amber-500/15 text-amber-300 border-amber-500/30"}`}>
                         {s.status === "PAID" ? "Settled" : overdue ? "OVERDUE" : "Active"}
                       </span>
-                      <span className="text-xs font-black text-amber-300">{money(s.balanceGhs)} owed</span>
+                      <span className="text-xs font-black text-amber-300">{money(s.balanceGhs, currentCurrency)} owed</span>
                     </div>
                     <p className="text-[10px] text-slate-500 mt-0.5">
-                      Total {money(s.totalGhs)} · paid {money(s.amountPaidGhs)}{s.dueDate ? ` · due ${s.dueDate}` : ""}
+                      Total {money(s.totalGhs, currentCurrency)} · paid {money(s.amountPaidGhs, currentCurrency)}{s.dueDate ? ` · due ${s.dueDate}` : ""}
                     </p>
                     {(s.items || []).length > 0 && (
                       <div className="mt-1.5 space-y-0.5">
@@ -350,9 +353,9 @@ export default function Customer360Drawer({
                         <td className="px-3 py-1.5 text-slate-400">{l.date}</td>
                         <td className="px-3 py-1.5 font-mono text-slate-300">{l.reference}</td>
                         <td className="px-3 py-1.5 text-slate-300">{l.description}</td>
-                        <td className="px-3 py-1.5 text-right text-slate-300">{l.debitGhs ? money(l.debitGhs) : ""}</td>
-                        <td className="px-3 py-1.5 text-right text-emerald-300">{l.creditGhs ? money(l.creditGhs) : ""}</td>
-                        <td className="px-3 py-1.5 text-right font-bold text-white">{money(l.balanceGhs)}</td>
+                        <td className="px-3 py-1.5 text-right text-slate-300">{l.debitGhs ? money(l.debitGhs, currentCurrency) : ""}</td>
+                        <td className="px-3 py-1.5 text-right text-emerald-300">{l.creditGhs ? money(l.creditGhs, currentCurrency) : ""}</td>
+                        <td className="px-3 py-1.5 text-right font-bold text-white">{money(l.balanceGhs, currentCurrency)}</td>
                       </tr>
                     ))}
                     {(data?.statement || []).length === 0 && (
@@ -362,7 +365,7 @@ export default function Customer360Drawer({
                 </table>
               </div>
               <p className="text-xs text-slate-300">
-                Closing balance: <b className="text-white">{money(data?.statementBalanceGhs)}</b>
+                Closing balance: <b className="text-white">{money(data?.statementBalanceGhs, currentCurrency)}</b>
               </p>
             </div>
           )}

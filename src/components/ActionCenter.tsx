@@ -16,6 +16,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import ApprovalInbox from "@/components/ApprovalInbox";
+import { CurrencyCode } from "@/lib/currency";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -70,6 +71,7 @@ function daysUntil(dateIso: string | null | undefined, today: string): number | 
 export default function ActionCenter({
   currentUser,
   businesses,
+  currentCurrency = "GHS",
   focusApprovalId = null,
   focusTaskId = null,
   onFocusHandled,
@@ -77,6 +79,7 @@ export default function ActionCenter({
 }: {
   currentUser: any;
   businesses: any[];
+  currentCurrency?: CurrencyCode;
   focusApprovalId?: number | null;
   focusTaskId?: number | null;
   onFocusHandled?: () => void;
@@ -665,6 +668,7 @@ export default function ActionCenter({
       <ApprovalInbox
         currentUser={currentUser}
         businesses={businesses}
+        currentCurrency={currentCurrency}
         focusRequestId={focusApprovalId}
         onFocusHandled={onFocusHandled}
         onChanged={load}

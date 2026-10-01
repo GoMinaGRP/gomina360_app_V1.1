@@ -26,9 +26,7 @@ import {
   Trash2,
   Wallet,
 } from "lucide-react";
-
-const money = (n: number | null | undefined) =>
-  `GH₵ ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+import { CurrencyCode, formatMoney } from "@/lib/currency";
 
 function monthLabel(period: string): string {
   const [y, m] = period.split("-");
@@ -49,9 +47,11 @@ function periodOptions(): string[] {
 export default function BudgetsAndCashflowSection({
   currentUser,
   businesses,
+  currentCurrency = "GHS",
 }: {
   currentUser: any;
   businesses: any[];
+  currentCurrency?: CurrencyCode;
 }) {
   const [tab, setTab] = useState<"BUDGETS" | "CASHFLOW">("BUDGETS");
   return (
@@ -76,14 +76,15 @@ export default function BudgetsAndCashflowSection({
           ))}
         </div>
       </div>
-      {tab === "BUDGETS" ? <BudgetsPanel currentUser={currentUser} businesses={businesses} /> : <CashflowPanel currentUser={currentUser} businesses={businesses} />}
+      {tab === "BUDGETS" ? <BudgetsPanel currentUser={currentUser} businesses={businesses} currentCurrency={currentCurrency} /> : <CashflowPanel currentUser={currentUser} businesses={businesses} currentCurrency={currentCurrency} />}
     </div>
   );
 }
 
 // ─── Budgets ───────────────────────────────────────────────────────────────
 
-function BudgetsPanel({ currentUser, businesses }: { currentUser: any; businesses: any[] }) {
+function BudgetsPanel({ currentUser, businesses, currentCurrency }: { currentUser: any; businesses: any[]; currentCurrency: CurrencyCode }) {
+  const money = useCallback((n: number | null | undefined) => formatMoney(Number(n || 0), currentCurrency, true), [currentCurrency]);
   const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [scope, setScope] = useState("all");
   const [data, setData] = useState<any>(null);
@@ -359,7 +360,8 @@ function AddBudgetLine({
 
 // ─── Cash-flow forecast ────────────────────────────────────────────────────
 
-function CashflowPanel({ currentUser, businesses }: { currentUser: any; businesses: any[] }) {
+function CashflowPanel({ currentUser, businesses, currentCurrency }: { currentUser: any; businesses: any[]; currentCurrency: CurrencyCode }) {
+  const money = useCallback((n: number | null | undefined) => formatMoney(Number(n || 0), currentCurrency, true), [currentCurrency]);
   const [scope, setScope] = useState("all");
   const [weeks, setWeeks] = useState(13);
   const [data, setData] = useState<any>(null);

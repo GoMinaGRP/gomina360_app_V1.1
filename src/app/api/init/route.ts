@@ -7,6 +7,7 @@ import { canViewSection, anySectionAllowed, farmModuleOfBusiness } from "@/lib/a
 import { BUSINESS_TYPES } from "@/lib/businessTypes";
 import { ensureTodayFor, sweepOverdueCritical } from "@/lib/checklistGen";
 import { compressJsonBody } from "@/lib/httpGzip";
+import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 
@@ -26,7 +27,10 @@ let seedCheckedThisProcess = false;
  *  for at most 2.5 s (dashboard refreshes are user-driven and infrequent).
  *  The cached entry stores BOTH the raw JSON and its gzip form so a cache hit
  *  never re-compresses 100+ KB. */
-const INIT_TTL_MS = 2_500;
+const INIT_TTL_MS = 10_000;
+const DAILY_CHECKLIST_ENSURE_TTL_MS = 10 * 60 * 1000;
+const OVERDUE_SWEEP_TTL_MS = 15 * 60 * 1000;
+const DAILY_OPS_TTL_MS = 60 * 60 * 1000;
 
 interface InitCacheEntry {
   raw: string;
@@ -44,18 +48,36 @@ function initCacheKey(session: any, allowed: number[] | null): string {
   return `init:v1:${me.id}:${createHash("sha1").update(scope).digest("base64url").slice(0, 12)}`;
 }
 
+function scopeHash(ids: number[] | null): string {
+  return createHash("sha1")
+    .update(ids === null ? "ALL" : [...ids].sort((a, b) => a - b).join(","))
+    .digest("base64url")
+    .slice(0, 12);
+}
+
+async function ensureSeededOnceFast(): Promise<void> {
+  if (seedCheckedThisProcess) return;
+  // Production cold starts used to import the full demo seeder and take an
+  // advisory lock on the first /api/init even when the database was already
+  // live.  A tiny EXISTS probe avoids that bundle + lock on every new Vercel
+  // function instance; the heavy seeder is imported only for an empty DB.
+  const existing = (await db.execute(sql`select exists(select 1 from businesses limit 1) as "hasBusinesses"`)) as any;
+  const hasBusinesses = existing?.rows?.[0]?.hasBusinesses === true || existing?.rows?.[0]?.hasBusinesses === "true";
+  if (hasBusinesses) {
+    seedCheckedThisProcess = true;
+    return;
+  }
+  const { seedDatabase } = await import("@/db/seed");
+  await seedDatabase();
+  seedCheckedThisProcess = true;
+}
+
 export async function GET(request: Request) {
   try {
-    // Run seed if database is empty (once per process — the check itself is a
-    // DB round trip that used to run on EVERY dashboard load).
-    if (!seedCheckedThisProcess) {
-      const { seedDatabase } = await import("@/db/seed");
-      await seedDatabase();
-      seedCheckedThisProcess = true;
-    }
-
     // ── Secure login gate ───────────────────────────────────────────────
-    // Every byte of data returned below is scoped to the signed-in user.
+    // Every byte of data returned below is scoped to the signed-in user.  Do
+    // this before any seed/checklist work so the public login page's bootstrap
+    // 401 is cheap and never cold-starts database maintenance on Vercel.
     const session = await getSessionInfo(request);
     if (!session) {
       return NextResponse.json(
@@ -63,6 +85,11 @@ export async function GET(request: Request) {
         { status: 401 }
       );
     }
+
+    // Run seed only when the database is genuinely empty.  Existing production
+    // data takes the lightweight fast path above, avoiding a large cold-start
+    // import and advisory-lock round trip on every new serverless instance.
+    await ensureSeededOnceFast();
     const me = session.user;
     const allowed = await accessibleBusinessIds(me, session.orgIds); // null ⇒ Super Admin (all)
     const cacheKey = initCacheKey(session, allowed);
@@ -104,28 +131,39 @@ export async function GET(request: Request) {
     // the first init of the day per business.
     if (!bids || bids[0] !== -1) {
       const todayLocal = new Date().toLocaleDateString("en-CA");
-      try {
-        await ensureTodayFor(bids, todayLocal); // null ⇒ Super Admin ⇒ all businesses
-      } catch (e) {
-        console.error("[checklistGen] ensureTodayFor failed (continuing without generation):", (e as any)?.message || e);
+      const scopedHash = scopeHash(bids);
+      // Checklist generation is idempotent, but it was still doing DB work on
+      // every /api/init miss.  Cache the proof per process/scope/date so rapid
+      // refreshes, route changes and notification-triggered reloads do not
+      // repeatedly hit Postgres for the same daily rows.
+      const ensureKey = `init:checklists-ready:${todayLocal}:${scopedHash}`;
+      if (ttlGet<boolean>(ensureKey) === undefined) {
+        try {
+          await ensureTodayFor(bids, todayLocal); // null ⇒ Super Admin ⇒ all businesses
+          ttlSet(ensureKey, true, DAILY_CHECKLIST_ENSURE_TTL_MS);
+        } catch (e) {
+          console.error("[checklistGen] ensureTodayFor failed (continuing without generation):", (e as any)?.message || e);
+        }
       }
-      // Overdue-critical sweep: incomplete CRITICAL tasks for today past the
-      // cutoff hour (default 18:00, per-business configurable) notify the
-      // managers + assignees — once per business+date (recordRef-deduped).
-      // Fire-and-forget: never blocks the init payload.
-      sweepOverdueCritical(bids).catch((e) => {
-        console.error("[checklistGen] overdue sweep failed (continuing):", (e as any)?.message || e);
-      });
-      // Daily ops heartbeat (P2): once per calendar day, the first session
-      // anywhere also runs the low-stock sweep, SLA escalations and the
-      // per-user morning digest — the pull-based fallback for deployments
-      // where the Vercel Cron job has not fired yet. Global marker
-      // `daily-ops:<date>` makes this exactly-once; fire-and-forget.
-      import("@/lib/dailyOps")
-        .then((m) => m.runDailyOps({ source: "init" }))
-        .catch((e) => {
-          console.error("[dailyOps] init fallback failed (continuing):", (e as any)?.message || e);
+      // Overdue-critical sweep and daily ops are background safety nets.  Rate
+      // limit their scheduling from init so busy dashboards cannot enqueue the
+      // same fire-and-forget jobs every few seconds on Vercel.
+      const sweepKey = `init:overdue-sweep:${todayLocal}:${scopedHash}`;
+      if (ttlGet<boolean>(sweepKey) === undefined) {
+        ttlSet(sweepKey, true, OVERDUE_SWEEP_TTL_MS);
+        sweepOverdueCritical(bids).catch((e) => {
+          console.error("[checklistGen] overdue sweep failed (continuing):", (e as any)?.message || e);
         });
+      }
+      const dailyOpsKey = `init:daily-ops-scheduled:${todayLocal}`;
+      if (ttlGet<boolean>(dailyOpsKey) === undefined) {
+        ttlSet(dailyOpsKey, true, DAILY_OPS_TTL_MS);
+        import("@/lib/dailyOps")
+          .then((m) => m.runDailyOps({ source: "init" }))
+          .catch((e) => {
+            console.error("[dailyOps] init fallback failed (continuing):", (e as any)?.message || e);
+          });
+      }
     }
 
     // ── Data fetch: ONE multi-statement round trip ───────────────────────
@@ -241,6 +279,7 @@ export async function GET(request: Request) {
       companyLogo: null,
       metrics: filterByAccess(snap.metrics, allowed),
       users: scopedUsers,
+      currentUser: stripSecret(me),
       customers: (allowed === null
         ? snap.customers
         : snap.customers.filter(

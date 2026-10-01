@@ -388,7 +388,7 @@ export default function CustomerTrackingPanel({
           credit order is still paying off, so surface its live position. */}
       {t.credit && (
         <span className="flex items-center gap-0.5 text-[9px] font-black px-1.5 py-1 rounded border shrink-0 bg-cyan-500/15 text-cyan-300 border-cyan-500/40" data-testid={`ct-credit-${t.id}`}>
-          <HandCoins className="w-2.5 h-2.5" /> {t.credit.status === "PAID" ? "CREDIT PAID" : `CREDIT · GH₵${Number(t.credit.balanceGhs || 0).toFixed(2)} DUE`}
+          <HandCoins className="w-2.5 h-2.5" /> {t.credit.status === "PAID" ? "CREDIT PAID" : `CREDIT · ${fmt(t.credit.balanceGhs)} DUE`}
         </span>
       )}
     </>

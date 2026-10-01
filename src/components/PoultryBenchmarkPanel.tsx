@@ -72,10 +72,10 @@ function VarChip({ kpi, against }: { kpi: BenchmarkKpi; against: "target" | "his
   );
 }
 
-function fmtVal(kpi: BenchmarkKpi, v: number | null): string {
+function fmtVal(kpi: BenchmarkKpi, v: number | null, currency: CurrencyCode): string {
   if (v == null) return "—";
   const money = ["FEED_COST_PER_KG_GAIN", "COST_PER_BIRD", "COST_PER_EGG"].includes(kpi.key);
-  if (money) return formatMoney(v, "GHS" as any);
+  if (money) return formatMoney(v, currency);
   return `${v}${kpi.unit ? ` ${kpi.unit}` : ""}`;
 }
 
@@ -315,14 +315,14 @@ export default function PoultryBenchmarkPanel({
               {scored.map((x) => (
                 <tr key={x.key} data-testid={`pob-row-${x.key.toLowerCase()}`}>
                   <td className="py-2 pr-3 font-semibold text-slate-200">{x.label}</td>
-                  <td className="py-2 pr-3 text-right font-bold text-white">{fmtVal(x, x.actual)}</td>
-                  <td className="py-2 pr-3 text-right text-slate-400">{x.target != null ? fmtVal(x, x.target) : "—"}</td>
+                  <td className="py-2 pr-3 text-right font-bold text-white">{fmtVal(x, x.actual, currentCurrency)}</td>
+                  <td className="py-2 pr-3 text-right text-slate-400">{x.target != null ? fmtVal(x, x.target, currentCurrency) : "—"}</td>
                   <td className="py-2 pr-3">
                     {x.target != null && x.actual != null
                       ? <VarChip kpi={x} against="target" />
                       : <span className="text-slate-600 text-[10px]">no curve</span>}
                   </td>
-                  <td className="py-2 pr-3 text-right text-slate-400">{x.histMedian != null ? fmtVal(x, x.histMedian) : "—"}</td>
+                  <td className="py-2 pr-3 text-right text-slate-400">{x.histMedian != null ? fmtVal(x, x.histMedian, currentCurrency) : "—"}</td>
                   <td className="py-2">
                     {x.histMedian != null && x.actual != null
                       ? <VarChip kpi={x} against="hist" />

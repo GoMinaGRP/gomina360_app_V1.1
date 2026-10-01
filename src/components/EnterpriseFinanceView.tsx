@@ -270,7 +270,7 @@ export default function EnterpriseFinanceView({
           that turns the live ledger into forward-looking controls: monthly
           budget envelopes with live variance, and a projection from the
           Command Center's liquid-surplus figure. ── */}
-      <BudgetsAndCashflowSection currentUser={currentUser} businesses={businesses} />
+      <BudgetsAndCashflowSection currentUser={currentUser} businesses={businesses} currentCurrency={currentCurrency} />
     </div>
   );
 }

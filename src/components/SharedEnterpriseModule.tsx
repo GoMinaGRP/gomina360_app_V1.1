@@ -325,7 +325,7 @@ export default function SharedEnterpriseModule({
 
   const recordLabel = (r: any) =>
     moduleType === "TRANSACTIONS"
-      ? `${r.transactionNumber} — GH₵ ${r.amountGhs} (${r.category})`
+      ? `${r.transactionNumber} — ${formatMoney(r.amountGhs, currentCurrency)} (${r.category})`
       : moduleType === "SUPPLIERS"
       ? r.name
       : moduleType === "INVENTORY"
@@ -3823,6 +3823,7 @@ export default function SharedEnterpriseModule({
         <Customer360Drawer
           customer={c360Customer}
           businesses={businesses}
+          currentCurrency={currentCurrency}
           onClose={() => setC360Customer(null)}
           onUpdated={onRefreshData}
         />

@@ -42,7 +42,7 @@ import LocationSelector, { LocationValue } from "./LocationSelector";
 import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
 import { businessManageIdsOf } from "@/lib/permissions";
-import { displayCategory } from "@/lib/businessTypeKeys";
+import { businessTypeKeyOf, businessTypeLabelOf, displayCategory } from "@/lib/businessTypeKeys";
 
 /** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
  *  the same convention used for employee photos and document uploads. */
@@ -202,21 +202,35 @@ export default function ManageBusinessesModal({
     (orgId ? `Organization #${orgId}` : "Unassigned");
   const [orgFilter, setOrgFilter] = useState<string>("ALL");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const orgScopedBusinesses = useMemo(() => {
+    if (!isSuperAdmin || orgFilter === "ALL") return businesses;
+    return businesses.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+  }, [businesses, isSuperAdmin, orgFilter]);
   const scopedBusinesses = useMemo(() => {
-    let list = businesses;
-    if (isSuperAdmin && orgFilter !== "ALL") {
-      list = list.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+    if (!isSuperAdmin || typeFilter === "ALL") return orgScopedBusinesses;
+    return orgScopedBusinesses.filter((b: any) => businessTypeKeyOf(b.category || "Other") === typeFilter);
+  }, [orgScopedBusinesses, isSuperAdmin, typeFilter]);
+  // Distinct business types present in the current owner/org filter — drives
+  // the Super Admin type filter and prevents stale no-result options.
+  const typeOptions = useMemo(() => {
+    const byKey = new Map<string, { key: string; label: string; count: number }>();
+    for (const b of orgScopedBusinesses) {
+      const key = businessTypeKeyOf(b.category || "Other");
+      const label = businessTypeLabelOf(b.category || "Other");
+      const row = byKey.get(key) || { key, label, count: 0 };
+      row.count += 1;
+      byKey.set(key, row);
     }
-    if (isSuperAdmin && typeFilter !== "ALL") {
-      list = list.filter((b: any) => (b.category || "Other") === typeFilter);
-    }
-    return list;
-  }, [businesses, isSuperAdmin, orgFilter, typeFilter]);
-  // Distinct business types present — drives the Super Admin type filter.
-  const typeOptions = useMemo(
-    () => Array.from(new Set(businesses.map((b: any) => b.category || "Other"))).sort(),
-    [businesses]
-  );
+    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [orgScopedBusinesses]);
+  const typeOptionsKey = typeOptions.map((t) => t.key).join("|");
+  useEffect(() => {
+    if (typeFilter !== "ALL" && !typeOptions.some((t) => t.key === typeFilter)) setTypeFilter("ALL");
+  }, [typeFilter, typeOptions, typeOptionsKey]);
+  const clearManagementFilters = () => {
+    setOrgFilter("ALL");
+    setTypeFilter("ALL");
+  };
 
   // Category re-type options: restricted orgs are offered ONLY their granted
   // types (the current category always stays selectable — it's what the unit
@@ -269,6 +283,8 @@ export default function ManageBusinessesModal({
       setResetCounts(null);
       setResetMasters(false);
       setResetStaffUsers(false);
+      setOrgFilter("ALL");
+      setTypeFilter("ALL");
     }
   }, [isOpen]);
 
@@ -1020,7 +1036,7 @@ export default function ManageBusinessesModal({
                   <select
                     data-testid="org-filter-select"
                     value={orgFilter}
-                    onChange={(e) => setOrgFilter(e.target.value)}
+                    onChange={(e) => { setOrgFilter(e.target.value); setTypeFilter("ALL"); }}
                     title="Filter branches by owning Owner / Organization"
                     className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
                   >
@@ -1042,11 +1058,22 @@ export default function ManageBusinessesModal({
                   >
                     <option value="ALL">All business types</option>
                     {typeOptions.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
+                      <option key={t.key} value={t.key}>
+                        {t.label} ({t.count})
                       </option>
                     ))}
                   </select>
+                )}
+                {isSuperAdmin && (orgFilter !== "ALL" || typeFilter !== "ALL") && (
+                  <button
+                    type="button"
+                    onClick={clearManagementFilters}
+                    data-testid="manage-biz-clear-filters"
+                    className="px-2 py-1.5 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-600"
+                    title="Clear Owner/Organization and Business Type filters"
+                  >
+                    Clear
+                  </button>
                 )}
                 </div>
                 {isOwner && (

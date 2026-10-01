@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { db } from "@/db";
 import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
-import { asc, eq, gt, inArray, and } from "drizzle-orm";
+import { asc, eq, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { compressJsonBody } from "@/lib/httpGzip";
 
@@ -62,21 +62,135 @@ export async function GET(request: Request) {
     if (cached !== undefined) {
       return menuResponse(request, cached, "hit", ifNoneMatch);
     }
-    const [bizRows, itemRows, areaRows, pickupRows, orgRows, optsRows, methodsRows] = await Promise.all([
-      db.select().from(businesses).orderBy(asc(businesses.id)),
-      // Every catalogue row — including OUT_OF_STOCK products that carry an
-      // active pre-order option (that is the whole point of pre-orders: sell
-      // goods before they arrive). The per-product `sellable` gate below
-      // still drops zero-stock items with NO option, so nothing extra leaks.
+    const [rawBizRows, orgRows] = await Promise.all([
       db
-        .select()
+        .select({
+          id: businesses.id,
+          name: businesses.name,
+          code: businesses.code,
+          category: businesses.category,
+          branchLocation: businesses.branchLocation,
+          contactPhone: businesses.contactPhone,
+          status: businesses.status,
+          logo: businesses.logo,
+          gpsLat: businesses.gpsLat,
+          gpsLng: businesses.gpsLng,
+          onlineOrderingEnabled: businesses.onlineOrderingEnabled,
+          preOrderEnabled: businesses.preOrderEnabled,
+          pickupEnabled: businesses.pickupEnabled,
+          deliveryEnabled: businesses.deliveryEnabled,
+          serviceRadiusKm: businesses.serviceRadiusKm,
+          serviceNote: businesses.serviceNote,
+          customerHelpPhone: businesses.customerHelpPhone,
+          momoNumber: businesses.momoNumber,
+          momoName: businesses.momoName,
+          watermarkEnabled: businesses.watermarkEnabled,
+          watermarkMode: businesses.watermarkMode,
+          ownerId: businesses.ownerId,
+        })
+        .from(businesses)
+        .orderBy(asc(businesses.id)),
+      db
+        .select({ id: organizations.id, name: organizations.name, slug: organizations.slug, status: organizations.status })
+        .from(organizations),
+    ]);
+
+    // Shared centralized marketplace across ALL participating organizations.
+    // A SUSPENDED organization never trades publicly — its branches vanish
+    // from the marketplace (platform-level kill switch).  Filter branches
+    // before reading product/photo rows so inactive tenants and offline units
+    // do not force large inventory/photo payloads across the DB connection.
+    const orgById = new Map(orgRows.map((o) => [Number(o.id), o]));
+    const bizRows = rawBizRows.filter((b: any) => {
+      const org = b.ownerId != null ? orgById.get(Number(b.ownerId)) : undefined;
+      if (org && (org.status || "").toUpperCase() !== "ACTIVE") return false;
+      if (!["ACTIVE", "EXPANDING"].includes((b.status || "").toUpperCase())) return false;
+      if (b.onlineOrderingEnabled === false) return false;
+      return true;
+    });
+    const publicBizIds = bizRows.map((b: any) => Number(b.id)).filter(Number.isFinite);
+    if (publicBizIds.length === 0) {
+      const snap = snapshotOf([]);
+      ttlSet(MENU_CACHE_KEY, snap, MENU_TTL_MS);
+      return menuResponse(request, snap, "miss", ifNoneMatch);
+    }
+
+    const [itemRows, areaRows, pickupRows, optsRows, methodsRows] = await Promise.all([
+      db
+        .select({
+          id: inventoryItems.id,
+          sku: inventoryItems.sku,
+          businessId: inventoryItems.businessId,
+          name: inventoryItems.name,
+          category: inventoryItems.category,
+          quantity: inventoryItems.quantity,
+          unit: inventoryItems.unit,
+          sellingPriceGhs: inventoryItems.sellingPriceGhs,
+          status: inventoryItems.status,
+          photo: inventoryItems.photo,
+          photos: inventoryItems.photos,
+          description: inventoryItems.description,
+          brand: inventoryItems.brand,
+          model: inventoryItems.model,
+          specifications: inventoryItems.specifications,
+          variants: inventoryItems.variants,
+        })
         .from(inventoryItems)
+        .where(inArray(inventoryItems.businessId, publicBizIds))
         .orderBy(asc(inventoryItems.name)),
-      db.select().from(serviceAreas).where(eq(serviceAreas.active, true)),
-      db.select().from(pickupLocations).where(eq(pickupLocations.active, true)),
-      db.select().from(organizations),
-      db.select().from(fulfillmentOptions).where(eq(fulfillmentOptions.active, true)),
-      db.select().from(fulfillmentMethods).where(eq(fulfillmentMethods.active, true)),
+      db
+        .select({
+          id: serviceAreas.id,
+          businessId: serviceAreas.businessId,
+          name: serviceAreas.name,
+          centerLat: serviceAreas.centerLat,
+          centerLng: serviceAreas.centerLng,
+          radiusKm: serviceAreas.radiusKm,
+          note: serviceAreas.note,
+        })
+        .from(serviceAreas)
+        .where(and(eq(serviceAreas.active, true), inArray(serviceAreas.businessId, publicBizIds))),
+      db
+        .select({
+          id: pickupLocations.id,
+          businessId: pickupLocations.businessId,
+          name: pickupLocations.name,
+          address: pickupLocations.address,
+          lat: pickupLocations.lat,
+          lng: pickupLocations.lng,
+          instructions: pickupLocations.instructions,
+        })
+        .from(pickupLocations)
+        .where(and(eq(pickupLocations.active, true), inArray(pickupLocations.businessId, publicBizIds))),
+      db
+        .select({
+          id: fulfillmentOptions.id,
+          inventoryId: fulfillmentOptions.inventoryId,
+          methodId: fulfillmentOptions.methodId,
+          businessId: fulfillmentOptions.businessId,
+          priceGhs: fulfillmentOptions.priceGhs,
+          leadMinDays: fulfillmentOptions.leadMinDays,
+          leadMaxDays: fulfillmentOptions.leadMaxDays,
+          depositType: fulfillmentOptions.depositType,
+          depositValue: fulfillmentOptions.depositValue,
+          termsKey: fulfillmentOptions.termsKey,
+          capacityPerPeriod: fulfillmentOptions.capacityPerPeriod,
+          requiresAddress: fulfillmentOptions.requiresAddress,
+          active: fulfillmentOptions.active,
+        })
+        .from(fulfillmentOptions)
+        .where(and(eq(fulfillmentOptions.active, true), inArray(fulfillmentOptions.businessId, publicBizIds))),
+      db
+        .select({
+          id: fulfillmentMethods.id,
+          label: fulfillmentMethods.label,
+          key: fulfillmentMethods.key,
+          icon: fulfillmentMethods.icon,
+          requiresPin: fulfillmentMethods.requiresPin,
+          active: fulfillmentMethods.active,
+        })
+        .from(fulfillmentMethods)
+        .where(eq(fulfillmentMethods.active, true)),
     ]);
 
     const invHasStock = (i: any) => (i.quantity || 0) > 0 && i.status !== "OUT_OF_STOCK";
@@ -85,13 +199,35 @@ export async function GET(request: Request) {
     // catalogue is org-scoped, so no other tenant's options leak.
     const preorderBizIds = new Set(bizRows.filter((b: any) => b.preOrderEnabled === true).map((b: any) => Number(b.id)));
     const activeOpts = optsRows.filter((o) => o.active && preorderBizIds.has(Number(o.businessId)));
+    const itemIds = new Set(itemRows.map((i) => Number(i.id)));
     const methodById = new Map(methodsRows.filter((m) => m.active).map((m) => [m.id, m]));
     const optsByInventory = new Map<number, any[]>();
+    const itemsByBiz = new Map<number, any[]>();
+    for (const item of itemRows) {
+      const bid = Number(item.businessId);
+      const list = itemsByBiz.get(bid) || [];
+      list.push(item);
+      itemsByBiz.set(bid, list);
+    }
+    const areasByBiz = new Map<number, any[]>();
+    for (const area of areaRows) {
+      const bid = Number(area.businessId);
+      const list = areasByBiz.get(bid) || [];
+      list.push(area);
+      areasByBiz.set(bid, list);
+    }
+    const pickupsByBiz = new Map<number, any[]>();
+    for (const point of pickupRows) {
+      const bid = Number(point.businessId);
+      const list = pickupsByBiz.get(bid) || [];
+      list.push(point);
+      pickupsByBiz.set(bid, list);
+    }
     for (const o of activeOpts) {
       const m = methodById.get(o.methodId);
       if (!m) continue;
-      // exposure rule: option resolves only for the business it was written for.
-      if (!itemRows.some((i) => i.id === o.inventoryId)) continue;
+      // exposure rule: option resolves only for a product in a public branch.
+      if (!itemIds.has(Number(o.inventoryId))) continue;
       const depositPerUnit =
         o.depositType === "PERCENT"
           ? Math.round((((o.priceGhs || 0) * (Number(o.depositValue) || 0)) / 100) * 100) / 100
@@ -103,35 +239,22 @@ export async function GET(request: Request) {
       optsByInventory.set(o.inventoryId, list);
     }
 
-    // Shared centralized marketplace across ALL participating organizations.
-    // A SUSPENDED organization never trades publicly — its branches vanish
-    // from the marketplace (platform-level kill switch).
-    const orgById = new Map(orgRows.map((o) => [Number(o.id), o]));
-
     const result = [];
     for (const b of bizRows) {
       const org = b.ownerId != null ? orgById.get(Number(b.ownerId)) : undefined;
-      if (org && (org.status || "").toUpperCase() !== "ACTIVE") continue;
-      // Only ACTIVE / EXPANDING units trade publicly — MAINTENANCE and
-      // INACTIVE are hidden from the storefront (and refused at checkout).
-      if (!["ACTIVE", "EXPANDING"].includes((b.status || "").toUpperCase())) continue;
-      // Units the OWNER / authorized staff switched OFF for online ordering
-      // never reach the customer storefront at all.
-      if (b.onlineOrderingEnabled === false) continue;
-      const products = itemRows
-        .filter((i) => i.businessId === b.id)
+      const products = (itemsByBiz.get(Number(b.id)) || [])
         .map((i) => {
-          // Every image registered for the product — the primary `photo` plus
-          // any extra shots in the `photos` array — exposed so the customer
-          // storefront can render an Amazon-style gallery (main image,
-          // thumbnails, click-to-preview, next/previous). Never cost prices,
-          // margins or other internal fields.
+          // Every registered product image remains available to the storefront,
+          // but large uploaded data URLs are exposed as cacheable image URLs
+          // instead of being inlined into the JSON catalogue.  This keeps
+          // /api/menu small while preserving galleries, thumbnails and zoom.
           const gallery = Array.isArray(i.photos) && i.photos.length > 0
             ? i.photos.filter((p: any) => typeof p === "string" && p.length > 0)
             : [];
           const allPhotos: string[] = [];
           if (typeof i.photo === "string" && i.photo.length > 0) allPhotos.push(i.photo);
           for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
+          const photoUrls = allPhotos.map((_photo, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}`);
           const opts = optsByInventory.get(i.id) || [];
           const sellable = invHasStock(i) || opts.length > 0;
           if (!sellable) return null;
@@ -144,8 +267,8 @@ export async function GET(request: Request) {
             price: i.sellingPriceGhs,
             available: Math.max(0, Math.floor(i.quantity)),
             inStock: invHasStock(i),
-            photo: i.photo || null,
-            photos: allPhotos,
+            photo: photoUrls[0] || null,
+            photos: photoUrls,
             // Product catalogue details registered at stock-in — shown on the
             // storefront product view verbatim (no duplicate entry anywhere).
             description: i.description || null,
@@ -216,8 +339,7 @@ export async function GET(request: Request) {
         // This unit's own service areas / localities (each branch defines its
         // own list) and its pickup points — drive the storefront's "serving
         // my location" filter and the PICKUP checkout chooser.
-        serviceAreas: areaRows
-          .filter((a) => a.businessId === b.id)
+        serviceAreas: (areasByBiz.get(Number(b.id)) || [])
           .map((a) => ({
             id: a.id,
             name: a.name,
@@ -226,8 +348,7 @@ export async function GET(request: Request) {
             radiusKm: a.radiusKm ?? null,
             note: a.note || null,
           })),
-        pickupLocations: pickupRows
-          .filter((p) => p.businessId === b.id)
+        pickupLocations: (pickupsByBiz.get(Number(b.id)) || [])
           .map((p) => ({
             id: p.id,
             name: p.name,
