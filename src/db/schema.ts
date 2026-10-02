@@ -665,6 +665,12 @@ export const inventoryItems = pgTable("inventory_items", {
   model: text("model"),
   specifications: jsonb("specifications"),
   variants: jsonb("variants"),
+  /** Boutique (and any size/colour retail) — when TRUE this item's stock is
+   *  tracked per SIZE/COLOUR variant in `inventory_variants`; `quantity` stays
+   *  the live AGGREGATE (sum of active variants) so every existing module
+   *  (low stock, finance, reports, dashboards) keeps working unchanged.
+   *  Existing items keep the column NULL/false and behave exactly as before. */
+  tracksVariants: boolean("tracks_variants").default(false),
   /** QR identity tag — globally unique when set; scanned with the camera or
    *  auto-generated at registration, printed on the stock label. */
   qrCode: text("qr_code"),
@@ -679,6 +685,40 @@ export const inventoryItems = pgTable("inventory_items", {
   // NULLs (unset QRs) may repeat.
   uniqueIndex("inventory_items_qr_code_unique").on(t.businessId, t.qrCode),
   index("inventory_items_business_id_idx").on(t.businessId)
+]);
+
+// 8a-bis. Boutique / apparel stock variants — SIZE × COLOUR rows for one
+// inventory item, each carrying its own live quantity. The parent item's
+// `quantity` is the aggregate of the active rows (kept in sync by
+// lib/boutique.ts), so Sales, Orders, Low Stock, Finance and Reports can keep
+// treating an item as one stock line while the register still knows exactly
+// which size/colour left the shelf. Purely additive: an item with no rows
+// (every existing item) behaves exactly as before.
+export const inventoryVariants = pgTable("inventory_variants", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  inventoryId: integer("inventory_id").notNull(),
+  /** Display + matching values. Empty string (never NULL) for "no axis" so
+   *  the (inventory,size,colour) uniqueness can be enforced in Postgres. */
+  size: text("size").notNull().default(""),
+  color: text("color").notNull().default(""),
+  /** LETTER | SHOE_UK | SHOE_EU | SHOE_US | NUMERIC | KIDS | FREE | CUSTOM */
+  sizeSystem: text("size_system").default("CUSTOM"),
+  /** Per-variant SKU (unique per business) — used for scanning/reordering. */
+  sku: text("sku"),
+  quantity: doublePrecision("quantity").notNull().default(0),
+  minStockThreshold: doublePrecision("min_stock_threshold").notNull().default(0),
+  status: text("status").default("IN_STOCK"), // IN_STOCK | LOW_STOCK | OUT_OF_STOCK
+  isActive: boolean("is_active").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("inventory_variants_item_size_color_uq").on(t.inventoryId, t.size, t.color),
+  index("inventory_variants_business_id_idx").on(t.businessId),
+  index("inventory_variants_inventory_id_idx").on(t.inventoryId),
+  uniqueIndex("inventory_variants_business_sku_uq").on(t.businessId, t.sku),
 ]);
 
 // 8b. Inventory Downloads audit trail

@@ -7,6 +7,7 @@ import {
   notifications,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { deductVariantQty, restoreVariantQty, syncItemAggregate, variantsForItem } from "@/lib/boutique";
 import { buildTrackingCode, googleMapsLink } from "@/lib/tracking";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { pushAfterBell } from "@/lib/push";
@@ -65,12 +66,20 @@ export async function uniqueTrackingCode(bizCode: string | null | undefined): Pr
  * Deduct stock for an ONLINE order's items (items carry inventoryId).
  * First validates availability; if any line is short, NOTHING is deducted
  * and problems are returned for the staff member / customer to see.
+ *
+ * Boutique rule: a line for a product that carries a SIZE/COLOUR matrix must
+ * name its variant (`li.variantId`). The deduction then hits that exact
+ * variant and the item's aggregate quantity is recomputed from its variant
+ * rows, so the register, dashboards and reports can never drift.
  */
 export async function deductOrderStock(
   items: any[],
 ): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
-  const plan: { id: number; newQty: number; newStatus: string }[] = [];
+  const plan: (
+    | { kind: "plain"; id: number; newQty: number; newStatus: string }
+    | { kind: "variant"; variantId: number; inventoryId: number; qty: number; label: string }
+  )[] = [];
   for (const li of items || []) {
     if (!li?.inventoryId) continue;
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(li.inventoryId)));
@@ -80,12 +89,31 @@ export async function deductOrderStock(
     }
     const qty = Number(li.quantity) || 0;
     if (qty <= 0) continue;
+    const activeVariants = (await variantsForItem(inv.businessId, inv.id)).filter((v) => v.isActive !== false);
+    if (activeVariants.length > 0) {
+      const variantId = Number(li.variantId) || 0;
+      const variant = activeVariants.find((v) => Number(v.id) === variantId);
+      if (!variant) {
+        problems.push(`"${inv.name}" needs a size/colour before its stock can be committed.`);
+        continue;
+      }
+      const label = [variant.size ? `Size ${variant.size}` : null, variant.color || null].filter(Boolean).join(" · ");
+      if ((Number(variant.quantity) || 0) < qty) {
+        problems.push(
+          `Not enough stock for "${inv.name}"${label ? ` (${label})` : ""}: ${qty} requested, ${variant.quantity} available.`,
+        );
+        continue;
+      }
+      plan.push({ kind: "variant", variantId: Number(variant.id), inventoryId: inv.id, qty, label });
+      continue;
+    }
     if (inv.quantity < qty) {
       problems.push(`Not enough stock for "${inv.name}": ${qty} ${inv.unit} requested, ${inv.quantity} ${inv.unit} available.`);
       continue;
     }
     const newQty = inv.quantity - qty;
     plan.push({
+      kind: "plain",
       id: inv.id,
       newQty,
       newStatus: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
@@ -93,8 +121,20 @@ export async function deductOrderStock(
   }
   if (problems.length > 0) return { ok: false, problems };
   for (const p of plan) {
-    await db.update(inventoryItems).set({ quantity: p.newQty, status: p.newStatus }).where(eq(inventoryItems.id, p.id));
+    if (p.kind === "variant") {
+      // Atomic conditional decrement — a concurrent sale that emptied the
+      // variant between validation and now is reported, never oversold.
+      const ok = await deductVariantQty(p.variantId, p.qty);
+      if (!ok) {
+        problems.push(`"${p.label || "That variant"}" just sold out — refresh and choose another size/colour.`);
+        continue;
+      }
+      await syncItemAggregate(p.inventoryId);
+    } else {
+      await db.update(inventoryItems).set({ quantity: p.newQty, status: p.newStatus }).where(eq(inventoryItems.id, p.id));
+    }
   }
+  if (problems.length > 0) return { ok: false, problems };
   return { ok: true, problems: [] };
 }
 
@@ -105,7 +145,14 @@ export async function restoreOrderStock(items: any[]): Promise<void> {
     try {
       const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(li.inventoryId)));
       if (!inv) continue;
-      const newQty = inv.quantity + (Number(li.quantity) || 0);
+      const qty = Number(li.quantity) || 0;
+      const variantId = Number(li.variantId) || 0;
+      if (variantId) {
+        await restoreVariantQty(variantId, qty);
+        await syncItemAggregate(inv.id);
+        continue;
+      }
+      const newQty = inv.quantity + qty;
       await db
         .update(inventoryItems)
         .set({

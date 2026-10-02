@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { db } from "@/db";
-import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
+import { businesses, inventoryItems, inventoryVariants, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
 import { asc, eq, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { compressJsonBody } from "@/lib/httpGzip";
+import { storefrontVariants } from "@/lib/boutique";
 
 /**
  * PUBLIC online-ordering menu — NO login required.
@@ -115,7 +116,7 @@ export async function GET(request: Request) {
       return menuResponse(request, snap, "miss", ifNoneMatch);
     }
 
-    const [itemRows, areaRows, pickupRows, optsRows, methodsRows] = await Promise.all([
+    const [itemRows, variantRows, areaRows, pickupRows, optsRows, methodsRows] = await Promise.all([
       db
         .select({
           id: inventoryItems.id,
@@ -138,6 +139,23 @@ export async function GET(request: Request) {
         .from(inventoryItems)
         .where(inArray(inventoryItems.businessId, publicBizIds))
         .orderBy(asc(inventoryItems.name)),
+      db
+        .select({
+          id: inventoryVariants.id,
+          inventoryId: inventoryVariants.inventoryId,
+          size: inventoryVariants.size,
+          color: inventoryVariants.color,
+          sizeSystem: inventoryVariants.sizeSystem,
+          sku: inventoryVariants.sku,
+          quantity: inventoryVariants.quantity,
+          minStockThreshold: inventoryVariants.minStockThreshold,
+          status: inventoryVariants.status,
+          isActive: inventoryVariants.isActive,
+          sortOrder: inventoryVariants.sortOrder,
+        })
+        .from(inventoryVariants)
+        .where(and(eq(inventoryVariants.isActive, true), inArray(inventoryVariants.businessId, publicBizIds)))
+        .orderBy(asc(inventoryVariants.sortOrder), asc(inventoryVariants.id)),
       db
         .select({
           id: serviceAreas.id,
@@ -223,6 +241,14 @@ export async function GET(request: Request) {
       list.push(point);
       pickupsByBiz.set(bid, list);
     }
+    // Boutique / apparel variant layer: active SIZE × COLOUR rows grouped per
+    // item. Items without rows keep their legacy shape exactly (no new keys).
+    const variantsByItem = new Map<number, any[]>();
+    for (const v of variantRows as any[]) {
+      const list = variantsByItem.get(Number(v.inventoryId)) || [];
+      list.push(v);
+      variantsByItem.set(Number(v.inventoryId), list);
+    }
     for (const o of activeOpts) {
       const m = methodById.get(o.methodId);
       if (!m) continue;
@@ -244,6 +270,10 @@ export async function GET(request: Request) {
       const org = b.ownerId != null ? orgById.get(Number(b.ownerId)) : undefined;
       const products = (itemsByBiz.get(Number(b.id)) || [])
         .map((i) => {
+          // Per-variant availability for Boutique items — the storefront
+          // renders these sizes/colours and disables the out-of-stock combos.
+          const itemVariantRows = variantsByItem.get(Number(i.id)) || [];
+          const vProjection = itemVariantRows.length > 0 ? storefrontVariants(itemVariantRows as any) : null;
           // Every registered product image remains available to the storefront,
           // but large uploaded data URLs are exposed as cacheable image URLs
           // instead of being inlined into the JSON catalogue.  This keeps
@@ -256,7 +286,8 @@ export async function GET(request: Request) {
           for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
           const photoUrls = allPhotos.map((_photo, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}`);
           const opts = optsByInventory.get(i.id) || [];
-          const sellable = invHasStock(i) || opts.length > 0;
+          const variantAvailable = vProjection ? vProjection.totalAvailable : null;
+          const sellable = (variantAvailable != null ? variantAvailable > 0 : invHasStock(i)) || opts.length > 0;
           if (!sellable) return null;
           return {
             id: i.id,
@@ -265,8 +296,23 @@ export async function GET(request: Request) {
             category: i.category,
             unit: i.unit,
             price: i.sellingPriceGhs,
-            available: Math.max(0, Math.floor(i.quantity)),
-            inStock: invHasStock(i),
+            available: Math.max(0, Math.floor(variantAvailable != null ? variantAvailable : i.quantity)),
+            inStock: variantAvailable != null ? variantAvailable > 0 : invHasStock(i),
+            // Boutique variant projection (only present for variant items):
+            //   hasVariants + variantOptions.{sizes,colors,variants,totalAvailable}
+            // The order page requires a size/colour choice for these products
+            // and the server re-validates the chosen variant at checkout.
+            ...(vProjection
+              ? {
+                  hasVariants: true,
+                  variantOptions: {
+                    sizes: vProjection.sizes,
+                    colors: vProjection.colors,
+                    variants: vProjection.variants,
+                    totalAvailable: vProjection.totalAvailable,
+                  },
+                }
+              : {}),
             photo: photoUrls[0] || null,
             photos: photoUrls,
             // Product catalogue details registered at stock-in — shown on the
@@ -275,7 +321,17 @@ export async function GET(request: Request) {
             brand: i.brand || null,
             model: i.model || null,
             specifications: Array.isArray(i.specifications) ? i.specifications : [],
-            variants: Array.isArray(i.variants) ? i.variants : [],
+            // Legacy display chips: for variant items the registered matrix
+            // becomes the chip list (with live stock notes) so the lightbox
+            // shows real availability instead of a stale display-only list.
+            variants: vProjection
+              ? vProjection.variants.slice(0, 60).map((v) => ({
+                  name: [v.size ? `Size ${v.size}` : null, v.color || null].filter(Boolean).join(" · ") || "Standard",
+                  note: v.inStock ? `${v.available} left` : "out of stock",
+                }))
+              : Array.isArray(i.variants)
+                ? i.variants
+                : [],
             // Seller-configured pre-order fulfilment options (price / ETA /
             // deposit shown next to the product on the storefront). Empty for
             // stock-only products — the UI then renders nothing extra.

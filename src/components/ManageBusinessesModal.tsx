@@ -82,6 +82,7 @@ const CATEGORIES = [
   "Car Wash",
   "Hardware Store",
   "Telecom & Digital Services",
+  "Boutique",
 ];
 
 const STATUSES = ["ACTIVE", "EXPANDING", "MAINTENANCE", "INACTIVE"];
@@ -104,6 +105,7 @@ const CATEGORY_KEY: Record<string, string> = {
   "Car Wash": "CAR_WASH",
   "Hardware Store": "HARDWARE_STORE",
   "Telecom & Digital Services": "TELECOM_DIGITAL",
+  Boutique: "BOUTIQUE",
 };
 
 interface ManageBusinessesModalProps {

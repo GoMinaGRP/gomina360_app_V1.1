@@ -34,6 +34,7 @@ import {
   Droplets,
   HardHat,
   Wifi,
+  Shirt,
   CornerUpLeft,
 } from "lucide-react";
 import type { ActiveTab } from "./Sidebar";
@@ -74,6 +75,7 @@ const CATEGORY_ICONS: Record<string, any> = {
   "Car Wash": Droplets,
   "Hardware Store": HardHat,
   "Telecom & Digital Services": Wifi,
+  Boutique: Shirt,
 };
 
 interface Loc {

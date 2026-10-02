@@ -30,6 +30,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   HardHat,
+  Shirt,
   Landmark,
   Wifi,
   Settings2,
@@ -268,6 +269,7 @@ export default function Sidebar({
     "Car Wash": Droplets,
     "Hardware Store": HardHat,
     "Telecom & Digital Services": Wifi,
+    Boutique: Shirt,
   };
 
   const selectTab = (tab: ActiveTab) => {

@@ -23,6 +23,8 @@ import {
 } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
+import { setVariantsForItem } from "@/lib/boutique";
+import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
@@ -908,6 +910,11 @@ export async function POST(request: Request) {
           );
         }
       }
+      // Boutique: a stock item registered with a size/colour matrix becomes a
+      // variant-tracked product. The matrix is validated + persisted right
+      // after the row exists, and it REPLACES the parent quantity with the
+      // live sum of variants (the register stays the one stock truth).
+      const boutiqueMatrix = data.tracksVariants === true ? normalizeVariantMatrix(data.boutiqueVariants) : [];
       const [inserted] = await db
         .insert(inventoryItems)
         .values({
@@ -936,6 +943,27 @@ export async function POST(request: Request) {
           registeredByUserId: data.registeredByUserId ? Number(data.registeredByUserId) : null,
         })
         .returning();
+
+      if (boutiqueMatrix.length > 0) {
+        try {
+          await setVariantsForItem({
+            businessId: bizId,
+            inventoryId: inserted.id,
+            variants: boutiqueMatrix,
+            replace: true,
+            actorName: data.registeredByName ? String(data.registeredByName) : null,
+          });
+          const [fresh] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, inserted.id));
+          return NextResponse.json({ success: true, item: fresh || inserted, variants: boutiqueMatrix.length });
+        } catch (e: any) {
+          // Never leave a half-configured variant product ambiguous: the item
+          // exists (still sellable as plain stock) and the message tells the
+          // owner exactly what to fix in the Sizes & Colours tab.
+          return NextResponse.json(
+            { success: true, item: inserted, variantWarning: e.message || "Variants could not be saved." },
+          );
+        }
+      }
       return NextResponse.json({ success: true, item: inserted });
     }
 

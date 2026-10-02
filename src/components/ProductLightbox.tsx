@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import WatermarkOverlay from "./WatermarkOverlay";
+import ProductVariantPicker, { defaultPick, hasVariants, isPickComplete, variantFor, type VariantSelection } from "./ProductVariantPicker";
 import type { WatermarkSpec } from "@/lib/watermark";
 import {
   ChevronLeft,
@@ -57,10 +58,24 @@ export default function ProductLightbox({
   canAdd: boolean;
   onClose: () => void;
   onNavigate: (i: number) => void;
-  onAdd: () => void;
+  /** Add to cart — receives the chosen size/colour pair for variant products. */
+  onAdd: (sel?: VariantSelection) => void;
   fmtMoney: (n: number) => string;
 }) {
   const count = photos.length;
+  // Boutique variant choice made inside the lightbox — required (and only
+  // in-stock) before Add to Cart activates for size/colour products.
+  const isVariantProduct = hasVariants(product);
+  const [sel, setSel] = useState<VariantSelection>(null);
+  useEffect(() => {
+    if (!isVariantProduct) return;
+    if (!sel) {
+      const d = defaultPick(product);
+      if (d) setSel(d);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVariantProduct, product?.id]);
+  const pickOk = !isVariantProduct || isPickComplete(product, sel);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [full, setFull] = useState(false);
@@ -478,17 +493,22 @@ export default function ProductLightbox({
           );
         })()}
 
-        {/* footer */}
-        <div className="px-4 py-3 flex items-center justify-between gap-3 border-t border-slate-100 shrink-0">
-          <div className="text-lg font-black text-slate-900">{fmtMoney(product.price)}</div>
-          <button
-            onClick={onAdd}
-            disabled={!canAdd}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
-            data-testid="oo-lightbox-add"
-          >
-            <Plus className="w-4 h-4" /> Add to Cart
-          </button>
+        {/* footer — variant products must pick an in-stock size/colour first */}
+        <div className="px-4 py-3 border-t border-slate-100 shrink-0">
+          {isVariantProduct && (
+            <ProductVariantPicker product={product} value={sel} onChange={setSel} testidPrefix="oo-lb" compact />
+          )}
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="text-lg font-black text-slate-900">{fmtMoney(product.price)}</div>
+            <button
+              onClick={() => onAdd(sel)}
+              disabled={!canAdd || !pickOk || (isVariantProduct && !variantFor(product, sel))}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black"
+              data-testid="oo-lightbox-add"
+            >
+              <Plus className="w-4 h-4" /> {isVariantProduct && !pickOk ? "Choose size & colour" : "Add to Cart"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

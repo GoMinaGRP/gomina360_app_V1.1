@@ -3131,6 +3131,191 @@ export const GUIDES: Record<string, Record<string, SectionGuide>> = {
       ],
     },
   },
+  BOUTIQUE: {
+    DASHBOARD: {
+      title: "Boutique Dashboard",
+      intro:
+        "The trading picture of {biz}: today's sales, monthly profit, open customer orders, stock value and the sizes/colours that are running low or selling best.",
+      tasks: [
+        {
+          name: "Read the shop at a glance",
+          steps: [
+            "Sales / Profit / Orders cards summarise performance — they update the moment a sale or order is saved.",
+            "“Products”, “Units on hand”, “Variant rows” and “Retail value” show what is physically on the rail and its worth at selling price.",
+            "Low-stock panel lists the exact SIZE × COLOUR rows to reorder; tap Restock to top one up (and optionally book the cost to Finance).",
+          ],
+          tip: "Best-selling products, sizes and colours rank by revenue from real receipts — use them to decide what to buy again.",
+        },
+        {
+          name: "Sell a size/colour at the counter",
+          steps: [
+            "Open the Sales tab, choose the product, then tap the size and colour the customer wants.",
+            "Out-of-stock combinations are disabled — the register can never oversell one size.",
+            "Enter the quantity and payment, then Record Sale: stock drops on that exact variant and a receipt is issued.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where do the numbers come from?",
+          match: ["numbers", "source", "finance", "revenue"],
+          answer:
+            "Every figure is read from the same records as the rest of GoMina 360 — the Inventory register, the transactions ledger, sales receipts and customer orders. Nothing is entered twice.",
+        },
+        {
+          q: "How do I reorder the right sizes?",
+          match: ["reorder", "restock", "low stock", "sizes"],
+          answer:
+            "The low-stock panel lists each variant row (product · size · colour) at or below its reorder level. Restock opens a small form: enter units added and an optional unit cost to book the cost as an expense.",
+        },
+      ],
+    },
+    PRODUCTS: {
+      title: "Sizes, Colours & Stock",
+      intro:
+        "Every product of {biz} with its size × colour matrix. The product total is always the live sum of its variants, so the rest of the system keeps seeing one stock line.",
+      tasks: [
+        {
+          name: "Add sizes & colours to a product",
+          steps: [
+            "Register the basic product first (Inventory → New item) — name, prices, unit.",
+            "Back here, tap “Sizes & colours” on the product row.",
+            "Pick a size system (letter, UK/EU/US shoe, numeric, kids or custom), tap the sizes the shop stocks, then tap the colours.",
+            "Type the quantity you actually have for each size × colour row and save.",
+          ],
+          tip: "Rows left at 0 are shown as out of stock to customers and cannot be ordered — perfect for sizes you have not stocked yet.",
+        },
+        {
+          name: "Adjust, restock or retire a combination",
+          steps: [
+            "Use Restock to add units (with an optional unit cost that books straight to Finance).",
+            "Save with fewer rows to retire a size/colour — sales history is kept and remaining stock is never lost.",
+            "The product total, low-stock alerts, dashboards, reports and exports update immediately.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Can two colours share one size list?",
+          match: ["colours", "colors", "sizes", "list"],
+          answer:
+            "Yes. Sizes and colours are chosen independently and the shop builds the full grid; leave a combination at 0 when you do not carry it yet.",
+        },
+        {
+          q: "Is this a second stock register?",
+          match: ["second", "duplicate", "inventory", "register"],
+          answer:
+            "No. GoMina keeps ONE inventory register: the product row holds the aggregate quantity and these variant rows explain which size/colour it belongs to. Sales, low stock, finance and reports all read the same register.",
+        },
+      ],
+    },
+    SALES: {
+      title: "Boutique Sales",
+      intro: "Record counter sales of {biz} with the exact size and colour — stock, receipt, customer record and Finance all update together.",
+      tasks: [
+        {
+          name: "Record a sale",
+          steps: [
+            "Choose the product, then tap the size and colour being sold.",
+            "Set the quantity (it cannot exceed that variant's stock), customer and payment method.",
+            "Record Sale — the receipt shows e.g. “Size M · Colour Black” and the variant stock drops immediately.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "What if the customer wants a size that is out of stock?",
+          match: ["out of stock", "size", "unavailable"],
+          answer:
+            "The combination is disabled at the register. Take the order on the Customer Orders tab, restock the size, then confirm it — or ask the customer to order the size they need from your storefront.",
+        },
+      ],
+    },
+    ORDERS: {
+      title: "Customer Orders",
+      intro: "Online and in-store orders for {biz} — each line carries the size/colour the customer chose.",
+      tasks: [
+        {
+          name: "Move an order forward",
+          steps: [
+            "Confirming an order commits the exact size/colour to stock (it cannot confirm if the variant is sold out).",
+            "Cancelling restores whatever was committed.",
+            "Every step is logged on the order timeline and in the Audit trail.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Where do online orders come from?",
+          match: ["online", "storefront", "order page", "customer"],
+          answer:
+            "Your customer storefront (/order) — customers must pick an available size and colour before the order goes through, and sold-out combinations cannot be chosen.",
+        },
+      ],
+    },
+    FINANCE: {
+      title: "Finance & Reports",
+      intro: "The complete financial report for {biz}: revenue, expenses, profit, stock value and the boutique's variant/order operational links.",
+      tasks: [
+        {
+          name: "Work the report",
+          steps: [
+            "Filter by period, business or branch — the numbers read the same ledger as every other module.",
+            "Record an expense with the button above (restocks, rent, packaging…) — it posts to Finance instantly.",
+            "Export or audit the data from the report toolbar.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Does a restock count as an expense?",
+          match: ["restock", "expense", "cost", "finance"],
+          answer:
+            "Only if you tick “Book the landed cost” (and enter a unit cost). Then the cost posts to Finance as a BOUTIQUE STOCK RESTOCK expense; otherwise the quantity simply rises.",
+        },
+      ],
+    },
+    CUSTOMERS: {
+      title: "Customers & Suppliers",
+      intro: "The shared CRM behind {biz} — customers that buy from the shop and the suppliers that stock it.",
+      tasks: [
+        {
+          name: "Keep the lists useful",
+          steps: [
+            "Customers are created automatically at the till or from the storefront order; you can also add them in the CRM console.",
+            "Suppliers record who you buy fabric, garments or footwear from — payment terms included.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Can another unit see these customers?",
+          match: ["other unit", "share", "privacy"],
+          answer: "No — customer records are isolated per business unit; only users with access to this unit can see them.",
+        },
+      ],
+    },
+    CHECKLIST: {
+      title: "Daily Checklist",
+      intro: "The boutique's opening/closing routine — assigned tasks with people, completion history and notes.",
+      tasks: [
+        {
+          name: "Run the day",
+          steps: [
+            "Tick tasks as they are completed; each one is stamped with who did it and when.",
+            "Assign tasks to staff so the shop routine never depends on memory.",
+          ],
+        },
+      ],
+      faqs: [
+        {
+          q: "Can I change the routine?",
+          match: ["change", "edit", "tasks"],
+          answer: "Yes — tasks are per unit and can be edited from the checklist panel (labels, assignment and order).",
+        },
+      ],
+    },
+  },
 };
 
 /** Resolve the guide for a module+section with graceful fallbacks. */

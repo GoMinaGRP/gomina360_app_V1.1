@@ -39,6 +39,7 @@ import ProductShareMenu from "@/components/ProductShareMenu";
 import WatermarkOverlay from "@/components/WatermarkOverlay";
 import MiniLeafletMap from "@/components/MiniLeafletMap";
 import { businessServesLocation, haversineM } from "@/lib/tracking";
+import ProductVariantPicker, { defaultPick, hasVariants, isPickComplete, variantFor, type VariantSelection } from "@/components/ProductVariantPicker";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
 function fmtMoney(amount: number | null | undefined, _currency = "GHS") {
@@ -81,6 +82,10 @@ interface CartLine {
   qty: number;
   /** Chosen fulfilment option (pre-order) for this line, if any. */
   option?: any | null;
+  /** Boutique: the chosen SIZE/COLOUR variant for this line (null for
+   *  products without a variant matrix). The variant id is what the server
+   *  validates and deducts stock from. */
+  variant?: { id: number; size: string | null; color: string | null } | null;
 }
 
 /**
@@ -186,8 +191,10 @@ type ProductCardProps = {
   stockQty: number;
   /** Quantities of each pre-order option line, keyed by option id string. */
   optionQtys: Record<string, number>;
-  add: (p: any, delta: number, fromBiz?: any, option?: any) => void;
-  setQty: (p: any, qty: number, fromBiz?: any, option?: any) => void;
+  /** Boutique: quantities in the cart per SIZE/COLOUR variant id (string key). */
+  variantQtys: Record<string, number>;
+  add: (p: any, delta: number, fromBiz?: any, option?: any, variant?: VariantSelection) => void;
+  setQty: (p: any, qty: number, fromBiz?: any, option?: any, variant?: VariantSelection) => void;
   onOpenLightbox: (p: any, fromBiz: any, idx: number) => void;
   /** The product's own business row — drives the stable per-product share
    *  link (/order?biz=…&p=…). Same object as fromBiz where provided. */
@@ -214,7 +221,8 @@ function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
     prev.onOpenLightbox === next.onOpenLightbox &&
     prev.shareBiz === next.shareBiz &&
     prev.highlight === next.highlight &&
-    optionQtysEqual(prev.optionQtys, next.optionQtys)
+    optionQtysEqual(prev.optionQtys, next.optionQtys) &&
+    optionQtysEqual(prev.variantQtys, next.variantQtys)
   );
 }
 
@@ -222,8 +230,9 @@ const ProductCard = React.memo(function ProductCard({
   p,
   fromBiz,
   wmBiz,
-  stockQty: q,
+  stockQty: qStock,
   optionQtys,
+  variantQtys,
   add,
   setQty,
   onOpenLightbox,
@@ -231,6 +240,24 @@ const ProductCard = React.memo(function ProductCard({
   highlight = false,
 }: ProductCardProps) {
   const photos = productPhotos(p);
+  // ── Boutique variant selection (sizes/colours) ───────────────────────
+  // The card owns the choice; adding to cart only becomes possible once the
+  // customer picked an IN-STOCK size/colour combination. Products without a
+  // variant matrix behave exactly as before.
+  const isVariantProduct = hasVariants(p);
+  const [sel, setSel] = useState<VariantSelection>(null);
+  useEffect(() => {
+    if (!isVariantProduct) return;
+    if (!sel) {
+      const d = defaultPick(p);
+      if (d) setSel(d);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVariantProduct, p?.id]);
+  const chosen = variantFor(p, sel);
+  const pickOk = !isVariantProduct || isPickComplete(p, sel);
+  const q = isVariantProduct ? (chosen ? variantQtys[String(chosen.id)] || 0 : 0) : qStock;
+  const maxQty = isVariantProduct ? (chosen ? Math.max(0, chosen.available) : 0) : p.available;
   return (
       <div
         key={p.id}
@@ -313,11 +340,14 @@ const ProductCard = React.memo(function ProductCard({
               email / copy (see ProductShareMenu). */}
           <ProductShareMenu product={{ id: p.id, sku: p.sku, name: p.name }} biz={shareBiz || fromBiz || wmBiz} priceLabel={fmtMoney(p.price)} />
         </div>
+        {isVariantProduct && (
+          <ProductVariantPicker product={p} value={sel} onChange={setSel} testidPrefix="oo" compact />
+        )}
         <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
-          {p.available >= 10 ? (
+          {maxQty >= 10 ? (
             <span className="text-[11px] font-bold text-emerald-600">In stock</span>
-          ) : p.available > 0 ? (
-            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
+          ) : maxQty > 0 ? (
+            <span className="text-[11px] font-bold text-amber-600">Only {maxQty} {p.unit} left</span>
           ) : (p.preorderOptions || []).length > 0 ? (
             <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
           ) : (
@@ -329,20 +359,20 @@ const ProductCard = React.memo(function ProductCard({
         </div>
         {q === 0 ? (
           <button
-            onClick={() => add(p, 1, fromBiz)}
-            disabled={p.available <= 0}
+            onClick={() => add(p, 1, fromBiz, undefined, sel)}
+            disabled={maxQty <= 0 || !pickOk}
             className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
             data-testid={`oo-add-${p.id}`}
           >
-            <Plus className="w-3.5 h-3.5" /> Add to Cart
+            <Plus className="w-3.5 h-3.5" /> {isVariantProduct && !pickOk ? "Choose size & colour" : "Add to Cart"}
           </button>
         ) : (
           <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
-            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
+            <button onClick={() => add(p, -1, fromBiz, undefined, sel)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
-            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
+            <QtyInput value={q} max={maxQty} onCommit={(v) => setQty(p, v, fromBiz, undefined, sel)} testid={`oo-qty-${p.id}`} />
+            <button onClick={() => add(p, 1, fromBiz, undefined, sel)} disabled={q >= maxQty} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
               <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -369,19 +399,20 @@ const ProductCard = React.memo(function ProductCard({
               </p>
               {optQty === 0 ? (
                 <button
-                  onClick={() => add(p, 1, fromBiz, opt)}
-                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+                  onClick={() => add(p, 1, fromBiz, opt, sel)}
+                  disabled={isVariantProduct && !pickOk}
+                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition disabled:opacity-40"
                   data-testid={`oo-preadd-${p.id}-${opt.id}`}
                 >
                   <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
                 </button>
               ) : (
                 <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
-                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
+                  <button onClick={() => add(p, -1, fromBiz, opt, sel)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
                     <Minus className="w-3.5 h-3.5" />
                   </button>
-                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
-                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
+                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt, sel)} testid={`oo-preqty-${p.id}-${opt.id}`} />
+                  <button onClick={() => add(p, 1, fromBiz, opt, sel)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -819,12 +850,16 @@ function OrderInner() {
   // Identity-stable cart mutations for the memoized ProductCards: the guard
   // dialogs below must read LIVE state (refs), never stale useCallback
   // closures. setCart/setBizId are already referentially stable.
-  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any) => {
+  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any, variant?: VariantSelection) => {
     const cartNow = cartRef.current;
     const pBiz = fromBiz || bizRef.current;
-    // Cart lines differ per fulfilment option: product × option is the launch key.
-    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
-    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    // Cart lines differ per fulfilment option AND per size/colour variant:
+    // product × option × variant is the launch key.
+    const picked = variant ? variantFor(p, variant) : null;
+    const variantMeta = picked ? { id: picked.id, size: picked.size, color: picked.color } : null;
+    const vKey = variantMeta ? variantMeta.id : 0;
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}:${vKey}`;
     const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
     // Cross-shop guard: adding a NEW line from a different business follows
     // the same confirm-then-switch rule as the branch chips (cart is
@@ -832,7 +867,7 @@ function OrderInner() {
     if (delta > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null }]);
+      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null, variant: variantMeta }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
@@ -843,11 +878,20 @@ function OrderInner() {
     }
     setCart((c) => {
       const existing = c.find((l) => lineKey(l) === myKey);
-      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null }];
+      if (!existing && delta > 0)
+        return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null, variant: variantMeta }];
       if (!existing) return c;
-      // Stock lines clamp to branch availability; pre-order lines are
-      // open-ended, just capped by the seller's per-period capacity (if any).
-      const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+      // Stock lines clamp to branch availability (the selected variant's own
+      // stock for Boutique items); pre-order lines are open-ended, just capped
+      // by the seller's per-period capacity (if any).
+      const cap =
+        option?.capacityPerPeriod != null
+          ? Number(option.capacityPerPeriod)
+          : option
+            ? 9999
+            : picked
+              ? Math.max(0, picked.available)
+              : p.available;
       const qty = Math.max(0, Math.min(cap, existing.qty + delta));
       if (qty === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty } : l));
@@ -855,17 +899,27 @@ function OrderInner() {
   }, []);
 
   // Direct (typed) quantity entry — same clamping rules as the −/+ stepper.
-  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any) => {
+  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any, variant?: VariantSelection) => {
     const cartNow = cartRef.current;
     const pBiz = fromBiz || bizRef.current;
-    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
-    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const picked = variant ? variantFor(p, variant) : null;
+    const variantMeta = picked ? { id: picked.id, size: picked.size, color: picked.color } : null;
+    const vKey = variantMeta ? variantMeta.id : 0;
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}:${vKey}`;
     const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
-    const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+    const cap =
+      option?.capacityPerPeriod != null
+        ? Number(option.capacityPerPeriod)
+        : option
+          ? 9999
+          : picked
+            ? Math.max(0, picked.available)
+            : p.available;
     if (qty > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }]);
+      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null, variant: variantMeta }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
@@ -874,7 +928,8 @@ function OrderInner() {
     }
     setCart((c) => {
       const existing = c.find((l) => lineKey(l) === myKey);
-      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }] : c;
+      if (!existing)
+        return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null, variant: variantMeta }] : c;
       const q = Math.max(0, Math.min(cap, qty));
       if (q === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty: q } : l));
@@ -957,7 +1012,12 @@ function OrderInner() {
           paymentChoice: payChoice,
           momoRef: momoRef.trim(),
           note: note.trim(),
-          items: cart.map((l) => ({ inventoryId: l.product.id, quantity: l.qty })),
+          items: cart.map((l) => ({
+            inventoryId: l.product.id,
+            quantity: l.qty,
+            // Boutique: the exact size/colour variant the customer chose.
+            ...(l.variant ? { variantId: l.variant.id } : {}),
+          })),
           // Chosen fulfilment options — the server validates every entry.
           fulfillmentPicker: Object.fromEntries(
             cart.filter((l) => l.option).map((l) => [l.product.id, l.option.id]),
@@ -1001,6 +1061,12 @@ function OrderInner() {
   const renderProduct = (p: any, fromBiz?: any) => {
     const qtys: Record<string, number> = {};
     for (const opt of p.preorderOptions || []) qtys[String(opt.id)] = cartQty(`${p.id}:${opt.id}`);
+    // Boutique: quantity already in the cart for each chosen variant id.
+    const vQtys: Record<string, number> = {};
+    for (const l of cart) {
+      if (l.product.id !== p.id || l.option || !l.variant) continue;
+      vQtys[String(l.variant.id)] = (vQtys[String(l.variant.id)] || 0) + l.qty;
+    }
     return (
       <ProductCard
         key={p.id}
@@ -1009,6 +1075,7 @@ function OrderInner() {
         wmBiz={fromBiz || bizOfProduct(p)}
         stockQty={inCart(p.id)}
         optionQtys={qtys}
+        variantQtys={vQtys}
         add={add}
         setQty={setQty}
         onOpenLightbox={openLightbox}
@@ -2004,8 +2071,8 @@ function OrderInner() {
             fmtMoney={fmtMoney}
             onClose={() => setLightbox(null)}
             onNavigate={(i) => setLightbox({ ...lightbox, idx: i })}
-            onAdd={() => {
-              add(lightbox.p, 1, lightbox.fromBiz);
+            onAdd={(lbSel) => {
+              add(lightbox.p, 1, lightbox.fromBiz, undefined, lbSel ?? null);
               setLightbox(null);
             }}
           />
@@ -2019,9 +2086,14 @@ function OrderInner() {
             {cartOpen && (
               <div className="max-h-56 overflow-y-auto mb-2 divide-y divide-slate-100" data-testid="oo-cart-lines">
                 {cart.map((l) => (
-                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
+                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
                     <span className="flex-1 min-w-0 truncate text-slate-700">
                       {l.qty}× {l.product.name}
+                      {l.variant && (
+                        <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-200 text-[9px] font-bold text-amber-800" data-testid={`oo-cart-line-variant-${l.product.id}`}>
+                          {[l.variant.size ? `Size ${l.variant.size}` : null, l.variant.color || null].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
                       {l.option && (
                         <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-[9px] font-bold text-indigo-700" data-testid={`oo-cart-line-pre-${l.product.id}`}>
                           PRE-ORDER · {l.option.methodLabel}
@@ -2029,7 +2101,19 @@ function OrderInner() {
                       )}
                     </span>
                     <span className="text-slate-500">{fmtMoney(lineUnitPrice(l) * l.qty)}</span>
-                    <button onClick={() => add(l.product, -l.qty, undefined, l.option ?? undefined)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
+                    <button
+                      onClick={() =>
+                        add(
+                          l.product,
+                          -l.qty,
+                          undefined,
+                          l.option ?? undefined,
+                          l.variant ? { size: l.variant.size, color: l.variant.color } : undefined,
+                        )
+                      }
+                      className="p-1 text-slate-400 hover:text-rose-600"
+                      data-testid={`oo-cart-rm-${l.product.id}`}
+                    >
                       <Trash className="w-3.5 h-3.5" />
                     </button>
                   </div>

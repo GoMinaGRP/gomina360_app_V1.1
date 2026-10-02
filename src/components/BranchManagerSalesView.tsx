@@ -37,6 +37,7 @@ import SalesDocumentBuilder from "./SalesDocumentBuilder";
 import FinancialReportSection from "./FinancialReportSection";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import ProductVariantPicker, { type VariantSelection } from "./ProductVariantPicker";
 import { generateSalesDocumentPDF, printSalesDocument, downloadFile as downloadPDFFile } from "@/lib/salesDocument";
 import {
   BarChart,
@@ -155,8 +156,15 @@ export default function BranchManagerSalesView({
     sellingPrice: number;
     customPriceReason: string;
     isCustomPrice: boolean;
+    /** Boutique: the exact size/colour variant sold (null for plain items). */
+    variantId?: number | null;
+    variantLabel?: string | null;
   }
   const [cart, setCart] = useState<CartItem[]>([]);
+  // ── Boutique variants for the operating branch (lazy, per business) ──
+  const [variantsByItem, setVariantsByItem] = useState<Record<string, any[]>>({});
+  const [variantPickerInv, setVariantPickerInv] = useState<any | null>(null);
+  const [variantPickSel, setVariantPickSel] = useState<VariantSelection>(null);
   const [salePaymentMethod, setSalePaymentMethod] = useState("MTN_MOMO");
   const [saleCustomerName, setSaleCustomerName] = useState("Walk-in Customer");
   const [saleCustomerPhone, setSaleCustomerPhone] = useState("");
@@ -185,6 +193,33 @@ export default function BranchManagerSalesView({
   const [newCustEmail, setNewCustEmail] = useState("");
   const [newCustType, setNewCustType] = useState("RETAIL");
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+
+  // ── Boutique variant matrix for the operating branch ────────────────
+  // Fetched lazily (small projection) so the POS can offer size/colour
+  // selection without bloating the app-wide /api/init payload.
+  useEffect(() => {
+    const bizId = activeBiz?.id;
+    if (!bizId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/boutique?businessId=${bizId}&variantsOnly=1`);
+        const body = await res.json().catch(() => null);
+        if (!cancelled && body?.success) setVariantsByItem(body.variants || {});
+      } catch {
+        /* variant layer is optional — a failed fetch just hides the chooser */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBiz?.id]);
+
+  /** Variant rows of one branch product (active only), [] when plain. */
+  const variantsOfItem = (invId: number): any[] => {
+    const rows = variantsByItem[String(invId)];
+    return Array.isArray(rows) ? rows.filter((v: any) => v.isActive !== false) : [];
+  };
 
   // ─────── Derived data ───────
   const branchInventory = inventory.filter(
@@ -381,13 +416,23 @@ export default function BranchManagerSalesView({
     return true;
   });
 
-  const addToCart = (inv: any) => {
-    const existing = cart.find((c) => c.inventoryId === inv.id);
+  /** One cart line per (product × size/colour) pair. */
+  const cartKeyOf = (inventoryId: number, variantId?: number | null) =>
+    `${inventoryId}:${variantId ? Number(variantId) : 0}`;
+
+  const addToCart = (inv: any, variant?: any | null) => {
+    const variantId = variant ? Number(variant.id) : null;
+    const variantLabel = variant
+      ? [variant.size ? `Size ${variant.size}` : null, variant.color || null].filter(Boolean).join(" · ")
+      : null;
+    const lineKey = cartKeyOf(inv.id, variantId);
+    const available = variant ? Number(variant.quantity) || 0 : inv.quantity;
+    const existing = cart.find((c) => cartKeyOf(c.inventoryId, c.variantId) === lineKey);
     if (existing) {
-      if (existing.quantity >= inv.quantity) return; // can't exceed stock
+      if (existing.quantity >= existing.availableQty) return; // can't exceed stock
       setCart(
         cart.map((c) =>
-          c.inventoryId === inv.id ? { ...c, quantity: c.quantity + 1 } : c
+          cartKeyOf(c.inventoryId, c.variantId) === lineKey ? { ...c, quantity: c.quantity + 1 } : c
         )
       );
     } else {
@@ -399,47 +444,49 @@ export default function BranchManagerSalesView({
           name: inv.name,
           category: inv.category,
           unit: inv.unit,
-          availableQty: inv.quantity,
+          availableQty: available,
           quantity: 1,
           originalPrice: inv.sellingPriceGhs,
           sellingPrice: inv.sellingPriceGhs,
           customPriceReason: "",
           isCustomPrice: false,
+          variantId,
+          variantLabel,
         },
       ]);
     }
   };
 
-  const updateCartQty = (inventoryId: number, qty: number) => {
+  const updateCartQty = (lineKey: string, qty: number) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey
           ? { ...c, quantity: Math.max(1, Math.min(qty, c.availableQty)) }
           : c
       )
     );
   };
 
-  const updateCartPrice = (inventoryId: number, price: number) => {
+  const updateCartPrice = (lineKey: string, price: number) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey
           ? { ...c, sellingPrice: price, isCustomPrice: price !== c.originalPrice }
           : c
       )
     );
   };
 
-  const updateCartPriceReason = (inventoryId: number, reason: string) => {
+  const updateCartPriceReason = (lineKey: string, reason: string) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId ? { ...c, customPriceReason: reason } : c
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey ? { ...c, customPriceReason: reason } : c
       )
     );
   };
 
-  const removeFromCart = (inventoryId: number) => {
-    setCart(cart.filter((c) => c.inventoryId !== inventoryId));
+  const removeFromCart = (lineKey: string) => {
+    setCart(cart.filter((c) => cartKeyOf(c.inventoryId, c.variantId) !== lineKey));
   };
 
   const cartSubtotal = cart.reduce(
@@ -467,6 +514,8 @@ export default function BranchManagerSalesView({
       originalPrice: c.originalPrice,
       sellingPrice: c.sellingPrice,
       customPriceReason: c.isCustomPrice ? c.customPriceReason : undefined,
+      // Boutique: the exact size/colour variant being sold.
+      ...(c.variantId ? { variantId: c.variantId } : {}),
     }));
 
     try {
@@ -1074,6 +1123,70 @@ export default function BranchManagerSalesView({
                 </div>
               )}
 
+              {/* ── Boutique size/colour chooser (opened from a product tile) ── */}
+              {variantPickerInv && (
+                <div className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4" data-testid="pos-variant-modal">
+                  <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-white truncate">{variantPickerInv.name}</div>
+                        <div className="text-[10px] text-slate-400">
+                          Choose size &amp; colour — {formatMoney(variantPickerInv.sellingPriceGhs, currentCurrency)} per {variantPickerInv.unit}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setVariantPickerInv(null); setVariantPickSel(null); }}
+                        className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="p-4">
+                      <ProductVariantPicker
+                        product={{ id: variantPickerInv.id, variantOptions: { sizes: [], colors: [], variants: variantsOfItem(variantPickerInv.id).map((v: any) => ({ id: Number(v.id), size: v.size || null, color: v.color || null, sizeSystem: v.sizeSystem || null, available: Number(v.quantity) || 0, inStock: (Number(v.quantity) || 0) > 0 })) } }}
+                        value={variantPickSel}
+                        onChange={setVariantPickSel}
+                        tone="dark"
+                        testidPrefix="pos"
+                      />
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setVariantPickerInv(null); setVariantPickSel(null); }}
+                          className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!(variantPickSel?.size || variantPickSel?.color)}
+                          onClick={() => {
+                            const inv = variantPickerInv;
+                            const picked = variantPickSel
+                              ? variantsOfItem(inv.id).find(
+                                  (v: any) => (v.size || null) === (variantPickSel.size || null) && (v.color || null) === (variantPickSel.color || null),
+                                )
+                              : null;
+                            if (!picked) {
+                              setSaleError("Choose an in-stock size/colour for this product.");
+                              return;
+                            }
+                            addToCart(inv, picked);
+                            setVariantPickerInv(null);
+                            setVariantPickSel(null);
+                          }}
+                          className="flex-1 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-xs font-black"
+                          data-testid="pos-variant-confirm"
+                        >
+                          Add to Cart
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* ── Product Picker ── */}
               <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-700/70 mb-3">
@@ -1094,13 +1207,24 @@ export default function BranchManagerSalesView({
                 {filteredProducts.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
                     {filteredProducts.map((inv: any) => {
-                      const inCart = cart.find((c) => c.inventoryId === inv.id);
+                      const itemVariants = variantsOfItem(inv.id);
+                      const inCart = cart.some((c) => c.inventoryId === inv.id);
+                      const shownQty = itemVariants.length
+                        ? itemVariants.reduce((sum: number, v: any) => sum + (Number(v.quantity) || 0), 0)
+                        : inv.quantity;
                       return (
                         <button
                           key={inv.id}
                           type="button"
-                          onClick={() => addToCart(inv)}
-                          disabled={inv.quantity <= 0}
+                          onClick={() => {
+                            if (itemVariants.length > 0) {
+                              setVariantPickSel(null);
+                              setVariantPickerInv(inv);
+                              return;
+                            }
+                            addToCart(inv);
+                          }}
+                          disabled={shownQty <= 0}
                           className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition text-xs ${
                             inCart ? "bg-emerald-500/10 border-emerald-500/40" : "bg-slate-900/60 border-slate-700 hover:border-slate-500"
                           } disabled:opacity-40`}
@@ -1115,7 +1239,12 @@ export default function BranchManagerSalesView({
                           </div>
                           <div className="text-right shrink-0">
                             <div className="font-bold text-emerald-400">{formatMoney(inv.sellingPriceGhs, currentCurrency)}</div>
-                            <div className="text-[10px] text-slate-400">{inv.quantity} {inv.unit} avail</div>
+                            <div className="text-[10px] text-slate-400">
+                              {shownQty} {inv.unit} avail
+                              {itemVariants.length > 0 && (
+                                <span className="ml-1 text-amber-300 font-bold">· sizes/colours</span>
+                              )}
+                            </div>
                           </div>
                         </button>
                       );
@@ -1139,13 +1268,20 @@ export default function BranchManagerSalesView({
                 {cart.length > 0 ? (
                   <div className="space-y-2">
                     {cart.map((item) => (
-                      <div key={item.inventoryId} className="p-3 rounded-lg border border-slate-700 bg-slate-900/60 space-y-2">
+                      <div key={cartKeyOf(item.inventoryId, item.variantId)} className="p-3 rounded-lg border border-slate-700 bg-slate-900/60 space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="min-w-0 flex-1 mr-2">
-                            <div className="text-xs font-bold text-slate-100 truncate">{item.name}</div>
+                            <div className="text-xs font-bold text-slate-100 truncate">
+                              {item.name}
+                              {item.variantLabel && (
+                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/40 text-[9px] font-bold text-amber-200" data-testid="pos-cart-variant">
+                                  {item.variantLabel}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-slate-400">{item.sku} • {item.category} • {item.availableQty} {item.unit} in stock</div>
                           </div>
-                          <button type="button" onClick={() => removeFromCart(item.inventoryId)} className="p-1 rounded hover:bg-rose-500/20 text-rose-400 shrink-0">
+                          <button type="button" onClick={() => removeFromCart(cartKeyOf(item.inventoryId, item.variantId))} className="p-1 rounded hover:bg-rose-500/20 text-rose-400 shrink-0">
                             <X className="w-4 h-4" />
                           </button>
                         </div>
@@ -1154,7 +1290,7 @@ export default function BranchManagerSalesView({
                           {/* Quantity */}
                           <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Qty (max {item.availableQty})</label>
-                            <input type="number" min={1} max={item.availableQty} value={item.quantity} onChange={(e) => updateCartQty(item.inventoryId, Number(e.target.value))} className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-white text-xs text-center" />
+                            <input type="number" min={1} max={item.availableQty} value={item.quantity} onChange={(e) => updateCartQty(cartKeyOf(item.inventoryId, item.variantId), Number(e.target.value))} className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-white text-xs text-center" />
                           </div>
                           {/* Unit Price */}
                           <div>
@@ -1169,7 +1305,7 @@ export default function BranchManagerSalesView({
                                   setSaleError("Only Owner or General Manager can override product prices.");
                                   return;
                                 }
-                                updateCartPrice(item.inventoryId, Number(e.target.value));
+                                updateCartPrice(cartKeyOf(item.inventoryId, item.variantId), Number(e.target.value));
                               }}
                               className={`w-full px-2 py-1.5 bg-slate-800 border rounded text-white text-xs text-right ${
                                 item.isCustomPrice ? "border-amber-500/60" : "border-slate-700"
@@ -1191,7 +1327,7 @@ export default function BranchManagerSalesView({
                             <label className="block text-[10px] text-amber-300 mb-0.5">
                               Reason for price change (original: {formatMoney(item.originalPrice, currentCurrency)})
                             </label>
-                            <input type="text" value={item.customPriceReason} onChange={(e) => updateCartPriceReason(item.inventoryId, e.target.value)} placeholder="e.g. Bulk discount approved by manager" className="w-full px-2 py-1 bg-slate-800 border border-amber-500/40 rounded text-white text-[11px]" />
+                            <input type="text" value={item.customPriceReason} onChange={(e) => updateCartPriceReason(cartKeyOf(item.inventoryId, item.variantId), e.target.value)} placeholder="e.g. Bulk discount approved by manager" className="w-full px-2 py-1 bg-slate-800 border border-amber-500/40 rounded text-white text-[11px]" />
                           </div>
                         )}
                       </div>

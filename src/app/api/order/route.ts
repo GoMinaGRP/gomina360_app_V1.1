@@ -13,6 +13,8 @@ import {
 import { googleMapsLink, businessServesLocation, haversineM } from "@/lib/tracking";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 import { buildPreorderSnapshot, optionDepositPerUnit, orderKindFor, resolvePreorders } from "@/lib/preorder";
+import { resolveVariantForLine } from "@/lib/boutique";
+import { variantSuffix } from "@/lib/boutiqueSizes";
 
 /**
  * PUBLIC online checkout — customers order WITHOUT logging in.
@@ -219,10 +221,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const cart: { inventoryId: number; quantity: number }[] = Array.isArray(body.items)
+    const cart: { inventoryId: number; quantity: number; variantId: number | null }[] = Array.isArray(body.items)
       ? body.items.slice(0, 50).map((li: any) => ({
           inventoryId: Number(li?.inventoryId),
           quantity: Number(li?.quantity),
+          variantId: li?.variantId != null && Number(li.variantId) > 0 ? Number(li.variantId) : null,
         }))
       : [];
     if (cart.length === 0 || cart.some((li) => !li.inventoryId || !(li.quantity > 0))) {
@@ -246,7 +249,10 @@ export async function POST(request: NextRequest) {
       );
     }
     const ownerOrg = biz.ownerId != null ? Number(biz.ownerId) : null;
-    const preorderResolution = await resolvePreorders({ businessId, ownerOrg, cart, fulfilmentPicker });
+    // Boutique: pre-order lines also carry the optional variant choice; the
+    // stock-line requirement is enforced below against the live variant rows.
+    const preorderCart = cart.map((c) => ({ inventoryId: c.inventoryId, quantity: c.quantity }));
+    const preorderResolution = await resolvePreorders({ businessId, ownerOrg, cart: preorderCart, fulfilmentPicker });
     const problems: string[] = [];
     if (preorderResolution?.problems?.length) {
       return NextResponse.json({ success: false, error: preorderResolution.problems.join(" "), errors: preorderResolution.problems }, { status: 409 });
@@ -259,12 +265,36 @@ export async function POST(request: NextRequest) {
         problems.push("One of the products is no longer sold by this branch — please refresh the menu.");
         continue;
       }
+      // Boutique variant choice — required for every product that carries a
+      // size/colour matrix; validated against the live per-variant stock so a
+      // customer can never order an unavailable size/colour.
+      const variantVerdict = await resolveVariantForLine({
+        businessId,
+        inventoryId: inv.id,
+        variantId: li.variantId,
+        quantity: li.quantity,
+      });
+      if (variantVerdict.error) {
+        problems.push(`"${inv.name}": ${variantVerdict.error}`);
+        continue;
+      }
+      const variantRow = variantVerdict.variant;
+      const vSuffix = variantRow ? variantSuffix(variantRow.size, variantRow.color) : "";
+      const variantFields = variantRow
+        ? {
+            variantId: Number(variantRow.id),
+            variantSku: variantRow.sku || null,
+            size: variantRow.size || null,
+            color: variantRow.color || null,
+          }
+        : {};
       const fu = pByInv.get(li.inventoryId);
       if (fu) {
-        // Pre-order line — stock is irrelevant here; goods arrive later.
+        // Pre-order line — stock is irrelevant here; goods arrive later. The
+        // chosen size/colour still travels with the order for the supplier.
         lines.push({
           inventoryId: inv.id,
-          description: `${inv.name} (${inv.sku})`,
+          description: `${inv.name} (${inv.sku})${vSuffix}`,
           sku: inv.sku,
           quantity: li.quantity,
           unit: inv.unit,
@@ -278,25 +308,34 @@ export async function POST(request: NextRequest) {
           leadMaxDays: fu.leadMaxDays,
           depositGhs: fu.depositGhs,
           termsKey: fu.termsKey,
+          ...variantFields,
         });
         continue;
       }
-      if (inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
+      // Variant items are validated against THEIR OWN stock (the aggregate
+      // stays in sync, but the customer must get the exact size/colour).
+      const availableUnits = variantRow ? Number(variantRow.quantity) || 0 : inv.quantity;
+      if (variantRow ? availableUnits <= 0 : inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
         problems.push(`"${inv.name}" just went out of stock.`);
         continue;
       }
-      if (li.quantity > inv.quantity) {
-        problems.push(`"${inv.name}": only ${inv.quantity} ${inv.unit} available right now.`);
+      if (li.quantity > availableUnits) {
+        problems.push(
+          variantRow
+            ? `"${inv.name}"${vSuffix}: only ${availableUnits} ${inv.unit} available right now.`
+            : `"${inv.name}": only ${availableUnits} ${inv.unit} available right now.`,
+        );
         continue;
       }
       lines.push({
         inventoryId: inv.id,
-        description: `${inv.name} (${inv.sku})`,
+        description: `${inv.name} (${inv.sku})${vSuffix}`,
         sku: inv.sku,
         quantity: li.quantity,
         unit: inv.unit,
         unitPrice: inv.sellingPriceGhs,
         total: inv.sellingPriceGhs * li.quantity,
+        ...variantFields,
       });
     }
     if (problems.length > 0) {
@@ -424,6 +463,9 @@ export async function POST(request: NextRequest) {
           unit: li.unit,
           unitPrice: li.unitPrice,
           total: li.total,
+          size: li.size ?? null,
+          color: li.color ?? null,
+          variantId: li.variantId ?? null,
         })),
         totalGhs,
         currency: "GHS",

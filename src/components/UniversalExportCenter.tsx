@@ -71,6 +71,7 @@ const MODULE_LABELS: Record<string, string> = {
   "TECH-01": "Electronics Shop Management",
   "WASH-01": "Car Wash Management",
   "TELECOM-01": "Telecom & Digital Services Management",
+  "BOUTIQUE-01": "Boutique Management",
 };
 
 const BUSINESS_MODULES = new Set([
@@ -82,6 +83,7 @@ const BUSINESS_MODULES = new Set([
   "TECH-01",
   "WASH-01",
   "TELECOM-01",
+  "BOUTIQUE-01",
 ]);
 
 function addSection(section: string, rows: any[]) {

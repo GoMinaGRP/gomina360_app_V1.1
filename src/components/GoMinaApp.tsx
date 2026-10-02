@@ -78,6 +78,7 @@ const HardwareStoreModule = lazyMod(() => import("./HardwareStoreModule"));
 const CarWashModule = lazyMod(() => import("./CarWashModule"));
 const TelecomServicesModule = lazyMod(() => import("./TelecomServicesModule"));
 const TransportModule = lazyMod(() => import("./TransportModule"));
+const BoutiqueModule = lazyMod(() => import("./BoutiqueModule"));
 const BusinessDashboardModule = lazyMod(() => import("./BusinessDashboardModule"));
 const UniversalExportCenter = lazyMod(() => import("./UniversalExportCenter"));
 
@@ -1102,8 +1103,11 @@ export default function GoMinaApp() {
       Transportation: "TRANSPORT",
       "Transport & Logistics": "TRANSPORT",
       Logistics: "TRANSPORT",
+      Boutique: "BOUTIQUE",
+      "Boutique & Fashion": "BOUTIQUE",
+      "Fashion & Apparel": "BOUTIQUE",
     };
-    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT"];
+    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT", "BOUTIQUE"];
     const tabCandidates = scopedBusinesses.filter((b) => b.code === activeTab);
     const tabBiz = tabCandidates.find((b) => b.id === lastOpenedBizIdRef.current) ?? tabCandidates[0];
     if (tabBiz) {
@@ -1309,6 +1313,29 @@ export default function GoMinaApp() {
                 ? (advisorSections[String(bizInfo.id)] ?? null)
                 : undefined
             }
+          />
+        );
+      }
+
+      // Boutique (fashion / clothing / apparel) units get the dedicated
+      // boutique dashboard: size × colour stock, boutique POS, customer
+      // orders, low stock and best-selling products/sizes/colours — all on
+      // the shared Inventory, Sales, Finance, Orders, Reports and Audit
+      // backbone.
+      if (moduleKey === "BOUTIQUE") {
+        return (
+          <BoutiqueModule
+            currentUser={currentUser}
+            businessInfo={bizInfo}
+            businessMetrics={bizMetric}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            suppliers={scopedSuppliers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
+            currentCurrency={currentCurrency}
+            onRefreshData={refreshAllData}
           />
         );
       }

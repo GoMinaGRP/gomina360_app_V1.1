@@ -28,6 +28,8 @@ import {
   SETTLED_EPSILON,
 } from "@/lib/credit";
 import { uniqueTrackingCode } from "@/lib/trackingServer";
+import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
+import { variantSuffix } from "@/lib/boutiqueSizes";
 import { apiError } from "@/lib/apiError";
 
 /**
@@ -66,6 +68,9 @@ interface CartLine {
   quantity: number;
   sellingPrice?: number;
   customPriceReason?: string;
+  /** Boutique: the exact size/colour variant being sold (required for items
+   *  that carry a variant matrix, validated against live per-variant stock). */
+  variantId?: number | null;
 }
 
 /** Validate + reserve a cart against inventory (identical rules to /api/sales). */
@@ -73,9 +78,12 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
   const validationErrors: string[] = [];
   const inventoryUpdates: { id: number; newQty: number; newStatus: string }[] = [];
   const lineItems: any[] = [];
+  // Boutique: variant deductions ride alongside their aggregate item update.
+  const variantUpdates: { variantId: number; inventoryId: number; qty: number; label: string }[] = [];
+  const variantItemIds = new Set<number>();
 
   for (const item of cartItems || []) {
-    const { inventoryId, quantity, sellingPrice } = item;
+    const { inventoryId, quantity, sellingPrice, variantId } = item;
     if (!inventoryId || !quantity || quantity <= 0) {
       validationErrors.push("Invalid cart item: missing inventoryId or quantity.");
       continue;
@@ -92,13 +100,27 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
       validationErrors.push(`Product "${inv.name}" does not belong to this branch.`);
       continue;
     }
-    if (inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
+    const variantVerdict = await resolveVariantForLine({
+      businessId: Number(businessId),
+      inventoryId: inv.id,
+      variantId: variantId != null && Number(variantId) > 0 ? Number(variantId) : null,
+      quantity: Number(quantity),
+    });
+    if (variantVerdict.error) {
+      validationErrors.push(`"${inv.name}": ${variantVerdict.error}`);
+      continue;
+    }
+    const variantRow = variantVerdict.variant;
+    const availableUnits = variantRow ? Number(variantRow.quantity) || 0 : inv.quantity;
+    if (variantRow ? availableUnits <= 0 : inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
       validationErrors.push(`"${inv.name}" is OUT OF STOCK and cannot be sold on credit.`);
       continue;
     }
-    if (Number(quantity) > inv.quantity) {
+    if (Number(quantity) > availableUnits) {
       validationErrors.push(
-        `Insufficient stock for "${inv.name}": requested ${quantity}, available ${inv.quantity} ${inv.unit}.`
+        variantRow
+          ? `Insufficient stock for "${inv.name}" (${[variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · ")}): requested ${quantity}, available ${availableUnits} ${inv.unit}.`
+          : `Insufficient stock for "${inv.name}": requested ${quantity}, available ${availableUnits} ${inv.unit}.`
       );
       continue;
     }
@@ -108,10 +130,28 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
     const newStatus =
       newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK";
     inventoryUpdates.push({ id: inv.id, newQty, newStatus });
+    if (variantRow) {
+      variantUpdates.push({
+        variantId: Number(variantRow.id),
+        inventoryId: inv.id,
+        qty: Number(quantity),
+        label: [variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · "),
+      });
+      variantItemIds.add(inv.id);
+    }
+    const vSuffix = variantRow ? variantSuffix(variantRow.size, variantRow.color) : "";
     lineItems.push({
       inventoryId: inv.id,
       sku: inv.sku,
-      description: `${inv.name} (${inv.sku})`,
+      description: `${inv.name} (${inv.sku})${vSuffix}`,
+      ...(variantRow
+        ? {
+            variantId: Number(variantRow.id),
+            variantSku: variantRow.sku || null,
+            size: variantRow.size || null,
+            color: variantRow.color || null,
+          }
+        : {}),
       category: inv.category,
       quantity: Number(quantity),
       unit: inv.unit,
@@ -123,7 +163,7 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
       lineProfit: itemTotal - (inv.costPriceGhs || 0) * Number(quantity),
     });
   }
-  return { validationErrors, inventoryUpdates, lineItems };
+  return { validationErrors, inventoryUpdates, lineItems, variantUpdates, variantItemIds };
 }
 
 /** Find-or-create the CRM customer and accrue their spend (business-isolated). */
@@ -541,7 +581,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Cart validation (same rules as a cash sale).
-    const { validationErrors, inventoryUpdates, lineItems } = await validateCart(
+    const { validationErrors, inventoryUpdates, lineItems, variantUpdates, variantItemIds } = await validateCart(
       Number(businessId),
       cartItems
     );
@@ -593,7 +633,22 @@ export async function POST(request: NextRequest) {
     const grossProfit = round2(total - cogs);
 
     // 3. Deduct stock — goods leave the shelf at sale time, like a paid sale.
+    // Boutique variants are decremented atomically first; their item's
+    // aggregate is then recomputed from the variant rows.
+    for (const vu of variantUpdates) {
+      const ok = await deductVariantQty(vu.variantId, vu.qty);
+      if (!ok) {
+        return NextResponse.json(
+          { success: false, error: `"${vu.label || "variant"}" just sold out — refresh and try again.` },
+          { status: 409 },
+        );
+      }
+    }
     for (const update of inventoryUpdates) {
+      if (variantItemIds.has(update.id)) {
+        await syncItemAggregate(update.id);
+        continue;
+      }
       await db
         .update(inventoryItems)
         .set({ quantity: update.newQty, status: update.newStatus })

@@ -75,6 +75,9 @@ const TABLES: Record<string, TableRef> = {
   assets: { table: schema.assets, fkBusinessId: "businessId" },
   assetAuditLogs: { table: schema.assetAuditLogs }, // joined via assetId
   inventoryItems: { table: schema.inventoryItems, fkBusinessId: "businessId" },
+  // Boutique size × colour stock — rows hang off inventory items and are
+  // remapped on import so a restored unit keeps its per-size stock.
+  inventoryVariants: { table: schema.inventoryVariants, fkBusinessId: "businessId" },
   inventoryDownloads: { table: schema.inventoryDownloads, fkBusinessId: "downloaderBusinessId" },
   universalExports: { table: schema.universalExports, fkBusinessId: "businessId" },
   transactions: { table: schema.transactions, fkBusinessId: "businessId" },
@@ -743,6 +746,7 @@ export async function importBusinessBackup(
       photo: r.photo,
       photos: r.photos,
       qrCode: null,
+      tracksVariants: r.tracksVariants === true,
       registeredByName: r.registeredByName,
       registeredByUserId: remapUserId(r.registeredByUserId),
       registeredAt: r.registeredAt ? new Date(r.registeredAt) : undefined,
@@ -934,6 +938,7 @@ export async function importBusinessBackup(
     "dailyNotes", "businessInsights",
     "aiInsights",
     "auditAssignments", "auditReviews", "auditTrail",
+    "inventoryVariants",
     "inventoryDownloads", "assetDownloads", "universalExports",
   ];
 
@@ -1104,6 +1109,12 @@ export async function importBusinessBackup(
     }),
     scenarioSimulations: (r) => ({
       targetBusinessId: newBusinessId,
+    }),
+    inventoryVariants: (r) => ({
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+      // Variant SKUs are derived from the parent SKU; regenerate to avoid
+      // collisions with the imported item's new code.
+      sku: null,
     }),
     inventoryDownloads: (r) => ({
       downloaderUserId: remapUserId(r.downloaderUserId),

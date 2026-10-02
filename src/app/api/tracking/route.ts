@@ -238,6 +238,15 @@ export async function POST(request: NextRequest) {
               unit: li.unit || null,
               unitPrice: Number(li.unitPrice) || 0,
               total: (Number(li.quantity) || 1) * (Number(li.unitPrice) || 0),
+              // Boutique: staff-created orders may carry the exact size/colour
+              // choice so confirming the order deducts the right variant.
+              ...(li.variantId || li.size || li.color
+                ? {
+                    variantId: li.variantId != null ? Number(li.variantId) : null,
+                    size: li.size ? String(li.size).slice(0, 24) : null,
+                    color: li.color ? String(li.color).slice(0, 24) : null,
+                  }
+                : {}),
             }))
         : [];
       const r2 = (n: number) => Math.round(n * 100) / 100;

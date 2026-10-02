@@ -7,6 +7,8 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { buildTrackingCode } from "@/lib/tracking";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
+import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
+import { variantSuffix } from "@/lib/boutiqueSizes";
 
 /**
  * POST /api/sales
@@ -65,11 +67,14 @@ export async function POST(request: NextRequest) {
     // ── 1. Validate every item against inventory ──────────────────────
     const validationErrors: string[] = [];
     const inventoryUpdates: { id: number; newQty: number; newStatus: string }[] = [];
+    // Boutique: variant rows deducted alongside their aggregate item.
+    const variantUpdates: { variantId: number; inventoryId: number; qty: number; label: string }[] = [];
+    const variantItemIds = new Set<number>();
     const lineItems: any[] = [];
     const priceAuditEntries: any[] = [];
 
     for (const item of cartItems) {
-      const { inventoryId, quantity, sellingPrice, originalPrice, customPriceReason } = item;
+      const { inventoryId, quantity, sellingPrice, originalPrice, customPriceReason, variantId } = item;
 
       if (!inventoryId || !quantity || quantity <= 0) {
         validationErrors.push(`Invalid cart item: missing inventoryId or quantity.`);
@@ -91,14 +96,31 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      if (inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
+      // Boutique variant choice — required for products that carry a
+      // size/colour matrix; validated against live per-variant stock.
+      const variantVerdict = await resolveVariantForLine({
+        businessId: Number(businessId),
+        inventoryId: inv.id,
+        variantId: variantId != null && Number(variantId) > 0 ? Number(variantId) : null,
+        quantity: Number(quantity),
+      });
+      if (variantVerdict.error) {
+        validationErrors.push(`"${inv.name}": ${variantVerdict.error}`);
+        continue;
+      }
+      const variantRow = variantVerdict.variant;
+      const availableUnits = variantRow ? Number(variantRow.quantity) || 0 : inv.quantity;
+
+      if (variantRow ? availableUnits <= 0 : inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
         validationErrors.push(`"${inv.name}" is OUT OF STOCK and cannot be sold.`);
         continue;
       }
 
-      if (Number(quantity) > inv.quantity) {
+      if (Number(quantity) > availableUnits) {
         validationErrors.push(
-          `Insufficient stock for "${inv.name}": requested ${quantity}, available ${inv.quantity} ${inv.unit}.`
+          variantRow
+            ? `Insufficient stock for "${inv.name}" (${[variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · ")}): requested ${quantity}, available ${availableUnits} ${inv.unit}.`
+            : `Insufficient stock for "${inv.name}": requested ${quantity}, available ${availableUnits} ${inv.unit}.`
         );
         continue;
       }
@@ -114,11 +136,29 @@ export async function POST(request: NextRequest) {
           : "IN_STOCK";
 
       inventoryUpdates.push({ id: inv.id, newQty, newStatus });
+      if (variantRow) {
+        variantUpdates.push({
+          variantId: Number(variantRow.id),
+          inventoryId: inv.id,
+          qty: Number(quantity),
+          label: [variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · "),
+        });
+        variantItemIds.add(inv.id);
+      }
 
+      const vSuffix = variantRow ? variantSuffix(variantRow.size, variantRow.color) : "";
       lineItems.push({
         inventoryId: inv.id,
         sku: inv.sku,
-        description: `${inv.name} (${inv.sku})`,
+        description: `${inv.name} (${inv.sku})${vSuffix}`,
+        ...(variantRow
+          ? {
+              variantId: Number(variantRow.id),
+              variantSku: variantRow.sku || null,
+              size: variantRow.size || null,
+              color: variantRow.color || null,
+            }
+          : {}),
         category: inv.category,
         quantity: Number(quantity),
         unit: inv.unit,
@@ -154,7 +194,25 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 2. Deduct inventory quantities ───────────────────────────────
+    // Boutique lines first hit their exact variant row (atomic conditional
+    // decrement), then the item's aggregate is recomputed FROM the variant
+    // rows so register, dashboards, low-stock and reports can never drift.
+    const variantFailures: string[] = [];
+    for (const vu of variantUpdates) {
+      const ok = await deductVariantQty(vu.variantId, vu.qty);
+      if (!ok) variantFailures.push(`"${vu.label || "variant"}" just sold out — refresh and try again.`);
+    }
+    if (variantFailures.length > 0) {
+      return NextResponse.json(
+        { success: false, error: variantFailures.join(" | "), errors: variantFailures },
+        { status: 409 },
+      );
+    }
     for (const update of inventoryUpdates) {
+      if (variantItemIds.has(update.id)) {
+        await syncItemAggregate(update.id);
+        continue;
+      }
       await db
         .update(inventoryItems)
         .set({ quantity: update.newQty, status: update.newStatus })
@@ -342,6 +400,9 @@ export async function POST(request: NextRequest) {
           unit: li.unit || null,
           unitPrice: li.unitPrice,
           total: li.total,
+          ...(li.size || li.color
+            ? { size: li.size || null, color: li.color || null, variantId: li.variantId ?? null }
+            : {}),
         })),
         totalGhs: total,
         currency: "GHS",
