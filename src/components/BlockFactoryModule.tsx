@@ -67,7 +67,6 @@ export default function BlockFactoryModule({
   const [production, setProduction] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [deliveries, setDeliveries] = useState<any[]>([]);
-  const [checklists, setChecklists] = useState<any[]>([]);
   const [blockTypesList, setBlockTypesList] = useState<any[]>([]);
   const [qcChecks, setQcChecks] = useState<any[]>([]);
   const [mixBatches, setMixBatches] = useState<any[]>([]);

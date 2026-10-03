@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
+  checklistEntries,
   blockFactoryLogs,
   blockFactoryOrders,
   blockFactoryDeliveries,
-  blockFactoryChecklists,
   blockTypes,
   blockQcChecks,
   blockMixFormulations,
@@ -26,6 +26,7 @@ import { auditLog } from "@/lib/audit";
 import { linkSupplier } from "@/lib/supplierLinks";
 import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
+import { insertDailyEntries, toggleChecklistEntry } from "@/lib/checklistGen";
 import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
@@ -226,13 +227,15 @@ export async function GET(request: NextRequest) {
       return FORBIDDEN("You do not have access to that business.");
     }
 
+    // Daily checklists ARE the shared engine's rows (checklist_entries) — the
+    // per-module legacy table is retired, the payload shape is unchanged.
     const [production, orders, deliveries, inventory, checklists, existingTypes, qcChecks,
       mixFormulations, mixFormulationItems, mixBatches, mixBatchInputs] = await Promise.all([
       db.select().from(blockFactoryLogs).where(eq(blockFactoryLogs.businessId, businessId)),
       db.select().from(blockFactoryOrders).where(eq(blockFactoryOrders.businessId, businessId)),
       db.select().from(blockFactoryDeliveries).where(eq(blockFactoryDeliveries.businessId, businessId)),
       db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId)),
-      db.select().from(blockFactoryChecklists).where(eq(blockFactoryChecklists.businessId, businessId)),
+      db.select().from(checklistEntries).where(eq(checklistEntries.businessId, businessId)),
       db.select().from(blockTypes).where(eq(blockTypes.businessId, businessId)),
       db.select().from(blockQcChecks).where(eq(blockQcChecks.businessId, businessId)),
       db.select().from(blockMixFormulations).where(eq(blockMixFormulations.businessId, businessId)),
@@ -527,41 +530,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, item: expRes.transaction, pendingApproval: expRes.pendingApproval });
     }
 
-    // ── CHECKLIST (create a day's task list; idempotent per business+branch+date) ──
+    // ── CHECKLIST (create a day's task list; idempotent per business+date) ──
+    // Backed by the SHARED checklist store (checklist_entries) — the
+    // block_factory_checklists table is retired. Same contract as before
+    // ({items, alreadyExists}); the day is keyed by business+date, exactly like
+    // the shared engine, so the module dashboard and /api/checklists agree.
     if (entity === "CHECKLIST") {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       const targetDate = data.checklistDate || today;
-      const existing = await db
-        .select()
-        .from(blockFactoryChecklists)
-        .where(
-          and(
-            eq(blockFactoryChecklists.businessId, businessId),
-            eq(blockFactoryChecklists.branchCode, branchCode),
-            eq(blockFactoryChecklists.checklistDate, targetDate),
-          ),
-        );
-      if (existing.length > 0) {
-        return NextResponse.json({ success: true, items: existing, alreadyExists: true });
-      }
-      const rows = [];
-      for (const t of tasks) {
-        const [row] = await db
-          .insert(blockFactoryChecklists)
-          .values({
-            businessId,
-            branchCode,
-            checklistDate: data.checklistDate || today,
-            taskKey: t.taskKey,
-            taskLabel: t.taskLabel,
-            category: t.category || "GENERAL",
-            isCompleted: false,
-            notes: t.notes || null,
-          })
-          .returning();
-        rows.push(row);
-      }
-      return NextResponse.json({ success: true, items: rows });
+      const { items, alreadyExists } = await insertDailyEntries({
+        businessId,
+        branchCode,
+        date: targetDate,
+        tasks: tasks.map((t: any) => ({
+          taskKey: t.taskKey,
+          taskLabel: t.taskLabel,
+          category: t.category || "GENERAL",
+        })),
+      });
+      ttlInvalidate("init");
+      return NextResponse.json(
+        alreadyExists ? { success: true, items, alreadyExists: true } : { success: true, items },
+      );
     }
 
     // ── QC_CHECK (Quality Control at any pipeline stage) ─────────────────
@@ -1090,25 +1080,18 @@ export async function PATCH(request: NextRequest) {
     if (entity === "CHECKLIST" && id) {
       const [existing] = await db
         .select()
-        .from(blockFactoryChecklists)
-        .where(eq(blockFactoryChecklists.id, Number(id)));
+        .from(checklistEntries)
+        .where(eq(checklistEntries.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
       }
       if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      const nowCompleted = !existing.isCompleted;
-      const [row] = await db
-        .update(blockFactoryChecklists)
-        .set({
-          isCompleted: nowCompleted,
-          completedByName: nowCompleted ? data?.completedByName || "Staff" : null,
-          completedByRole: nowCompleted ? data?.completedByRole || null : null,
-          completedAt: nowCompleted ? new Date() : null,
-        })
-        .where(eq(blockFactoryChecklists.id, Number(id)))
-        .returning();
+      const row = await toggleChecklistEntry(Number(id), {
+        name: data?.completedByName,
+        role: data?.completedByRole,
+      });
       return NextResponse.json({ success: true, item: row });
     }
 

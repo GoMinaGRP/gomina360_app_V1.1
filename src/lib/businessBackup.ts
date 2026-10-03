@@ -134,12 +134,10 @@ const TABLES: Record<string, TableRef> = {
   poultryProduction: { table: schema.poultryProduction, fkBusinessId: "businessId" },
   poultryProducts: { table: schema.poultryProducts, fkBusinessId: "businessId" },
   poultryWeightLogs: { table: schema.poultryWeightLogs, fkBusinessId: "businessId" },
-  poultryChecklists: { table: schema.poultryChecklists, fkBusinessId: "businessId" },
   // Block factory
   blockFactoryLogs: { table: schema.blockFactoryLogs, fkBusinessId: "businessId" },
   blockFactoryOrders: { table: schema.blockFactoryOrders, fkBusinessId: "businessId" },
   blockFactoryDeliveries: { table: schema.blockFactoryDeliveries, fkBusinessId: "businessId" },
-  blockFactoryChecklists: { table: schema.blockFactoryChecklists, fkBusinessId: "businessId" },
   blockTypes: { table: schema.blockTypes, fkBusinessId: "businessId" },
   blockQcChecks: { table: schema.blockQcChecks, fkBusinessId: "businessId" },
   // Aquaculture
@@ -150,7 +148,6 @@ const TABLES: Record<string, TableRef> = {
   aquacultureWaterQualityLogs: { table: schema.aquacultureWaterQualityLogs, fkBusinessId: "businessId" },
   aquacultureHarvests: { table: schema.aquacultureHarvests, fkBusinessId: "businessId" },
   aquacultureWeightLogs: { table: schema.aquacultureWeightLogs, fkBusinessId: "businessId" },
-  aquacultureChecklists: { table: schema.aquacultureChecklists, fkBusinessId: "businessId" },
   // Livestock
   livestockLogs: { table: schema.livestockLogs, fkBusinessId: "businessId" },
   // Restaurant
@@ -1161,12 +1158,9 @@ async function importBusinessBackupTx(
   const simpleTables = [
     "poultryLogs", "poultryFlocks", "poultryFeedLogs", "poultryWaterLogs",
     "poultryHealthRecords", "poultryProduction", "poultryProducts",
-    "poultryWeightLogs", "poultryChecklists",
     "blockFactoryLogs", "blockFactoryOrders", "blockFactoryDeliveries",
-    "blockFactoryChecklists", "blockTypes", "blockQcChecks",
     "aquacultureLogs", "aquaculturePonds", "aquacultureBatches",
     "aquacultureFeedLogs", "aquacultureWaterQualityLogs", "aquacultureHarvests",
-    "aquacultureWeightLogs", "aquacultureChecklists",
     "livestockLogs",
     "restaurantLogs", "restaurantOrders", "restaurantMenuItems",
     "restaurantWaste", "restaurantPurchases",

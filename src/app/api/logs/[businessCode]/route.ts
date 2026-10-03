@@ -14,13 +14,15 @@ import {
   transactions,
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { stockOut, computeStockStatus } from "@/lib/stock";
+import { stockOut, stockIn, ensureInventoryItem } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN, isFarmAdvisor, advisorSectionsForBusiness } from "@/lib/auth";
 import { anySectionAllowed, farmModuleOfBusiness } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { ttlInvalidate } from "@/lib/ttlCache";
-import { nextTrxNumber } from "@/lib/idNumbers";
+import { ownerOrgOfBusiness } from "@/lib/notify";
+import { postSale } from "@/lib/salePosting";
+import { linkSupplier } from "@/lib/supplierLinks";
 
 /** Unit codes are unique PER ORGANIZATION, so a code may match businesses in
  *  several tenants. Resolve the first business the caller can access —
@@ -283,24 +285,34 @@ export async function POST(
         .returning();
 
       // ── Finance linkage: wash revenue flows into Transactions so the
-      // branch's revenue / profit / dashboards update immediately ──
+      // branch's revenue / profit / dashboards update immediately. Posted by
+      // the SHARED sale engine (one writer per fact); a shift total is not a
+      // counter sale, so receipt/tracking/CRM stay off and the ledger row is
+      // unchanged.
       if ((inserted.totalRevenueGhs || 0) > 0) {
-        await db.insert(transactions).values({
-          transactionNumber: nextTrxNumber(),
+        await postSale({
           businessId: biz.id,
           branchCode: biz.code,
-          branchName: biz.name,
-          type: "INCOME",
+          lines: [
+            {
+              description: `${inserted.vehiclesWashed} vehicles washed`,
+              quantity: inserted.vehiclesWashed || 1,
+              unitPrice: (inserted.totalRevenueGhs || 0) / (inserted.vehiclesWashed || 1),
+              total: inserted.totalRevenueGhs,
+            },
+          ],
           category: "CAR_WASH_REVENUE",
-          amountGhs: inserted.totalRevenueGhs,
-          paymentMethod: body.paymentMethod || "CASH",
           description: `Auto Wash shift ${inserted.shiftDate}: ${inserted.vehiclesWashed} vehicles washed`,
+          paymentMethod: body.paymentMethod || "CASH",
           date: today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: body.recordedBy || body.createdByName || "Auto Wash Supervisor",
-          recordedByRole: body.recordedByRole || body.createdByRole || null,
-          recordedByUserId: body.recordedByUserId ? Number(body.recordedByUserId) : null,
+          receipt: false,
+          tracking: false,
+          linkCustomer: false,
+          actor: {
+            id: body.recordedByUserId ? Number(body.recordedByUserId) : null,
+            name: body.recordedBy || body.createdByName || "Auto Wash Supervisor",
+            role: body.recordedByRole || body.createdByRole || null,
+          },
         }).catch((e) => console.error("wash revenue txn warning:", e));
       }
 
@@ -381,39 +393,48 @@ export async function POST(
               i.name?.toUpperCase().includes(key) ||
               key.includes(String(i.name || "").toUpperCase().slice(0, 12))
           );
-          if (target) {
-            const newQty = (target.quantity || 0) + qty;
-            await db
-              .update(inventoryItems)
-              .set({
-                quantity: newQty,
-                costPriceGhs: unitCost || target.costPriceGhs,
-                status: computeStockStatus(newQty, target.minStockThreshold || 0),
-              })
-              .where(eq(inventoryItems.id, target.id));
-          } else {
+          // Shared stock service (src/lib/stock): the ops-log GRN path used to
+          // hand-roll the inventory insert/update — the same duplicated writer
+          // P1 removed from the module routes. SKU generation for a brand-new
+          // item is preserved exactly as before (HW-<name>[-n]).
+          let sku = target?.sku as string | undefined;
+          if (!sku) {
             const taken = new Set(
               (await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku)
             );
-            let sku = `HW-${String(inserted.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
+            sku = `HW-${String(inserted.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
             let n = 2;
             while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-            await db.insert(inventoryItems).values({
-              name: inserted.itemName,
-              sku,
-              businessId: biz.id,
-              category: "Building Materials",
-              quantity: qty,
-              unit: inserted.unit || "Units",
-              costPriceGhs: unitCost,
-              sellingPriceGhs: Math.round(unitCost * 1.25 * 100) / 100,
-              minStockThreshold: 10,
-              status: computeStockStatus(qty, 10),
-            });
           }
+          await stockIn({
+            businessId: biz.id,
+            sku,
+            name: inserted.itemName || target?.name || "Stock item",
+            category: "Building Materials",
+            unit: inserted.unit || target?.unit || "Units",
+            quantity: qty,
+            costPriceGhs: unitCost || target?.costPriceGhs || 0,
+            sellingPriceGhs:
+              target?.sellingPriceGhs || Math.round((unitCost || 0) * 1.25 * 100) / 100,
+            minStockThreshold: target?.minStockThreshold ?? 10,
+          });
         } catch (e) {
           console.error("hardware receipt stock warning:", e);
         }
+      }
+
+      // ── Supplier ledger: name the supplier on a GRN and the org-wide
+      // Suppliers register accrues the goods value (shared linkSupplier) ──
+      if (qty > 0 && unitCost > 0 && inserted.supplierName) {
+        const orgId = await ownerOrgOfBusiness(biz.id).catch(() => null);
+        await linkSupplier({
+          ownerId: orgId,
+          name: inserted.supplierName,
+          category: "Building Materials",
+          suppliedGhs: qty * unitCost,
+          paymentMethod: body.paymentMethod || "BANK_TRANSFER",
+          logTag: "[hardware-grn]",
+        });
       }
 
       // ── Finance linkage: landed cost books as an EXPENSE ──

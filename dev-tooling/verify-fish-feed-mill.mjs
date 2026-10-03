@@ -181,7 +181,10 @@ async function main() {
     check("B6.bom-4-lines", formItems.length === 4 && Math.abs(formItems.reduce((s, i) => s + i.share_pct, 0) - 100) < 0.01);
     check("B7.bom-linked-raw-items", formItems.every((i) => i.inventory_id != null && (i.sku || "").startsWith("FISH-RM-")), formItems.map((i) => i.sku).join(","));
     // raw materials auto-created under the fish raw category
-    const rawInv = (await q(`SELECT * FROM inventory_items WHERE business_id=$1 AND category='Fish Feed Raw Materials' AND name LIKE 'TFFM%'`, [BIZ])).rows;
+    // The shared inventory taxonomy stores the umbrella category with the
+    // specific wording in `subcategory` (src/lib/inventoryCategories.ts) — the
+    // module literal "Fish Feed Raw Materials" is the subcategory.
+    const rawInv = (await q(`SELECT * FROM inventory_items WHERE business_id=$1 AND subcategory='Fish Feed Raw Materials' AND name LIKE 'TFFM%'`, [BIZ])).rows;
     check("B8.raw-items-created", rawInv.length === 4, rawInv.map((i) => i.name).join(","));
 
     const bDup = await fmPost(page, "FORMULATION", { businessId: BIZ, name: "TFFM Tilapia Grower 30% CP", items: [{ ingredientName: "TFFM Maize", sharePct: 100 }] });
@@ -229,7 +232,7 @@ async function main() {
       const ri = await fmPost(page, "INTAKE", { businessId: BIZ, itemName: nm, qty: kg, unit: "KG", unitCostGhs: cost, date: TODAY, recordExpense: false });
       if (!ri.body.success) { console.error("intake helper failed", nm, ri.body); }
     }
-    check("C7.all-raw-in", n((await q1(`SELECT COUNT(*) c FROM inventory_items WHERE business_id=$1 AND category='Fish Feed Raw Materials' AND name LIKE 'TFFM%'`, [BIZ])).c) === 4);
+    check("C7.all-raw-in", n((await q1(`SELECT COUNT(*) c FROM inventory_items WHERE business_id=$1 AND subcategory='Fish Feed Raw Materials' AND name LIKE 'TFFM%'`, [BIZ])).c) === 4);
 
     console.log("── D. BATCH run: guards + draws + ops txn once ──");
     // insufficient stock guard: huge run (bom now: 50/30/20 → 1000kg needs 500 maize)
@@ -262,7 +265,7 @@ async function main() {
     const opsTxn = (await q(`SELECT * FROM transactions WHERE business_id=$1 AND category='AQUA_FEED_MILL_OPS' AND description LIKE $2`, [BIZ, `%${dBatch.body.item.batchNumber}%`])).rows;
     check("D10.ops-txn-once", opsTxn.length === 1 && n(opsTxn[0].amount_ghs) === 60, opsTxn.map((t) => t.amount_ghs).join(","));
     const finItem = await q1(`SELECT * FROM inventory_items WHERE id=$1`, [batchRow?.finished_inventory_id]);
-    check("D11.finished-stock-in", finItem?.category === "Fish Feed (Milled)" && n(finItem?.quantity) === 192 && (finItem?.sku || "").startsWith("FISH-FM-"), JSON.stringify(finItem?.sku));
+    check("D11.finished-stock-in", (finItem?.category === "Fish Feed (Milled)" || finItem?.subcategory === "Fish Feed (Milled)") && n(finItem?.quantity) === 192 && (finItem?.sku || "").startsWith("FISH-FM-"), JSON.stringify(finItem?.sku));
     check("D12.finished-cost-kg", Math.abs(n(finItem?.cost_price_ghs) - (2060 / 192)) < 0.02);
 
     // zero labour+overhead → NO ops txn

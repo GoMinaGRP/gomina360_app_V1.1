@@ -108,15 +108,18 @@ export default function AquacultureModule({
   const refresh = useCallback(async () => {
     if (!bizId) return;
     try {
+      // The route serves `checklists` from the unified enterprise checklist
+      // engine (checklist_entries): the module's own legacy table is retired, so
+      // the dashboard KPIs and analytics read exactly what the checklist tab shows.
       const res = await fetch(`/api/aquaculture?businessId=${bizId}`);
       const d = await res.json();
       if (d.success) {
+        setChecklists(d.checklists || []);
         setPonds(d.ponds || []);
         setBatches(d.batches || []);
         setFeedLogs(d.feedLogs || []);
         setWaterLogs(d.waterLogs || []);
         setHarvests(d.harvests || []);
-        setChecklists(d.checklists || []);
         setWeightLogs(d.weightLogs || []);
         setBenchmarkProfiles(d.benchmarkProfiles || []);
       }

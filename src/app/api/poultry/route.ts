@@ -2,17 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
+  checklistEntries,
   poultryFlocks,
   poultryFeedLogs,
   poultryWaterLogs,
   poultryHealthRecords,
   poultryProduction,
-  poultryChecklists,
   poultryProducts,
   poultryWeightLogs,
   poultryBenchmarkProfiles,
   businesses,
-  transactions,
 } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { stockIn, stockOut, ensureInventoryItem } from "@/lib/stock";
@@ -22,14 +21,16 @@ import { canViewSection } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
 import { stageOfFlock } from "@/lib/poultryStages";
 import {
   isPoultryCategory,
   forkFlockPlan,
   applyPlanTemplateToFlock,
   generateEntriesForDate,
+  insertDailyEntries,
+  toggleChecklistEntry,
 } from "@/lib/checklistGen";
 import { checklistPlanTemplates } from "@/db/schema";
 import { resolveProfile, BENCHMARK_TEMPLATES } from "@/lib/poultryBenchmarking";
@@ -109,6 +110,8 @@ export async function GET(request: NextRequest) {
     const scope = <T extends { businessId: any }>(table: any) =>
       db.select().from(table).where(eq(table.businessId, bizId));
 
+    // Daily checklists ARE the shared engine's rows (checklist_entries) — the
+    // per-module legacy table is retired, the payload shape is unchanged.
     const [flocks, feedLogs, waterLogs, healthRecords, production, checklists, weightLogs, benchmarkProfiles] =
       await Promise.all([
         scope(poultryFlocks),
@@ -116,7 +119,7 @@ export async function GET(request: NextRequest) {
         scope(poultryWaterLogs),
         scope(poultryHealthRecords),
         scope(poultryProduction),
-        scope(poultryChecklists),
+        scope(checklistEntries),
         scope(poultryWeightLogs),
         scope(poultryBenchmarkProfiles),
       ]);
@@ -711,27 +714,38 @@ export async function POST(request: NextRequest) {
           stockNote += ` | −${out.deducted} ${product.unit} sold from stock`;
         }
 
-        // Production → Finance linkage.
+        // Production → Finance linkage (shared sale engine, P1/P3).
+        // Production/harvest revenue is a farm event, not a counter sale: it
+        // posts through postSale() with receipt/tracking/CRM off, so the ledger
+        // row is byte-identical to before while every INCOME in the app comes
+        // from ONE writer.
         if (revenue > 0) {
-          const trxNum = nextTrxNumber();
-          await db.insert(transactions).values({
-            transactionNumber: trxNum,
+          await postSale({
             businessId,
             branchCode,
-            branchName: data.branchName || null,
-            type: "INCOME",
+            lines: [
+              {
+                description: `${qty} ${product.unit} ${product.name}`,
+                quantity: qty || 1,
+                unit: product.unit,
+                unitPrice: qty > 0 ? revenue / qty : revenue,
+                total: revenue,
+              },
+            ],
             category: "POULTRY_PRODUCT_SALE",
-            amountGhs: revenue,
-            paymentMethod: data.paymentMethod || "CASH",
             description: `Poultry production — ${qty} ${product.unit} ${product.name}${
               qtySold > 0 ? `, ${qtySold} sold` : ""
             }${stockNote}`,
+            paymentMethod: data.paymentMethod || "CASH",
             date: data.recordedDate || today,
-            createdAt: new Date(),
-            status: "COMPLETED",
-            recordedBy: data.recordedByName || "Poultry Farm User",
-            recordedByRole: data.recordedByRole || null,
-            recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+            receipt: false,
+            tracking: false,
+            linkCustomer: false,
+            actor: {
+              id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+              name: data.recordedByName || "Poultry Farm User",
+              role: data.recordedByRole || null,
+            },
           });
         }
 
@@ -802,8 +816,8 @@ export async function POST(request: NextRequest) {
       }
 
       // Auto-create revenue transaction when production includes sales revenue
+      // (shared sale engine — see the product-track branch above).
       if (revenue > 0) {
-        const trxNum = nextTrxNumber();
         let desc = "Poultry production";
         if (eggs > 0) desc += ` — ${eggs} eggs collected`;
         if (soldEggs > 0) desc += `, ${soldEggs} sold`;
@@ -811,22 +825,33 @@ export async function POST(request: NextRequest) {
         if (data.revenueSource) desc += ` | ${data.revenueSource}`;
         if (stockNote) desc += stockNote;
 
-        await db.insert(transactions).values({
-          transactionNumber: trxNum,
+        await postSale({
           businessId,
           branchCode,
-          branchName: data.branchName || null,
-          type: "INCOME",
+          lines: [
+            {
+              description:
+                row.productionType === "BROILER_WEIGHT" ? "Broilers sold" : "Eggs sold",
+              quantity: row.productionType === "BROILER_WEIGHT" ? broilersSold || 1 : soldEggs || 1,
+              unitPrice:
+                row.productionType === "BROILER_WEIGHT"
+                  ? revenue / (broilersSold || 1)
+                  : revenue / (soldEggs || 1),
+              total: revenue,
+            },
+          ],
           category: row.productionType === "BROILER_WEIGHT" ? "POULTRY_BROILER_SALE" : "POULTRY_EGG_SALE",
-          amountGhs: revenue,
-          paymentMethod: data.paymentMethod || "CASH",
           description: desc,
+          paymentMethod: data.paymentMethod || "CASH",
           date: data.recordedDate || today,
-          createdAt: new Date(),
-          status: "COMPLETED",
-          recordedBy: data.recordedByName || "Poultry Farm User",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          receipt: false,
+          tracking: false,
+          linkCustomer: false,
+          actor: {
+            id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+            name: data.recordedByName || "Poultry Farm User",
+            role: data.recordedByRole || null,
+          },
         });
       }
 
@@ -834,41 +859,27 @@ export async function POST(request: NextRequest) {
     }
 
     // ── CHECKLIST (create today's list) ────────────────────────────
+    // Legacy-compatible endpoint, now backed by the SHARED checklist store
+    // (checklist_entries). The poultry_checklists table is retired; the module
+    // UI reads /api/checklists, and this path keeps the historical contract
+    // (idempotent per day, same response shape) for existing clients.
     if (entity === "CHECKLIST") {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       const targetDate = data.checklistDate || today;
-      // Idempotent per day: re-generating today's checklist returns the
-      // existing rows instead of duplicating them (same contract the
-      // Block Factory checklist already uses).
-      const existing = await db
-        .select()
-        .from(poultryChecklists)
-        .where(
-          and(
-            eq(poultryChecklists.businessId, businessId),
-            eq(poultryChecklists.checklistDate, targetDate),
-          )
-        );
-      if (existing.length > 0) {
-        return NextResponse.json({ success: true, items: existing.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)), alreadyExists: true });
-      }
-      const rows = [];
-      for (const t of tasks) {
-        const [row] = await db
-          .insert(poultryChecklists)
-          .values({
-            businessId,
-            branchCode,
-            checklistDate: targetDate,
-            taskKey: t.taskKey,
-            taskLabel: t.taskLabel,
-            category: t.category || "GENERAL",
-            isCompleted: false,
-          })
-          .returning();
-        rows.push(row);
-      }
-      return NextResponse.json({ success: true, items: rows });
+      const { items, alreadyExists } = await insertDailyEntries({
+        businessId,
+        branchCode,
+        date: targetDate,
+        tasks: tasks.map((t: any) => ({
+          taskKey: t.taskKey,
+          taskLabel: t.taskLabel,
+          category: t.category || "GENERAL",
+        })),
+      });
+      ttlInvalidate("init");
+      return NextResponse.json(
+        alreadyExists ? { success: true, items, alreadyExists: true } : { success: true, items },
+      );
     }
 
     return NextResponse.json(
@@ -894,32 +905,26 @@ export async function PATCH(request: NextRequest) {
     const { entity, id, data } = body;
 
     if (entity === "CHECKLIST" && id) {
+      // Tenant gate first: resolve the canonical entry, then verify the caller
+      // may touch its business — any authenticated user could previously toggle
+      // any tenant's tasks.
       const [existing] = await db
         .select()
-        .from(poultryChecklists)
-        .where(eq(poultryChecklists.id, Number(id)));
+        .from(checklistEntries)
+        .where(eq(checklistEntries.id, Number(id)));
       if (!existing) {
         return NextResponse.json(
           { success: false, error: "Checklist task not found" },
           { status: 404 }
         );
       }
-      // Tenant gate: the row's business must be one the caller can access —
-      // previously any authenticated user could toggle any tenant's tasks.
       if (!(await canAccessBusiness(session.user, existing.businessId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      const nowCompleted = !existing.isCompleted;
-      const [row] = await db
-        .update(poultryChecklists)
-        .set({
-          isCompleted: nowCompleted,
-          completedByName: nowCompleted ? data?.completedByName || "Staff" : null,
-          completedByRole: nowCompleted ? data?.completedByRole || null : null,
-          completedAt: nowCompleted ? new Date() : null,
-        })
-        .where(eq(poultryChecklists.id, Number(id)))
-        .returning();
+      const row = await toggleChecklistEntry(Number(id), {
+        name: data?.completedByName,
+        role: data?.completedByRole,
+      });
       return NextResponse.json({ success: true, item: row });
     }
 

@@ -51,7 +51,11 @@ import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
 const RAW_CATEGORY = "Feed Raw Materials";
+/** The shared taxonomy may store the umbrella category with this wording in
+ *  `subcategory` — match either, and keep the legacy literal working. */
+const isRawCategory = (i: any) => i?.category === RAW_CATEGORY || i?.subcategory === RAW_CATEGORY;
 const MILL_CATEGORY = "Animal Feed (Milled)";
+const isMillCategory = (i: any) => i?.category === MILL_CATEGORY || i?.subcategory === MILL_CATEGORY;
 const EXP_CAT_INTAKE = "POULTRY_FEED_RAW_MATERIAL";
 const EXP_CAT_OPS = "POULTRY_FEED_MILL_OPS";
 
@@ -140,7 +144,7 @@ async function ensureRawMaterial(businessId: number, name: string) {
   const existing = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
   const hit =
     existing.find((i) => (i.sku || "").toUpperCase() === sku.toUpperCase()) ||
-    existing.find((i) => (i.name || "").toLowerCase() === name.toLowerCase() && i.category === RAW_CATEGORY);
+    existing.find((i) => (i.name || "").toLowerCase() === name.toLowerCase() && (isRawCategory(i)));
   if (hit) return hit;
   await ensureInventoryItem({
     businessId, sku, name, category: RAW_CATEGORY, unit: "Kg",
@@ -178,8 +182,8 @@ export async function GET(request: NextRequest) {
     const millInputs = inputs.filter((i) => batchIds.has(i.batchId));
     const formIds = new Set(forms.map((f) => f.id));
     const millFormItems = formItems.filter((i) => formIds.has(i.formulationId));
-    const rawMaterials = invRows.filter((i) => i.category === RAW_CATEGORY);
-    const finishedFeeds = invRows.filter((i) => i.category === MILL_CATEGORY);
+    const rawMaterials = invRows.filter((i) => isRawCategory(i));
+    const finishedFeeds = invRows.filter((i) => isMillCategory(i));
     const consumption = feedRows.filter((f) => f.sourceType === "OWN_MILL");
 
     // Self-heal mill checklist templates once the mill is in use (no seed data).

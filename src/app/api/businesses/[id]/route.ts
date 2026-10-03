@@ -34,7 +34,6 @@ import {
   poultryWaterLogs,
   poultryHealthRecords,
   poultryProduction,
-  poultryChecklists,
   poultryProducts,
   poultryWeightLogs,
   poultryBenchmarkProfiles,
@@ -46,7 +45,6 @@ import {
   blockFactoryLogs,
   blockFactoryOrders,
   blockFactoryDeliveries,
-  blockFactoryChecklists,
   blockTypes,
   blockQcChecks,
   blockMixFormulations,
@@ -61,7 +59,6 @@ import {
   aquacultureHarvests,
   aquacultureWeightLogs,
   aquacultureBenchmarkProfiles,
-  aquacultureChecklists,
   fishFeedFormulations,
   fishFeedFormulationItems,
   fishFeedBatches,
@@ -265,13 +262,11 @@ async function relatedCounts(businessId: number) {
       (await count(poultryHealthRecords, poultryHealthRecords.businessId)) +
       (await count(poultryProduction, poultryProduction.businessId)) +
       (await count(poultryWeightLogs, poultryWeightLogs.businessId)) +
-      (await count(poultryChecklists, poultryChecklists.businessId)) +
       (await count(poultryProducts, poultryProducts.businessId)) +
       (await count(poultryFeedFormulations, poultryFeedFormulations.businessId)) +
       (await count(poultryFeedBatches, poultryFeedBatches.businessId)) +
       (await count(poultryFeedQcChecks, poultryFeedQcChecks.businessId)) +
       (await count(blockFactoryLogs, blockFactoryLogs.businessId)) +
-      (await count(blockFactoryChecklists, blockFactoryChecklists.businessId)) +
       (await count(blockTypes, blockTypes.businessId)) +
       (await count(blockMixFormulations, blockMixFormulations.businessId)) +
       (await count(blockMixBatches, blockMixBatches.businessId)) +
@@ -283,7 +278,6 @@ async function relatedCounts(businessId: number) {
       (await count(aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId)) +
       (await count(aquacultureHarvests, aquacultureHarvests.businessId)) +
       (await count(aquacultureWeightLogs, aquacultureWeightLogs.businessId)) +
-      (await count(aquacultureChecklists, aquacultureChecklists.businessId)) +
       (await count(fishFeedFormulations, fishFeedFormulations.businessId)) +
       (await count(fishFeedBatches, fishFeedBatches.businessId)) +
       (await count(fishFeedQcChecks, fishFeedQcChecks.businessId)) +
@@ -511,7 +505,6 @@ async function purgeBusinessAllRecords(
     [blockFactoryLogs, blockFactoryLogs.businessId],
     [blockFactoryOrders, blockFactoryOrders.businessId],
     [blockFactoryDeliveries, blockFactoryDeliveries.businessId],
-    [blockFactoryChecklists, blockFactoryChecklists.businessId],
 
     // 2i. Poultry operations
     [poultryLogs, poultryLogs.businessId],
@@ -521,7 +514,6 @@ async function purgeBusinessAllRecords(
     [poultryHealthRecords, poultryHealthRecords.businessId],
     [poultryProduction, poultryProduction.businessId],
     [poultryWeightLogs, poultryWeightLogs.businessId],
-    [poultryChecklists, poultryChecklists.businessId],
 
     // 2j. Aquaculture operations
     [aquacultureLogs, aquacultureLogs.businessId],
@@ -531,7 +523,6 @@ async function purgeBusinessAllRecords(
     [aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId],
     [aquacultureHarvests, aquacultureHarvests.businessId],
     [aquacultureWeightLogs, aquacultureWeightLogs.businessId],
-    [aquacultureChecklists, aquacultureChecklists.businessId],
 
     // 2k. Livestock operations
     [livestockLogs, livestockLogs.businessId],

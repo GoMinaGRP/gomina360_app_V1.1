@@ -449,23 +449,6 @@ export default function PoultryFarmModule({
   };
 
 
-  const toggleTask = async (id: number) => {
-    await fetch("/api/poultry", {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        entity: "CHECKLIST", id,
-        data: { completedByName: currentUser?.name, completedByRole: currentUser?.role },
-      }),
-    });
-    refresh();
-  };
-
-  const generateChecklist = async () => {
-    setBusy(true);
-    await submit("CHECKLIST", { checklistDate: today, tasks: DEFAULT_TASKS });
-    setBusy(false);
-  };
-
   const COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#a855f7", "#ec4899", "#06b6d4"];
 
   if (loading) {

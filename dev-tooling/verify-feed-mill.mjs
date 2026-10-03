@@ -293,7 +293,7 @@ async function main() {
       `${await invQty(invId.maize)}/${await invQty(invId.soya)}/${await invQty(invId.bran)}/${await invQty(invId.premix)}`);
     const finItem1 = await q1(`SELECT * FROM inventory_items WHERE id=$1`, [B1.finishedInventoryId]);
     check("D9 finished feed stocked at derived cost (490 kg @ 13.592, Animal Feed (Milled))",
-      n(finItem1.quantity) === 490 && Math.abs(n(finItem1.cost_price_ghs) - expCostPerKg) < 0.001 && finItem1.category === "Animal Feed (Milled)", JSON.stringify({ q: n(finItem1.quantity), c: n(finItem1.cost_price_ghs), cat: finItem1.category }));
+      n(finItem1.quantity) === 490 && Math.abs(n(finItem1.cost_price_ghs) - expCostPerKg) < 0.001 && (finItem1.category === "Animal Feed (Milled)" || finItem1.subcategory === "Animal Feed (Milled)"), JSON.stringify({ q: n(finItem1.quantity), c: n(finItem1.cost_price_ghs), cat: finItem1.category, sub: finItem1.subcategory }));
     created.invIds.push(B1.finishedInventoryId);
     const opsTxns = (await q(`SELECT id, amount_ghs FROM transactions WHERE business_id=$1 AND category='POULTRY_FEED_MILL_OPS' AND id>$2`, [BIZ, b0.txnMax])).rows;
     check("D10 exactly ONE mill-ops txn for the batch (GH₵ 200 = labour+overhead)", opsTxns.length === 1 && n(opsTxns[0].amount_ghs) === 200, JSON.stringify(opsTxns));
@@ -479,7 +479,7 @@ async function main() {
     check("G1 GET shape (10 datasets + success)", get.body.success && ["formulations", "formulationItems", "batches", "batchInputs", "qcChecks", "rawMaterials", "finishedFeeds", "consumption", "feedLogs", "flocks"].every((k) => Array.isArray(get.body[k])), Object.keys(get.body || {}).join(","));
     const port = computePort(get.body);
     check("G2 finished-feed KPI = DB truth (milled items sum)", await (async () => {
-      const dbFinished = n((await q1(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_items WHERE business_id=$1 AND category='Animal Feed (Milled)'`, [BIZ])).q);
+      const dbFinished = n((await q1(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_items WHERE business_id=$1 AND (category='Animal Feed (Milled)' OR subcategory='Animal Feed (Milled)')`, [BIZ])).q);
       return port.finishedFeedKg === dbFinished && dbFinished > 0;
     })(), `port=${port.finishedFeedKg}`);
     check("G3 last batch (latest non-rejected) is batch 2 w/ 13.592 cost/kg", !!port.last && port.last.batchNumber === B2.batchNumber && Math.abs(port.last.costPerKgGhs - 13.592) < 0.001, JSON.stringify(port.last));

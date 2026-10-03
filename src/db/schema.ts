@@ -1600,25 +1600,6 @@ export const poultryFeedQcChecks = pgTable("poultry_feed_qc_checks", {
     index("poultry_feed_qc_checks_business_id_idx").on(t.businessId),
   ]);
 
-// P6. Daily Activity Checklist
-export const poultryChecklists = pgTable("poultry_checklists", {  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. FEED_MORNING, WATER_CHECK
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // FEEDING, WATER, HEALTH, CLEANING, SECURITY, PRODUCTION
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("poultry_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 11. Block Factory Log (Blocks molded, bags cement used, breakage rate)
 export const blockFactoryLogs = pgTable("block_factory_logs", {
   id: serial("id").primaryKey(),
@@ -1686,25 +1667,6 @@ export const blockFactoryDeliveries = pgTable("block_factory_deliveries", {
   ]);
 
 // 11d. Block Factory Daily Activity Checklist
-export const blockFactoryChecklists = pgTable("block_factory_checklists", {
-  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. MACHINE_STARTUP, MATERIAL_COUNT
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // PRODUCTION, MATERIALS, MACHINERY, QUALITY, CLEANING, SECURITY, DELIVERIES
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("block_factory_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 11e. Block Types Master List (production master data — user-extensible)
 export const blockTypes = pgTable("block_types", {
   id: serial("id").primaryKey(),
@@ -2217,25 +2179,6 @@ export const aquacultureBenchmarkProfiles = pgTable("aquaculture_benchmark_profi
   ]);
 
 // A6. Daily Tasks / Checklist for Aquaculture
-export const aquacultureChecklists = pgTable("aquaculture_checklists", {
-  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. AERATION_CHECK, DO_PH_TEST, FEED_MORNING, MORTALITY_CHECK, FILTER_CLEAN
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // WATER, FEEDING, HEALTH, CLEANING, SECURITY, PRODUCTION
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("aquaculture_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 13. Livestock Log (Cattle, Small Ruminants tags, vaccination, breeding)
 export const livestockLogs = pgTable("livestock_logs", {
   id: serial("id").primaryKey(),

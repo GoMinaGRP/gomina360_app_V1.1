@@ -16,7 +16,6 @@ import {
   poultryWaterLogs,
   poultryHealthRecords,
   poultryProduction,
-  poultryChecklists,
   poultryProducts,
   blockTypes,
   blockFactoryLogs,
