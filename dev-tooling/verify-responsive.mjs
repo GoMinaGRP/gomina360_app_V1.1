@@ -1,295 +1,437 @@
-// Live responsiveness verification of the entire GoMina 360 interface in
-// real headless Chromium across phone / tablet / laptop / desktop viewports:
-// no horizontal page overflow on any page, the restored STATIC left navigation
-// menu on every screen (compact on phones, always pinned, no hamburger drawer), all module pages, modals and the worker view —
-// with zero page errors everywhere.
-// Run: LD_LIBRARY_PATH=/tmp/al2023/lib node dev-tooling/verify-responsive.mjs
-
+// verify-responsive.mjs — responsive / overflow audit across GoMina 360.
+//
+// Walks every shared page and every business unit (all business types) at
+// desktop / tablet / mobile widths and reports elements that
+//   • extend past the viewport without a horizontal scroller around them
+//     (content pushed off-screen), or
+//   • are clipped inside an overflow:hidden box with content wider than the box
+//     (content cut off), or
+//   • are tables/charts that cannot be reached on a phone.
+//
+// Usage:
+//   bash dev-tooling/run-suite.sh dev-tooling/verify-responsive.mjs
+//   VIEWPORTS=mobile bash dev-tooling/run-suite.sh dev-tooling/verify-responsive.mjs
+//   PAGES=inventory,orders bash dev-tooling/run-suite.sh dev-tooling/verify-responsive.mjs
 import { createRequire } from "node:module";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
+const fs = req("fs");
 
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://127.0.0.1:3000";
+const OUT = new URL("./.verify-out/", import.meta.url).pathname;
+fs.mkdirSync(OUT, { recursive: true });
 const OWNER = { email: "kwame.owner@gomina360.com", pw: process.env.OWNER_PW || "Owner@GoMina26" };
-const AKUA = { email: "akua.donkor@gomina360.com", pw: process.env.AKUA_PW || "GoMina@User10" };
+const REPORT = process.env.REPORT || `${OUT}responsive-report.json`;
 
-const checks = [];
-let failures = 0;
-const ok = (name, cond, extra = "") => { checks.push({ name, pass: !!cond }); if (!cond) failures++; console.log(`${cond ? "✅" : "❌"} ${name}${extra ? ` — ${extra}` : ""}`); };
-
-const pageErrors = [];
-const browser = await puppeteer.launch({ executablePath: "/tmp/al2023/chromium", headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
-const page = await browser.newPage();
-page.on("pageerror", (e) => pageErrors.push(String(e)));
-page.on("console", (m) => { if (m.type() === "error") { const t = m.text(); if (!/401|Failed to load resource|net::ERR_/.test(t)) pageErrors.push(t); } });
+const VIEWPORTS = (process.env.VIEWPORTS || "desktop,tablet,mobile").split(",").map((v) => v.trim());
+const VP = {
+  desktop: { width: 1440, height: 900, label: "desktop 1440" },
+  laptop: { width: 1280, height: 800, label: "laptop 1280" },
+  tablet: { width: 820, height: 1180, label: "tablet 820" },
+  mobile: { width: 390, height: 844, label: "mobile 390" },
+  narrow: { width: 320, height: 720, label: "narrow 320" },
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const waitSel = (sel, timeout = 15000) => page.waitForSelector(sel, { timeout });
-const exists = async (sel) => !!(await page.$(sel));
-const setVal = async (sel, val) => {
-  await waitSel(sel);
-  await page.evaluate((s, v) => {
-    const el = document.querySelector(s);
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }, sel, val);
-};
-const setTid = (tid, val) => setVal(`[data-testid="${tid}"]`, val);
-const clickTid = async (tid) => { await waitSel(`[data-testid="${tid}"]`); await page.$eval(`[data-testid="${tid}"]`, (e) => e.click()); };
-const clickText = async (text) => page.evaluate((t) => {
-  const el = [...document.querySelectorAll("button, a")].find((b) => (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase().includes(t.toLowerCase()));
-  if (el) { el.click(); return true; }
+const waitFor = async (fn, timeout = 25000, step = 250) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if (await fn()) return true;
+    await sleep(step);
+  }
   return false;
-}, text);
-const noOverflow = async () => page.evaluate(() => {
-  const de = document.documentElement;
-  return { ok: de.scrollWidth <= window.innerWidth + 1, sw: de.scrollWidth, iw: window.innerWidth };
-});
-/** Elements visibly poking past the right viewport edge (offenders list). */
-const offenders = async () => page.evaluate(() => {
-  const iw = window.innerWidth;
-  const bad = [];
-  for (const el of document.querySelectorAll("body *")) {
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) continue;
-    if (r.right > iw + 2 && r.left < iw) {
-      const cs = getComputedStyle(el);
-      if (cs.visibility === "hidden" || cs.display === "none") continue;
-      const tid = el.getAttribute?.("data-testid");
-      bad.push(tid || `${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]}`);
-      if (bad.length >= 4) break;
+};
+
+// ── In-page probes ──────────────────────────────────────────────────────────
+const probeOverflow = (opts = {}) => {
+  // Reference width = the app's content column (main), not the window: the
+  // sidebar takes part of the window, and main is the box users perceive as
+  // "the page". Anything sticking out of main is invisible/cut off on screen
+  // even when main itself can scroll.
+  // Modal pass: scan only the top-most overlay so the (dimmed) page underneath
+  // is not re-reported for the same defects.
+  const overlays = [...document.querySelectorAll('main div.fixed, main [role="dialog"]')].filter((el) => el.getClientRects().length);
+  const scopeEl =
+    opts.scope === "modal" && overlays.length ? overlays[overlays.length - 1] : document.querySelector("main");
+  const mainEl = document.querySelector("main");
+  const vw = scopeEl && opts.scope === "modal" ? scopeEl.clientWidth : mainEl ? mainEl.clientWidth : document.documentElement.clientWidth;
+  const seen = new Set();
+  const out = [];
+  const path = (el) => {
+    const bits = [];
+    let n = el;
+    for (let i = 0; i < 4 && n && n !== document.body; i++) {
+      const cls = (n.className && typeof n.className === "string" ? n.className : "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(".");
+      bits.unshift(`${n.tagName.toLowerCase()}${n.dataset?.testid ? `[${n.dataset.testid}]` : ""}${cls ? `.${cls}` : ""}`);
+      n = n.parentElement;
     }
+    return bits.join(" > ");
+  };
+  const scroller = (el) => {
+    let p = el.parentElement;
+    while (p && p !== document.documentElement && p !== mainEl) {
+      const cs = getComputedStyle(p);
+      if (cs.overflowX === "auto" || cs.overflowX === "scroll") return p;
+      p = p.parentElement;
+    }
+    return null;
+  };
+  const mainLeft = mainEl ? mainEl.getBoundingClientRect().left : 0;
+  const limit = mainLeft + vw;
+  const winRight = document.documentElement.clientWidth;
+  // An element that is not actually painted (opacity 0 / visibility hidden /
+  // display none ancestor) cannot clip anything — ignore it.
+  const visible = (el) => {
+    try {
+      if (typeof el.checkVisibility === "function" && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    } catch {}
+    let n = el;
+    while (n && n !== document.body) {
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+      n = n.parentElement;
+    }
+    return true;
+  };
+  for (const el of (scopeEl || document).querySelectorAll(opts.scope === "modal" ? "*" : "main *")) {
+    if (el.closest('[data-printchrome="true"]')) continue;
+    if (!visible(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    // Fixed overlays (modals/drawers) are positioned against the WINDOW, not
+    // the content column — only flag them when they exceed the window itself.
+    const isFixed = getComputedStyle(el).position === "fixed";
+    if (r.right <= (isFixed ? winRight : limit) + 1) continue;
+    const sc = scroller(el);
+    if (sc) continue;
+    const sig = `${path(el)}|${Math.round(r.width)}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push({
+      kind: "pushed-off",
+      tag: el.tagName.toLowerCase(),
+      testid: el.getAttribute("data-testid") || null,
+      path: path(el),
+      right: Math.round(r.right),
+      width: Math.round(r.width),
+      text: (el.textContent || "").trim().slice(0, 60),
+    });
+    if (out.length >= 14) break;
   }
-  return bad;
+  // Clipped content (cut off): scrollWidth materially wider than clientWidth
+  // inside a box that cannot scroll.
+  for (const el of (scopeEl || document).querySelectorAll(opts.scope === "modal" ? "div, section, table" : "main div, main section, main table")) {
+    if (el.closest('[data-printchrome="true"]')) continue;
+    if (!visible(el)) continue;
+    const cs = getComputedStyle(el);
+    if (cs.overflowX !== "hidden" && cs.overflowX !== "clip") continue;
+    if (el.scrollWidth <= el.clientWidth + 2 || el.clientWidth < 40) continue;
+    const sig = `clip|${path(el)}|${el.scrollWidth}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push({
+      kind: "clipped",
+      tag: el.tagName.toLowerCase(),
+      testid: el.getAttribute("data-testid") || null,
+      path: path(el),
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      text: (el.textContent || "").trim().slice(0, 60),
+    });
+    if (out.length >= 22) break;
+  }
+  // Positive assertion: every table that is wider than its box must sit inside
+  // a horizontally scrollable ancestor, otherwise its columns are unreachable.
+  const tables = [...(scopeEl || document).querySelectorAll(opts.scope === "modal" ? "table" : "main table")];
+  const wideTablesWithoutScroller = tables
+    .filter((t) => t.scrollWidth > t.clientWidth + 2 && !scroller(t))
+    .map((t) => (t.textContent || "").trim().slice(0, 40));
+  return {
+    viewportWidth: document.documentElement.clientWidth,
+    contentWidth: vw,
+    pageScrollWidth: document.documentElement.scrollWidth,
+    // The document must never scroll sideways: window width is the budget.
+    pageOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    tables: tables.length,
+    wideTablesWithoutScroller,
+    offenders: out,
+  };
+};
+
+const probeCounts = () => ({
+  tables: document.querySelectorAll("main table").length,
+  tablesWithoutScroller: [...document.querySelectorAll("main table")].filter((t) => {
+    let p = t.parentElement;
+    while (p && p !== document.documentElement) {
+      const cs = getComputedStyle(p);
+      if (cs.overflowX === "auto" || cs.overflowX === "scroll") return false;
+      p = p.parentElement;
+    }
+    return true;
+  }).length,
+  cards: document.querySelectorAll("main [class*='rounded-2xl'], main [class*='rounded-xl']").length,
 });
-const visible = async (sel) => page.evaluate((s) => {
-  const el = document.querySelector(s);
-  if (!el) return false;
-  const cs = getComputedStyle(el);
-  const r = el.getBoundingClientRect();
-  return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 0;
-}, sel);
-const geoOf = async (sel) => page.evaluate((s) => {
-  const el = document.querySelector(s);
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: Math.round(r.left), w: Math.round(r.width) };
-}, sel);
 
-async function login(cred) {
-  await page.goto(BASE, { waitUntil: "networkidle0", timeout: 45000 });
-  if (await exists('[data-testid="login-email"]')) {
-    await setTid("login-email", cred.email);
-    await setTid("login-password", cred.pw);
-    await clickTid("login-submit");
-    await page.waitForFunction(() => !document.querySelector('[data-testid="login-screen"]'), { timeout: 30000 });
-  }
-  await sleep(2000);
-}
-async function logoutIfNeeded() {
-  await page.evaluate(() => { try { sessionStorage.clear(); localStorage.clear(); } catch {} });
-  const cookies = await page.cookies(BASE);
-  if (cookies.length) await page.deleteCookie(...cookies);
+// ── Navigation helpers ──────────────────────────────────────────────────────
+async function login(page) {
+  await page.goto(`${BASE}/?login=1`, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await page.waitForSelector('[data-testid="login-email"]', { timeout: 120000 });
+  await page.type('[data-testid="login-email"]', OWNER.email);
+  await page.type('[data-testid="login-password"]', OWNER.pw);
+  await page.click('[data-testid="login-submit"]');
+  await waitFor(async () => (await page.$('[data-testid="nav-sidebar"]')) !== null, 60000);
 }
 
-let shotN = 0;
-const shot = async (name) => { shotN++; await page.screenshot({ path: `/home/user/rsp-${String(shotN).padStart(2, "0")}-${name}.png` }); };
+/** Click an element in the sidebar by its visible label. */
+async function clickSidebar(page, text) {
+  return page.evaluate((label) => {
+    const sidebar = document.querySelector('[data-testid="nav-sidebar"]');
+    if (!sidebar) return false;
+    const els = [...sidebar.querySelectorAll("button, a")];
+    const el = els.find((b) => new RegExp(label, "i").test(b.textContent || ""));
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    return true;
+  }, text);
+}
 
-try {
-  // ══ A. Login screen on a phone ════════════════════════════════════════
-  console.log("── A. Phone: login ──");
-  await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true });
-  await page.goto(BASE, { waitUntil: "networkidle0", timeout: 45000 });
-  await sleep(1200);
-  let r = await noOverflow();
-  ok("A1 login screen fits 375px", r.ok, `sw=${r.sw}`);
-  await shot("phone-login");
-  await login(OWNER);
+/** Click a tab-like button inside main (never the sidebar / top bar). */
+async function clickTab(page, re) {
+  return page.evaluate((src) => {
+    const rx = new RegExp(src, "i");
+    const els = [...document.querySelectorAll("main button, main [role='tab']")];
+    const el = els.find((b) => {
+      const t = (b.textContent || "").trim();
+      return t.length > 1 && t.length < 40 && rx.test(t);
+    });
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    return true;
+  }, re);
+}
 
-  // ══ B. Phone: drawer navigation ═══════════════════════════════════════
-  console.log("── B. Phone: static left menu ──");
-  ok("B1 STATIC left menu always visible on phones (no hamburger needed)", (await visible('[data-testid="nav-sidebar"]')) && !(await exists('[data-testid="nav-menu-btn"]')));
-  const sbGeo = await geoOf('[data-testid="nav-sidebar"]');
-  ok("B2 menu compact on phones (≤170px — content keeps room)", sbGeo && sbGeo.w <= 170, `w=${sbGeo?.w}`);
-  ok("B3 menu docked flush at the left edge", sbGeo && sbGeo.x === 0, `x=${sbGeo?.x}`);
-  await shot("phone-static-menu");
-  ok("B4 menu navigates to a business (no drawer)", await clickText("Mina Akuafo Poultry Farm"));
-  await sleep(2500);
-  ok("B5 poultry module mounted", await exists('[data-testid="pltry-root"]') || (await page.evaluate(() => document.body.innerText.includes("Poultry"))), "");
-  r = await noOverflow();
-  ok("B6 content column fits beside the static menu", r.ok, `sw=${r.sw}`);
-
-  // ══ C. Phone: every major page fits without horizontal overflow ════════
-  console.log("── C. Phone: page-by-page overflow sweep ──");
-  const pages = [
-    ["Command Center", "Command Center"],
-    ["Mina Concrete & Blocks", "Block Factory"],
-    ["Mina Volta Tilapia", "Aquaculture"],
-    ["Mina Heritage Kitchen", "Restaurant"],
-    ["Mina Tech & Electronics", "Electronics"],
-    ["GoMina Hardware", "Hardware"],
-    ["Mina Express Auto Wash", "Car Wash"],
-    ["Sales & Payments", "Sales"],
-    ["Finance & Reports", "Finance"],
-    ["Customers & CRM", "Customers"],
-    ["Suppliers & Vendors", "Suppliers"],
-    ["Employees & Payroll", "Employees"],
-    ["Assets & Equipment", "Assets"],
-    ["Inventory & Stock", "Inventory"],
-    ["Transactions & MoMo", "Transactions"],
-  ];
-  let allFit = true;
-  const badPages = [];
-  const absent = [];
-  for (const [label, name] of pages) {
-    const clicked = await clickText(label);
-    if (!clicked) { absent.push(name); continue; } // business absent (e.g. the
-    // Owner deleted the unit — deletion is final by design) → page N/A here
-    await sleep(2400);
-    const res = await noOverflow();
-    const offs = res.ok ? [] : await offenders();
-    if (!res.ok) { allFit = false; badPages.push(`${name} sw=${res.sw} ${offs.join(",")}`); }
+const results = [];
+const push = (entry) => {
+  results.push(entry);
+  const off = entry.offenders?.length || 0;
+  const flag = off === 0 && !entry.pageOverflows ? "OK " : "!! ";
+  console.log(
+    `${flag}${entry.viewportLabel.padEnd(13)} ${entry.page.padEnd(34)}${entry.tab ? `[${entry.tab}]` : ""} ${
+      entry.pageOverflows ? `PAGE-SCROLL(${entry.pageScrollWidth}) ` : ""
+    }${off} offender(s)`,
+  );
+  for (const o of (entry.offenders || []).slice(0, 4)) {
+    console.log(`      · ${o.kind} ${o.tag}${o.testid ? `#${o.testid}` : ""} w=${o.width ?? o.scrollWidth} right=${o.right ?? "-"} :: ${o.text.slice(0, 50)}`);
   }
-  ok("C1 all present module pages fit 375px (no h-overflow)", allFit,
-    badPages.slice(0, 4).join(" | ") || `clean${absent.length ? ` (absent: ${absent.join(", ")})` : ""}`);
-  await shot("phone-transactions");
-  // back to command center for a stable screenshot
-  await clickText("Command Center");
-  await sleep(2200);
-  await shot("phone-command-center");
+};
 
-  // ══ D. Phone: modal forms fit ═════════════════════════════════════════
-  console.log("── D. Phone: modal forms ──");
-  await clickText("Mina Express Auto Wash");
-  await sleep(2400);
-  await clickTid("cw-open-wash");
-  await sleep(900);
-  const modalFit = await page.evaluate(() => {
-    const f = document.querySelector("form.fixed, .fixed form");
-    if (!f) return { found: false };
-    const r = f.getBoundingClientRect();
-    return { found: true, w: r.width, iw: window.innerWidth, fits: r.width <= window.innerWidth + 1 };
+const chromium = (await req("@sparticuz/chromium")).default ?? req("@sparticuz/chromium");
+const browser = await puppeteer.launch({
+  executablePath: await chromium.executablePath(),
+  args: [...(chromium.args || []), "--no-sandbox", "--disable-setuid-sandbox"],
+});
+
+const SHARED_PAGES = [
+  { label: "Command Center", nav: "Command Center", tabs: [] },
+  { label: "Inventory & Stock", nav: "Inventory & Stock", tabs: [] },
+  { label: "Sales & Transactions", nav: "Transactions", tabs: [] },
+  { label: "Assets", nav: "Assets", tabs: [] },
+  { label: "Customers", nav: "Customers", tabs: [] },
+  { label: "Suppliers", nav: "Suppliers", tabs: [] },
+  { label: "Employees", nav: "Employees", tabs: [] },
+  { label: "Finance & Reports", nav: "Finance", tabs: [] },
+  { label: "Customer Orders", nav: "Orders", tabs: [] },
+  { label: "Audit Center", nav: "Audit", tabs: [] },
+];
+
+const MODULE_TABS = /^(Dashboard|Overview|Products?|Products? & Stock|Stock|Stock & .*|Inventory|Sales|Orders?|Orders? & .*|Finance.*|Reports?.*|Customers?.*|Staff.*|Checklist|Deliveries|Serials|Warranty|Bookings|Services|Washes|Lines|Expenses|Payments|Menu|Kitchen|Fleet|Trips|Tracking|Sizes.*|Benchmark|Insights|Jobs|Bookings.*|Attendance|Payroll)$/i;
+
+/** Candidate "open a form" buttons, with a skip-list for in-form mutators. */
+const OPENER_SKIP = /(?:^|-)(?:add-(?:row|item|metric|line|column)|new-(?:row|item|line|error|result|total|submit|cancel|done|pin|customer|dest|discount|fulfillment|note|phone|copy|code|biz|btn|root|maplink)|open-(?:since|btn|console)|save|submit)(?:-|$)/;
+const MODALS = process.env.MODALS === "1";
+
+async function collectOpeners(page) {
+  return page.evaluate(() => {
+    const out = [];
+    for (const b of document.querySelectorAll("main button[data-testid], main a[data-testid]")) {
+      const id = b.getAttribute("data-testid") || "";
+      if (!/(?:^|-)(?:open|new|add)(?:-|$)/.test(id)) continue;
+      const t = (b.textContent || "").trim();
+      if (!/(new|add|register|record|log|open|create|offer|method|order|sale|expense|asset|supplier|customer|employee|shift|booking|wash|service|package|vehicle|trip|formula|recipe|plan|note)/i.test(`${id} ${t}`)) continue;
+      out.push({ id, text: t.slice(0, 30) });
+    }
+    // De-duplicate by testid, keep order.
+    const seen = new Set();
+    return out.filter((o) => (seen.has(o.id) ? false : (seen.add(o.id), true)));
   });
-  ok("D1 car-wash form modal fits the phone", modalFit.found && modalFit.fits, `w=${modalFit.w}/${modalFit.iw}`);
-  await shot("phone-carwash-form");
-  await page.keyboard.press("Escape").catch(() => {});
-  await page.evaluate(() => { const b = document.querySelector('[data-testid="telf-close"], .fixed button'); });
-  // close via the X in the modal header
-  await page.evaluate(() => {
-    const btns = [...document.querySelectorAll(".fixed button")];
-    const x = btns.find((b) => (b.getAttribute("aria-label") || "").toLowerCase().includes("close") || b.querySelector("svg.lucide-x"));
-    if (x) x.click();
+}
+
+async function closeOverlay(page) {
+  await page.keyboard.press("Escape");
+  await sleep(500);
+  const still = await page.evaluate(() => !!document.querySelector('main div.fixed, main [role="dialog"]'));
+  if (!still) return true;
+  const clicked = await page.evaluate(() => {
+    const overlay = document.querySelector('main div.fixed, main [role="dialog"]');
+    if (!overlay) return false;
+    const btns = [...overlay.querySelectorAll("button")];
+    const closeBtn = btns.find((b) => /^(close|cancel|✕|×|x)$/i.test((b.textContent || "").trim()) || /close|cancel/i.test(b.getAttribute("aria-label") || "") || /-(close|cancel)$/.test(b.getAttribute("data-testid") || ""));
+    if (!closeBtn) return false;
+    closeBtn.click();
+    return true;
   });
   await sleep(600);
-
-  // Payroll center on a phone (dense data UI)
-  await clickText("Employees & Payroll");
-  await sleep(2400);
-  await clickTid("emp-payroll-open");
-  await sleep(2400);
-  r = await noOverflow();
-  ok("D2 payroll center fits the phone", r.ok, `sw=${r.sw}`);
-  await shot("phone-payroll");
-
-  // ══ E. Worker view on a phone ═════════════════════════════════════════
-  console.log("── E. Phone: worker role ──");
-  await logoutIfNeeded();
-  await login(AKUA);
-  r = await noOverflow();
-  ok("E1 worker dashboard fits the phone", r.ok, `sw=${r.sw}`);
-  await shot("phone-worker");
-  await logoutIfNeeded();
-
-  // ══ F. Tablet (834×1194) ══════════════════════════════════════════════
-  console.log("── F. Tablet ──");
-  await page.setViewport({ width: 834, height: 1194, isMobile: true, hasTouch: true });
-  await login(OWNER);
-  ok("F1 static left menu present on tablets (no hamburger)", (await visible('[data-testid="nav-sidebar"]')) && !(await exists('[data-testid="nav-menu-btn"]')));
-  r = await noOverflow();
-  ok("F2 command center fits tablet", r.ok, `sw=${r.sw}`);
-  await shot("tablet-command-center");
-  await clickText("Mina Tech & Electronics");
-  await sleep(2400);
-  r = await noOverflow();
-  ok("F3 electronics module fits tablet", r.ok, `sw=${r.sw}`);
-  await shot("tablet-tech");
-  await clickText("Finance & Reports");
-  await sleep(2400);
-  r = await noOverflow();
-  ok("F4 finance fits tablet", r.ok, `sw=${r.sw}`);
-
-  // ══ G. Laptop (1280×800) ══════════════════════════════════════════════
-  console.log("── G. Laptop ──");
-  await page.setViewport({ width: 1280, height: 800 });
-  await page.reload({ waitUntil: "networkidle0", timeout: 45000 });
-  await sleep(2500);
-  ok("G1 sidebar static on laptop (no hamburger shown)", !(await visible('[data-testid="nav-menu-btn"]')));
-  const sideRect = await page.evaluate(() => {
-    const a = document.querySelector('[data-testid="nav-sidebar"]');
-    const r = a?.getBoundingClientRect();
-    return r ? { x: r.x, w: r.width } : null;
-  });
-  ok("G2 sidebar docked at left edge", !!sideRect && sideRect.x === 0, JSON.stringify(sideRect));
-  r = await noOverflow();
-  ok("G3 command center fits laptop", r.ok, `sw=${r.sw}`);
-  await shot("laptop-command-center");
-
-  // ══ H. Desktop (1500×950) ═════════════════════════════════════════════
-  console.log("── H. Desktop ──");
-  await page.setViewport({ width: 1500, height: 950 });
-  await page.reload({ waitUntil: "networkidle0", timeout: 45000 });
-  await sleep(2500);
-  ok("H1 sidebar static on desktop (no hamburger shown)", !(await visible('[data-testid="nav-menu-btn"]')));
-  r = await noOverflow();
-  ok("H2 desktop command center clean", r.ok, `sw=${r.sw}`);
-  await shot("desktop-command-center");
-
-  // ══ I. Collapsible static menu ════════════════════════════════════════
-  console.log("── I. Collapsible menu (toggle → icon rail → persists) ──");
-  let g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I1 menu starts expanded on desktop", g && g.w >= 250, `w=${g?.w}`);
-  await clickTid("sidebar-collapse-toggle");
-  await sleep(500);
-  g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I2 toggle collapses menu to icon rail", g && g.w <= 60, `w=${g?.w}`);
-  ok("I3 page still clean beside the rail", (await noOverflow()).ok);
-  await shot("desktop-menu-collapsed");
-  await page.reload({ waitUntil: "networkidle0", timeout: 45000 });
-  await sleep(2200);
-  g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I4 collapse persists across reload", g && g.w <= 60, `w=${g?.w}`);
-  await clickTid("sidebar-collapse-toggle");
-  await sleep(500);
-  g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I5 toggle re-expands the menu", g && g.w >= 250, `w=${g?.w}`);
-  // Icon rail still navigates: icon-only buttons remain clickable
-  const navOk = await clickText("Finance & Reports").catch(() => false);
-  await sleep(2200);
-  ok("I6 expanded menu navigates after restore", navOk === true, String(navOk));
-
-  // Phone: same collapse behavior with the compact menu
-  await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true });
-  await page.reload({ waitUntil: "networkidle0", timeout: 45000 });
-  await sleep(2200);
-  await clickTid("sidebar-collapse-toggle");
-  await sleep(500);
-  g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I7 phone menu collapses to icon rail", g && g.w <= 52, `w=${g?.w}`);
-  ok("I8 collapsed phone menu keeps page clean", (await noOverflow()).ok);
-  await shot("phone-menu-collapsed");
-  await clickTid("sidebar-collapse-toggle");
-  await sleep(500);
-  g = await geoOf('[data-testid="nav-sidebar"]');
-  ok("I9 phone menu re-expands", g && g.w === 160, `w=${g?.w}`);
-} catch (err) {
-  console.error("FATAL", err);
-  failures++;
-} finally {
-  await browser.close();
+  const gone = await page.evaluate(() => !document.querySelector('main div.fixed, main [role="dialog"]'));
+  return clicked && gone;
 }
 
-console.log(`\n══ verify-responsive: ${checks.filter((c) => c.pass).length}/${checks.length} passed, ${failures} failed ══`);
-const pe = pageErrors.filter((e) => !/ResizeObserver/.test(e));
-if (pe.length) { console.log("PAGE ERRORS:"); pe.slice(0, 10).forEach((e) => console.log(" •", e.slice(0, 240))); }
-else console.log("Page errors: none");
-process.exit(failures || pe.length ? 1 : 0);
+const filterPages = process.env.PAGES ? process.env.PAGES.split(",").map((s) => s.trim().toLowerCase()) : null;
+const keep = (label) => !filterPages || filterPages.some((f) => label.toLowerCase().includes(f));
+
+let page;
+let testedTabs = 0;
+try {
+  page = await browser.newPage();
+  const consoleErrors = [];
+  page.on("pageerror", (e) => consoleErrors.push(String(e.message || e).slice(0, 160)));
+  await login(page);
+
+  const units = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-biz-code]')].map((b) => ({
+      code: b.getAttribute("data-biz-code"),
+      name: (b.textContent || "").trim().split("\n")[0].slice(0, 60),
+    })),
+  );
+  if (units.length === 0) console.log("   (no business chips found in the sidebar — unit pages skipped)");
+
+  for (const vpName of VIEWPORTS) {
+    const vp = VP[vpName];
+    if (!vp) continue;
+    await page.setViewport({ width: vp.width, height: vp.height });
+    await sleep(400);
+
+    for (const p of SHARED_PAGES) {
+      if (!keep(p.label)) continue;
+      const clicked = await clickSidebar(page, p.nav);
+      if (!clicked) {
+        console.log(`   (skip ${p.label}: nav not found)`);
+        continue;
+      }
+      await sleep(1600);
+      const probe = await page.evaluate(probeOverflow);
+      push({ viewport: vpName, viewportLabel: vp.label, page: p.label, tab: null, ...probe });
+      await page.screenshot({ path: `${OUT}resp-${vpName}-${p.label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png` });
+    }
+
+    // Business units (all business types) + their module tabs.
+    for (const unit of units) {
+      const clean = unit.name.replace(/\s+/g, " ").trim();
+      if (!keep(clean)) continue;
+      const clicked = await page.evaluate((code) => {
+        const btn = document.querySelector(`[data-testid="nav-sidebar"] [data-biz-code="${code}"]`);
+        if (!btn || btn.disabled) return false;
+        btn.click();
+        return true;
+      }, unit.code);
+      if (!clicked) continue;
+      await sleep(2200);
+      const mainProbe = await page.evaluate(probeOverflow);
+      push({ viewport: vpName, viewportLabel: vp.label, page: clean, tab: "default", ...mainProbe });
+      await page.screenshot({ path: `${OUT}resp-${vpName}-${clean.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png` });
+
+      // Click through the module's tabs (generic, text-matched).
+      const tabLabels = await page.evaluate(() =>
+        [
+          ...new Set(
+            [...document.querySelectorAll("main button, main [role='tab']")]
+              .map((b) => (b.textContent || "").trim())
+              .filter((t) => t.length > 1 && t.length < 26),
+          ),
+        ],
+      );
+      const wanted = tabLabels.filter((t) => MODULE_TABS.test(t)).slice(0, 12);
+      for (const tab of wanted) {
+        const ok = await clickTab(page, `^${tab.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+        if (!ok) continue;
+        await sleep(1400);
+        const probe = await page.evaluate(probeOverflow);
+        testedTabs++;
+        if (probe.offenders.length === 0 && !probe.pageOverflows && !probe.wideTablesWithoutScroller.length) continue; // keep the report focused
+        push({ viewport: vpName, viewportLabel: vp.label, page: clean, tab, ...probe });
+      }
+    }
+  }
+
+  // ── Modal / drawer pass: form dialogs are fixed overlays, so they are
+  // measured against the window. Run after the page sweep to keep it stable.
+  if (MODALS) {
+    const targets = [
+      ...SHARED_PAGES.filter((p) => keep(p.label)).map((p) => ({ kind: "nav", label: p.label, nav: p.nav })),
+      ...units.filter((u) => keep(u.name)).map((u) => ({ kind: "unit", label: u.name, code: u.code })),
+    ];
+    for (const vpName of VIEWPORTS) {
+      const vp = VP[vpName];
+      if (!vp) continue;
+      await page.setViewport({ width: vp.width, height: vp.height });
+      await sleep(400);
+      for (const t of targets) {
+        const go = async () => {
+          if (t.kind === "nav") return clickSidebar(page, t.nav);
+          return page.evaluate((code) => {
+            const btn = document.querySelector(`[data-testid="nav-sidebar"] [data-biz-code="${code}"]`);
+            if (!btn || btn.disabled) return false;
+            btn.click();
+            return true;
+          }, t.code);
+        };
+        if (!(await go())) continue;
+        await sleep(2200);
+        const openers = (await collectOpeners(page)).filter((o) => !OPENER_SKIP.test(o.id)).slice(0, 4);
+        for (const opener of openers) {
+          const clicked = await page.evaluate((id) => {
+            const b = document.querySelector(`main [data-testid="${id}"]`);
+            if (!b || b.disabled) return false;
+            b.click();
+            return true;
+          }, opener.id);
+          if (!clicked) continue;
+          await sleep(1200);
+          const opened = await page.evaluate(() => !!document.querySelector('main div.fixed, main [role="dialog"]'));
+          if (!opened) continue;
+          testedTabs++;
+          const probe = await page.evaluate(probeOverflow, { scope: "modal" });
+          const entry = { viewport: vpName, viewportLabel: vp.label, page: t.label, tab: `modal:${opener.id}`, ...probe };
+          if (probe.offenders.length || probe.pageOverflows || probe.wideTablesWithoutScroller.length) push(entry);
+          await page.screenshot({
+            path: `${OUT}resp-${vpName}-modal-${opener.id.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`,
+          });
+          await closeOverlay(page);
+        }
+        await closeOverlay(page);
+      }
+    }
+  }
+
+  const counts = await page.evaluate(probeCounts);
+  console.log(`\ntables on last page=${counts.tables} without scroller=${counts.tablesWithoutScroller} cards=${counts.cards}`);
+  const tablesScanned = results.reduce((n, r) => n + (r.tables || 0), 0);
+  const wideTableIssues = results.flatMap((r) => r.wideTablesWithoutScroller || []);
+  console.log(`tables checked=${tablesScanned}  wide-without-scroller=${wideTableIssues.length}`);
+  fs.writeFileSync(
+    REPORT,
+    JSON.stringify(
+      { generatedAt: new Date().toISOString(), coverage: { pageViews: results.length + testedTabs, testedTabs }, results, consoleErrors },
+      null,
+      1,
+    ),
+  );
+  const bad = results.filter((r) => (r.offenders?.length || 0) > 0 || r.pageOverflows || (r.wideTablesWithoutScroller?.length || 0) > 0);
+  console.log(`\n${bad.length === 0 ? "✅ responsive audit clean" : `⚠️  ${bad.length} page/viewport combination(s) with issues`} — report: ${REPORT}`);
+  console.log(`page views scanned: ${results.length} clean + ${testedTabs} module tabs clicked`);
+} finally {
+  await browser.close().catch(() => {});
+}

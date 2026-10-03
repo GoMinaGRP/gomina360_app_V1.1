@@ -393,9 +393,9 @@ export default function CommandCenterDashboard({
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100" data-testid="command-center-root">
       {/* Top Welcome & Quick Actions */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 rounded-2xl border border-slate-700/80 shadow-2xl">
-        <div>
-          <div className="flex items-center space-x-2">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 sm:p-6 rounded-2xl border border-slate-700/80 shadow-2xl">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30">
               EXECUTIVE COMMAND CENTER • 360° VIEW
             </span>
@@ -404,7 +404,7 @@ export default function CommandCenterDashboard({
               Live Consolidated Operating Report • Q1 2026 + real-time activity
             </span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white">
+          <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white break-words">
             Enterprise Performance Overview
           </h2>
           {isSuperAdminUser && (

@@ -1389,16 +1389,16 @@ export default function SharedEnterpriseModule({
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100">
       {/* Header banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 rounded-2xl border border-slate-700/80 shadow-2xl flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex items-start space-x-4">
-          <div className="w-14 h-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center shadow-lg shrink-0">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 sm:p-6 rounded-2xl border border-slate-700/80 shadow-2xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex items-start gap-3 sm:gap-4 min-w-0">
+          <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center shadow-lg shrink-0">
             {config.icon}
           </div>
-          <div>
+          <div className="min-w-0">
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
               CENTRALIZED ENTERPRISE SYSTEM
             </span>
-            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white">
+            <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white break-words">
               {config.title}
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
@@ -1407,7 +1407,7 @@ export default function SharedEnterpriseModule({
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {(moduleType === "INVENTORY" || moduleType === "ASSETS") && (
             <button
               onClick={() => { setQrScanTarget("lookup"); setQrError(""); setQrScanOpen(true); }}
@@ -1700,8 +1700,8 @@ export default function SharedEnterpriseModule({
       )}
 
       {/* Search & Filter Bar */}
-      <div className="flex items-center justify-between gap-4 bg-slate-800/90 border border-slate-700/80 p-3.5 rounded-xl">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-800/90 border border-slate-700/80 p-3.5 rounded-xl">
+        <div className="relative flex-1 min-w-[160px] max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -1955,7 +1955,7 @@ export default function SharedEnterpriseModule({
                   <div className="mt-1 text-sm font-extrabold text-emerald-400">
                     {formatMoney(s.value, currentCurrency, true)}
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">
+                  <div className="text-[10px] text-slate-500 leading-snug break-words" title={parentBiz?.name || "Unassigned"}>
                     {parentBiz?.name || "Unassigned"}
                   </div>
                 </div>

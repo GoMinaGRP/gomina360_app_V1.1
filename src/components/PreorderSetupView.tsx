@@ -422,7 +422,7 @@ export default function PreorderSetupView({
           {options.map((o) => (
             <div key={o.id} className={`px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 ${o.active ? "" : "opacity-50"}`} data-testid={`po-option-${o.id}`}>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-slate-200 truncate">{o.inventoryName || `Product #${o.inventoryId}`} {o.inventorySku ? <span className="text-slate-500 font-mono text-[10px]">({o.inventorySku})</span> : null}</p>
+                <p className="text-xs font-bold text-slate-200 break-words">{o.inventoryName || `Product #${o.inventoryId}`} {o.inventorySku ? <span className="text-slate-500 font-mono text-[10px]">({o.inventorySku})</span> : null}</p>
                 <p className="text-[10px] text-slate-500 mt-0.5">
                   {methods.find((m) => m.id === o.methodId)?.label || `Method #${o.methodId}`} · {o.leadMinDays}–{o.leadMaxDays}d lead
                   {(o as any).supplierId ? ` · supplier: ${suppliers.find((sp) => sp.id === (o as any).supplierId)?.name || "?"}` : ""}

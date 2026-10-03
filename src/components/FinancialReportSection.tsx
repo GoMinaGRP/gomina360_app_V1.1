@@ -364,14 +364,18 @@ export default function FinancialReportSection({
   const Stat = ({ label, value, sub, icon: Icon, tone = "text-emerald-400", tid }: any) => (
     <div
       data-testid={tid}
-      className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-3.5 min-w-0"
+      className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-3 sm:p-3.5 min-w-0"
     >
       <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400 tracking-wide">
         <span className="truncate pr-1">{label}</span>
         {Icon && <Icon className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
       </div>
-      <div className={`text-lg font-black mt-1 truncate ${tone}`}>{value}</div>
-      {sub != null && <div className="text-[10px] text-slate-500 mt-0.5 truncate">{sub}</div>}
+      <div className={`text-[15px] sm:text-lg font-black mt-1 tabular-nums truncate ${tone}`}>{value}</div>
+      {sub != null && (
+        <div className="text-[10px] text-slate-500 mt-0.5 leading-snug line-clamp-2 break-words" title={typeof sub === "string" ? sub : undefined}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 
@@ -628,7 +632,7 @@ export default function FinancialReportSection({
       )}
 
       {/* ── KPI cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-1 min-[360px]:grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
         <Stat
           tid={`${testid}-kpi-revenue`}
           label="Revenue"

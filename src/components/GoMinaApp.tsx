@@ -1847,7 +1847,7 @@ export default function GoMinaApp() {
               return (
                 <div
                   data-testid={`org-identity-banner-${openBiz.code}`}
-                  className={`mx-4 sm:mx-6 mt-3 flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 ${
+                  className={`mx-4 sm:mx-6 mt-3 flex flex-wrap items-center gap-2.5 rounded-xl border px-3.5 py-2.5 ${
                     mine
                       ? "bg-violet-500/10 border-violet-500/40"
                       : "bg-sky-500/10 border-sky-500/40"
@@ -1857,7 +1857,7 @@ export default function GoMinaApp() {
                     <img src={openBiz.logo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0">
-                    <div className="text-[11px] font-black tracking-wide text-white truncate">
+                    <div className="text-[11px] font-black tracking-wide text-white leading-snug break-words">
                       {mine ? "YOUR BUSINESS" : "OWNED BY ANOTHER OWNER"} · {orgName}
                     </div>
                     <div className={`text-[10px] ${mine ? "text-violet-300" : "text-sky-300"}`}>

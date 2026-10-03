@@ -152,6 +152,8 @@ export default function Sidebar({
     return (
       <button
         key={biz.code}
+        data-biz-code={biz.code}
+        data-testid={`sidebar-biz-${biz.code}`}
         onClick={() => {
           if (accessible) selectTab(biz.code as ActiveTab);
         }}
@@ -237,9 +239,34 @@ export default function Sidebar({
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     try {
-      if (window.localStorage.getItem("gomina.sidebarCollapsed") === "1") setCollapsed(true);
+      const saved = window.localStorage.getItem("gomina.sidebarCollapsed");
+      if (saved === "1") setCollapsed(true);
+      else if (saved === "0") setCollapsed(false);
+      else if (window.matchMedia("(max-width: 1023px)").matches) {
+        // No explicit choice yet: phones and tablets start in the icon rail so
+        // the page gets the screen (160px of a 390px phone is a third of it).
+        setCollapsed(true);
+      }
+      setPrefReady(true);
     } catch {}
   }, []);
+  // Has the user made an explicit choice? Until then the auto-collapse above
+  // decides (and a rotation/resize may flip it on tablet).
+  const [prefReady, setPrefReady] = useState(false);
+  useEffect(() => {
+    if (!prefReady) return;
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const apply = () => {
+      try {
+        if (window.localStorage.getItem("gomina.sidebarCollapsed") != null) return;
+      } catch {}
+      setCollapsed(mq.matches);
+    };
+    apply();
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, [prefReady]);
+
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       try {
