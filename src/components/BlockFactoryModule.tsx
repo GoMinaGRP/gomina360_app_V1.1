@@ -22,6 +22,8 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import SaleFields, { stockDetailOptions } from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
+import InventoryItemFields from "@/components/shared/InventoryItemFields";
 
 interface Props {
   currentUser: any;
@@ -788,8 +790,9 @@ function MiniList({ title, items, render }: any) {
   return <div><div className="text-[10px] uppercase text-slate-500 font-bold mb-2">{title}</div><div className="space-y-2">{items.length ? items.map((item: any) => <div key={item.id} className="p-2 rounded-lg bg-slate-900/70 border border-slate-700 text-xs text-slate-300">{render(item)}</div>) : <p className="text-xs text-slate-500">No records</p>}</div></div>;
 }
 
-function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
-function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect {...p} />; }
 
 function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, blockTypeOptions, blockTypes = [], initialRestockItemId = null, mixBatches = [] }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -983,19 +986,13 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
       </div>
       <FormField f={f} set={set} label="Description / Supplier note" k="description" placeholder="e.g. 200 bags Ghacem cement from Tema depot" />
     </>}
-    {type === "ITEM" && <>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2"><FormField f={f} set={set} label="Item Name" k="name" required placeholder="e.g. Ghacem Cement 50kg Bag" /></div>
-        <FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" />
-        <FormField f={f} set={set} label="Category" k="category" placeholder="Raw Material / Concrete Blocks" list="blk-item-cats" />
-        <FormField f={f} set={set} label="Opening Quantity" k="quantity" t="number" min={0} />
-        <FormSelect f={f} set={set} label="Unit" k="unit" opts={["Units", "Bags", "Tons", "Kg", "Drums", "Litres", "m³"]} />
-        <FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
-        <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
-        <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
-      </div>
-      <datalist id="blk-item-cats">{INVENTORY_CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}</datalist>
-    </>}
+    {type === "ITEM" && <InventoryItemFields
+      f={f} set={set}
+      nameLabel="Item Name" nameFull namePlaceholder="e.g. Ghacem Cement 50kg Bag"
+      categoryPlaceholder="Raw Material / Concrete Blocks" categoryListId="blk-item-cats" categoryOptions={INVENTORY_CATEGORY_SUGGESTIONS}
+      quantityLabel="Opening Quantity" minLabel="Low-Stock Threshold"
+      unit={{ mode: "select", options: ["Units", "Bags", "Tons", "Kg", "Drums", "Litres", "m³"] }}
+    />}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
   </form></div></div>
   );

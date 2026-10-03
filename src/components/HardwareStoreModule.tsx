@@ -20,6 +20,8 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import SaleFields from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
+import InventoryItemFields from "@/components/shared/InventoryItemFields";
 
 type Props = {
   currentUser: any;
@@ -857,8 +859,9 @@ export default function HardwareStoreModule({
   );
 }
 
-function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input data-testid={`hwf-${k}`} type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
-function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select data-testid={`hwf-${k}`} value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField testidPrefix="hwf" {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect testidPrefix="hwf" {...p} />; }
 
 function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, orders, currency }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -912,7 +915,13 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
         <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} formatMoney={formatMoney} productLabel="Material (in stock)" productEmptyLabel="— select material —" totalTone="text-amber-300" totalTestId="hwf-sale-total" />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Forklift Fuel, Yard Rent, Utilities..." required /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /></>}
-    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Material Name" k="name" required /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Cement & Mortar" list="hw-item-cats" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Bags, Lengths, Sheets…" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" /></div><datalist id="hw-item-cats">{MATERIAL_CATS.map((c) => <option key={c} value={c} />)}</datalist></>}
+    {type === "ITEM" && <InventoryItemFields
+      f={f} set={set} testidPrefix="hwf"
+      nameLabel="Material Name"
+      categoryPlaceholder="Cement & Mortar" categoryListId="hw-item-cats" categoryOptions={MATERIAL_CATS}
+      quantityLabel="Opening Qty" minLabel="Min Stock Alert"
+      unit={{ mode: "text", placeholder: "Bags, Lengths, Sheets…" }}
+    />}
     {type === "ORDER" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer Name" k="customerName" required /><FormField f={f} set={set} label="Customer Phone" k="customerPhone" /></div><FormSelect f={f} set={set} label="Material (from stock)" k="inventoryId" opts={[{ v: "", l: "— custom / not in stock list —" }, ...(inventory || []).map((i: any) => ({ v: i.id, l: `${i.name} (${i.quantity} in stock)` }))]} /><FormField f={f} set={set} label="Material Name (if custom)" k="itemName" placeholder={selectedItem?.name || "e.g. Torkor Blocks 6in Hollow"} />{selectedItem && !f.itemName && <p className="text-[10px] text-amber-300 -mt-2">Will use: {selectedItem.name}</p>}<div className="grid grid-cols-3 gap-3"><FormField f={f} set={set} label="Qty" k="quantity" t="number" required min={1} /><FormField f={f} set={set} label="Unit Price (GH₵)" k="unitPriceGhs" t="number" step="0.01" required placeholder={selectedItem ? String(selectedItem.sellingPriceGhs) : ""} /><FormField f={f} set={set} label="Due Date" k="dueDate" t="date" /></div><FormField f={f} set={set} label="Delivery Site" k="deliverySite" placeholder="e.g. East Legon Site, Plot 14" /><FormField f={f} set={set} label="Notes" k="notes" /></>}
     {type === "PURCHASE" && <>
       <div className="grid grid-cols-2 gap-3"><FormSelect f={f} set={set} label="Supplier" k="supplierName" opts={(suppliers || []).map((s: any) => s.name)} /><FormField f={f} set={set} label="Material / Product" k="itemName" placeholder={selectedItem?.name || "e.g. Ghacem 42.5R Cement 50kg"} required /></div>

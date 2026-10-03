@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { FormField, FormSelect } from "@/components/shared/ModuleFormFields";
 
 /**
  * SaleFields — the shared "Record Sale" field group (P1.1).
@@ -64,34 +65,14 @@ export function stockDetailOptions(inventory: any[], sortKey?: (a: any, b: any) 
   });
 }
 
-function Field({ f, set, label, k, t = "text", ...rest }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <input
-        type={t}
-        value={f[k] ?? ""}
-        onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-        {...rest}
-      />
-    </div>
-  );
-}
+// The pair itself lives in src/components/shared/ModuleFormFields.tsx — this
+// file only supplies the sale-specific layout around it.
+const Field = (p: any) => <FormField {...p} />;
 
 function Select({ f, set, label, k, opts, ...rest }: any) {
   return (
     <div {...rest}>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <select
-        value={f[k] ?? ""}
-        onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
-      >
-        {opts.map((o: any) => (
-          <option key={String(o.v)} value={o.v} disabled={!!o.disabled}>{o.l}</option>
-        ))}
-      </select>
+      <FormSelect f={f} set={set} label={label} k={k} opts={opts} />
     </div>
   );
 }

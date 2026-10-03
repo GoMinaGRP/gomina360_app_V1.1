@@ -22,7 +22,6 @@ import {
   Building2,
   ClipboardEdit,
   BarChart3,
-  Landmark,
   HandCoins,
   Download,
   Eye,
@@ -34,11 +33,11 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { COMPANY_INFO } from "@/lib/companyInfo";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import SalesDocumentBuilder from "./SalesDocumentBuilder";
-import FinancialReportSection from "./FinancialReportSection";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import ProductVariantPicker, { type VariantSelection } from "./ProductVariantPicker";
 import { generateSalesDocumentPDF, printSalesDocument, downloadFile as downloadPDFFile } from "@/lib/salesDocument";
+import CustomerQuickAddForm from "@/components/shared/CustomerQuickAddForm";
 import {
   BarChart,
   Bar,
@@ -69,6 +68,12 @@ interface BranchManagerSalesViewProps {
   onRefreshData: () => void;
   /** Executives (Owner / General Manager) can sell across every branch. */
   isExecutive?: boolean;
+  /**
+   * Opens a canonical enterprise module (Customers & CRM / Inventory & Stock).
+   * Only supplied when the signed-in user may actually open those modules, so
+   * the shortcut never lands on the "Access Restricted" screen.
+   */
+  onNavigate?: (tab: string) => void;
 }
 
 export default function BranchManagerSalesView({
@@ -85,8 +90,9 @@ export default function BranchManagerSalesView({
   isOnline,
   onRefreshData,
   isExecutive = false,
+  onNavigate,
 }: BranchManagerSalesViewProps) {
-  type SalesTab = "NEW_SALE" | "CREDIT" | "INVOICES" | "QUOTATIONS" | "ANALYTICS" | "FIN_REPORT" | "PAYMENTS" | "RECEIPTS" | "RETURNS" | "CUSTOMERS" | "INVENTORY";
+  type SalesTab = "NEW_SALE" | "CREDIT" | "INVOICES" | "QUOTATIONS" | "ANALYTICS" | "PAYMENTS" | "RECEIPTS" | "RETURNS" | "CUSTOMERS" | "INVENTORY";
   const [activeSubTab, setActiveSubTab] = useState<SalesTab>("NEW_SALE");
 
   // Sales documents (invoices, quotations, receipts)
@@ -187,12 +193,6 @@ export default function BranchManagerSalesView({
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
   const [returnSuccess, setReturnSuccess] = useState(false);
 
-  // ─────── Customer form state ───────
-  const [newCustName, setNewCustName] = useState("");
-  const [newCustPhone, setNewCustPhone] = useState("+233 24 ");
-  const [newCustEmail, setNewCustEmail] = useState("");
-  const [newCustType, setNewCustType] = useState("RETAIL");
-  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
 
   // ── Boutique variant matrix for the operating branch ────────────────
   // Fetched lazily (small projection) so the POS can offer size/colour
@@ -761,39 +761,6 @@ export default function BranchManagerSalesView({
     }
   };
 
-  const handleCreateCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCustName.trim()) return;
-    setIsCreatingCustomer(true);
-    try {
-      const res = await fetch("/api/enterprise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entityType: "customer",
-          data: {
-            name: newCustName,
-            type: newCustType,
-            phone: newCustPhone,
-            email: newCustEmail || `${newCustName.toLowerCase().replace(/\s/g, ".")}@client.gh`,
-            businessId: activeBiz?.id,
-          },
-        }),
-      });
-      if (res.ok) {
-        setNewCustName("");
-        setNewCustPhone("+233 24 ");
-        setNewCustEmail("");
-        setNewCustType("RETAIL");
-        onRefreshData();
-      }
-    } catch (err) {
-      console.error("Customer creation error:", err);
-    } finally {
-      setIsCreatingCustomer(false);
-    }
-  };
-
   const hasManyCustomers = branchCustomers.length > 0;
 
   // ─────── Tab config ───────
@@ -804,7 +771,6 @@ export default function BranchManagerSalesView({
     { key: "QUOTATIONS", label: "Quotations", icon: ClipboardEdit },
     { key: "RECEIPTS", label: "Receipts", icon: Receipt },
     { key: "ANALYTICS", label: "Analytics", icon: BarChart3 },
-    { key: "FIN_REPORT", label: "Financial Report", icon: Landmark },
     { key: "PAYMENTS", label: "Payments", icon: CreditCard },
     { key: "RETURNS", label: "Returns", icon: RotateCcw },
     { key: "CUSTOMERS", label: "Customers", icon: Users },
@@ -2003,37 +1969,10 @@ export default function BranchManagerSalesView({
             </div>
           )}
 
-          {/* ~~~~~~~~~~ FINANCIAL REPORT (complete, live-linked) ~~~~~~~~~~ */}
-          {activeSubTab === "FIN_REPORT" && (
-            <FinancialReportSection
-              mode="business"
-              businessInfo={activeBiz}
-              businessMetric={activeBizMetrics}
-              transactions={transactions}
-              inventory={inventory}
-              customers={customers}
-              salesDocuments={salesDocuments}
-              currentCurrency={currentCurrency}
-              accent="emerald"
-              testid="fin-report-branch"
-              aiModuleKey="SALES_CENTER"
-              opsLinks={[
-                {
-                  label: "Invoices issued",
-                  value: String(branchInvoices.length),
-                  note: `${branchInvoices.filter((i: any) => i.status === "PAID").length} fully paid`,
-                  tone: "emerald",
-                },
-                {
-                  label: "Quotations open",
-                  value: String(branchQuotations.filter((q: any) => !["CONVERTED", "REJECTED", "EXPIRED"].includes(q.status)).length),
-                  tone: "sky",
-                },
-              ]}
-            />
-          )}
+          {/* The Financial Report tab used to be a third entry point to the same
+              FinancialReportSection that Finance & Reports already renders (unit scope).
+              The report lives there once, for both scopes — this tab is retired. */}
 
-          {/* ~~~~~~~~~~ PAYMENTS ~~~~~~~~~~ */}
           {activeSubTab === "PAYMENTS" && (
             <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl">
               <div className="flex items-center space-x-2 pb-4 border-b border-slate-700/70">
@@ -2344,59 +2283,24 @@ export default function BranchManagerSalesView({
           {activeSubTab === "CUSTOMERS" && (
             <div className="space-y-4">
               <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl">
-                <div className="flex items-center space-x-2 pb-4 border-b border-slate-700/70">
-                  <UserPlus className="w-5 h-5 text-amber-400" />
-                  <h3 className="text-base font-bold text-white">Add New Customer</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-700/70">
+                  <div className="flex items-center space-x-2">
+                    <UserPlus className="w-5 h-5 text-amber-400" />
+                    <h3 className="text-base font-bold text-white">Add New Customer</h3>
+                  </div>
+                  {onNavigate && (
+                    <button type="button" onClick={() => onNavigate("CUSTOMERS")}
+                      data-testid="bm-open-crm"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-amber-500/50 text-[11px] font-bold text-slate-300 hover:text-amber-300 transition">
+                      Full Customers &amp; CRM <ArrowUpRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
-                <form onSubmit={handleCreateCustomer} className="mt-4 space-y-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Full Name *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={newCustName}
-                      onChange={(e) => setNewCustName(e.target.value)}
-                      placeholder="Customer full name"
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Phone Number
-                      </label>
-                      <input
-                        type="text"
-                        value={newCustPhone}
-                        onChange={(e) => setNewCustPhone(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Type
-                      </label>
-                      <select
-                        value={newCustType}
-                        onChange={(e) => setNewCustType(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm"
-                      >
-                        <option value="RETAIL">Retail</option>
-                        <option value="WHOLESALE">Wholesale</option>
-                        <option value="CORPORATE">Corporate</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isCreatingCustomer}
-                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg transition disabled:opacity-50"
-                  >
-                    {isCreatingCustomer ? "Creating..." : "Create Customer"}
-                  </button>
-                </form>
+                <CustomerQuickAddForm
+                  businessId={activeBiz?.id}
+                  onCreated={onRefreshData}
+                  testidPrefix="custq"
+                />
               </div>
 
               {hasManyCustomers && (
@@ -2442,9 +2346,18 @@ export default function BranchManagerSalesView({
           {/* ~~~~~~~~~~ INVENTORY ~~~~~~~~~~ */}
           {activeSubTab === "INVENTORY" && (
             <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl">
-              <div className="px-5 py-4 border-b border-slate-700 flex items-center space-x-2">
-                <Package className="w-5 h-5 text-cyan-400" />
-                <h3 className="text-base font-bold text-white">Branch Inventory Oversight</h3>
+              <div className="px-5 py-4 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <Package className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-base font-bold text-white">Branch Inventory Oversight</h3>
+                </div>
+                {onNavigate && (
+                  <button type="button" onClick={() => onNavigate("INVENTORY")}
+                    data-testid="bm-open-inventory"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-cyan-500/50 text-[11px] font-bold text-slate-300 hover:text-cyan-300 transition">
+                    Inventory &amp; Stock <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs sm:text-sm">

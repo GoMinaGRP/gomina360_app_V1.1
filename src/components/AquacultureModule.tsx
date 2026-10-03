@@ -25,6 +25,7 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import { canViewSection } from "@/lib/advisorSections";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
 
 interface Props {
   currentUser: any;
@@ -894,26 +895,9 @@ export default function AquacultureModule({
 // ────────────────────────────────────────────────────────────────────────────
 //  Form component
 // ────────────────────────────────────────────────────────────────────────────
-function FormField({ f, set, label, k, t = "text", ...rest }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-}
-function FormSelect({ f, set, label, k, opts }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-}
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField tone="slate900" {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect tone="slate900" {...p} />; }
 
 function PondSelect({ ponds, f, set, required, hint }: any) {
   return (

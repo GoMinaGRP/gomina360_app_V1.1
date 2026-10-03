@@ -729,6 +729,10 @@ export default function GoMinaApp() {
   const renderActiveView = () => {
     const isExecutive =
       currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
+    // Deep links from the branch workspace into the canonical enterprise modules
+    // (Customers & CRM / Inventory & Stock) are offered whenever the module guard
+    // below would let that user open them.
+    const canOpenEnterpriseModules = isExecutive || businessManageIdsOf(currentUser).length > 0;
     const isBranchManager = currentUser?.role === "BRANCH_MANAGER";
 
     // ── Farm Advisor workspace ─────────────────────────────────────────
@@ -899,6 +903,8 @@ export default function GoMinaApp() {
             metrics={liveMetrics}
             currentCurrency={currentCurrency}
             isOnline={isOnline}
+
+            onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
             onRefreshData={refreshAllData}
           />
         );
@@ -920,6 +926,8 @@ export default function GoMinaApp() {
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
+
+          onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
           onRefreshData={refreshAllData}
           isExecutive
         />
@@ -1023,6 +1031,8 @@ export default function GoMinaApp() {
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
+
+          onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
           onRefreshData={refreshAllData}
         />
       );
