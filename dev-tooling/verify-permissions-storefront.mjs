@@ -319,8 +319,15 @@ async function sectionStorefront(browser, errors) {
   const stepsAfterReload = await page.$('[data-testid="oo-howto-steps"]');
   ok("H4 instructions stay hidden across a reload until HELP is tapped again", !stepsAfterReload);
 
-  /* C — category catalog browse sanity */
-  await clickT(page, "oo-biz-1");
+  /* C — category catalog browse sanity.
+     The chip filter can only be *proved* on a catalogue holding more than one
+     category, so open the richest business on the public menu (biz 1 is a
+     single-category poultry catalogue after a fresh seed). */
+  const menu = await fetch(`${BASE}/api/menu`).then((r) => r.json()).catch(() => null);
+  const catCount = (b) => new Set((b.products || []).map((p) => p.category)).size;
+  const richest = [...(menu?.businesses || [])].sort((a, b) => catCount(b) - catCount(a))[0];
+  const targetBiz = richest && catCount(richest) >= 2 ? richest.businessId : 1;
+  await clickT(page, `oo-biz-${targetBiz}`);
   await page.waitForSelector('[data-testid="oo-catalog"]', { timeout: 30000 }).catch(() => {});
   await sleep(400);
   const catalog = await page.evaluate(() => {
@@ -344,6 +351,11 @@ async function sectionStorefront(browser, errors) {
     await clickT(page, "oo-cat-ALL");
     await sleep(400);
   }
+  // Back to the poultry flagship: the rest of the flow (delivery pin guard,
+  // map drag) runs against the temporarily anchored biz 1.
+  await clickT(page, "oo-biz-1");
+  await page.waitForSelector('[data-testid="oo-catalog"]', { timeout: 30000 }).catch(() => {});
+  await sleep(400);
   const firstAdd = await page.evaluate(() => document.querySelector('[data-testid^="oo-add-"]')?.getAttribute("data-testid"));
   await clickT(page, firstAdd);
   await page.waitForSelector('[data-testid="oo-cart"]', { timeout: 10000 });

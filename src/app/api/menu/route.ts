@@ -132,6 +132,8 @@ export async function GET(request: Request) {
           status: inventoryItems.status,
           photo: inventoryItems.photo,
           photos: inventoryItems.photos,
+          photoThumb: inventoryItems.photoThumb,
+          photosThumb: inventoryItems.photosThumb,
           description: inventoryItems.description,
           brand: inventoryItems.brand,
           model: inventoryItems.model,
@@ -284,9 +286,33 @@ export async function GET(request: Request) {
             ? i.photos.filter((p: any) => typeof p === "string" && p.length > 0)
             : [];
           const allPhotos: string[] = [];
-          if (typeof i.photo === "string" && i.photo.length > 0) allPhotos.push(i.photo);
-          for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
+          const allThumbs: string[] = [];
+          const thumbs = Array.isArray(i.photosThumb)
+            ? i.photosThumb.filter((p: any) => typeof p === "string" && p.length > 0)
+            : [];
+          // `photosThumb` is parallel to `photos[]`, `photoThumb` to `photo`.
+          const thumbAt = (gi: number) => (typeof thumbs[gi] === "string" ? thumbs[gi] : "");
+          if (typeof i.photo === "string" && i.photo.length > 0) {
+            allPhotos.push(i.photo);
+            allThumbs.push((typeof i.photoThumb === "string" && i.photoThumb) || thumbAt(0));
+          }
+          for (let gi = 0; gi < gallery.length; gi++) {
+            const p = gallery[gi];
+            const at = allPhotos.indexOf(p);
+            if (at >= 0) {
+              // Same bytes already listed (primary === photos[0]) — adopt the
+              // gallery thumbnail when the earlier slot has none.
+              if (!allThumbs[at]) allThumbs[at] = thumbAt(gi);
+              continue;
+            }
+            allPhotos.push(p);
+            allThumbs.push(thumbAt(gi));
+          }
           const photoUrls = allPhotos.map((_photo, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}`);
+          // Parallel thumbnail URLs (same index) — grids and galleries paint
+          // these; the lightbox keeps the full-resolution URLs above. The
+          // photo route falls back to the full image when a row has no thumb.
+          const thumbUrls = allThumbs.map((_t, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}&size=thumb`);
           const opts = optsByInventory.get(i.id) || [];
           const variantAvailable = vProjection ? vProjection.totalAvailable : null;
           const sellable = (variantAvailable != null ? variantAvailable > 0 : invHasStock(i)) || opts.length > 0;
@@ -323,6 +349,9 @@ export async function GET(request: Request) {
               : {}),
             photo: photoUrls[0] || null,
             photos: photoUrls,
+            // Same index order as `photos`; entries may be empty strings when
+            // the row predates thumbnails (the URL still serves the full image).
+            thumbs: thumbUrls,
             // Product catalogue details registered at stock-in — shown on the
             // storefront product view verbatim (no duplicate entry anywhere).
             description: i.description || null,

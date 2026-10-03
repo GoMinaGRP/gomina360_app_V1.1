@@ -900,6 +900,12 @@ export async function POST(request: Request) {
       const photosArr = Array.isArray(data.photos)
         ? data.photos.filter((p: any) => typeof p === "string" && p.length > 0)
         : [];
+      // Display thumbnails generated in the browser at upload time
+      // (src/lib/imageOptimize) — same index order as `photos`. Optional:
+      // older clients/rows simply have none and every reader falls back.
+      const thumbsArr = Array.isArray(data.photosThumb)
+        ? data.photosThumb.filter((p: any) => typeof p === "string" && /^data:image\//.test(p))
+        : [];
       // ── Unique QR tag — scanned or auto-generated; never duplicated. ──
       const invQr = data.qrCode ? String(data.qrCode).trim().slice(0, 200) : "";
       if (invQr) {
@@ -943,6 +949,11 @@ export async function POST(request: Request) {
           expiryDate: data.expiryDate || null,
           photo: typeof data.photo === "string" && data.photo ? data.photo : photosArr[0] || null,
           photos: photosArr,
+          photoThumb:
+            typeof data.photoThumb === "string" && /^data:image\//.test(data.photoThumb)
+              ? data.photoThumb
+              : thumbsArr[0] || null,
+          photosThumb: thumbsArr.length > 0 ? thumbsArr : null,
           description: data.description ? String(data.description).trim().slice(0, 4000) : null,
           brand: data.brand ? String(data.brand).trim().slice(0, 120) : null,
           model: data.model ? String(data.model).trim().slice(0, 120) : null,

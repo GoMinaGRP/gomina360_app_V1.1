@@ -68,6 +68,17 @@ const textOf = async (sel) => page.$eval(sel, (e) => e.textContent || "").catch(
 const innerHas = async (sel, needle) => ((await textOf(sel)) || "").toLowerCase().includes(needle.toLowerCase());
 const clickSel = async (sel) => { await waitSel(sel); await page.$eval(sel, (e) => e.click()); };
 const clickTid = (tid) => clickSel(`[data-testid="${tid}"]`);
+/** Wait until a control stops being disabled (logo saves are serialised by
+ *  the modal's `logoBusy` flag, so a fast click can land on a disabled button). */
+const waitEnabled = async (tid, ms = 20000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const disabled = await page.$eval(`[data-testid="${tid}"]`, (el) => el.disabled).catch(() => true);
+    if (!disabled) return true;
+    await sleep(150);
+  }
+  return false;
+};
 const clickText = async (text) => page.evaluate((t) => {
   const el = [...document.querySelectorAll("button, a")].find((b) => (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase().includes(t.toLowerCase()));
   if (el) { el.click(); return true; }
@@ -155,6 +166,7 @@ try {
   await waitSel('[data-testid="bizlogo-branch-pending-1"]', 20000);
   ok("B2 branch image chosen (defaults to branch code POULTRY-01)",
     (await page.$eval('[data-testid="bizlogo-branch-code-1"]', (e) => e.value)) === "POULTRY-01");
+  ok("B2b branch save becomes available once the business-logo save settles", await waitEnabled("bizlogo-branch-save-1"));
   await clickTid("bizlogo-branch-save-1");
   await waitSel('[data-testid="bizlogo-branch-del-1-POULTRY-01"]', 20000);
   ok("B3 branch override listed after save", true);
@@ -169,9 +181,19 @@ try {
   BIZ_LOGO = biz1.logo;
   BRANCH_LOGO = (biz1.branch_logos || {})["POULTRY-01"];
   CO_LOGO = (await q1("SELECT company_logo FROM company_settings WHERE id=1")).company_logo;
-  ok("C1 business logo persisted (resized JPEG)", BIZ_LOGO?.startsWith("data:image/jpeg"));
-  ok("C2 branch logo persisted under POULTRY-01", BRANCH_LOGO?.startsWith("data:image/jpeg"));
-  ok("C3 company logo persisted with audit stamp", CO_LOGO?.startsWith("data:image/jpeg") &&
+  // Logos now go through the shared, transparency-aware optimizer: a
+  // transparent PNG is kept (or stored as WebP), never flattened onto black.
+  // Opaque artwork is JPEG. Both must stay an image ≤512px.
+  const fmtOf = (dataUrl) => {
+    const m = /^data:image\/(png|jpeg|webp)/.exec(String(dataUrl || ""));
+    return m ? m[1] : "";
+  };
+  ok("C1 business logo persisted (transparency-safe image)",
+    ["png", "webp"].includes(fmtOf(BIZ_LOGO)) && BIZ_LOGO.length < 700_000,
+    String(BIZ_LOGO || "null").slice(0, 30));
+  ok("C2 branch logo persisted under POULTRY-01", ["jpeg", "webp", "png"].includes(fmtOf(BRANCH_LOGO)),
+    String(BRANCH_LOGO || "null").slice(0, 30));
+  ok("C3 company logo persisted with audit stamp", ["png", "webp"].includes(fmtOf(CO_LOGO)) &&
     (await q1("SELECT updated_by_name n FROM company_settings WHERE id=1")).n === "Kwame Mina");
   ok("C4 all three levels distinct", BIZ_LOGO !== BRANCH_LOGO && BIZ_LOGO !== CO_LOGO && BRANCH_LOGO !== CO_LOGO);
   const init = await fetch(`${BASE}/api/init`, { headers: { "x-gomina-session": ownerToken } }).then((x) => x.json());

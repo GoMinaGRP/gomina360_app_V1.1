@@ -1,0 +1,720 @@
+#!/usr/bin/env node
+/**
+ * verify-image-optimization.mjs — automatic image optimization, end to end.
+ *
+ * Requirement: every image-upload section optimizes images BEFORE upload with
+ * a purpose-appropriate size/quality, generates display thumbnails where they
+ * matter, and never degrades existing images or functionality — on desktop
+ * and on mobile.
+ *
+ * Layers:
+ *   A. STATIC — every <input type="file"> that accepts images is wired to the
+ *      shared optimizer (src/lib/imageOptimize.ts); the only raw
+ *      readAsDataURL calls left are the deliberate PDF pass-throughs; the
+ *      preset table has the documented size ordering.
+ *   B. DESKTOP BROWSER (real Chromium, real handlers, real uploads):
+ *      inventory product photo (full pipeline + thumbnails + submission),
+ *      storefront grid/lightbox byte behaviour, dashboard bootstrap payload,
+ *      legacy rows without thumbnails (fallback), profile avatar, business
+ *      logo (transparency preserved), expense receipt, asset images,
+ *      employee photo.
+ *   C. MOBILE BROWSER (isMobile, DPR 3) — the same upload pipeline and the
+ *      storefront rendering on a phone profile.
+ *   D. NO-REGRESSION — every pre-existing row's stored image bytes are
+ *      byte-identical before/after the suite.
+ *
+ * Fixtures: synthetic photo-noise PNGs (multi-MB, larger than the old 5 MB
+ * cap), a transparent-RGBA PNG for the logo check. All created rows are
+ * deleted and all mutated rows restored in the finally block.
+ *
+ * Run: bash dev-tooling/run-suite.sh dev-tooling/verify-image-optimization.mjs
+ */
+import { createRequire } from "node:module";
+import { readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import zlib from "node:zlib";
+
+const require = createRequire("/home/user/pgtooling/package.json");
+const { Client } = require("pg");
+const puppeteer = require("puppeteer-core");
+const chromium = require("@sparticuz/chromium");
+
+const BASE = process.env.BASE_URL || "http://127.0.0.1:3000";
+const OWNER = { email: "kwame.owner@gomina360.com", pw: process.env.GOMINA_OWNER_PW || "Owner@GoMina26" };
+const OUT = new URL("./.verify-out/", import.meta.url).pathname;
+mkdirSync(OUT, { recursive: true });
+
+let pass = 0;
+let fail = 0;
+const ok = (cond, msg, extra = "") => {
+  if (cond) {
+    pass++;
+    console.log(`  ✅ ${msg}${extra ? ` — ${extra}` : ""}`);
+  } else {
+    fail++;
+    console.error(`  ❌ ${msg}${extra ? ` — ${extra}` : ""}`);
+  }
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ─────────────────────── fixture image generation ─────────────────────── */
+
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+const crc32 = (buf) => {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+};
+const pngChunk = (type, data) => {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+};
+/** Hand-rolled PNG writer (no dependencies): RGB noise or RGBA with alpha. */
+function makePng(width, height, { alpha = false, transparent = false } = {}) {
+  const channels = alpha ? 4 : 3;
+  const stride = width * channels + 1;
+  const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    raw[y * stride] = 0;
+    for (let x = 0; x < width; x++) {
+      const o = y * stride + 1 + x * channels;
+      // Photo-like content: smooth gradients + texture + edges. (Pure noise
+      // is the pathological worst case for JPEG and is not what a camera
+      // produces; this behaves like a real 12 MP capture.)
+      const base = (x * 255) / width;
+      const band = y > height * 0.6 && y < height * 0.62 ? 60 : 0;
+      const texture = ((x * 31 + y * 17) % 23) - 11 + (Math.random() * 14 - 7);
+      const shade = base + texture + band;
+      raw[o] = Math.max(0, Math.min(255, shade)) & 0xff;
+      raw[o + 1] = Math.max(0, Math.min(255, 255 - base * 0.6 + texture)) & 0xff;
+      raw[o + 2] = Math.max(0, Math.min(255, base * 0.4 + 90 + texture)) & 0xff;
+      if (alpha) raw[o + 3] = transparent && x < width / 2 ? 0 : 255;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = alpha ? 6 : 2; // colour type
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw, { level: 1 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const LARGE_PHOTO = makePng(3000, 2000); // realistic 6 MP capture, > old 5 MB upload cap, < 20 MB guard
+const LARGE_PHOTO_B64 = LARGE_PHOTO.toString("base64");
+const TRANSPARENT_LOGO = makePng(700, 700, { alpha: true, transparent: true });
+const TRANSPARENT_LOGO_B64 = TRANSPARENT_LOGO.toString("base64");
+console.log(`fixtures: photo ${(LARGE_PHOTO.length / 1024 / 1024).toFixed(1)} MB, transparent logo ${(TRANSPARENT_LOGO.length / 1024).toFixed(0)} KB`);
+
+/* ───────────────────────────── database ───────────────────────────────── */
+
+const db = new Client({ connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@127.0.0.1:5432/app_db" });
+await db.connect();
+const q = async (sql, params = []) => (await db.query(sql, params)).rows;
+const q1 = async (sql, params = []) => (await q(sql, params))[0];
+
+const TAG = `IMGOPT-${Date.now().toString(36).toUpperCase()}`;
+const suiteStart = new Date();
+
+const created = { businessId: 1, inventoryIds: [], transactionIds: [] };
+const restore = []; // { table, column, id, value }
+
+/**
+ * "Existing images are never rewritten" guard: a content hash of every image
+ * column in the tables the app stores images in, plus a real pre-existing
+ * inventory photo (the fresh seed ships none), taken before the suite uploads
+ * anything and re-checked at the end. Rows this suite creates/mutates are
+ * excluded by name/id and restored separately.
+ */
+const IMAGE_TRACKED = [
+  ["inventory_items", "id", "photo, photo_thumb, photos, photos_thumb"],
+  ["employees", "id", "photo"],
+  ["assets", "id", "asset_images"],
+  ["transactions", "id", "receipt_image, receipt_images"],
+];
+async function imageFingerprint() {
+  const out = {};
+  for (const [table, key, cols] of IMAGE_TRACKED) {
+    const rows = await q(`select ${key} as k, ${cols} from ${table} order by ${key}`);
+    out[table] = Object.fromEntries(rows.map((r) => [String(r.k), JSON.stringify(r)]));
+  }
+  const biz = await q(`select id as k, logo from businesses where id <> 1 order by id`);
+  out.businesses = Object.fromEntries(biz.map((r) => [String(r.k), JSON.stringify(r)]));
+  const usr = await q(`select id as k, avatar_url from users where id <> 1 order by id`);
+  out.users = Object.fromEntries(usr.map((r) => [String(r.k), JSON.stringify(r)]));
+  return JSON.stringify(out);
+}
+/** Pre-existing rows (present before the suite) whose image data changed. */
+function fingerprintDrift(beforeJson, afterJson) {
+  const before = JSON.parse(beforeJson);
+  const after = JSON.parse(afterJson);
+  const drift = [];
+  for (const table of Object.keys(before)) {
+    for (const [id, row] of Object.entries(before[table])) {
+      if (after[table]?.[id] !== row) drift.push(`${table}#${id}`);
+    }
+  }
+  return drift;
+}
+
+/* ─────────────── A. static wiring + preset policy ─────────────────────── */
+
+console.log("\n── A. static wiring audit ──");
+const walk = (dir) => {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) out.push(...walk(p));
+    else if (p.endsWith(".tsx") || p.endsWith(".ts")) out.push(p);
+  }
+  return out;
+};
+const sources = [...walk("src/components"), ...walk("src/app")];
+const imageInputs = [];
+for (const f of sources) {
+  const text = readFileSync(f, "utf8");
+  const re = /<input[^>]*type=["']file["'][^>]*>/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const tag = m[0];
+    const am = tag.match(/accept\s*=\s*["']([^"']*)["']/);
+    const accept = am ? am[1] : "";
+    const isBackupZip = /zip/.test(accept);
+    if (!isBackupZip && /image\/\*/.test(accept)) {
+      imageInputs.push({ file: f, wired: text.includes("imageOptimize") });
+    }
+  }
+}
+const unwired = imageInputs.filter((i) => !i.wired);
+ok(imageInputs.length >= 16, `every image uploader found in the app sources (${imageInputs.length} inputs)`);
+ok(unwired.length === 0, "every image uploader goes through the shared optimizer", unwired.map((u) => u.file).join(", ") || "0 unwired");
+
+const rawReaders = [];
+for (const f of sources) {
+  const text = readFileSync(f, "utf8");
+  if (/readAsDataURL/.test(text) && !/imageOptimize/.test(text)) rawReaders.push(f);
+}
+ok(rawReaders.length === 0, "no component reads image files directly any more", rawReaders.join(", "));
+
+const optimizerSrc = readFileSync("src/lib/imageOptimize.ts", "utf8");
+const preset = (name) => {
+  const m = new RegExp(`${name}:\\s*\\{\\s*maxEdge:\\s*(\\d+),\\s*quality:\\s*([\\d.]+)`).exec(optimizerSrc);
+  return m ? { edge: Number(m[1]), quality: Number(m[2]) } : null;
+};
+const product = preset("product");
+const document_ = preset("document");
+const receipt = preset("receipt");
+const evidence = preset("evidence");
+const avatar = preset("avatar");
+ok(!!product && product.edge === 1600 && product.quality === 0.82, "product photos: 1600px @ q0.82 (zoomable detail)", JSON.stringify(product));
+ok(!!document_ && document_.edge === 2000 && document_.quality >= 0.86, "documents keep extra detail: 2000px @ q0.88", JSON.stringify(document_));
+ok(!!receipt && receipt.edge >= 1600 && receipt.quality >= 0.8, "receipts stay legible: ≥1600px @ q≥0.8", JSON.stringify(receipt));
+ok(!!evidence && !!avatar && evidence.edge > avatar.edge, "evidence (>avatar) sized by purpose", `${evidence?.edge} vs ${avatar?.edge}`);
+ok(/thumb:\s*\{\s*edge:\s*400/.test(optimizerSrc), "product photos generate a ≤400px display thumbnail");
+ok(/image\/gif|svg\+xml/.test(optimizerSrc), "vector/animated inputs are excluded from rasterizing");
+
+/* ───────────────────────────── browser ───────────────────────────────── */
+
+// A pre-existing product photo (production has these; the fresh seed ships
+// none) — the suite must leave its bytes exactly as they are.
+// Defensive: purge any rows a previous (crashed) run of this suite left behind.
+await q(`delete from inventory_variants where inventory_id in (select id from inventory_items where name like 'IMGOPT-%')`).catch(() => {});
+await q(`delete from inventory_items where name like 'IMGOPT-%'`).catch(() => {});
+const BASELINE_PHOTO = "data:image/jpeg;base64," + Buffer.from(makePng(64, 48)).toString("base64");
+const baselineRow = await q1(
+  `insert into inventory_items (name, sku, business_id, branch_code, branch_name, category, quantity, unit, cost_price_ghs, selling_price_ghs, min_stock_threshold, status, photo, photos)
+   values ($1, $2, 1, 'POULTRY-01', 'Mina Akuafo Poultry Farm', 'Poultry & Eggs', 4, 'Units', 10, 15, 1, 'IN_STOCK', $3, $4) returning id`,
+  [`${TAG} Pre-existing Row`, `${TAG}-BASE`, BASELINE_PHOTO, JSON.stringify([BASELINE_PHOTO])],
+);
+created.inventoryIds.push(Number(baselineRow.id));
+const fingerprintBefore = await imageFingerprint();
+
+const browser = await puppeteer.launch({
+  executablePath: "/tmp/al2023/chromium",
+  args: [...(chromium.args || []), "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+});
+
+/** Attach a synthetic File to a file input and fire the real change event. */
+async function uploadFixture(page, selector, b64, name) {
+  return page.evaluate(
+    async (sel, data, fileName) => {
+      const bin = atob(data);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], fileName, { type: "image/png" });
+      const el = document.querySelector(sel);
+      if (!el) return { ok: false, error: "input not found: " + sel };
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.files = dt.files;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true };
+    },
+    selector,
+    b64,
+    name,
+  );
+}
+
+/** Measure a data URL's decoded dimensions + byte size inside the browser. */
+async function inspectDataUrl(page, dataUrl) {
+  return page.evaluate(
+    (url) =>
+      new Promise((resolve) => {
+        if (!url) return resolve(null);
+        const img = new Image();
+        img.onload = () =>
+          resolve({
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            bytes: Math.floor((url.split(",")[1] || "").length * 0.75),
+            mime: (url.match(/^data:([^;,]+)/) || [])[1] || "",
+          });
+        img.onerror = () => resolve(null);
+        img.src = url;
+      }),
+    dataUrl,
+  );
+}
+
+async function login(page) {
+  await page.goto(`${BASE}/?login=1`, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await page.waitForSelector('[data-testid="login-email"]', { timeout: 120000 });
+  await page.type('[data-testid="login-email"]', OWNER.email);
+  await page.type('[data-testid="login-password"]', OWNER.pw);
+  await page.click('[data-testid="login-submit"]');
+  await page.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 120000 });
+  await sleep(1800);
+}
+
+async function openSection(page, label) {
+  await page.evaluate((lbl) => {
+    const btn = [...document.querySelectorAll('[data-testid="nav-sidebar"] button')].find((b) => new RegExp(lbl, "i").test(b.textContent || ""));
+    btn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  }, label);
+  await sleep(2200);
+}
+
+try {
+  /* ═════════════ B. desktop browser, real uploads ═════════════ */
+  console.log("\n── B. desktop browser (1440×900) ──");
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+  const pageErrors = [];
+  page.on("pageerror", (e) => pageErrors.push(String(e.message).slice(0, 160)));
+  await login(page);
+  let uploadBodyBytes = 0;
+  page.on("request", (r) => {
+    if (r.url().includes("/api/enterprise") && r.method() === "POST") {
+      const body = r.postData() || "";
+      if (body.length > uploadBodyBytes) uploadBodyBytes = body.length;
+    }
+  });
+
+  // ── B1-B5 inventory product photo: upload → optimize → thumbnails → save
+  await openSection(page, "inventory & stock");
+  await page.click('[data-testid="shared-add-open"]');
+  await page.waitForSelector('[data-testid="inv-photo-upload"]', { timeout: 30000 });
+  await page.type('[data-testid="inv-name"]', `${TAG} Optimized Product`);
+  await page.evaluate(() => {
+    const qty = document.querySelector('[data-testid="inv-qty"]');
+    if (qty) {
+      qty.value = "";
+      qty.dispatchEvent(new Event("input", { bubbles: true }));
+      qty.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  await page.type('[data-testid="inv-qty"]', "25");
+  await uploadFixture(page, '[data-testid="inv-photo-upload"] input[type=file]', LARGE_PHOTO_B64, `${TAG}-product.png`);
+  await page.waitForFunction(() => !!document.querySelector('[data-testid="inv-photo-previews"] img'), { timeout: 30000 });
+  const notice = await page.$eval('[data-testid="inv-photo-optimized"]', (el) => el.textContent || "").catch(() => "");
+  const preview = await page.$eval('[data-testid="inv-photo-previews"] img', (el) => el.getAttribute("src") || "");
+  const previewInfo = await inspectDataUrl(page, preview);
+  ok(!!previewInfo && previewInfo.bytes < 400 * 1024, "uploaded multi-MB photo is re-encoded before it leaves the browser", previewInfo ? `${(LARGE_PHOTO.length / 1024 / 1024).toFixed(1)} MB → ${Math.round(previewInfo.bytes / 1024)} KB` : "no preview");
+  ok(!!previewInfo && previewInfo.width <= 1600 && previewInfo.height <= 1600, "longest edge capped at 1600px", previewInfo ? `${previewInfo.width}×${previewInfo.height}` : "-");
+  ok(/→/.test(notice) && /smaller/.test(notice) && /(\d+)× smaller/.test(notice) && Number(RegExp.$1) >= 8, "the user sees a ≥8× optimization result", notice.slice(0, 60));
+
+  await page.click('[data-testid="shared-add-submit"]');
+  await sleep(900);
+  // The shared form asks for confirmation before writing the record.
+  if (await page.$('[data-testid="shared-confirm-entry-confirm"]')) {
+    await page.click('[data-testid="shared-confirm-entry-confirm"]');
+  }
+  await sleep(2500);
+  const row = await q1(
+    `select id, photo, photo_thumb, photos, photos_thumb from inventory_items where name = $1 order by id desc limit 1`,
+    [`${TAG} Optimized Product`],
+  );
+  ok(!!row, "product saved with the optimized photo");
+  ok(uploadBodyBytes > 0 && uploadBodyBytes < 400 * 1024, "the upload request itself carries only the optimized bytes", uploadBodyBytes ? `${Math.round(uploadBodyBytes / 1024)} KB JSON body (source was ${(LARGE_PHOTO.length / 1024 / 1024).toFixed(1)} MB)` : "no POST captured");
+  if (row) {
+    created.inventoryIds.push(Number(row.id));
+    const mainBytes = Math.floor(((row.photo || "").split(",")[1] || "").length * 0.75);
+    const thumbBytes = Math.floor(((row.photo_thumb || "").split(",")[1] || "").length * 0.75);
+    ok(mainBytes > 0 && mainBytes < 400 * 1024, "stored product photo ≤400 KB", `${Math.round(mainBytes / 1024)} KB`);
+    ok(!!row.photo_thumb && thumbBytes < 60 * 1024, "stored display thumbnail ≤60 KB", `${Math.round(thumbBytes / 1024)} KB`);
+    ok(Array.isArray(row.photos_thumb) && row.photos_thumb.length === (row.photos || []).length, "thumbnail array is parallel to the photo array", `${(row.photos_thumb || []).length}/${(row.photos || []).length}`);
+    const thumbInfo = await inspectDataUrl(page, row.photo_thumb);
+    ok(!!thumbInfo && Math.max(thumbInfo.width, thumbInfo.height) <= 400, "thumbnail long edge ≤400px", thumbInfo ? `${thumbInfo.width}×${thumbInfo.height}` : "-");
+    ok(!!thumbInfo && /webp|jpeg/.test(thumbInfo.mime), "thumbnail uses a web-friendly format", thumbInfo?.mime || "-");
+  }
+
+  // ── B6-B8 storefront: thumbnails for the grid, full images for the lightbox
+  const menu = await (await fetch(`${BASE}/api/menu`)).json();
+  let productRow = null;
+  for (const b of menu.businesses || []) {
+    const hit = (b.products || []).find((p) => p.name === `${TAG} Optimized Product`);
+    if (hit) {
+      productRow = { branch: b, product: hit };
+      break;
+    }
+  }
+  ok(!!productRow, "restored product is live on the public storefront");
+  if (productRow) {
+    const { product: p } = productRow;
+    ok(Array.isArray(p.thumbs) && p.thumbs.length === (p.photos || []).length, "storefront catalogue publishes parallel thumbnail URLs", `${(p.thumbs || []).length}/${(p.photos || []).length}`);
+    const fullRes = await fetch(`${BASE}${p.photos[0]}`);
+    const thumbRes = await fetch(`${BASE}${p.thumbs[0]}`);
+    const fullBuf = Buffer.from(await fullRes.arrayBuffer());
+    const thumbBuf = Buffer.from(await thumbRes.arrayBuffer());
+    ok(fullRes.status === 200 && thumbRes.status === 200, "both the full image and the thumbnail are served", `${fullRes.status}/${thumbRes.status}`);
+    ok(thumbBuf.length < 60 * 1024, "grid thumbnail is small (fast mobile storefront)", `${Math.round(thumbBuf.length / 1024)} KB`);
+    ok(fullBuf.length > thumbBuf.length * 3, "the lightbox URL still serves the full-quality image", `${Math.round(fullBuf.length / 1024)} KB vs ${Math.round(thumbBuf.length / 1024)} KB`);
+    const thumbType = thumbRes.headers.get("content-type") || "";
+    ok(/webp|jpeg/.test(thumbType), "thumbnail is served with the right content type", thumbType);
+
+    // ── B9-B10 storefront UI paints the thumbnail, lightbox the full image
+    const shop = await browser.newPage();
+    await shop.setViewport({ width: 1440, height: 900 });
+    await shop.goto(`${BASE}/order`, { waitUntil: "networkidle2", timeout: 120000 });
+    await shop.waitForSelector(`[data-testid="oo-photo-${p.id}"] img`, { timeout: 60000 }).catch(() => {});
+    const cardSrc = await shop.$eval(`[data-testid="oo-photo-${p.id}"] img`, (el) => el.getAttribute("src") || "").catch(() => "");
+    ok(/size=thumb/.test(cardSrc), "product card renders the thumbnail", cardSrc.slice(0, 70));
+    const cardLoaded = await shop.$eval(`[data-testid="oo-photo-${p.id}"] img`, (el) => el.naturalWidth > 0 || (el.complete && el.currentSrc !== "")).catch(() => false);
+    ok(!!cardLoaded, "thumbnail image decodes and paints");
+    await shop.click(`[data-testid="oo-photo-${p.id}"]`);
+    await sleep(1200);
+    const lightboxSrc = await shop.evaluate(() => {
+      const img = [...document.querySelectorAll('[data-testid^="lb-"] img, img')].map((i) => i.getAttribute("src") || "").find((s) => /\/api\/menu\/photo\?/.test(s) && !/size=thumb/.test(s));
+      return img || "";
+    });
+    ok(!!lightboxSrc, "lightbox opens the full-resolution photo (no thumbnail)", lightboxSrc.slice(0, 70));
+
+    // ── B10b "See details & zoom" path keeps full quality ──
+    await q(
+      `update inventory_items set description = $2, brand = $3, model = $4, specifications = $5 where id = $1`,
+      [p.id, "Optimization test product.", "GoMina", `${TAG}-1`, JSON.stringify([{ key: "Warranty", value: "12 months" }])],
+    );
+    const detailsCard = await browser.newPage();
+    await detailsCard.setViewport({ width: 1440, height: 900 });
+    let detailsBtn = null;
+    for (let attempt = 0; attempt < 8 && !detailsBtn; attempt++) {
+      await sleep(2000); // menu cache TTL
+      await detailsCard.goto(`${BASE}/order`, { waitUntil: "networkidle2", timeout: 120000 });
+      detailsBtn = await detailsCard.$(`[data-testid="oo-details-${p.id}"]`);
+    }
+    ok(!!detailsBtn, "product details view is offered when details exist");
+    if (detailsBtn) {
+      await detailsBtn.click();
+      await sleep(1500);
+      const detailImg = await detailsCard.evaluate(() => {
+        const img = [...document.querySelectorAll("img")].map((i) => i.getAttribute("src") || "").find((src) => /api\/menu\/photo\?/.test(src) && !/size=thumb/.test(src));
+        return img || "";
+      });
+      ok(!!detailImg, "details view loads the full-resolution photo", detailImg.slice(0, 70));
+      // Fetch the bytes directly: the detail/zoom image must stay much richer
+      // than the grid thumbnail.
+      const detailBytes = (await (await fetch(`${BASE}${detailImg}`)).arrayBuffer()).byteLength;
+      ok(detailBytes > thumbBuf.length * 3, "detail/zoom image is several times richer than the grid thumbnail", `${Math.round(detailBytes / 1024)} KB vs ${Math.round(thumbBuf.length / 1024)} KB`);
+      await detailsCard.close();
+    } else {
+      await detailsCard.close();
+    }
+    await shop.close();
+
+    // ── B11 dashboard bootstrap carries the small thumbnail, not the full photo
+    const init = await page.evaluate(async () => (await fetch("/api/init")).json()).catch(() => null);
+    if (init?.success) {
+      const item = (init.inventory || []).find((i) => Number(i.id) === Number(p.id));
+      const bytes = item ? Math.floor(((item.photo || "").split(",")[1] || "").length * 0.75) : -1;
+      ok(!!item && bytes > 0 && bytes < 60 * 1024, "dashboard bootstrap ships the ≤60 KB thumbnail", bytes >= 0 ? `${Math.round(bytes / 1024)} KB` : "row missing");
+    } else {
+      ok(false, "dashboard bootstrap payload inspected", "init fetch failed inside the signed-in page");
+    }
+  }
+
+  // ── B12 legacy rows without thumbnails keep working (fallback)
+  const legacyPhoto = (await q1(`select photo from inventory_items where business_id = $1 and photo is not null limit 1`, [created.businessId]))?.photo || "";
+  const legacy = await q1(
+    `insert into inventory_items (name, sku, business_id, branch_code, branch_name, category, quantity, unit, cost_price_ghs, selling_price_ghs, min_stock_threshold, status, photo, photos)
+     values ($1, $2, $3, $4, $5, 'Hardware & Tools', 9, 'Units', 5, 9, 1, 'IN_STOCK', $6, $7) returning id`,
+    [`${TAG} Legacy Product`, `${TAG}-LEG`, created.businessId, "HARDWARE-01", "GoMina Hardware & Building Materials Depot", legacyPhoto, JSON.stringify([legacyPhoto])],
+  );
+  created.inventoryIds.push(Number(legacy.id));
+  let legacyProduct = null;
+  for (let attempt = 0; attempt < 8 && !legacyProduct; attempt++) {
+    // The catalogue is cached for 10 s — a direct SQL insert cannot invalidate it.
+    await sleep(2000);
+    const legacyMenu = await (await fetch(`${BASE}/api/menu`)).json();
+    for (const b of legacyMenu.businesses || []) {
+      const hit = (b.products || []).find((p) => Number(p.id) === Number(legacy.id));
+      if (hit) legacyProduct = hit;
+    }
+  }
+  ok(!!legacyProduct, "legacy row (no thumbnails) still appears on the storefront");
+  if (legacyProduct) {
+    const r = await fetch(`${BASE}${legacyProduct.thumbs[0]}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    ok(r.status === 200 && buf.length > 0, "its thumbnail URL falls back to the full image instead of breaking", `${r.status}, ${Math.round(buf.length / 1024)} KB`);
+  }
+  ok(!pageErrors.length, "no page errors during the desktop flows", pageErrors.slice(0, 2).join(" | "));
+
+  // ── B13 profile avatar: 320×320 preset, saved to the profile
+  const beforeAvatar = (await q1(`select avatar_url from users where id = 1`))?.avatar_url || null;
+  restore.push({ table: "users", column: "avatar_url", id: 1, value: beforeAvatar });
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2", timeout: 120000 });
+  await sleep(1500);
+  await page.click('[data-testid="user-menu-btn"]');
+  await sleep(500);
+  const openedAvatar = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="open-profile-photo"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  ok(openedAvatar, "profile photo dialog opens");
+  await sleep(800);
+  await uploadFixture(page, '[data-testid="ppm-file"]', LARGE_PHOTO_B64, `${TAG}-avatar.png`);
+  await sleep(1500);
+  const pendingAvatar = await page.$eval('[data-testid="ppm-root"] img', (el) => el.getAttribute("src") || "").catch(() => "");
+  const pendingInfo = await inspectDataUrl(page, pendingAvatar);
+  ok(!!pendingInfo && pendingInfo.width === 320 && pendingInfo.height === 320, "avatar is square-cropped to 320×320", pendingInfo ? `${pendingInfo.width}×${pendingInfo.height}` : "-");
+  ok(!!pendingInfo && pendingInfo.bytes < 60 * 1024, "avatar ≤60 KB", pendingInfo ? `${Math.round(pendingInfo.bytes / 1024)} KB` : "-");
+  await page.click('[data-testid="ppm-save"]');
+  await sleep(2000);
+  const savedAvatar = (await q1(`select avatar_url from users where id = 1`))?.avatar_url || "";
+  ok(/^data:image\//.test(savedAvatar) && Math.floor((savedAvatar.split(",")[1] || "").length * 0.75) < 60 * 1024, "avatar stored small on the profile", `${Math.round(Math.floor((savedAvatar.split(",")[1] || "").length * 0.75) / 1024)} KB`);
+
+  // ── B14 business logo: transparency preserved (was flattened onto black)
+  const beforeLogo = (await q1(`select logo from businesses where id = 1`))?.logo || null;
+  restore.push({ table: "businesses", column: "logo", id: 1, value: beforeLogo });
+  await openSection(page, "manage|businesses");
+  await sleep(1200);
+  const logoOpened = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="open-manage-businesses"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  }).catch(() => false);
+  if (logoOpened) {
+    await page.waitForSelector('[data-testid="manage-biz-logos-POULTRY-01"]', { timeout: 30000 });
+    await page.$eval('[data-testid="manage-biz-logos-POULTRY-01"]', (el) => el.click());
+    await page.waitForSelector('[data-testid="bizlogo-mgr"]', { timeout: 30000 });
+    await uploadFixture(page, '[data-testid="bizlogo-upload-1"]', TRANSPARENT_LOGO_B64, `${TAG}-logo.png`);
+    await page.waitForSelector('[data-testid="bizlogo-preview-1"]', { timeout: 40000 });
+    // The modal shows the optimized preview immediately but persists it in a
+    // separate request — wait for the stored row to change before judging it.
+    let savedLogo = beforeLogo || "";
+    for (let i = 0; i < 30; i++) {
+      savedLogo = (await q1(`select logo from businesses where id = 1`))?.logo || "";
+      if (savedLogo && savedLogo !== beforeLogo) break;
+      await sleep(500);
+    }
+    const previewLogo = await page.$eval('[data-testid="bizlogo-preview-1"]', (el) => el.getAttribute("src") || "").catch(() => "");
+    const logoInfo = await inspectDataUrl(page, savedLogo);
+    const previewInfo = await inspectDataUrl(page, previewLogo);
+    ok(!!logoInfo && /webp|png/.test(logoInfo.mime), "transparent logo keeps a transparency-capable format",
+      `stored=${logoInfo?.mime || "-"} preview=${previewInfo?.mime || "-"}`);
+    ok(!savedLogo.includes("image/jpeg"), "logo is not flattened onto black any more", String(savedLogo).slice(0, 24));
+    ok(!!logoInfo && Math.max(logoInfo.width, logoInfo.height) <= 512, "logo stays ≤512px for documents", logoInfo ? `${logoInfo.width}×${logoInfo.height}` : "-");
+  } else {
+    ok(false, "Manage Businesses dialog opens", "trigger not found");
+  }
+
+  // ── B15 expense receipt (Block Factory module): readable but small
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2", timeout: 120000 });
+  await sleep(1200);
+  await openSection(page, "block factory|concrete");
+  await sleep(1500);
+  const expenseOpened = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="bf-open-expense"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (expenseOpened) {
+    await page.waitForSelector('[data-testid="bf-expense-receipt-upload"]', { timeout: 30000 });
+    await uploadFixture(page, '[data-testid="bf-expense-receipt-upload"]', LARGE_PHOTO_B64, `${TAG}-receipt.png`);
+    await page.waitForFunction(() => !!document.querySelector('[data-testid="bf-expense-receipt-upload"]')?.closest("div,form")?.parentElement?.querySelector("img"), { timeout: 30000 }).catch(() => {});
+    await sleep(1200);
+    const receiptSrc = await page.evaluate(() => {
+      const modal = document.querySelector('[data-testid="bf-expense-modal"]');
+      const img = modal ? [...modal.querySelectorAll("img")].map((i) => i.getAttribute("src") || "").find((s) => s.startsWith("data:image/")) : "";
+      return img || "";
+    });
+    const receiptInfo = await inspectDataUrl(page, receiptSrc);
+    ok(!!receiptInfo && receiptInfo.bytes < 450 * 1024, "receipt photo is compressed before upload", receiptInfo ? `${Math.round(receiptInfo.bytes / 1024)} KB` : "no preview");
+    ok(!!receiptInfo && receiptInfo.width >= 1200, "receipt keeps enough resolution to read small print", receiptInfo ? `${receiptInfo.width}×${receiptInfo.height}` : "-");
+  } else {
+    ok(false, "expense form opens in the Block Factory module", "bf-open-expense missing");
+  }
+
+  // ── B16 asset images (dedicated registration modal)
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2", timeout: 120000 });
+  await sleep(1200);
+  await openSection(page, "assets & machinery|assets");
+  await sleep(1500);
+  const assetOpened = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="asset-reg-open"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (assetOpened) {
+    await sleep(1000);
+    await uploadFixture(page, '[data-testid="ast-code"] ~ * input[type=file], input[type=file][accept="image/*"]', LARGE_PHOTO_B64, `${TAG}-asset.png`);
+    await sleep(3000);
+    const assetSrc = await page.evaluate(() => {
+      const anchor = document.querySelector('[data-testid="ast-business"]');
+      const scope = anchor?.closest("form") || document;
+      const imgs = [...scope.querySelectorAll("img")].map((i) => i.getAttribute("src") || "").filter((s) => s.startsWith("data:image/"));
+      return imgs[imgs.length - 1] || "";
+    });
+    const assetInfo = await inspectDataUrl(page, assetSrc);
+    ok(!!assetInfo && assetInfo.bytes < 400 * 1024, "asset image is optimized before it is saved", assetInfo ? `${Math.round(assetInfo.bytes / 1024)} KB` : "no preview");
+  } else {
+    ok(false, "asset registration modal opens", "asset-reg-open missing");
+  }
+
+  // ── B17 employee photo (HR registration form)
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2", timeout: 120000 });
+  await sleep(1200);
+  await openSection(page, "employees|payroll");
+  await sleep(1500);
+  const empOpened = await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="employee-reg-open"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (empOpened) {
+    await sleep(1000);
+    await uploadFixture(page, '[data-testid="ereg-photo-upload"] input[type=file]', LARGE_PHOTO_B64, `${TAG}-employee.png`);
+    await sleep(3000);
+    const empSrc = await page.evaluate(() => {
+      const anchor = document.querySelector('[data-testid="ereg-photo-upload"]');
+      const scope = anchor?.closest("form") || anchor?.parentElement || document;
+      const imgs = [...scope.querySelectorAll("img")].map((i) => i.getAttribute("src") || "").filter((s) => s.startsWith("data:image/"));
+      return imgs[imgs.length - 1] || "";
+    });
+    const empInfo = await inspectDataUrl(page, empSrc);
+    ok(!!empInfo && empInfo.bytes < 90 * 1024, "employee photo is optimized before it is saved", empInfo ? `${Math.round(empInfo.bytes / 1024)} KB` : "no preview");
+    await page.click('[data-testid="ereg-cancel"]').catch(() => {});
+  } else {
+    ok(false, "employee registration form opens", "employee-reg-open missing");
+  }
+
+  /* ═════════════ C. mobile browser ═════════════ */
+  console.log("\n── C. mobile browser (390×844, DPR 3) ──");
+  const mobileCtx = await browser.createBrowserContext();
+  const mobile = await mobileCtx.newPage();
+  await mobile.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+  await mobile.setUserAgent(
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+  );
+  const mobileErrors = [];
+  mobile.on("pageerror", (e) => mobileErrors.push(String(e.message).slice(0, 160)));
+  await login(mobile);
+  await openSection(mobile, "inventory & stock");
+  await mobile.click('[data-testid="shared-add-open"]');
+  await mobile.waitForSelector('[data-testid="inv-photo-camera"], [data-testid="inv-photo-upload"]', { timeout: 30000 });
+  await mobile.type('[data-testid="inv-name"]', `${TAG} Mobile Product`);
+  await mobile.type('[data-testid="inv-qty"]', "12");
+  await uploadFixture(mobile, '[data-testid="inv-photo-upload"] input[type=file]', LARGE_PHOTO_B64, `${TAG}-mobile.png`);
+  await mobile.waitForFunction(() => !!document.querySelector('[data-testid="inv-photo-previews"] img'), { timeout: 40000 });
+  const mobilePreview = await mobile.$eval('[data-testid="inv-photo-previews"] img', (el) => el.getAttribute("src") || "");
+  const mobileInfo = await inspectDataUrl(mobile, mobilePreview);
+  ok(!!mobileInfo && mobileInfo.width <= 1600 && mobileInfo.bytes < 400 * 1024, "mobile upload produces the same optimized image", mobileInfo ? `${mobileInfo.width}×${mobileInfo.height}, ${Math.round(mobileInfo.bytes / 1024)} KB` : "-");
+  await mobile.click('[data-testid="shared-add-submit"]');
+  await sleep(900);
+  if (await mobile.$('[data-testid="shared-confirm-entry-confirm"]')) {
+    await mobile.click('[data-testid="shared-confirm-entry-confirm"]');
+  }
+  await sleep(2500);
+  const mobileRow = await q1(`select id, photo_thumb from inventory_items where name = $1 order by id desc limit 1`, [`${TAG} Mobile Product`]);
+  ok(!!mobileRow && !!mobileRow.photo_thumb, "mobile upload stores a display thumbnail too");
+  if (mobileRow) created.inventoryIds.push(Number(mobileRow.id));
+
+  // storefront on the phone profile
+  const shopMobile = await mobileCtx.newPage();
+  await shopMobile.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+  await shopMobile.goto(`${BASE}/order`, { waitUntil: "networkidle2", timeout: 120000 });
+  const mobileThumb = await shopMobile
+    .$eval(`[data-testid="oo-photo-${mobileRow?.id}"] img`, (el) => ({ src: el.getAttribute("src") || "", w: el.naturalWidth }))
+    .catch(() => null);
+  ok(!!mobileThumb && /size=thumb/.test(mobileThumb.src) && mobileThumb.w > 0, "mobile storefront grid paints the thumbnail", mobileThumb ? `${mobileThumb.w}px wide` : "-");
+  const mobileFull = await fetch(`${BASE}/api/menu/photo?item=${mobileRow?.id}&index=0`);
+  const mobileFullBuf = Buffer.from(await mobileFull.arrayBuffer());
+  ok(mobileFull.status === 200 && mobileFullBuf.length > 60 * 1024, "mobile lightbox still gets the detailed image", `${Math.round(mobileFullBuf.length / 1024)} KB`);
+  ok(!mobileErrors.length, "no page errors on the mobile profile", mobileErrors.slice(0, 2).join(" | "));
+  await shopMobile.close();
+
+  /* ═════════════ D. no-regression on existing images ═════════════ */
+  console.log("\n── D. existing images untouched ──");
+  // Put the deliberately mutated rows back FIRST, so the comparison below is
+  // against the true pre-suite state.
+  for (const r of restore) await q(`update ${r.table} set ${r.column} = $1 where id = $2`, [r.value, r.id]);
+  const beforeRow = await q1(`select photo from inventory_items where id = $1`, [baselineRow.id]);
+  ok(beforeRow?.photo === BASELINE_PHOTO, "a pre-existing product photo is byte-identical after the suite", `${Math.round((beforeRow?.photo || "").length / 1024)} KB`);
+  const fingerprintAfter = await imageFingerprint();
+  const drift = fingerprintDrift(fingerprintBefore, fingerprintAfter);
+  ok(drift.length === 0, "every pre-existing image row in the database is unchanged", drift.slice(0, 3).join(", "));
+  const restoredAvatar = (await q1(`select avatar_url from users where id = 1`))?.avatar_url || null;
+  const restoredLogo = (await q1(`select logo from businesses where id = 1`))?.logo || null;
+  ok(restoredAvatar === (restore.find((r) => r.column === "avatar_url")?.value ?? null), "the mutated avatar was restored to its original value");
+  ok(restoredLogo === (restore.find((r) => r.column === "logo")?.value ?? null), "the mutated logo was restored to its original value");
+} catch (err) {
+  fail++;
+  console.error("💥 suite error:", err?.message || err);
+} finally {
+  /* ───────────────────────── cleanup / restore ───────────────────────── */
+  console.log("\n── cleanup ──");
+  try {
+    for (const id of created.inventoryIds) {
+      await q(`delete from inventory_variants where inventory_id = $1 and business_id = $2`, [id, created.businessId]).catch(() => {});
+      await q(`delete from inventory_items where id = $1`, [id]).catch(() => {});
+    }
+    for (const t of created.transactionIds) await q(`delete from transactions where id = $1`, [t]).catch(() => {});
+    for (const r of restore) {
+      await q(`update ${r.table} set ${r.column} = $1 where id = $2`, [r.value, r.id]).catch(() => {});
+    }
+    await q(`delete from inventory_items where name like '${TAG}%'`).catch(() => {});
+    await q(`delete from transactions where description like '${TAG}%'`).catch(() => {});
+    await q(`delete from user_sessions where created_at >= $1`, [suiteStart]).catch(() => {});
+    console.log(`  removed ${created.inventoryIds.length} test item(s); restored ${restore.length} mutated record(s)`);
+  } catch (e) {
+    console.error("  cleanup warning:", e?.message);
+  }
+  await browser.close();
+  await db.end();
+
+  console.log("\n" + "─".repeat(56));
+  console.log(fail === 0 ? `✅ ALL IMAGE-OPTIMIZATION CHECKS PASSED (${pass} checks)` : `❌ ${fail} FAILED of ${pass + fail} checks`);
+  process.exit(fail === 0 ? 0 : 1);
+}

@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { addToOfflineQueue } from "@/lib/offlineSync";
+import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrls } from "@/lib/imageOptimize";
 
 export interface ExpenseCategoryOption {
   value: string;
@@ -143,23 +144,27 @@ export default function ExpenseEntryForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Expense receipts (upload or camera) — optimized in the browser with the
+   *  `receipt` preset: long edge ≤1800px at q0.82 keeps small printed digits
+   *  readable while a 4 MB capture lands around 200 KB. */
+  const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file) => {
-      if (file.size > 5 * 1024 * 1024) {
-        setError("Image must be under 5MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setReceiptImages((prev) => [...prev, ev.target!.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
+    const picked = Array.from(files);
+    const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
+    if (tooBig.length > 0) {
+      setError("Image is too large to process (max 20MB).");
+      e.target.value = "";
+      return;
+    }
+    try {
+      const urls = await optimizedDataUrls(picked, "receipt");
+      setReceiptImages((prev) => [...prev, ...urls]);
+    } catch {
+      setError("That image could not be processed — try another one.");
+    } finally {
+      e.target.value = "";
+    }
   };
 
   const removeReceiptImage = (index: number) =>

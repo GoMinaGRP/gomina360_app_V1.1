@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, ImagePlus, Loader2, RefreshCw, Trash, UserRound, X } from "lucide-react";
 import Avatar from "./Avatar";
+import { IMAGE_PRESETS, optimizeCanvas } from "@/lib/imageOptimize";
 
 interface Props {
   isOpen: boolean;
@@ -68,17 +69,25 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
 
   useEffect(() => () => stopCamera(), [stopCamera]);
 
-  /** Downsize/crop any image source to a centered 256×256 JPEG data URL. */
-  const toSquareDataUrl = (source: CanvasImageSource, sw: number, sh: number): string => {
+  /**
+   * Center-crop the image to a square and encode it with the shared `avatar`
+   * preset (320×320, q0.80). 320px covers every place an avatar is painted
+   * (≤64px circles) at 2-3× DPR for ~15 KB — the frontend receives avatars in
+   * the bootstrap payload, so this is a page-weight decision too.
+   */
+  const toSquareDataUrl = async (source: CanvasImageSource, sw: number, sh: number): Promise<string> => {
     const side = Math.min(sw, sh);
     const sx = (sw - side) / 2;
     const sy = (sh - side) / 2;
+    const edge = IMAGE_PRESETS.avatar.maxEdge;
     const canvas = document.createElement("canvas");
-    canvas.width = 256;
-    canvas.height = 256;
+    canvas.width = edge;
+    canvas.height = edge;
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(source, sx, sy, side, side, 0, 0, 256, 256);
-    return canvas.toDataURL("image/jpeg", 0.85);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, sx, sy, side, side, 0, 0, edge, edge);
+    return (await optimizeCanvas(canvas, "avatar")).dataUrl;
   };
 
   const acceptFile = (file: File | undefined | null) => {
@@ -86,9 +95,9 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
     if (!/^image\//.test(file.type)) { setError("Please choose an image file (any common format: JPEG, PNG, WebP, GIF, …)."); return; }
     setError("");
     const img = new Image();
-    img.onload = () => {
+    img.onload = async () => {
       try {
-        setPending(toSquareDataUrl(img, img.naturalWidth, img.naturalHeight));
+        setPending(await toSquareDataUrl(img, img.naturalWidth, img.naturalHeight));
         setStatus("Preview ready — Save to store it with your profile.");
       } catch {
         setError("Could not process that image. Try another one.");
@@ -130,11 +139,11 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
     }
   };
 
-  const snap = () => {
+  const snap = async () => {
     const v = videoRef.current;
     if (!v || !v.videoWidth) { setError("Camera is still starting… try again in a second."); return; }
     try {
-      setPending(toSquareDataUrl(v, v.videoWidth, v.videoHeight));
+      setPending(await toSquareDataUrl(v, v.videoWidth, v.videoHeight));
       setStatus("Snapshot ready — Save to store it with your profile.");
       setError("");
       stopCamera();

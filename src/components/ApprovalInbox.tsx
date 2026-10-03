@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, XCircle, ShieldCheck, Clock, Trash2, Plus, ChevronDown, ChevronRight, Receipt, X } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrls } from "@/lib/imageOptimize";
 
 const ACTION_LABEL: Record<string, string> = {
   EXPENSE: "Expense",
@@ -123,21 +124,22 @@ export default function ApprovalInbox({
     }
   }, [focusRequestId, loading, data, onFocusHandled]);
 
-  const handlePostReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Receipts attached while posting an approved expense — optimized in the
+   *  browser (≤1800px, q0.82) so the printed figures stay readable at a
+   *  fraction of the original capture weight. */
+  const handlePostReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.size > 5 * 1024 * 1024) {
-        alert("Receipt file too large (max 5MB)");
-        continue;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const result = ev.target?.result as string;
-        if (result) setPostReceipts((prev) => [...prev, result]);
-      };
-      reader.readAsDataURL(file);
+    const picked = Array.from(files).filter((f) => f.size <= MAX_SOURCE_IMAGE_BYTES);
+    if (picked.length !== files.length) alert("Some files were too large to process (max 20MB each).");
+    if (picked.length === 0) return;
+    try {
+      const urls = await optimizedDataUrls(picked, "receipt");
+      setPostReceipts((prev) => [...prev, ...urls]);
+    } catch {
+      alert("One or more receipts could not be processed — try another image.");
+    } finally {
+      e.target.value = "";
     }
   };
 

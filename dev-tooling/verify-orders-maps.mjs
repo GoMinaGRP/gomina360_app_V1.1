@@ -446,8 +446,10 @@ async function sectionD() {
   await page.type('[data-testid="oo-name"]', "TEST UI Pinner");
   await page.type('[data-testid="oo-phone"]', "0551230456");
   await page.type('[data-testid="oo-dest-input"]', "TEST Osu, Oxford Street");
-  // D1 — placing without a pin is blocked with guidance
-  await page.click('[data-testid="oo-place"]');
+  // D1 — placing without a pin is blocked with guidance.
+  // The Place button sits at the end of the form, under the fixed cart bar on a
+  // phone viewport: centre it first so the tap reaches the button.
+  await centreClick('[data-testid="oo-place"]');
   await page.waitForSelector('[data-testid="oo-error"]', { timeout: 10000 });
   const errTxt = await page.$eval('[data-testid="oo-error"]', (el) => el.textContent || "");
   ok("D1 delivery requires pinning the exact delivery point first", /Pin your exact delivery point/i.test(errTxt), errTxt.slice(0, 120));

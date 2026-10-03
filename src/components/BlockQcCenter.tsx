@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   ShieldCheck, AlertTriangle, Camera, RotateCcw, X, Save, Scale, Ruler,
   Gauge, Layers, TrendingUp, CheckCircle2, XCircle, Activity, Boxes, Truck,
@@ -90,24 +91,14 @@ const fmtWhen = (d: Date) => {
 const dayOf = (t: any) => (t ? new Date(t).toISOString().slice(0, 10) : "-");
 const timeOf = (t: any) => (t ? new Date(t).toISOString().slice(11, 16) : "");
 
-/** Compress a picked image to a small JPEG data URL (photo evidence). */
+/**
+ * QC photo evidence — shared optimizer preset `evidence` (≤1400px, q0.78).
+ * The previous local helper capped at 640px/0.72, which blurred the surface
+ * detail QC evidence exists to prove; 1400px keeps defects legible and still
+ * lands around 120 KB.
+ */
 function readPhoto(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const max = 640;
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.72));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
+  return optimizedDataUrl(file, "evidence");
 }
 
 /**

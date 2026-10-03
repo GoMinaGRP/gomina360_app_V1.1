@@ -44,32 +44,22 @@ import { googleMapsEmbed } from "@/lib/tracking";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { businessTypeKeyOf, businessTypeLabelOf, displayCategory } from "@/lib/businessTypeKeys";
 
-/** Resize an uploaded image to a compact base64 data-URL (≤512px JPEG) —
- *  the same convention used for employee photos and document uploads. */
 import WatermarkOverlay from "@/components/WatermarkOverlay";
+import { optimizeImage } from "@/lib/imageOptimize";
 
-async function logoFileToDataUrl(file: File | Blob, max = 512): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale) || 1;
-      const h = Math.round(img.height * scale) || 1;
-      const c = document.createElement("canvas");
-      c.width = w;
-      c.height = h;
-      c.getContext("2d")!.drawImage(img, 0, 0, w, h);
-      resolve(c.toDataURL("image/jpeg", 0.85));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
+/**
+ * Branding logos (≤512px, shared optimizer preset `logo`).
+ *
+ * Two improvements over the previous local helper: transparency is PRESERVED
+ * (the old JPEG-only path flattened transparent logos onto black, which looked
+ * broken on the dark sidebar and in document headers), and the size/quality
+ * now come from the same preset every other upload uses, so letterhead logos
+ * stay crisp while staying small.
+ */
+async function logoFileToDataUrl(file: File | Blob): Promise<string> {
+  // Vector (SVG) and animated GIF logos are returned untouched by the
+  // pipeline — rasterizing them would only make them worse.
+  return (await optimizeImage(file, "logo")).dataUrl;
 }
 
 const CATEGORIES = [

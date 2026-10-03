@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   AlertTriangle,
   Download,
@@ -111,9 +112,29 @@ export default function DocumentVaultPanel({
 
   const pickFile = () => fileRef.current?.click();
 
-  const onFile = (f: File | null) => {
+  /**
+   * Vault upload. Images are optimized in the browser first (≤2000px q0.88 —
+   * scans/attachments keep their text detail while a 6 MB capture lands
+   * around 400 KB), so the vault's 2.5 MB stored-file rule no longer rejects
+   * ordinary phone photos. PDFs are never touched: the server-side
+   * `validateDocUpload` still enforces the real format + size limits.
+   */
+  const onFile = async (f: File | null) => {
     setFileErr("");
     if (!f) return;
+    if (f.type.startsWith("image/") && f.type !== "image/svg+xml") {
+      if (f.size > MAX_SOURCE_IMAGE_BYTES) {
+        setFileErr(`That image is ${(f.size / 1024 / 1024).toFixed(1)} MB — the vault accepts up to 20 MB per image (it is optimized after upload).`);
+        return;
+      }
+      try {
+        const optimized = await optimizedDataUrl(f, "document");
+        setUploadDraft((d: any) => ({ ...d, fileData: optimized, fileName: f.name }));
+      } catch {
+        setFileErr("That image could not be processed — try another file.");
+      }
+      return;
+    }
     if (f.size > 2.5 * 1024 * 1024) {
       setFileErr(`That file is ${(f.size / 1024 / 1024).toFixed(1)} MB — the vault accepts up to 2.5 MB.`);
       return;
@@ -182,7 +203,7 @@ export default function DocumentVaultPanel({
             <FolderLock className="w-4 h-4 text-teal-400" /> Document Vault
           </h3>
           <p className="text-[11px] text-slate-400 mt-0.5 max-w-2xl">
-            One registry for every unit document — licences, permits, contracts, insurance (image/PDF ≤ 2.5 MB) plus
+            One registry for every unit document — licences, permits, contracts, insurance (images up to 20 MB, compressed automatically; PDF ≤ 2.5 MB) plus
             generated vet reports and delivery notes. Expiring documents warn the team at 30 / 7 / 0 days.
           </p>
         </div>
@@ -288,7 +309,7 @@ export default function DocumentVaultPanel({
               </div>
             </div>
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">File (image or PDF, ≤ 2.5 MB)</label>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">File (image up to 20 MB — optimized automatically — or PDF ≤ 2.5 MB)</label>
               <div className="flex items-center gap-2">
                 <button onClick={pickFile} className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold flex items-center gap-1.5" data-testid="vault-up-pick">
                   <Plus className="w-3 h-3" /> Choose file

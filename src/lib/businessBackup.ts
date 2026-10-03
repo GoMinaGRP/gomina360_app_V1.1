@@ -985,6 +985,10 @@ async function importBusinessBackupTx(
       expiryDate: r.expiryDate,
       photo: r.photo,
       photos: r.photos,
+      // Display thumbnails travel with the photos so a restored business keeps
+      // serving light list/menu images instead of falling back to full size.
+      photoThumb: r.photoThumb,
+      photosThumb: r.photosThumb,
       qrCode: null,
       tracksVariants: r.tracksVariants === true,
       registeredByName: r.registeredByName,

@@ -161,10 +161,12 @@ try {
      values ($1, 'RETAIL', '+233 24 111 0002', $2, 1, 900) returning id`,
     [`${TAG} Shared Name Customer`, neighbour.id],
   )).id;
+  const ITEM_PHOTO = "data:image/jpeg;base64,UFJJTk9QSA==";
+  const ITEM_THUMB = "data:image/webp;base64,VkVSWS1TTU9PTA==";
   const srcItem = (await q1(
-    `insert into inventory_items (name, sku, business_id, category, unit, quantity, cost_price_ghs, selling_price_ghs, min_stock_threshold, status)
-     values ($1, $2, $3, 'Hardware & Tools', 'Pieces', 10, 5, 9, 2, 'IN_STOCK') returning id`,
-    [`${TAG} Source Item`, `${src.code}-ITEM-1`, src.id],
+    `insert into inventory_items (name, sku, business_id, category, unit, quantity, cost_price_ghs, selling_price_ghs, min_stock_threshold, status, photo, photos, photo_thumb, photos_thumb)
+     values ($1, $2, $3, 'Hardware & Tools', 'Pieces', 10, 5, 9, 2, 'IN_STOCK', $4, $5, $6, $7) returning id`,
+    [`${TAG} Source Item`, `${src.code}-ITEM-1`, src.id, ITEM_PHOTO, JSON.stringify([ITEM_PHOTO]), ITEM_THUMB, JSON.stringify([ITEM_THUMB])],
   )).id;
   const srcEmployee = (await q1(
     `insert into employees (name, role, business_id, branch, salary_ghs, status, employee_no, phone, hire_date)
@@ -594,6 +596,15 @@ try {
     if (got !== want) countMismatch.push(`${table} ${got}/${want}`);
   }
   ok("every restored table matches the source row-for-row", countMismatch.length === 0, countMismatch.join(", "));
+  const restoredThumb = await q1(
+    `select photo_thumb, photos_thumb from inventory_items where business_id = $1 and name = $2`,
+    [newId, `${TAG} Source Item`],
+  );
+  ok(
+    "conserved image thumbnails are restored alongside the full photos",
+    restoredThumb && restoredThumb.photo_thumb === ITEM_THUMB && Array.isArray(restoredThumb.photos_thumb) && restoredThumb.photos_thumb[0] === ITEM_THUMB,
+    JSON.stringify({ thumb: String(restoredThumb?.photo_thumb || "").slice(0, 24), arr: Array.isArray(restoredThumb?.photos_thumb) ? restoredThumb.photos_thumb.length : restoredThumb?.photos_thumb }),
+  );
   const policyRestored = await q1(`select count(*)::int c from approval_policies where scope_business_id = $1`, [newId]);
   const policyArchived = (manifest.tables.approvalPolicies || []).length;
   ok("business-scoped approval policies are restored to the new unit", policyRestored.c === policyArchived && policyArchived >= 1, `${policyRestored.c}/${policyArchived}`);

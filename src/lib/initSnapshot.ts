@@ -171,7 +171,11 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
   stmts.push(`SELECT ${selectList(assets)} FROM "assets"${whereIn("business_id", bids)}`);
   stmts.push(
     `SELECT ${selectList(inventoryItems, {
-      exclude: ["photos"],
+      // `photos` (N × base64 data URLs) and its thumbnail array never leave
+      // the server on bootstrap — the ONE image the lists actually paint is
+      // `photoThumb` (falling back to `photo` for legacy rows, applied in
+      // /api/init), plus the raw `photo` for records that predate thumbnails.
+      exclude: ["photos", "photosThumb"],
       extra: [`coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos else '[]'::jsonb end), 0) AS "photoCount"`],
     })} FROM "inventory_items"${whereIn("business_id", bids)}`
   );

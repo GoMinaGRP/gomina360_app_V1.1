@@ -45,6 +45,8 @@ export async function GET(request: Request) {
         status: inventoryItems.status,
         photo: inventoryItems.photo,
         photos: inventoryItems.photos,
+        photoThumb: inventoryItems.photoThumb,
+        photosThumb: inventoryItems.photosThumb,
       })
       .from(inventoryItems)
       .where(eq(inventoryItems.id, itemId))
@@ -98,35 +100,62 @@ export async function GET(request: Request) {
     }
     if (!hasStock && !hasPreorder) return notFound();
 
+    // Full-resolution gallery (lightbox/detail) — the primary photo first, in
+    // the same order the catalogue advertises, plus the parallel ≤400px display
+    // thumbnails generated at upload time.
     const photos: string[] = [];
-    if (typeof item.photo === "string" && item.photo.length > 0) photos.push(item.photo);
-    if (Array.isArray(item.photos)) {
-      for (const p of item.photos) if (typeof p === "string" && p.length > 0 && !photos.includes(p)) photos.push(p);
+    const thumbs: string[] = [];
+    const gallery = Array.isArray(item.photos)
+      ? item.photos.filter((p: any) => typeof p === "string" && p.length > 0)
+      : [];
+    const galleryThumbs = Array.isArray(item.photosThumb)
+      ? item.photosThumb.filter((p: any) => typeof p === "string" && p.length > 0)
+      : [];
+    const thumbAt = (gi: number) => (typeof galleryThumbs[gi] === "string" ? galleryThumbs[gi] : "");
+    if (typeof item.photo === "string" && item.photo.length > 0) {
+      photos.push(item.photo);
+      thumbs.push((typeof item.photoThumb === "string" && item.photoThumb) || thumbAt(0));
     }
+    for (let gi = 0; gi < gallery.length; gi++) {
+      const p = gallery[gi];
+      const at = photos.indexOf(p);
+      if (at >= 0) {
+        if (!thumbs[at]) thumbs[at] = thumbAt(gi);
+        continue;
+      }
+      photos.push(p);
+      thumbs.push(thumbAt(gi));
+    }
+    // `size=thumb`: serve the display thumbnail (grids, gallery strip). Rows
+    // uploaded before thumbnails existed fall back to the full image, so the
+    // parameter is always safe to send.
+    const wantThumb = (url.searchParams.get("size") || "").toLowerCase() === "thumb";
     const src = photos[index];
     if (!src) return notFound();
+    const thumbSrc = wantThumb ? thumbs[index] : "";
+    const served = thumbSrc || src;
 
     const ifNoneMatch = request.headers.get("if-none-match");
-    const headers = cacheHeaders(src);
+    const headers = cacheHeaders(served);
     if (ifNoneMatch && ifNoneMatch === (headers as Record<string, string>).ETag) {
       return new NextResponse(null, { status: 304, headers });
     }
 
-    const dataImage = parseDataImage(src);
+    const dataImage = parseDataImage(served);
     if (dataImage) {
       const body = new Uint8Array(dataImage.bytes.buffer, dataImage.bytes.byteOffset, dataImage.bytes.byteLength);
       return new NextResponse(body as unknown as BodyInit, {
         status: 200,
-        headers: cacheHeaders(src, dataImage.mime),
+        headers: cacheHeaders(served, dataImage.mime),
       });
     }
 
     // Keep the JSON catalogue small even when legacy/demo records hold remote
     // URLs.  The browser may load those lazily as images, but the API never
     // inlines them into the menu payload.
-    if (/^https:\/\//i.test(src)) {
-      const redirect = NextResponse.redirect(src, 302);
-      for (const [key, value] of Object.entries(cacheHeaders(src))) redirect.headers.set(key, value);
+    if (/^https:\/\//i.test(served)) {
+      const redirect = NextResponse.redirect(served, 302);
+      for (const [key, value] of Object.entries(cacheHeaders(served))) redirect.headers.set(key, value);
       return redirect;
     }
 

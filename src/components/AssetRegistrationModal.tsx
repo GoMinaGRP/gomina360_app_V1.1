@@ -7,6 +7,7 @@ import QrScanModal from "./QrScanModal";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { buildAssetQr } from "@/lib/qrRegistry";
 import { displayCategory } from "@/lib/businessTypeKeys";
+import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrls } from "@/lib/imageOptimize";
 
 interface AssetRegistrationModalProps {
   isOpen: boolean;
@@ -232,19 +233,19 @@ export default function AssetRegistrationModal({
       )
     : "Choose a branch to auto-fill location";
 
+  /** Asset photos — optimized in the browser (≤1600px, q0.80) before the
+   *  record is saved: a phone capture drops from megabytes to ~150 KB with
+   *  no visible difference at any size the asset register renders. */
   const handleImageFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const readers = Array.from(files).map(
-      (file) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        })
-    );
+    const picked = Array.from(files);
+    const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
+    if (tooBig.length > 0) {
+      setErrorMsg("One or more images are too large to process (max 20MB each).");
+      return;
+    }
     try {
-      const images = await Promise.all(readers);
+      const images = await optimizedDataUrls(picked, "asset");
       setAssetImages((prev) => [...prev, ...images]);
     } catch {
       setErrorMsg("One or more asset images could not be read.");

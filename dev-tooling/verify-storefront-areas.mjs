@@ -321,9 +321,13 @@ async function sectionC(cookies) {
   await page.click(`[data-testid="oo-photo-${itemId}"]`);
   await page.waitForSelector('[data-testid="oo-lightbox-img"]', { timeout: 10000 });
   const src = await page.$eval('[data-testid="oo-lightbox-img"]', (el) => el.getAttribute("src") || "");
+  // The catalogue serves photos through /api/menu/photo (cacheable full-size
+  // URLs); the lightbox must request that full image, never the thumb variant.
+  const loaded = await page.$eval('[data-testid="oo-lightbox-img"]', (el) => el.naturalWidth > 0 && el.naturalHeight > 0);
   const title = await page.evaluate(() => document.querySelector('[data-testid="oo-lightbox"]')?.textContent || "");
   ok("C1 tapping the photo enlarges it in a lightbox (image + name + price)",
-    src.startsWith("data:image/png") && /TEST Photo Widget/.test(title) && /GH₵/.test(title));
+    loaded && /\/api\/menu\/photo\?/.test(src) && !/size=thumb/.test(src) && /TEST Photo Widget/.test(title) && /GH₵/.test(title),
+    `${src} natural=${loaded}`);
   await shot(page, "areas-2-image-lightbox");
   await page.click('[data-testid="oo-lightbox-add"]');
   await page.waitForSelector('[data-testid="oo-cart-total"]', { timeout: 10000 });

@@ -22,6 +22,11 @@ import {
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { businessManageIdsOf } from "@/lib/permissions";
+import {
+  MAX_SOURCE_IMAGE_BYTES,
+  optimizationSummary,
+  optimizeImages,
+} from "@/lib/imageOptimize";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
@@ -129,6 +134,9 @@ export default function SharedEnterpriseModule({
   const [invPrice, setInvPrice] = useState<number>(35);
   const [invMin, setInvMin] = useState<number>(10);
   const [invPhotos, setInvPhotos] = useState<string[]>([]);
+  /** Display thumbnails (≤400px) generated with each photo — same index. */
+  const [invPhotoThumbs, setInvPhotoThumbs] = useState<string[]>([]);
+  const [invPhotoNotice, setInvPhotoNotice] = useState("");
   // Starter / draft state for the product-detail fields. On INVENTORY the
   // owner additionally captures: description, brand, model, specs (with
   // dedicated Size + Weight rows), variants. The editor (editingRecord
@@ -176,6 +184,8 @@ export default function SharedEnterpriseModule({
     setInvPrice(35);
     setInvMin(10);
     setInvPhotos([]);
+    setInvPhotoThumbs([]);
+    setInvPhotoNotice("");
     setInvDescUI("");
     setInvBrandUI("");
     setInvModelUI("");
@@ -236,25 +246,41 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  /** Accepts uploaded images or camera captures (data URLs), 5MB max each. */
-  const handleInvPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Product photos — uploaded files or camera captures. Every image is
+   * optimized in the browser BEFORE it is stored (src/lib/imageOptimize):
+   * longest edge ≤1600px JPEG q0.82 for the lightbox/detail view plus a
+   * ≤400px WebP display thumbnail used by grids and the public storefront.
+   * A typical 4 MB phone capture becomes ~200 KB + ~18 KB, which is what
+   * makes the upload fast, the row small and the marketplace light.
+   */
+  const handleInvPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file) => {
-      if (file.size > 5 * 1024 * 1024) {
-        setInvPhotoErr("Each photo must be under 5MB.");
-        return;
-      }
-      setInvPhotoErr("");
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) setInvPhotos((prev) => [...prev, ev.target!.result as string]);
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
+    setInvPhotoErr("");
+    setInvPhotoNotice("");
+    const picked = Array.from(files);
+    const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
+    if (tooBig.length > 0) {
+      setInvPhotoErr(`${tooBig.length === 1 ? "That photo is" : "Some photos are"} too large to process (max 20MB each).`);
+      return;
+    }
+    try {
+      const results = await optimizeImages(picked, "product");
+      setInvPhotos((prev) => [...prev, ...results.map((r) => r.dataUrl)]);
+      setInvPhotoThumbs((prev) => [...prev, ...results.map((r) => r.thumb || "")]);
+      const summary = optimizationSummary(results);
+      if (summary) setInvPhotoNotice(`Optimized for the storefront — ${summary}`);
+    } catch {
+      setInvPhotoErr("One or more photos could not be processed. Try a different image.");
+    } finally {
+      e.target.value = "";
+    }
   };
-  const removeInvPhoto = (idx: number) => setInvPhotos((prev) => prev.filter((_, i) => i !== idx));
+  const removeInvPhoto = (idx: number) => {
+    setInvPhotos((prev) => prev.filter((_, i) => i !== idx));
+    setInvPhotoThumbs((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const isExecutiveUser =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
@@ -1095,6 +1121,10 @@ export default function SharedEnterpriseModule({
         minStockThreshold: Number(invMin) || 10,
         photo: invPhotos[0] || null,
         photos: invPhotos,
+        // Display thumbnails (same index order) — the storefront and
+        // in-app grids render these instead of the full photos.
+        photoThumb: invPhotoThumbs[0] || null,
+        photosThumb: invPhotoThumbs.filter(Boolean),
         description: invDescUI.trim() || null,
         brand: invBrandUI.trim() || null,
         model: invModelUI.trim() || null,
@@ -3079,6 +3109,9 @@ export default function SharedEnterpriseModule({
                       </label>
                     </div>
                     {invPhotoErr && <p className="text-[10px] text-rose-400 mt-1">{invPhotoErr}</p>}
+                    {invPhotoNotice && !invPhotoErr && (
+                      <p className="text-[10px] text-emerald-400 mt-1" data-testid="inv-photo-optimized">{invPhotoNotice}</p>
+                    )}
                   </div>
 
                   <div className="pt-2 border-t border-slate-800">

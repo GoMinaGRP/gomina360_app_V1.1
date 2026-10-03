@@ -655,9 +655,18 @@ export const inventoryItems = pgTable("inventory_items", {
   minStockThreshold: doublePrecision("min_stock_threshold").notNull(),
   status: text("status").default("IN_STOCK"), // 'IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'
   expiryDate: text("expiry_date"), // perishable stock safety tracking (used by Restaurant & Kitchen)
-  /** Primary product photo (data URL) + full set — uploaded or camera-captured. */
+  /** Primary product photo (data URL) + full set — uploaded or camera-captured.
+   *  Images are optimized in the browser before upload (src/lib/imageOptimize):
+   *  longest edge ≤ 1600px, JPEG q0.82 — a 12 MP capture drops from ~4 MB to
+   *  ~200 KB with no visible loss at any size this app renders. */
   photo: text("photo"),
   photos: jsonb("photos"),
+  /** Display thumbnails (≤400px) generated alongside the photos — the SAME
+   *  index order as `photos`. Grids and the public storefront render these
+   *  (~18 KB vs ~200 KB per tile); the lightbox keeps using the full photo.
+   *  NULL for legacy rows: every reader falls back to `photo`/`photos`. */
+  photoThumb: text("photo_thumb"),
+  photosThumb: jsonb("photos_thumb"),
   /** Rich product details registered ONCE at stock-in and served verbatim on
    *  the customer storefront product view (no duplicate entry anywhere):
    *  free description, brand/model, typed specifications (key/value rows —

@@ -799,20 +799,54 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.pickupEnabled !== undefined) updates.pickupEnabled = Boolean(body.pickupEnabled);
     if (body.deliveryEnabled !== undefined) updates.deliveryEnabled = Boolean(body.deliveryEnabled);
     if (body.serviceRadiusKm !== undefined) {
-      const num = Number(body.serviceRadiusKm);
-      if (Number.isFinite(num) && num >= 0) updates.serviceRadiusKm = num;
+      if (body.serviceRadiusKm === null || body.serviceRadiusKm === "") {
+        updates.serviceRadiusKm = null; // empty = no limit (matches the editor)
+      } else {
+        const num = Number(body.serviceRadiusKm);
+        // The editor's own contract is 0–1000 km. Enforce it on the server too,
+        // otherwise a crafted PATCH could widen the delivery area to the whole
+        // map and defeat the service-area refusal at checkout.
+        if (!Number.isFinite(num) || num < 0 || num > 1000) {
+          return NextResponse.json(
+            { success: false, error: "Service radius must be a number of kilometres between 0 and 1000 (leave empty for no limit)." },
+            { status: 400 },
+          );
+        }
+        updates.serviceRadiusKm = num;
+      }
     }
     if (body.serviceNote !== undefined) updates.serviceNote = body.serviceNote ? String(body.serviceNote).trim() : null;
     if (body.customerHelpPhone !== undefined) updates.customerHelpPhone = body.customerHelpPhone ? String(body.customerHelpPhone).trim() : null;
     if (body.momoNumber !== undefined) updates.momoNumber = body.momoNumber ? String(body.momoNumber).trim() : null;
     if (body.momoName !== undefined) updates.momoName = body.momoName ? String(body.momoName).trim() : null;
+    // `null`/"" clears the pin. (Number(null) is 0, so the old code silently
+    // relocated a cleared unit to 0°,0° — the Gulf of Guinea.)
     if (body.gpsLat !== undefined) {
       const num = Number(body.gpsLat);
-      updates.gpsLat = Number.isFinite(num) ? num : null;
+      updates.gpsLat = body.gpsLat === null || body.gpsLat === "" ? null : Number.isFinite(num) ? num : null;
     }
     if (body.gpsLng !== undefined) {
       const num = Number(body.gpsLng);
-      updates.gpsLng = Number.isFinite(num) ? num : null;
+      updates.gpsLng = body.gpsLng === null || body.gpsLng === "" ? null : Number.isFinite(num) ? num : null;
+    }
+    // A branch pin is a lat/lng PAIR. Half a request (or half a stored pin)
+    // makes every distance — service areas, courier maps, customer proximity —
+    // meaningless, so refuse both shapes instead of silently moving the pin.
+    if (body.gpsLat !== undefined || body.gpsLng !== undefined) {
+      if ((body.gpsLat !== undefined) !== (body.gpsLng !== undefined)) {
+        return NextResponse.json(
+          { success: false, error: "A branch pin needs BOTH latitude and longitude — send the pair, or clear both." },
+          { status: 400 },
+        );
+      }
+      const latSet = updates.gpsLat !== null && updates.gpsLat !== undefined;
+      const lngSet = updates.gpsLng !== null && updates.gpsLng !== undefined;
+      if (latSet !== lngSet) {
+        return NextResponse.json(
+          { success: false, error: "A branch pin needs BOTH a latitude and a longitude — send the pair, or clear both." },
+          { status: 400 },
+        );
+      }
     }
     if (body.watermarkEnabled !== undefined) updates.watermarkEnabled = Boolean(body.watermarkEnabled);
     if (body.watermarkMode !== undefined && ["LIGHT", "BOLD", "SUBTLE"].includes(body.watermarkMode)) {
@@ -845,6 +879,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       business: updatedBiz,
       categoryChanged,
       reprovisioned,
+      // The editor shows the "type changed — starter kit/checklists
+      // provisioned" notice from `typeChange`; the provisioning result was
+      // only ever exposed under `reprovisioned`, so that notice never showed.
+      typeChange: categoryChanged ? reprovisioned : null,
     });
   } catch (error: any) {
     return apiError(error);

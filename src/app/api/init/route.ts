@@ -292,13 +292,19 @@ export async function GET(request: Request) {
       assets: filterByAccess(snap.assets, allowed),
       // Slim transport: the `photos[]` arrays (N× base64 data URLs per row —
       // the single heaviest column family in this payload) never leave the
-      // server on dashboard bootstrap. `photo` (the one thumbnail the UI
-      // actually renders) stays, and `photoCount` preserves the "N photos"
-      // indicator. Full photos still ship in the dedicated detail endpoints.
-      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => ({
-        ...item,
-        photoCount: Number(item.photoCount ?? (Array.isArray(item.photos) ? item.photos.length : 0)),
-      })),
+      // server on dashboard bootstrap. What the lists paint is the ≤400px
+      // display thumbnail generated at upload time (`photoThumb`, ~18 KB);
+      // legacy rows without one fall back to the full `photo` exactly as
+      // before. `photoCount` preserves the "N photos" indicator. Full photos
+      // still ship in the dedicated detail endpoints.
+      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => {
+        const { photoThumb, photo, ...rest } = item;
+        return {
+          ...rest,
+          photo: photoThumb || photo || null,
+          photoCount: Number(item.photoCount ?? (Array.isArray(item.photos) ? item.photos.length : 0)),
+        };
+      }),
       transactions: filterByAccess(snap.transactions, allowed),
       aiInsights: (allowed === null
         ? snap.aiInsights

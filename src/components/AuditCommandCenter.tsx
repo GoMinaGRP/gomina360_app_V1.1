@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 import { csvSafeCell } from "@/lib/universalExport";
 
 const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
@@ -391,13 +392,17 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
     return () => window.removeEventListener("keydown", handleKey);
   }, [actionModal, verifyModal, correctModal, detail]);
 
-  const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Evidence photo — optimized in the browser (≤1400px, q0.78) so the issue
+   *  thread carries readable proof without multi-megabyte payloads. */
+  const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) { err("Evidence photo must be an image file."); return; }
-    const r = new FileReader();
-    r.onload = () => setter(String(r.result));
-    r.readAsDataURL(file);
+    try {
+      setter(await optimizedDataUrl(file, "evidence"));
+    } catch {
+      err("That photo could not be processed — try another image.");
+    }
   };
 
   // ── Shared record renderers (used by BOTH the lg table and the <lg card

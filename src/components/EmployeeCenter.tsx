@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { optimizeCanvas, optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   UserCheck,
   X,
@@ -58,29 +59,11 @@ const DOC_TYPES: [string, string][] = [
 
 const DAY_OPTIONS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
-/** Downscale an image file / data URL to a manageable base64 (max 480px). */
-async function imageToDataUrl(file: File | Blob, max = 480): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale) || 1;
-      const h = Math.round(img.height * scale) || 1;
-      const c = document.createElement("canvas");
-      c.width = w;
-      c.height = h;
-      c.getContext("2d")!.drawImage(img, 0, 0, w, h);
-      resolve(c.toDataURL("image/jpeg", 0.85));
-    };
-    img.onerror = () => resolve(dataUrl); // keep original if undecodable
-    img.src = dataUrl;
-  });
+/** Employee photos go through the shared optimizer (≤480px, q0.82) — the
+ *  same pipeline every other upload uses, with EXIF rotation applied and the
+ *  original kept whenever it is already small enough. */
+async function imageToDataUrl(file: File | Blob, purpose: "employeePhoto" | "document" = "employeePhoto"): Promise<string> {
+  return optimizedDataUrl(file, purpose);
 }
 
 /** Live camera capture modal (getUserMedia → canvas snapshot). */
@@ -107,14 +90,15 @@ function CameraCapture({ onShot, onClose }: { onShot: (dataUrl: string) => void;
     };
   }, []);
 
-  const shoot = () => {
+  const shoot = async () => {
     const v = videoRef.current;
     if (!v) return;
     const c = document.createElement("canvas");
     c.width = v.videoWidth || 640;
     c.height = v.videoHeight || 480;
     c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
-    onShot(c.toDataURL("image/jpeg", 0.85));
+    // Same preset as the file picker: the capture is stored at ≤480px.
+    onShot((await optimizeCanvas(c, "employeePhoto")).dataUrl);
   };
 
   useEffect(() => {
@@ -496,7 +480,7 @@ export function EmployeeProfile({
     if (!f) return;
     if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
     setDocErr("");
-    if (f.type.startsWith("image/")) setDocFile({ name: f.name, data: await imageToDataUrl(f, 1400) });
+    if (f.type.startsWith("image/")) setDocFile({ name: f.name, data: await imageToDataUrl(f, "document") });
     else if (f.type === "application/pdf") {
       const r = new FileReader();
       r.onload = () => setDocFile({ name: f.name, data: String(r.result) });

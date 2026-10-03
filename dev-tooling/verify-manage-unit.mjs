@@ -174,8 +174,16 @@ try {
   try {
     const owner = await login(OWNER.email, OWNER.pw);
     if (testBizId) await call(owner, `/api/businesses/${testBizId}`, "DELETE", { confirmCode: testBizCode });
-    if (testUserId) await call(owner, "/api/users", "PATCH", { userId: testUserId, isActive: false });
-    console.log("  (cleanup: test business deleted, test user deactivated)");
+    if (testUserId) {
+      // Delete the throwaway manager outright — deactivating left an
+      // "AUDTEST Unit Manager" row behind after every run.
+      const del = await call(owner, `/api/users?userId=${testUserId}`, "DELETE");
+      if (del.status !== 200) {
+        await call(owner, "/api/users", "PATCH", { userId: testUserId, isActive: false });
+        console.log(`  (cleanup: test user could not be deleted (HTTP ${del.status}) — deactivated instead)`);
+      }
+    }
+    console.log("  (cleanup: test business deleted, test user removed)");
   } catch (e) {
     console.error("  cleanup failed:", e.message);
   }

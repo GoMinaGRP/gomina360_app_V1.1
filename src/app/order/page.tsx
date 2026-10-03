@@ -62,6 +62,16 @@ function productPhotos(p: any): string[] {
   return arr;
 }
 
+/** Display thumbnails parallel to productPhotos(): `/api/menu/photo?…&size=thumb`
+ *  URLs served from the ≤400px image generated at upload time. Empty strings
+ *  (rows that predate thumbnail generation) fall back to the full photo, so
+ *  every image that existed before still renders exactly as it did. */
+function productThumbs(p: any): string[] {
+  const full = productPhotos(p);
+  const t = Array.isArray(p.thumbs) ? p.thumbs.filter((x: any) => typeof x === "string") : [];
+  return full.map((_ph, i) => (typeof t[i] === "string" ? t[i] : ""));
+}
+
 /** Watermark spec for a menu business row — the faint overlay composites at
  *  display time; the stored product photo bytes are never modified. */
 function wmSpecOf(b: any) {
@@ -240,6 +250,9 @@ const ProductCard = React.memo(function ProductCard({
   highlight = false,
 }: ProductCardProps) {
   const photos = productPhotos(p);
+  // Grid tiles + the gallery strip paint the small thumbnails (~18 KB); the
+  // lightbox still opens the full-resolution photos for zoom/detail.
+  const thumbs = productThumbs(p);
   // ── Boutique variant selection (sizes/colours) ───────────────────────
   // The card owns the choice; adding to cart only becomes possible once the
   // customer picked an IN-STOCK size/colour combination. Products without a
@@ -277,7 +290,7 @@ const ProductCard = React.memo(function ProductCard({
               title="Tap for details & photos"
               data-testid={`oo-photo-${p.id}`}
             >
-              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              <img src={thumbs[0] || photos[0]} alt={p.name} loading="lazy" decoding="async" className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
               {/* Faint storefront watermark (Owner-toggleable) — overlay only,
                   never baked into the stored image; keeps zoom-in affordance. */}
               <span className="absolute inset-0 rounded-lg overflow-hidden">
@@ -304,7 +317,7 @@ const ProductCard = React.memo(function ProductCard({
                     data-testid={`oo-thumb-${p.id}-${i}`}
                     aria-label={`View photo ${i + 1} of ${photos.length}`}
                   >
-                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    <img src={thumbs[i] || ph} alt={`${p.name} ${i + 1}`} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
                   </button>
                 ))}
