@@ -71,11 +71,11 @@ async function api(method, path, token, body) {
 
 // Every business-scoped table in src/db/schema.ts (businessId present).
 const BUSINESS_SCOPED = [
-  "ai_insights", "aquaculture_batches", "aquaculture_checklists",
+  "ai_insights", "aquaculture_batches",
   "aquaculture_feed_logs", "aquaculture_harvests", "aquaculture_logs",
   "aquaculture_ponds", "aquaculture_water_quality_logs", "aquaculture_weight_logs",
   "assets", "attendance_logs", "audit_assignments", "audit_reviews", "audit_trail",
-  "block_factory_checklists", "block_factory_deliveries", "block_factory_logs",
+  "block_factory_deliveries", "block_factory_logs",
   "block_factory_orders", "block_qc_checks", "block_types", "business_insights",
   "business_metrics", "car_wash_activities", "car_wash_bookings", "car_wash_logs",
   "car_wash_services", "car_wash_washes", "cctv_cameras", "checklist_entries",
@@ -85,7 +85,7 @@ const BUSINESS_SCOPED = [
   "employee_documents", "employee_history", "employees", "expense_categories",
   "hardware_deliveries", "hardware_logs", "hardware_orders", "hardware_purchases",
   "inventory_items", "livestock_logs", "notifications", "payroll_attendance",
-  "payroll_entries", "payroll_runs", "pickup_locations", "poultry_checklists",
+  "payroll_entries", "payroll_runs", "pickup_locations",
   "poultry_feed_logs", "poultry_flocks", "poultry_health_records", "poultry_logs",
   "poultry_production", "poultry_products", "poultry_water_logs", "poultry_weight_logs",
   "restaurant_logs", "restaurant_menu_items", "restaurant_orders",

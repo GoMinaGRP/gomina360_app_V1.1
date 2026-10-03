@@ -108,8 +108,14 @@ try {
   ]);
   const s3 = await api(ownerS.cookie, "POST", "/api/low-stock?businessId=1");
   const row3 = await q1("select status from inventory_items where id = $1", [item?.id]);
+  // The radar is business-wide, so other items in business 1 may legitimately
+  // be low after other suites seed/consume stock — assert on THIS item: it
+  // normalized to IN_STOCK and dropped out of the alert list.
+  const radar3 = await api(ownerS.cookie, "GET", "/api/low-stock?businessId=1");
+  const stillAlerting = (radar3.data?.items || []).some((i) => i.id === item?.id);
   ok("healthy stock normalizes back to IN_STOCK and does not alert",
-    s3.data?.result?.lowCount === 0 && s3.data?.result?.outCount === 0 && row3?.status === "IN_STOCK");
+    !stillAlerting && row3?.status === "IN_STOCK" && s3.status === 200,
+    `stillAlerting=${stillAlerting} status=${row3?.status} lowCount=${s3.data?.result?.lowCount}`);
 } catch (e) {
   ok("suite ran without exception", false, String(e?.message || e));
 } finally {

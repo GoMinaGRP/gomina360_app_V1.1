@@ -161,16 +161,19 @@ async function main() {
     await wp.click("[data-testid='ppm-save']");
     await wp.waitForFunction(() => /saved to your profile/.test(document.querySelector("[data-testid='ppm-status']")?.textContent || ""), { timeout: 15000 });
     const saved1 = (await q(`SELECT avatar_url FROM users WHERE id=$1`, [WORKER.id])).rows[0].avatar_url;
+    // The shared image optimizer stores profile photos as WebP (see
+    // verify-image-optimization: "avatar stored small on the profile"), so the
+    // check accepts any image data URL and keeps the size bound.
     check("A3 upload saved to the user's profile (data URL on users.avatar_url)",
-      typeof saved1 === "string" && saved1.startsWith("data:image/jpeg") && saved1.length > 500 && saved1.length < 700_000,
+      typeof saved1 === "string" && saved1.startsWith("data:image/") && saved1.length > 500 && saved1.length < 700_000,
       (saved1 || "").slice(0, 60));
     await wp.waitForSelector("[data-testid='user-menu-photo']", { timeout: 20000 });
     const navSrc = await wp.$eval("[data-testid='user-menu-photo']", (e) => e.getAttribute("src") || "");
-    check("A4 photo now renders in the top-right Staff menu button", navSrc.startsWith("data:image/jpeg"), navSrc.slice(0, 60));
+    check("A4 photo now renders in the top-right Staff menu button", navSrc.startsWith("data:image/"), navSrc.slice(0, 60));
     await wp.click("[data-testid='ppm-close']");
     await openUserMenu(wp);
     const lgSrc = await wp.$eval("[data-testid='user-menu-photo-lg']", (e) => e.getAttribute("src") || "").catch(() => "");
-    check("A5 photo renders in the staff menu dropdown profile card", lgSrc.startsWith("data:image/jpeg"), lgSrc.slice(0, 60));
+    check("A5 photo renders in the staff menu dropdown profile card", lgSrc.startsWith("data:image/"), lgSrc.slice(0, 60));
     await wp.keyboard.press("Escape");
 
     // camera path (fake device)
@@ -190,7 +193,7 @@ async function main() {
     await wp.click("[data-testid='ppm-save']");
     await wp.waitForFunction(() => /saved to your profile/.test(document.querySelector("[data-testid='ppm-status']")?.textContent || ""), { timeout: 15000 });
     const saved2 = (await q(`SELECT avatar_url FROM users WHERE id=$1`, [WORKER.id])).rows[0].avatar_url;
-    check("A6 camera capture saved as the profile photo", typeof saved2 === "string" && saved2.startsWith("data:image/jpeg") && saved2 !== saved1, saved1 === saved2 ? "unchanged" : "ok");
+    check("A6 camera capture saved as the profile photo", typeof saved2 === "string" && saved2.startsWith("data:image/") && saved2 !== saved1, saved1 === saved2 ? "unchanged" : "ok");
 
     // remove path
     await wp.click("[data-testid='ppm-remove']");

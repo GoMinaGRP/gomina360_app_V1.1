@@ -745,6 +745,29 @@ try {
   const shopMobile = await mobileCtx.newPage();
   await shopMobile.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
   await shopMobile.goto(`${BASE}/order`, { waitUntil: "networkidle2", timeout: 120000 });
+  // The storefront grid uses loading="lazy": on a 390×844 phone the fresh card
+  // starts below the fold, and the client swaps in the ?size=thumb URL once the
+  // catalogue payload settles. Bring the card into view and wait for the
+  // thumbnail to be both requested and decoded before asserting on it —
+  // otherwise the check races the lazy image rather than the behaviour.
+  await shopMobile
+    .waitForSelector(`[data-testid="oo-photo-${mobileRow?.id}"]`, { timeout: 60000 })
+    .catch(() => {});
+  await shopMobile
+    .evaluate((id) => {
+      document.querySelector(`[data-testid="oo-photo-${id}"]`)?.scrollIntoView({ block: "center" });
+    }, mobileRow?.id)
+    .catch(() => {});
+  await shopMobile
+    .waitForFunction(
+      (id) => {
+        const img = document.querySelector(`[data-testid="oo-photo-${id}"] img`);
+        return !!img && /size=thumb/.test(img.getAttribute("src") || "") && img.naturalWidth > 0;
+      },
+      { timeout: 60000 },
+      mobileRow?.id,
+    )
+    .catch(() => {});
   const mobileThumb = await shopMobile
     .$eval(`[data-testid="oo-photo-${mobileRow?.id}"] img`, (el) => ({ src: el.getAttribute("src") || "", w: el.naturalWidth }))
     .catch(() => null);

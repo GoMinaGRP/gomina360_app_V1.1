@@ -27,7 +27,7 @@ import { computeStockStatus } from "@/lib/stock";
 import { setVariantsForItem } from "@/lib/boutique";
 import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
-import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, resolveUserOrgIds, businessIdsOfOrgs, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
@@ -65,11 +65,27 @@ export async function GET(request: Request) {
       // QR labels are unique PER BUSINESS: two independent organizations may
       // legitimately carry the same label value (their unit codes can match).
       // Resolve the caller's accessible match — not just the first global row.
+      //
+      // A platform super admin (allowed == null) can see every match, so with
+      // several candidates the row order would decide which unit answers the
+      // scan. Prefer the caller's own organization first, then fall back to the
+      // first accessible match — scanning your own label always returns your
+      // own item, never another org's.
+      const ownOrgBizIds = async (): Promise<Set<number>> => {
+        const orgIds = await resolveUserOrgIds(session.user);
+        return new Set(orgIds.length ? (await businessIdsOfOrgs(orgIds)).map(Number) : []);
+      };
+      const pick = async (rows: any[]) => {
+        const visible = rows.filter((r: any) => canSee(r.businessId));
+        if (visible.length <= 1) return visible[0];
+        const own = await ownOrgBizIds();
+        return visible.find((r: any) => own.has(Number(r.businessId))) ?? visible[0];
+      };
       const itemRows = await db
         .select()
         .from(inventoryItems)
         .where(eq(inventoryItems.qrCode, code));
-      const item = itemRows.find((r: any) => canSee(r.businessId));
+      const item = await pick(itemRows);
       if (item) {
         return NextResponse.json({ success: true, found: true, kind: "inventory", record: item });
       }
@@ -77,7 +93,7 @@ export async function GET(request: Request) {
         .select()
         .from(assets)
         .where(eq(assets.qrCode, code));
-      const asset = assetRows.find((r: any) => canSee(r.businessId));
+      const asset = await pick(assetRows);
       if (asset) {
         return NextResponse.json({ success: true, found: true, kind: "asset", record: asset });
       }
