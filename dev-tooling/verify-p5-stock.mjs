@@ -63,6 +63,11 @@ const purge = async () => {
   try {
     await client.query(`delete from stock_movements where item_name like $1 or sku like $1`, [`${TAG}%`]).catch(() => {});
     await client.query(`delete from stock_movements where inventory_id in (select id from inventory_items where name like $1 or sku like $1)`, [`${TAG}%`]).catch(() => {});
+    // The hardware ORDER path also writes a receipt book row; delete it before
+    // the linked transaction so no TEST receipt is left behind (a leftover
+    // "TEST-P5 Buyer" receipt made verify-tracking / verify-orders-maps' Z1
+    // "TEST data purged" assertions fail on the next sweep).
+    await client.query(`delete from sales_documents where customer_name like $1`, [`${TAG}%`]).catch(() => {});
     await client.query(`delete from transactions where description like $1`, [`%${TAG}%`]).catch(() => {});
     await client.query(`delete from customer_trackings where customer_name like $1 or customer_phone like $2`, [`${TAG}%`, `%${stamp}%`]).catch(() => {});
     await client.query(`delete from customers where name like $1 or phone like $2`, [`${TAG}%`, `%${stamp}%`]).catch(() => {});

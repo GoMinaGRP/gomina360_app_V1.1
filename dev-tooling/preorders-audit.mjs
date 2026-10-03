@@ -48,7 +48,9 @@ if (process.env.DATABASE_URL) {
   }
 }
 
-const BASE = "http://127.0.0.1:3001";
+// Configurable (was hard-coded to :3001 from the old dev-server era); default
+// keeps the historical port so nothing that relied on it silently changes.
+const BASE = process.env.BASE_URL || "http://127.0.0.1:3001";
 const OUT = new URL("./.verify-out/", import.meta.url).pathname;
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
