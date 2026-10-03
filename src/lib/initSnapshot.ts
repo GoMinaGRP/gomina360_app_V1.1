@@ -2,6 +2,7 @@ import { getTableColumns, getTableName } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { getPool } from "@/db";
 import { mapRawRows } from "@/lib/rawRowMapper";
+import { normalizeInventoryItem } from "@/lib/inventoryCategories";
 import {
   users,
   businesses,
@@ -276,7 +277,11 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
     suppliers: mapRawRows(suppliers, supplierRows.rows),
     employees: mapRawRows(employees, employeeRows.rows),
     assets: mapRawRows(assets, assetRows.rows),
-    inventory: mapRawRows(inventoryItems, inventoryRows.rows),
+    // Read-time guard: legacy/free-text categories are reported under the
+    // shared standard taxonomy (the specific wording stays as `subcategory`),
+    // so every list, filter and picker is consistent even before the
+    // one-time data backfill has run.
+    inventory: mapRawRows(inventoryItems, inventoryRows.rows).map((i: any) => normalizeInventoryItem(i)),
     transactions: mapRawRows(transactions, txnRows.rows),
     creditSales: mapRawRows(creditSales, creditRows.rows),
     aiInsights: mapRawRows(aiInsights, insightRows.rows),

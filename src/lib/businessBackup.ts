@@ -20,6 +20,7 @@
 
 import JSZip from "jszip";
 import { db } from "@/db";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import * as schema from "@/db/schema";
 import {
   and,
@@ -735,7 +736,10 @@ export async function importBusinessBackup(
       businessId: newBusinessId,
       branchCode: remapBranchCode(r.branchCode),
       branchName: r.branchName,
-      category: r.category,
+      // Restored stock keeps the shared taxonomy: umbrella category + the
+      // unit's own wording preserved as the subcategory.
+      category: normalizeInventoryCategory(r.category),
+      subcategory: deriveInventorySubcategory(r.category, r.subcategory),
       quantity: Number(r.quantity) || 0,
       unit: r.unit,
       costPriceGhs: Number(r.costPriceGhs) || 0,

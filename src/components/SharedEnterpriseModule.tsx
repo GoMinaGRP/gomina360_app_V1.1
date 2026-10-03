@@ -28,6 +28,8 @@ import { REGION_NAMES } from "@/lib/ghanaLocations";
 import AssetRegistrationModal from "./AssetRegistrationModal";
 import Customer360Drawer from "./Customer360Drawer";
 import ConfirmActionModal from "./ConfirmActionModal";
+import InventoryCategoryFields from "./InventoryCategoryFields";
+import { DEFAULT_INVENTORY_CATEGORY, inventoryCategoryFields, normalizeInventoryCategory } from "@/lib/inventoryCategories";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import QrScanModal from "./QrScanModal";
 import QrRecordModal from "./QrRecordModal";
@@ -142,6 +144,9 @@ export default function SharedEnterpriseModule({
   // registration path only (POST) and mirrored by the PATCH editor.
   const [detailsKeyState] = [{ key: "Size", value: "" }, { key: "Weight", value: "" }];
   const [invPhotoErr, setInvPhotoErr] = useState("");
+  // Standardized taxonomy: umbrella category (always standard) + free subcategory.
+  const [invCategory, setInvCategory] = useState<string>(DEFAULT_INVENTORY_CATEGORY);
+  const [invSubcategory, setInvSubcategory] = useState<string | null>(null);
 
   // ─── QR registry: camera scan → open existing record / guided registration ───
   const [invQr, setInvQr] = useState("");
@@ -179,6 +184,8 @@ export default function SharedEnterpriseModule({
     setInvSpecsUI([]);
     setInvVariantsUI([]);
     setInvPhotoErr("");
+    setInvCategory(DEFAULT_INVENTORY_CATEGORY);
+    setInvSubcategory(null);
     setInvQr("");
     setQrError("");
     setLocation({ region: "", district: "", town: "" });
@@ -1079,7 +1086,8 @@ export default function SharedEnterpriseModule({
         businessId: Number(businessId),
         branchCode: invBranch.trim() || invBiz?.code || null,
         branchName: invBiz?.name || null,
-        category: typeOrCategory,
+        category: normalizeInventoryCategory(invCategory),
+        subcategory: (invSubcategory || "").trim() || null,
         quantity: Number(invQty) || 0,
         unit: invUnit || "Units",
         costPriceGhs: Number(invCost) || 0,
@@ -2395,7 +2403,12 @@ export default function SharedEnterpriseModule({
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3.5 text-slate-300">{inv.category}</td>
+                    <td className="px-4 py-3.5 text-slate-300">
+                      <div>{inv.category}</div>
+                      {inv.subcategory && inv.subcategory !== inv.category && (
+                        <div className="text-[10px] text-slate-500" data-testid={`inv-subcategory-${inv.id}`}>{inv.subcategory}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5 text-slate-300">
                       <div>{inv.branchName || getBusinessName(inv.businessId)}</div>
                       <div className="text-[10px] font-mono text-cyan-400">
@@ -2802,17 +2815,14 @@ export default function SharedEnterpriseModule({
                     {qrError && <p className="text-[10px] text-rose-400 font-semibold" data-testid="inv-qr-error">{qrError}</p>}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Category / Type
-                    </label>
-                    <input
-                      type="text"
-                      value={typeOrCategory}
-                      onChange={(e) => setTypeOrCategory(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
-                    />
-                  </div>
+                  <InventoryCategoryFields
+                    category={invCategory}
+                    subcategory={invSubcategory}
+                    onChange={({ category, subcategory }) => {
+                      setInvCategory(category);
+                      setInvSubcategory(subcategory);
+                    }}
+                  />
 
                   <div className="grid grid-cols-3 gap-3">
                     <div>
@@ -3381,11 +3391,17 @@ export default function SharedEnterpriseModule({
                         onChange={(e) => setEditingRecord({ ...editingRecord, sku: e.target.value })}
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm font-mono" />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
-                      <input type="text" value={editingRecord.category || ""}
-                        onChange={(e) => setEditingRecord({ ...editingRecord, category: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <InventoryCategoryFields
+                        key={`inv-cat-${editingRecord.id}`}
+                        testidPrefix="edit-inv"
+                        hint={false}
+                        category={inventoryCategoryFields(editingRecord.category, editingRecord.subcategory).category}
+                        subcategory={inventoryCategoryFields(editingRecord.category, editingRecord.subcategory).subcategory}
+                        onChange={({ category, subcategory }) =>
+                          setEditingRecord({ ...editingRecord, category, subcategory })
+                        }
+                      />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">

@@ -8,6 +8,7 @@ import {
   inventoryItems,
   transactions,
 } from "@/db/schema";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { tasksForBusiness } from "@/lib/checklistDefaults";
@@ -59,6 +60,7 @@ export interface StarterItem {
   name: string;
   skuSuffix: string;
   category: string;
+  subcategory?: string;
   quantity: number;
   unit: string;
   costPriceGhs: number;
@@ -375,7 +377,11 @@ export async function provisionBusiness(
           name: item.name,
           sku: `${biz.code}-${item.skuSuffix}`,
           businessId,
-          category: item.category,
+          // Starter kits land in the shared standard taxonomy like any other
+          // stock-in, so a brand-new unit's products group correctly on the
+          // customer marketplace from day one.
+          category: normalizeInventoryCategory(item.category),
+          subcategory: deriveInventorySubcategory(item.category, item.subcategory),
           quantity: qty,
           unit: item.unit,
           costPriceGhs: item.costPriceGhs,

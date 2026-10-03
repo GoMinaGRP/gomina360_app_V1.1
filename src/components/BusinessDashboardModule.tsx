@@ -12,6 +12,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { INVENTORY_CATEGORY_SUGGESTIONS } from "@/lib/inventoryCategories";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
@@ -888,13 +889,14 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2"><FormField f={f} set={set} label="Item Name" k="name" required /></div>
                 <FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" />
-                <FormField f={f} set={set} label="Category" k="category" placeholder="e.g. Finished Goods" />
+                <FormField f={f} set={set} label="Category" k="category" placeholder="Pick or type — e.g. Building Materials" list="bd-item-cats" />
                 <FormField f={f} set={set} label="Opening Quantity" k="quantity" t="number" min={0} />
                 <FormSelect f={f} set={set} label="Unit" k="unit" opts={["Units", "Kg", "Plates", "Bags", "Litres", "Crates", "Jobs", "Drums", "m³"]} />
                 <FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
                 <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
                 <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
               </div>
+              <datalist id="bd-item-cats">{INVENTORY_CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}</datalist>
             </>
           )}
           {type === "OPS" && (

@@ -14,6 +14,7 @@ import {
   LineChart, Line, AreaChart, Area,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { INVENTORY_CATEGORY_SUGGESTIONS } from "@/lib/inventoryCategories";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import BlockMixing from "./BlockMixing";
 import FinancialReportSection from "./FinancialReportSection";
@@ -993,7 +994,7 @@ function BlockFactoryForm({ type, busy, onClose, onSubmit, orders, inventory, bl
         <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
         <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
       </div>
-      <datalist id="blk-item-cats">{["Raw Materials", "Concrete Blocks", "Paving & Bricks", "Spare Parts", "Consumables", "Finished Goods"].map((c) => <option key={c} value={c} />)}</datalist>
+      <datalist id="blk-item-cats">{INVENTORY_CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}</datalist>
     </>}
     <div className="flex justify-end gap-3 pt-3 border-t border-slate-800"><button type="button" onClick={onClose} className="px-4 py-2 bg-slate-800 rounded-lg text-xs text-slate-300">Cancel</button><button disabled={busy} className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-xs font-bold text-white disabled:opacity-50">{busy ? "Saving..." : "Save"}</button></div>
   </form></div></div>

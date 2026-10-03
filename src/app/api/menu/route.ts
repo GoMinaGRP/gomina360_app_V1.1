@@ -6,6 +6,7 @@ import { asc, eq, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { compressJsonBody } from "@/lib/httpGzip";
 import { storefrontVariants } from "@/lib/boutique";
+import { normalizeInventoryItem } from "@/lib/inventoryCategories";
 
 /**
  * PUBLIC online-ordering menu — NO login required.
@@ -25,7 +26,7 @@ import { storefrontVariants } from "@/lib/boutique";
 // service-areas, pickup points, businesses…) also flushes this snapshot.
 // A standalone "menu:*" key would stay stale for up to MENU_TTL_MS after
 // any write.
-const MENU_CACHE_KEY = "init:menu:v1";
+const MENU_CACHE_KEY = "init:menu:v2";
 const MENU_TTL_MS = 10_000;
 /** Browser/CDN freshness — the server TTL cache (10 s, invalidated on every
  *  inventory/business write) is the source of truth; browsers may serve the
@@ -124,6 +125,7 @@ export async function GET(request: Request) {
           businessId: inventoryItems.businessId,
           name: inventoryItems.name,
           category: inventoryItems.category,
+          subcategory: inventoryItems.subcategory,
           quantity: inventoryItems.quantity,
           unit: inventoryItems.unit,
           sellingPriceGhs: inventoryItems.sellingPriceGhs,
@@ -289,11 +291,17 @@ export async function GET(request: Request) {
           const variantAvailable = vProjection ? vProjection.totalAvailable : null;
           const sellable = (variantAvailable != null ? variantAvailable > 0 : invHasStock(i)) || opts.length > 0;
           if (!sellable) return null;
+          // Marketplace grouping uses the SHARED taxonomy: every product is
+          // reported under its standard umbrella category (with the branch's
+          // own wording kept as `subcategory`), so similar products from
+          // different businesses land under one category chip.
+          const taxonomy = normalizeInventoryItem({ category: i.category, subcategory: i.subcategory });
           return {
             id: i.id,
             sku: i.sku,
             name: i.name,
-            category: i.category,
+            category: taxonomy.category,
+            subcategory: taxonomy.subcategory,
             unit: i.unit,
             price: i.sellingPriceGhs,
             available: Math.max(0, Math.floor(variantAvailable != null ? variantAvailable : i.quantity)),

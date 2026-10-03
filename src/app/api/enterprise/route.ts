@@ -8,6 +8,7 @@ console.error = (...args) => {
   return origError(...args);
 };
 import { NextResponse } from "next/server";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { db } from "@/db";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import {
@@ -268,7 +269,15 @@ export async function PATCH(request: Request) {
       // the IN_STOCK / LOW_STOCK / OUT_OF_STOCK status that drives alerts.
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
       if (typeof d.sku === "string" && d.sku.trim()) updates.sku = d.sku.trim();
-      if (typeof d.category === "string" && d.category.trim()) updates.category = d.category.trim();
+      // Category is standardized across every business (marketplace grouping):
+      // the incoming wording is normalized to the shared umbrella and, when it
+      // is more specific, preserved as the subcategory.
+      if (typeof d.category === "string" && d.category.trim()) {
+        updates.category = normalizeInventoryCategory(d.category);
+        updates.subcategory = deriveInventorySubcategory(d.category, d.subcategory);
+      } else if (d.subcategory !== undefined) {
+        updates.subcategory = d.subcategory ? String(d.subcategory).trim().slice(0, 120) : null;
+      }
       if (typeof d.unit === "string" && d.unit.trim()) updates.unit = d.unit.trim();
       if (d.quantity !== undefined) {
         const qty = Number(d.quantity);
@@ -923,7 +932,8 @@ export async function POST(request: Request) {
           businessId: bizId,
           branchCode: branchCode || null,
           branchName: branchName || null,
-          category: data.category || "General Stock",
+          category: normalizeInventoryCategory(data.category),
+          subcategory: deriveInventorySubcategory(data.category, data.subcategory),
           quantity: qty,
           unit: data.unit || "Units",
           costPriceGhs: Number(data.costPriceGhs) || 20,

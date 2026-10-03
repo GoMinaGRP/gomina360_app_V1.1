@@ -318,7 +318,11 @@ const ProductCard = React.memo(function ProductCard({
         )}
         <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
         <div className="text-[10px] text-slate-500 mt-1">
-          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
+          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600" data-testid={`oo-category-${p.id}`}>{p.category}</span>
+          {/* Subcategory registered in Inventory — keeps the branch's own wording. */}
+          {p.subcategory && p.subcategory !== p.category && (
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-violet-50 border border-violet-200 font-bold text-violet-700" data-testid={`oo-subcategory-${p.id}`}>{p.subcategory}</span>
+          )}
           <span className="ml-1">per {p.unit}</span>
           {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
           {p.brand && (

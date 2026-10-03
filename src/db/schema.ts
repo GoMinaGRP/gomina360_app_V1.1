@@ -644,6 +644,10 @@ export const inventoryItems = pgTable("inventory_items", {
   branchCode: text("branch_code"),
   branchName: text("branch_name"),
   category: text("category").notNull(),
+  /** Standardized umbrella category (src/lib/inventoryCategories.ts) — the
+   *  marketplace groups similar products from every business under this name.
+   *  The optional subcategory keeps the branch's own specific wording. */
+  subcategory: text("subcategory"),
   quantity: doublePrecision("quantity").notNull(),
   unit: text("unit").notNull(), // 'Bags', 'Trays', 'Tons', 'Kg', 'Units', 'Vehicles'
   costPriceGhs: doublePrecision("cost_price_ghs").notNull(),

@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { inventoryItems } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 
 /**
  * Shared stock helpers — every module (production, harvest, purchases, sales)
@@ -25,6 +26,8 @@ export async function ensureInventoryItem(opts: {
   name: string;
   category: string;
   unit: string;
+  /** Optional specific wording kept alongside the standard umbrella category. */
+  subcategory?: string | null;
   costPriceGhs?: number;
   sellingPriceGhs?: number;
   minStockThreshold?: number;
@@ -47,7 +50,10 @@ export async function ensureInventoryItem(opts: {
       name: opts.name,
       sku: opts.sku,
       businessId: opts.businessId,
-      category: opts.category,
+      // Every module's stock-in lands in the shared standardized taxonomy so the
+      // customer marketplace groups similar products from all businesses.
+      category: normalizeInventoryCategory(opts.category),
+      subcategory: deriveInventorySubcategory(opts.category, opts.subcategory),
       quantity: 0,
       unit: opts.unit,
       costPriceGhs: opts.costPriceGhs ?? 0,

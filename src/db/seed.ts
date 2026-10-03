@@ -124,6 +124,7 @@ async function ensureBoutiqueFlagship() {
       name: string;
       sku: string;
       category: string;
+      subcategory: string;
       unit: string;
       cost: number;
       price: number;
@@ -133,7 +134,8 @@ async function ensureBoutiqueFlagship() {
       {
         name: "Kente Print Shirt (Men)",
         sku: "BOUTIQUE-01-KENTE-SHIRT",
-        category: "Men's Shirts",
+        category: "Fashion & Clothing",
+        subcategory: "Men's Clothing",
         unit: "Pieces",
         cost: 95,
         price: 180,
@@ -147,7 +149,8 @@ async function ensureBoutiqueFlagship() {
       {
         name: "Ankara Print Dress (Ladies)",
         sku: "BOUTIQUE-01-ANKARA-DRESS",
-        category: "Ladies' Dresses",
+        category: "Fashion & Clothing",
+        subcategory: "Women's Clothing",
         unit: "Pieces",
         cost: 120,
         price: 250,
@@ -161,7 +164,8 @@ async function ensureBoutiqueFlagship() {
       {
         name: "Slim-Fit Denim Jeans",
         sku: "BOUTIQUE-01-DENIM-JEANS",
-        category: "Denim & Trousers",
+        category: "Fashion & Clothing",
+        subcategory: "Men's Clothing",
         unit: "Pieces",
         cost: 130,
         price: 240,
@@ -174,7 +178,8 @@ async function ensureBoutiqueFlagship() {
       {
         name: "Leather Sneakers",
         sku: "BOUTIQUE-01-SNEAKERS",
-        category: "Footwear",
+        category: "Fashion & Clothing",
+        subcategory: "Footwear",
         unit: "Pairs",
         cost: 180,
         price: 320,
@@ -194,6 +199,7 @@ async function ensureBoutiqueFlagship() {
           name: p.name,
           sku: p.sku,
           category: p.category,
+          subcategory: p.subcategory,
           unit: p.unit,
           quantity: totalQty,
           costPriceGhs: p.cost,
@@ -1184,7 +1190,8 @@ async function seedDatabaseInner() {
       name: "Grade A Large Egg Trays (30 Eggs/Tray)",
       sku: "POUL-EGG-L01",
       businessId: businessMap["POULTRY-01"],
-      category: "Poultry Products",
+      category: "Poultry & Eggs",
+      subcategory: "Eggs",
       quantity: 850,
       unit: "Trays",
       costPriceGhs: 38.0,
@@ -1196,7 +1203,8 @@ async function seedDatabaseInner() {
       name: "6-Inch Solid Construction Blocks (Grade A)",
       sku: "BLK-SOLID-6IN",
       businessId: businessMap["BLOCK-01"],
-      category: "Concrete Blocks",
+      category: "Building Materials",
+      subcategory: "Concrete Blocks",
       quantity: 4500,
       unit: "Units",
       costPriceGhs: 9.5,
@@ -1208,7 +1216,8 @@ async function seedDatabaseInner() {
       name: "Fresh Harvested Volta Tilapia (Average 800g)",
       sku: "AQUA-TILAP-800G",
       businessId: businessMap["AQUA-01"],
-      category: "Fresh Aquaculture",
+      category: "Fish & Seafood",
+      subcategory: "Fresh Fish",
       quantity: 1200,
       unit: "Kg",
       costPriceGhs: 38.0,
@@ -1220,7 +1229,8 @@ async function seedDatabaseInner() {
       name: "5kVA Hybrid Solar Inverter + Lithium Battery Combo",
       sku: "TECH-SOL-5KVA",
       businessId: businessMap["TECH-01"],
-      category: "Solar & Energy",
+      category: "Computers & Electronics",
+      subcategory: "Solar & Power",
       quantity: 14,
       unit: "Units",
       costPriceGhs: 9200,
@@ -1232,7 +1242,8 @@ async function seedDatabaseInner() {
       name: "Premium Auto Foam Shampoo & High-Gloss Wax Drum (50L)",
       sku: "WASH-CHEM-50L",
       businessId: businessMap["WASH-01"],
-      category: "Cleaning Chemicals",
+      category: "Household & Home Appliances",
+      subcategory: "Car Wash Supplies",
       quantity: 8,
       unit: "Drums",
       costPriceGhs: 750,

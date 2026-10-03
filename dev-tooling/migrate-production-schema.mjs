@@ -335,6 +335,44 @@ try {
   // ──────────────────────────────────────────────────────────────────────────────
 
   // ──────────────────────────────────────────────────────────────────────────────
+  // Standardized inventory categories (non-destructive, idempotent).
+  //
+  // Every inventory row's `category` becomes one of the shared standard
+  // umbrella categories from src/lib/inventoryCategories.ts; the branch's own
+  // original wording is preserved in the new `subcategory` column (only when
+  // it adds information). This is what lets the customer marketplace group
+  // similar products from different businesses under ONE category. Nothing is
+  // deleted: the original free text is either equal to the standard name or
+  // stored verbatim as the subcategory.
+  // ──────────────────────────────────────────────────────────────────────────────
+  {
+    const invTable = await client.query("select to_regclass('public.inventory_items') as name");
+    if (invTable.rows[0]?.name) {
+      await client.query("alter table public.inventory_items add column if not exists subcategory text");
+      const { normalizeInventoryCategory, deriveInventorySubcategory } = await import("../src/lib/inventoryCategories.ts");
+      const rows = await client.query(
+        "select id, category, subcategory from public.inventory_items order by id",
+      );
+      let moved = 0;
+      for (const row of rows.rows) {
+        const standard = normalizeInventoryCategory(row.category);
+        const sub = deriveInventorySubcategory(row.category, row.subcategory);
+        const changedCategory = standard !== row.category;
+        const changedSub = (sub ?? null) !== (row.subcategory ?? null);
+        if (!changedCategory && !changedSub) continue;
+        await client.query(
+          "update public.inventory_items set category = $1, subcategory = $2 where id = $3",
+          [standard, sub, row.id],
+        );
+        moved += 1;
+      }
+      if (moved > 0) {
+        console.log(`[db:migrate] standardized ${moved} inventory categor${moved === 1 ? "y" : "ies"} (originals kept as subcategory)`);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
   // Multi-Owner upgrade (additive, idempotent, backfilled — mirrors
   // dev-tooling/migrate-multiowner.mjs). Creates the Organization layer and the
   // tenant ownership columns without touching any existing row's meaning.

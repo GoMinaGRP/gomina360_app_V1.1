@@ -13,6 +13,7 @@ import {
   AreaChart, Area,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { INVENTORY_CATEGORY_SUGGESTIONS } from "@/lib/inventoryCategories";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
@@ -878,7 +879,9 @@ function HardwareForm({ type, busy, onClose, onSubmit, inventory, suppliers, ord
     "Log Goods Receipt (GRN)";
 
   const selectedItem = (inventory || []).find((i: any) => String(i.id) === String(f.inventoryId));
-  const MATERIAL_CATS = ["Cement & Mortar", "Steel & Reinforcement", "Fasteners & Fixings", "Roofing & Cladding", "Paints & Finishing", "Plumbing & Drainage", "Electrical & Lighting", "Timber & Boards", "Tools & Equipment", "Aggregates & Sand"];
+  // Standard GoMina 360 taxonomy (umbrellas + specific subcategories) — the
+  // API normalizes whatever is typed to the shared umbrella category.
+  const MATERIAL_CATS = INVENTORY_CATEGORY_SUGGESTIONS;
 
   const handle = (e: React.FormEvent) => {
     e.preventDefault();
