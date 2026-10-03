@@ -8,12 +8,12 @@ console.error = (...args) => {
   return origError(...args);
 };
 import { NextResponse } from "next/server";
+import { createEmployeeRecord } from "@/lib/employeeCreate";
 import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { db } from "@/db";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import {
   employees,
-  employeeHistory,
   assets,
   assetAuditLogs,
   inventoryItems,
@@ -670,40 +670,22 @@ export async function POST(request: Request) {
       if (!(await canAccessBusiness(session.user, empBizId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      // Quick-add path — auto-assign the employee number and record the
-      // registration in the employee record history (same as the full
-      // Employee Registration flow in /api/employees).
-      // Staff numbers are PER UNIT (each unit numbers its own roster from
-      // EMP-0001) — never a continuation of another unit's or organization's
-      // sequence.
-      const maxRows = await db
-        .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-        .from(employees)
-        .where(eq(employees.businessId, empBizId));
-      const employeeNo = `EMP-${String((Number(maxRows[0]?.v) || 0) + 1).padStart(4, "0")}`;
-      const [inserted] = await db
-        .insert(employees)
-        .values({
-          name: data.name || "New Employee",
-          role: data.role || "Staff",
-          businessId: empBizId,
-          branch: data.branch || "Accra Main",
-          ...loc,
-          salaryGhs: Number(data.salaryGhs) || 3000,
-          phone: data.phone || "+233 24 000 0000",
-          hireDate: data.hireDate || new Date().toISOString().split("T")[0],
-          status: "ACTIVE",
-          employeeNo,
-        })
-        .returning();
-      await db.insert(employeeHistory).values({
-        employeeId: inserted.id,
-        businessId: inserted.businessId,
-        action: "CREATED",
-        summary: `Registered ${inserted.name} (${employeeNo}) — ${inserted.role}, quick add`,
-        changedByUserId: session.user.id,
-        changedByName: session.user.name,
-        changedByRole: session.user.role,
+      // Quick-add path — the SAME create core as the full Employee
+      // Registration flow (src/lib/employeeCreate), so staff numbering and
+      // the employee_history trail can never drift between the two intakes.
+      const inserted = await createEmployeeRecord({
+        businessId: empBizId,
+        name: data.name || "New Employee",
+        role: data.role || "Staff",
+        branch: data.branch || "Accra Main",
+        region: data.region,
+        district: data.district,
+        town: data.town,
+        salaryGhs: Number(data.salaryGhs) || 3000,
+        phone: data.phone || "+233 24 000 0000",
+        hireDate: data.hireDate,
+        status: "ACTIVE",
+        actor: session.user,
       });
       return NextResponse.json({ success: true, item: inserted });
     }

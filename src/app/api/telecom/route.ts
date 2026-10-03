@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -88,7 +89,7 @@ async function bookTransaction(
   }
   const now = new Date();
   await db.insert(transactions).values({
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}-${crypto.randomInt(10, 99)}`,
+    transactionNumber: nextTrxNumber(now),
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,

@@ -32,6 +32,8 @@ import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
 import { variantSuffix } from "@/lib/boutiqueSizes";
 import { apiError } from "@/lib/apiError";
+import { nextSalesDocumentNumber } from "@/lib/documentNumbers";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * /api/credit-sales — Credit Sale lifecycle.
@@ -216,9 +218,7 @@ async function postInstallment({
   const payNum = buildCreditPaymentNumber();
 
   // 1. Finance — INCOME transaction (feeds Payments, Reports, dashboards).
-  const trxNum = `TRX-${now.getFullYear()}-${Date.now().toString().slice(-6)}${Math.floor(
-    Math.random() * 90 + 10
-  )}`;
+  const trxNum = nextTrxNumber(now);
   const [trx] = await db
     .insert(transactions)
     .values({
@@ -244,9 +244,8 @@ async function postInstallment({
     .returning();
 
   // 2. Receipts — installment RECEIPT sales document.
-  const docNum = `RCP-${now.getFullYear()}-${Date.now().toString().slice(-6)}${Math.floor(
-    Math.random() * 90 + 10
-  )}`;
+  // ONE numbering source (src/lib/documentNumbers).
+  const docNum = await nextSalesDocumentNumber("RECEIPT", now);
   const [receipt] = await db
     .insert(salesDocuments)
     .values({
@@ -657,7 +656,7 @@ export async function POST(request: NextRequest) {
     let depositBundle: any = null;
 
     // 7. CREDIT invoice (flips to PAID when the balance is settled).
-    const docNum = `INV-${now.getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const docNum = await nextSalesDocumentNumber("INVOICE", now);
     const [invoice] = await db
       .insert(salesDocuments)
       .values({

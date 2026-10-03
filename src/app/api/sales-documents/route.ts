@@ -5,6 +5,7 @@ import { salesDocuments, businesses } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { nextSalesDocumentNumber } from "@/lib/documentNumbers";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 
 /**
@@ -164,24 +165,11 @@ export async function POST(request: NextRequest) {
       resolvedBranchName = resolvedBranchName || biz?.name;
     }
 
-    // Generate unique document number
-    const year = new Date().getFullYear();
-    const prefix = documentType === "INVOICE" ? "INV" : documentType === "QUOTATION" ? "QT" : "RCP";
-    const existingDocs = await db.select().from(salesDocuments)
-      .where(eq(salesDocuments.documentType, documentType));
-    const nextNumber = existingDocs.length + 1;
-    let documentNumber = `${prefix}-${year}-${String(nextNumber).padStart(4, "0")}`;
-
-    // Ensure uniqueness with a fallback loop
-    let existsCheck = await db.select().from(salesDocuments)
-      .where(eq(salesDocuments.documentNumber, documentNumber));
-    let attempt = nextNumber;
-    while (existsCheck.length > 0) {
-      attempt += 1;
-      documentNumber = `${prefix}-${year}-${String(attempt).padStart(4, "0")}`;
-      existsCheck = await db.select().from(salesDocuments)
-        .where(eq(salesDocuments.documentNumber, documentNumber));
-    }
+    // ONE numbering source (src/lib/documentNumbers): PREFIX-YYYY-NNNN,
+    // derived from the highest issued number so deletions can't cause reuse.
+    const documentNumber = await nextSalesDocumentNumber(
+      documentType === "INVOICE" ? "INVOICE" : documentType === "QUOTATION" ? "QUOTATION" : "RECEIPT"
+    );
 
     const [inserted] = await db.insert(salesDocuments).values({
       documentNumber,

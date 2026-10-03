@@ -19,6 +19,7 @@ import {
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
 import { apiError } from "@/lib/apiError";
+import { createEmployeeRecord, nextEmployeeNo, recordEmployeeHistory } from "@/lib/employeeCreate";
 
 /**
  * Employee Registration — complete HR records:
@@ -63,19 +64,6 @@ const TRACKED: [string, string][] = [
   ["notes", "Notes"],
 ];
 
-const empNo = (n: number) => `EMP-${String(n).padStart(4, "0")}`;
-
-/** Next staff number for a unit — EMP-0001… numbered PER BUSINESS (each
- *  unit's own staff roster), never a continuation of another organization's
- *  or another unit's sequence. */
-async function nextEmployeeNo(businessId: number): Promise<string> {
-  const rows = await db
-    .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-    .from(employees)
-    .where(eq(employees.businessId, businessId));
-  const max = Number(rows[0]?.v) || 0;
-  return empNo(max + 1);
-}
 
 async function assertEmployeeAccess(user: any, businessId: number) {
   if (user.isSuperAdmin) return null;
@@ -98,17 +86,15 @@ async function hist(
   oldValue?: any,
   newValue?: any
 ) {
-  await db.insert(employeeHistory).values({
+  await recordEmployeeHistory({
     employeeId,
     businessId,
     action,
-    field: field || null,
-    oldValue: oldValue === undefined || oldValue === null ? null : String(oldValue),
-    newValue: newValue === undefined || newValue === null ? null : String(newValue),
     summary,
-    changedByUserId: user.id,
-    changedByName: user.name,
-    changedByRole: user.role,
+    field,
+    oldValue,
+    newValue,
+    actor: user,
   });
 }
 
@@ -299,50 +285,44 @@ export async function POST(request: Request) {
       if (dupe.length) {
         return NextResponse.json({ success: false, error: `Employee ID ${employeeNo} is already in use at this unit.` }, { status: 409 });
       }
-    } else {
-      employeeNo = await nextEmployeeNo(Number(businessId));
     }
 
-    const [row] = await db
-      .insert(employees)
-      .values({
-        name,
-        role,
-        businessId,
-        branch: String(d.branch || biz.code || "").trim() || biz.code,
-        region: d.region || null,
-        district: d.district || null,
-        town: d.town || null,
-        salaryGhs,
-        phone: String(d.phone || "").trim() || "—",
-        hireDate: d.hireDate || new Date().toISOString().slice(0, 10),
-        status: "ACTIVE",
-        employeeNo,
-        dateOfBirth: d.dateOfBirth || null,
-        gender: d.gender || null,
-        email: d.email ? String(d.email).trim() : null,
-        address: d.address || null,
-        emergencyContactName: d.emergencyContactName || null,
-        emergencyContactPhone: d.emergencyContactPhone || null,
-        photo,
-        workSchedule: d.workSchedule || "FULL_TIME",
-        shift: d.shift || "DAY",
-        dailyHours: d.dailyHours !== undefined && d.dailyHours !== "" ? Number(d.dailyHours) : 8,
-        workDays: d.workDays || "MON,TUE,WED,THU,FRI",
-        leaveEntitlementDays: d.leaveEntitlementDays !== undefined && d.leaveEntitlementDays !== "" ? Number(d.leaveEntitlementDays) : 15,
-        idType: d.idType || null,
-        idNumber: d.idNumber || null,
-        workPermitNo: d.workPermitNo || null,
-        notes: d.notes || null,
-      })
-      .returning();
-    await hist(
-      row.id,
-      row.businessId,
-      "CREATED",
-      `Registered ${row.name} (${row.employeeNo}) — ${row.role}, ${biz.name}, GH₵ ${salaryGhs.toLocaleString()}/month${photo ? ", photo captured" : ""}`,
-      user
-    );
+    // ONE roster writer (src/lib/employeeCreate): the QR/procurement quick-add
+    // path shares this same create core, so numbering and history can't drift.
+    const row = await createEmployeeRecord({
+      businessId,
+      name,
+      role,
+      branch: String(d.branch || biz.code || "").trim() || biz.code,
+      region: d.region,
+      district: d.district,
+      town: d.town,
+      salaryGhs,
+      phone: d.phone,
+      email: d.email,
+      hireDate: d.hireDate,
+      status: "ACTIVE",
+      employeeNo,
+      photo,
+      dateOfBirth: d.dateOfBirth,
+      gender: d.gender,
+      address: d.address,
+      emergencyContactName: d.emergencyContactName,
+      emergencyContactPhone: d.emergencyContactPhone,
+      workSchedule: d.workSchedule,
+      shift: d.shift,
+      dailyHours: d.dailyHours,
+      workDays: d.workDays,
+      leaveEntitlementDays: d.leaveEntitlementDays,
+      idType: d.idType,
+      idNumber: d.idNumber,
+      workPermitNo: d.workPermitNo,
+      notes: d.notes,
+      historySummary: (row: any) =>
+        `Registered ${row.name} (${row.employeeNo}) — ${row.role}, ${biz.name}, GH₵ ${salaryGhs.toLocaleString()}/month${photo ? ", photo captured" : ""}`,
+      actor: user,
+    });
+
     return NextResponse.json({ success: true, employee: row });
   } catch (error: any) {
     return apiError(error);

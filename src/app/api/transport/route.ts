@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -109,7 +110,7 @@ async function bookTransaction(
   const [row] = await db
     .insert(transactions)
     .values({
-      transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}-${Math.floor(Math.random() * 900 + 100)}`,
+      transactionNumber: nextTrxNumber(now),
       businessId: biz.id,
       branchCode: biz.code,
       branchName: biz.name,

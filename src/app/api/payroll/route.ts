@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import crypto from "crypto";
 import { db } from "@/db";
@@ -455,7 +456,7 @@ export async function POST(request: Request) {
 async function postPayrollTransaction(user: any, entry: any, run: any, method: string) {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
-  const trxNum = `TRX-${now.getFullYear()}-${crypto.randomInt(100000, 999999)}`;
+  const trxNum = nextTrxNumber(now);
   // Statutory-era entries carry the full gross→deductions→net breakdown in
   // the ledger description; legacy (pre-statutory) entries keep the old one.
   const description = entry.grossPayGhs != null

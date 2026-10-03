@@ -469,6 +469,11 @@ export const customers = pgTable("customers", {
 },
   (t) => [
     index("customers_business_id_idx").on(t.businessId),
+    // CRM match lookups (src/lib/customerLink): the find-or-create path probes
+    // by phone and by lower-cased name inside a business. Without these the
+    // matcher degrades to a full scan of the customers table on every sale.
+    index("customers_business_phone_idx").on(t.businessId, t.phone),
+    index("customers_business_name_idx").on(t.businessId, t.name),
   ]);
 
 // 5. Suppliers & Vendors

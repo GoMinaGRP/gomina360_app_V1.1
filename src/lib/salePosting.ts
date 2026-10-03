@@ -21,6 +21,7 @@
  */
 import { db } from "@/db";
 import { transactions, salesDocuments, customerTrackings, businesses } from "@/db/schema";
+import { nextSalesDocumentNumber } from "@/lib/documentNumbers";
 import { eq } from "drizzle-orm";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { buildTrackingCode } from "@/lib/tracking";
@@ -261,7 +262,8 @@ export async function postSale(opts: PostSaleOptions): Promise<PostSaleResult> {
   // ── 3. Receipt (sales document) ──────────────────────────────────────────
   let newDoc: any = null;
   if (opts.receipt !== false) {
-    const docNum = `RCP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    // ONE numbering source (src/lib/documentNumbers) — collision-safe sequence.
+    const docNum = await nextSalesDocumentNumber("RECEIPT");
     [newDoc] = await db
       .insert(salesDocuments)
       .values({

@@ -16,6 +16,7 @@
  */
 
 import { db } from "@/db";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { deductOrderStock } from "@/lib/trackingServer";
 import {
   auditTrail,
@@ -227,7 +228,7 @@ export async function bookPaymentEvent({
   biz: any;
 }): Promise<{ paymentId: number; transactionId: number }> {
   const dateStr = new Date().toISOString().split("T")[0];
-  const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+  const trxNum = nextTrxNumber();
   const label =
     kind === "DEPOSIT" ? "Order Deposit" : kind === "BALANCE" ? "Order Balance" : "Online Order Sale";
   const ownerId = biz?.ownerId != null ? Number(biz.ownerId) : await ownerOrgOfBusiness(tracking.businessId);

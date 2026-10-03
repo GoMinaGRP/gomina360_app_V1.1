@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import {
   businessMetrics,
   carWashServices,
@@ -398,7 +399,7 @@ export async function provisionBusiness(
       const now = new Date();
       // One real, manageable expense record for the whole opening kit.
       await db.insert(transactions).values({
-        transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+        transactionNumber: nextTrxNumber(now),
         businessId,
         branchCode: biz.code,
         type: "EXPENSE",

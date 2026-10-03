@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import {
   customerTrackings,
   inventoryItems,
@@ -10,6 +11,7 @@ import { and, eq } from "drizzle-orm";
 import { deductVariantQty, restoreVariantQty, syncItemAggregate, variantsForItem } from "@/lib/boutique";
 import { buildTrackingCode, googleMapsLink } from "@/lib/tracking";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
+import { linkOrCreateCustomer, isAnonymousBuyer } from "@/lib/customerLink";
 import { pushAfterBell } from "@/lib/push";
 
 /** Server-side helpers for Customer Ordering & Tracking (used by the public
@@ -166,7 +168,20 @@ export async function restoreOrderStock(items: any[]): Promise<void> {
   }
 }
 
-/** Match / accumulate the shared CRM customer (same rules as the till). Never throws. */
+/**
+ * Match / accumulate the shared CRM customer for storefront & tracked orders.
+ *
+ * This used to be a SECOND find-or-create implementation (its own org check,
+ * its own loyalty rate, and an unfiltered `select() from customers` scan per
+ * order) living beside `src/lib/customerLink`. It now delegates to that single
+ * matcher, so the till, credit sales, module sales and online orders all agree
+ * on who a buyer is and how spend accrues.
+ *
+ * Behaviour preserved exactly: anonymous buyers ("walk-in", blank names) are
+ * never CREATED here (matchOnly), the historical group-shared rows with a null
+ * businessId stay matchable inside the same organization, and the owning
+ * organization is stamped on new rows.
+ */
 export async function linkCrmCustomer({
   name,
   phone,
@@ -179,54 +194,23 @@ export async function linkCrmCustomer({
   spendGhs: number;
 }): Promise<number | null> {
   try {
-    const all = await db.select().from(customers);
-    // The selling unit's organization — EVERY new customer row is stamped to
-    // it, and org-scoped matching never crosses organization boundaries.
     const ownerOrg = businessId != null ? await ownerOrgOfBusiness(Number(businessId)) : null;
-    const sameOrg = (c: any) => (c.ownerId == null && ownerOrg == null) || Number(c.ownerId) === Number(ownerOrg);
-    const norm = (s: any) => String(s || "").trim().toLowerCase();
-    // Business isolation: the selling business's OWN customer wins first; a
-    // legacy group-shared (NULL business) row matches only inside the SAME
-    // organization, so history flows to it, but new rows are always stamped
-    // to the seller's unit and organization.
-    const match =
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === businessId && sameOrg(c))) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === businessId && sameOrg(c))) ||
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === null && sameOrg(c))) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === null && sameOrg(c))) ||
-      null;
-    if (match) {
-      await db
-        .update(customers)
-        .set({
-          totalSpentGhs: (match.totalSpentGhs || 0) + spendGhs,
-          loyaltyPoints: (match.loyaltyPoints || 0) + Math.floor(spendGhs / 100),
-        })
-        .where(eq(customers.id, match.id));
-      return match.id;
-    }
-    if (name && norm(name) !== "walk-in" && norm(name) !== "walk-in customer") {
-      const [created] = await db
-        .insert(customers)
-        .values({
-          name: String(name).trim(),
-          type: "RETAIL",
-          phone: phone || "",
-          totalSpentGhs: spendGhs,
-          loyaltyPoints: Math.floor(spendGhs / 100),
-          // Isolation: storefront & staff-tracked orders stamp the SELLING
-          // business so the buyer appears in that unit's CRM scope, and the
-          // OWNING organization so per-owner directories stay private.
-          businessId: businessId || null,
-          ownerId: ownerOrg,
-        })
-        .returning();
-      return created?.id ?? null;
-    }
+    const linked = await linkOrCreateCustomer({
+      businessId: Number(businessId),
+      name,
+      phone,
+      amount: spendGhs,
+      ownerId: ownerOrg,
+      includeLegacyShared: true,
+      // Orders only ever adopt an existing buyer; a real name is required to
+      // open a new CRM record (exactly the pre-refactor rule).
+      matchOnly: isAnonymousBuyer(name),
+    });
+    return linked?.id ?? null;
   } catch (e) {
     console.error("linkCrmCustomer warning:", e);
+    return null;
   }
-  return null;
 }
 
 /** Book revenue when staff confirm payment for an order. Returns transaction id. */
@@ -241,7 +225,7 @@ export async function bookOrderPayment({
   staff: { name?: string; role?: string; id?: number };
   business: any;
 }): Promise<number> {
-  const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+  const trxNum = nextTrxNumber();
   const dateStr = new Date().toISOString().split("T")[0];
   const itemsDesc = (tracking.items || [])
     .map((li: any) => `${li.quantity}× ${li.description}`)
