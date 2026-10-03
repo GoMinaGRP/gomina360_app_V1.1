@@ -11,72 +11,20 @@ import {
   ChevronsLeft,
   ChevronsRight,
   X,
-  LayoutDashboard,
-  ShoppingCart,
-  Landmark,
-  Users,
-  Truck,
-  UserCheck,
-  Wrench,
-  Package,
-  CreditCard,
   ShieldCheck,
-  Sparkles,
-  Sliders,
-  Share2,
-  ShieldAlert,
-  Egg,
-  Boxes,
-  Fish,
-  Beef,
-  Utensils,
-  Cpu,
-  Droplets,
-  HardHat,
-  Wifi,
-  Shirt,
+  ShoppingCart,
   CornerUpLeft,
 } from "lucide-react";
 import type { ActiveTab } from "./Sidebar";
-
-const SHARED = "Shared Enterprise Modules";
-
-/**
- * Human-readable metadata for every top-level destination (mirrors the left
- * Sidebar grouping exactly, so the right panel always agrees with the menu).
- */
-const PAGE_INFO: Record<string, { label: string; section: string; Icon: any }> = {
-  COMMAND_CENTER: { label: "Enterprise Command Center", section: "Executive HQ", Icon: LayoutDashboard },
-  SALES_CENTER: { label: "Sales & Payments", section: SHARED, Icon: ShoppingCart },
-  FINANCE: { label: "Finance & Reports", section: SHARED, Icon: Landmark },
-  CUSTOMERS: { label: "Customers & CRM", section: SHARED, Icon: Users },
-  SUPPLIERS: { label: "Suppliers & Vendors", section: SHARED, Icon: Truck },
-  EMPLOYEES: { label: "Employees & Payroll", section: SHARED, Icon: UserCheck },
-  ASSETS: { label: "Assets & Equipment", section: SHARED, Icon: Wrench },
-  INVENTORY: { label: "Inventory & Stock", section: SHARED, Icon: Package },
-  TRANSACTIONS: { label: "Transactions & MoMo", section: SHARED, Icon: CreditCard },
-  AUDIT: { label: "Audit & Review", section: "Oversight & Assurance", Icon: ShieldCheck },
-  AI_ADVISOR: { label: "AI Strategic Advisor", section: "Decision Support & Hub", Icon: Sparkles },
-  SCENARIO_PLANNER: { label: "Scenario Planner", section: "Decision Support & Hub", Icon: Sliders },
-  INTEGRATIONS: { label: "Integrations Hub", section: "Decision Support & Hub", Icon: Share2 },
-  BRANCH_SALES: { label: "Branch Sales & Payments", section: "Branch Workspace", Icon: ShoppingCart },
-  BRANCH_ASSETS: { label: "Branch Assets", section: "Branch Workspace", Icon: Wrench },
-  WORKERS_MANAGE: { label: "Manage Sales Persons", section: "Branch Workspace", Icon: ShieldAlert },
-  USERS_MANAGE: { label: "Users & Access", section: "Administration", Icon: Users },
-};
-
-const CATEGORY_ICONS: Record<string, any> = {
-  "Poultry Farm": Egg,
-  "Block Factory": Boxes,
-  Aquaculture: Fish,
-  Livestock: Beef,
-  "Restaurant & Food": Utensils,
-  "Electronic Shop": Cpu,
-  "Car Wash": Droplets,
-  "Hardware Store": HardHat,
-  "Telecom & Digital Services": Wifi,
-  Boutique: Shirt,
-};
+import {
+  CATEGORY_ICONS,
+  NavEntry,
+  groupByKey,
+  navCtx,
+  pageInfoFor,
+  sectionSiblingsFor,
+} from "@/lib/navManifest";
+import { businessManageIdsOf } from "@/lib/permissions";
 
 interface Loc {
   section: string;
@@ -119,7 +67,7 @@ export function resolveLocation(
   // 1) Audit & Review takes precedence for every role (granted auditors too).
   if (activeTab === "AUDIT") {
     return {
-      section: "Oversight & Assurance",
+      section: groupByKey("GOVERNANCE").rail,
       page: "Audit & Review",
       PageIcon: ShieldCheck,
       bizName: isExecutive ? "Group-wide (all businesses)" : "Your authorized scope",
@@ -154,7 +102,8 @@ export function resolveLocation(
     if (assignedBiz && effective === assignedBiz.code) {
       // falls through to the business-page branch below (same shape as exec)
     } else {
-      const info = PAGE_INFO[effective] || { label: effective, section: "Branch Workspace", Icon: ShoppingCart };
+      const mInfo = pageInfoFor(effective);
+      const info = mInfo || { label: effective, section: groupByKey("BRANCH").rail, Icon: ShoppingCart };
       return {
         section: info.section,
         page: info.label,
@@ -185,16 +134,25 @@ export function resolveLocation(
     };
   }
 
-  // 5) Static page registry (HQ, shared modules, decision support…).
-  const info = PAGE_INFO[activeTab] || { label: activeTab, section: "Workspace", Icon: FileText };
-  const inShared = info.section === SHARED;
+  // 5) Static destinations — straight from the navigation manifest, so the
+  //    right rail can never be missing a page the left menu offers (the audit
+  //    found seven of them, e.g. Pre-Orders and the Document Vault).
+  const mInfo = pageInfoFor(activeTab);
+  const info = mInfo || { label: activeTab, section: "Workspace", Icon: FileText };
+  // Consolidated enterprise sections read as "group-wide"; single-page
+  // destinations simply have no business/branch scope.
+  const consolidated =
+    info.section === "Shared Enterprise Modules" ||
+    info.section === "Decision Support & Hub" ||
+    info.section === "Oversight & Assurance";
+  const isHq = activeTab === "COMMAND_CENTER";
   return {
     section: info.section,
     page: info.label,
     PageIcon: info.Icon,
-    bizName: inShared || info.section === "Executive HQ" ? "Group-wide (all businesses)" : "—",
-    bizNote: inShared ? "Consolidated across every unit" : undefined,
-    branch: inShared ? "All branches (consolidated)" : info.section === "Executive HQ" ? "Enterprise HQ" : "—",
+    bizName: consolidated || isHq ? "Group-wide (all businesses)" : "—",
+    bizNote: consolidated ? "Consolidated across every unit" : undefined,
+    branch: consolidated ? "All branches (consolidated)" : isHq ? "Enterprise HQ" : "—",
     scoped: false,
     biz: null,
   };
@@ -255,6 +213,12 @@ function PanelBody({
   const isExecutive = role === "OWNER" || role === "GENERAL_MANAGER";
   const isWorker = role === "WORKER";
   const isBranchManager = role === "BRANCH_MANAGER";
+  const ctx = navCtx(currentUser, {
+    isUnitManager: businessManageIdsOf(currentUser).length > 0,
+    hasSupportEditor: true,
+    hasManageBusinesses: true,
+    hasOnlineOrdering: role === "OWNER" || !!currentUser?.canManageOnline,
+  });
   const crumbs = crumbList(loc);
 
   // Sibling units of the same business family (e.g. POULTRY-01 ↔ POULTRY-02).
@@ -272,10 +236,15 @@ function PanelBody({
         return true;
       })
       .map((b) => ({ tid: b.code, label: b.name, Icon: CATEGORY_ICONS[b.category] || Building2 }));
-  } else if (loc.section === SHARED && isExecutive) {
-    quick = Object.entries(PAGE_INFO)
-      .filter(([, v]) => v.section === SHARED)
-      .map(([k, v]) => ({ tid: k, label: v.label, Icon: v.Icon }));
+  } else {
+    // Every other destination lists its own section siblings — the same
+    // manifest entries the left rail renders for this user, so the two
+    // surfaces can never disagree about what a section contains.
+    quick = sectionSiblingsFor(String(activeTab), ctx).map((e: NavEntry) => ({
+      tid: e.id,
+      label: e.label,
+      Icon: e.Icon,
+    }));
   }
   // P0.2 — the rail no longer re-lists the Branch Workspace links for a
   // BRANCH_MANAGER: the sidebar's single "Branch Management" group is their

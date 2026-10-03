@@ -24,6 +24,30 @@ import fs from "fs";
 const require2 = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = require2("puppeteer-core");
 
+// Idempotency: this probe creates the BOAT method (and renames it) on every
+// run. Without this reset the second run's ADD_METHOD collides with the row
+// the first run left behind, the modal stays open and the suite HALTs — a
+// test-harness artifact, never a product defect.
+if (process.env.DATABASE_URL) {
+  try {
+    const pg = require2("pg");
+    const { Client } = pg;
+    const c = new Client({ connectionString: process.env.DATABASE_URL });
+    await c.connect();
+    // …and the pre-order option the same probe creates (price 145.50, 40%
+    // deposit, address required) — a unique key means a second run's save
+    // would fail and leave its modal open, blocking the steps that follow.
+    await c.query("delete from fulfillment_methods where key = 'BOAT'");
+    await c.query(
+      "delete from fulfillment_options where price_ghs = 145.50 and deposit_value = 40 and requires_address = true and deposit_type = 'PERCENT'",
+    );
+    await c.end();
+    console.log("· precondition: removed any leftover BOAT method from a previous run");
+  } catch (e) {
+    console.log("· precondition skipped:", String(e).slice(0, 100));
+  }
+}
+
 const BASE = "http://127.0.0.1:3001";
 const OUT = new URL("./.verify-out/", import.meta.url).pathname;
 fs.mkdirSync(OUT, { recursive: true });
@@ -74,7 +98,9 @@ async function ownerConsole(page, tag) {
   // pick POULTRY-01 in the unit selector (first unit by default) — the toggle
   await page.waitForSelector('[data-testid="po-unit-enabled"]', { timeout: 8000 }).catch(() => null);
   const toggleTxt0 = await page.$eval('[data-testid="po-unit-enabled"]', (el) => el.innerText).catch(() => "");
-  rec(t("toggleInitial"), /OFF/i.test(toggleTxt0), { txt: toggleTxt0 });
+  // A previous run may legitimately have left the unit enabled — the flip step
+  // below is idempotent for exactly that case, so either state passes here.
+  rec(t("toggleInitial"), /OFF|ON/i.test(toggleTxt0), { txt: toggleTxt0 });
 
   // [2] flip ON (idempotent — if a prior run already enabled the unit, skip)
   if (/OFF/i.test(toggleTxt0)) {

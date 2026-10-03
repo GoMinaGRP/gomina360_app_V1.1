@@ -1,46 +1,66 @@
 "use client";
 
+/**
+ * Sidebar — the single left navigation rail.
+ *
+ * Rewritten (sidebar audit, docs/SIDEBAR-NAV-AUDIT.md) to render *from the
+ * manifest* (src/lib/navManifest.ts) instead of hard-coding each section. What
+ * that buys the product:
+ *
+ *  · One destination = one row. The old rail rendered "Customer Order &
+ *    Tracking" twice and "Finance & Reports" twice for a manage-grantee, with
+ *    duplicate test-ids; eligibility now lives in exactly one place.
+ *  · Sections are real, collapsible groups with a live count. A group is
+ *    ≤6 rows, so the rail cannot grow into a 30-row wall again.
+ *  · "My Businesses" is bounded: the unit list scrolls inside its own box,
+ *    picks up a type-to-filter box past 8 units, and puts favourites first —
+ *    with EVERY unit still rendered (nothing is hidden behind a click).
+ *  · Quick access: recents + favourites, so the 3-4 screens an owner uses
+ *    daily are always one click away.
+ *  · Search: a "Search or jump to…" row opens the command palette (⌘K).
+ *  · Phones: the rail is an off-canvas drawer opened from the navbar, with a
+ *    4-slot bottom bar for the everyday actions — instead of a 48px strip of
+ *    unlabelled icons.
+ *
+ * Everything that worked before still works: same test-ids, same chips
+ * (GRANTED / MANAGE / MONITOR / INACTIVE), same Organization Lens, same
+ * role gating (re-checked server-side by /api/init and every API route).
+ */
+
 import React, { useEffect, useMemo, useState } from "react";
 import { groupBusinessesByOrg } from "@/lib/orgGrouping";
 import {
-  Beef,
-  LayoutDashboard,
-  LifeBuoy,
-  Building2,
-  Egg,
-  Boxes,
-  Fish,
-  Utensils,
-  Cpu,
-  Droplets,
-  Users,
-  Truck,
-  UserCheck,
-  Wrench,
-  Package,
-  CreditCard,
-  Sparkles,
-  Sliders,
-  Share2,
-  BarChart3,
+  ChevronDown,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  ShieldAlert,
-  ShieldCheck,
-  ShoppingCart,
-  HardHat,
-  Shirt,
-  Landmark,
-  Wifi,
+  Search,
+  X,
   Settings2,
-  CalendarClock,
-  Stethoscope,
+  Building2,
+  Clock,
+  LayoutDashboard,
   ListTodo,
-  FolderLock,
-  BrainCircuit,
+  Stethoscope,
+  ShoppingCart,
 } from "lucide-react";
 import { businessManageIdsOf } from "@/lib/permissions";
+import {
+  NavEntry,
+  businessIcon,
+  groupByKey,
+  navCtx,
+  navEntriesFor,
+  navSectionsFor,
+} from "@/lib/navManifest";
+import {
+  NAV_PREFS_EVENT,
+  loadNavPrefs,
+  saveNavPrefs,
+  isSectionOpen,
+  pushRecent,
+  quickAccessIds,
+} from "@/lib/navPrefs";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
@@ -79,20 +99,28 @@ interface SidebarProps {
   businesses: any[];
   currentUser: any;
   auditEligible?: boolean;
-  // Opens the Customer Support (storefront HELP) editor — OWNER always,
-  // plus any user the OWNER granted canManageSupport.
+  /** Opens the Customer Support (storefront HELP) editor — OWNER always,
+   *  plus any user the OWNER granted canManageSupport. */
   onOpenSupportInfo?: () => void;
-  /** Server-vetted access scope from /api/init (null ⇒ OWNER, unrestricted).
-   *  A BRANCH_MANAGER sees business dashboard chips for their primary
-   *  assignment AND every business the OWNER granted via Users & Access →
-   *  "Extra business access" (user_business_access). */
+  /** Server-vetted access scope from /api/init (null ⇒ OWNER, unrestricted). */
   accessibleBusinessIds?: number[] | null;
   /** Opens Manage Businesses & Branches — shown to "Manage Unit" grantees. */
   onOpenManageBusinesses?: () => void;
+  /** Opens Manage Units → Online Ordering & service areas. */
+  onOpenOnlineOrdering?: () => void;
   /** SUPER ADMIN ONLY — Organization Lens context + org directory. */
   organizations?: { id: number; name: string; slug: string; status: string }[];
   orgLens?: string; // "MY" | "ALL" | "<orgId>"
   onLensChange?: (lens: string) => void;
+  /** Opens the command palette (also bound to ⌘K / "/" globally). */
+  onOpenPalette?: () => void;
+  /** The shared navigation context computed by GoMinaApp (one truth for the
+   *  rail, the palette and the right rail). Falls back to a local computation. */
+  navContext?: import("@/lib/navManifest").NavCtx;
+  /** Off-canvas drawer state (phones & tablets). */
+  mobileOpen?: boolean;
+  onCloseMobile?: () => void;
+  onOpenMobile?: () => void;
 }
 
 export default function Sidebar({
@@ -107,6 +135,12 @@ export default function Sidebar({
   onOpenSupportInfo,
   accessibleBusinessIds,
   onOpenManageBusinesses,
+  onOpenOnlineOrdering,
+  onOpenPalette,
+  navContext,
+  mobileOpen = false,
+  onCloseMobile,
+  onOpenMobile,
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
@@ -115,39 +149,148 @@ export default function Sidebar({
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
   const isSuperAdmin = !!currentUser?.isSuperAdmin;
   const myOrgName = organizations.find((o) => Number(o.id) === 1)?.name || "GoMina Group";
-  // Super-Admin grouped business list (Organization Lens): the Main Owner's
-  // own workspace first, then each other Owner's org — org identity is
-  // never invisible inside the business/branch list anymore.
-  const businessGroups = useMemo(
-    () => (isSuperAdmin ? groupBusinessesByOrg(businesses, organizations) : []),
-    [isSuperAdmin, businesses, organizations]
+
+  const managedBizIds = useMemo(() => new Set(businessManageIdsOf(currentUser)), [currentUser]);
+  const isUnitManager = managedBizIds.size > 0;
+  const assignedBusinessId = currentUser?.assignedBusinessId;
+  const grantScope = Array.isArray(accessibleBusinessIds)
+    ? accessibleBusinessIds.map((n) => Number(n))
+    : null;
+
+  /** One navigation context for the whole rail (and handed to the palette by
+   *  GoMinaApp), so no two surfaces can disagree about who sees what. */
+  const ctx = useMemo(
+    () =>
+      navCtx(currentUser, {
+        isUnitManager,
+        auditEligible,
+        hasSupportEditor: !!onOpenSupportInfo,
+        hasManageBusinesses: !!onOpenManageBusinesses,
+        hasOnlineOrdering: !!onOpenOnlineOrdering,
+      }),
+    [currentUser, isUnitManager, isBusinessManager, auditEligible, onOpenSupportInfo, onOpenManageBusinesses, onOpenOnlineOrdering],
   );
 
-  // P0.3 — archived units leave the navigation for executives and super
-  // admins (Manage Businesses keeps them listed with a Restore control).
-  // A BRANCH_MANAGER still sees their own assigned unit even if archived —
-  // their workspace must never vanish overnight.
+  const sharedCtx = navContext ?? ctx;
+  const entries = useMemo(() => navEntriesFor(sharedCtx), [sharedCtx]);
+  const pinned = useMemo(() => entries.filter((e) => e.group === "PINNED"), [entries]);
+  const sections = useMemo(() => navSectionsFor(sharedCtx), [sharedCtx]);
+
+  /* ── icon-rail (desktop preference, unchanged key for continuity) ── */
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem("gomina.sidebarCollapsed") === "1");
+    } catch {}
+  }, []);
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        window.localStorage.setItem("gomina.sidebarCollapsed", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  };
+
+  /* ── per-user preferences: collapsed sections, recents, favourites ── */
+  const [prefs, setPrefs] = useState(() => loadNavPrefs());
+  useEffect(() => {
+    const sync = () => setPrefs(loadNavPrefs());
+    window.addEventListener(NAV_PREFS_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(NAV_PREFS_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+  const sectionOpen = (key: string) => isSectionOpen(prefs, key);
+  const toggleSection = (key: string) => {
+    const open = sectionOpen(key);
+    setPrefs(saveNavPrefs({ sections: { ...prefs.sections, [key]: !open } }));
+  };
+
+  /* ── recents: remember where the user actually went ── */
+  useEffect(() => {
+    if (!activeTab) return;
+    pushRecent(String(activeTab));
+  }, [activeTab]);
+
+  /* ── drawer behaviour: close on navigate / Escape, lock the page ── */
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCloseMobile?.();
+    };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileOpen, onCloseMobile]);
+
+  const selectTab = (tab: ActiveTab) => {
+    onSelectTab(tab);
+    if (mobileOpen) onCloseMobile?.();
+  };
+
+  /* ── My Businesses: archived units leave the rail for execs (their own
+        assigned unit never disappears for a manager), SA groups by owner ── */
   const navBusinesses = useMemo(
     () =>
       isExecutive || isSuperAdmin
         ? businesses.filter((b) => !b?.isArchived || b.code === activeTab)
         : businesses,
-    [businesses, isExecutive, isSuperAdmin, activeTab]
+    [businesses, isExecutive, isSuperAdmin, activeTab],
+  );
+  const businessGroups = useMemo(
+    () => (isSuperAdmin ? groupBusinessesByOrg(businesses, organizations) : []),
+    [isSuperAdmin, businesses, organizations],
   );
   const navBusinessGroups = useMemo(
     () =>
       isSuperAdmin
         ? businessGroups
-            .map((g) => ({ ...g, businesses: g.businesses.filter((b) => !b?.isArchived || b.code === activeTab) }))
+            .map((g) => ({
+              ...g,
+              businesses: g.businesses.filter((b) => !b?.isArchived || b.code === activeTab),
+            }))
             .filter((g) => g.businesses.length > 0)
         : [],
-    [businessGroups, isSuperAdmin, activeTab]
+    [businessGroups, isSuperAdmin, activeTab],
   );
 
-  /** One business/branch chip in the list — identical for Owners and super
-   *  admins; grouping happens at the caller (group headers for SA only). */
+  const [bizFilter, setBizFilter] = useState("");
+  const matchesFilter = (biz: any) => {
+    const q = bizFilter.trim().toLowerCase();
+    if (!q) return true;
+    return `${biz.name} ${biz.code} ${biz.category || ""} ${biz.branchLocation || ""}`
+      .toLowerCase()
+      .includes(q);
+  };
+  const favUnitIndex = (biz: any) => {
+    const i = prefs.favUnits.indexOf(biz.code);
+    return i === -1 ? 999 : i;
+  };
+  const sortUnits = (list: any[]) =>
+    [...list].sort((a, b) => favUnitIndex(a) - favUnitIndex(b));
+
+  const isAccessible = (biz: any) => {
+    if (isWorker || isBusinessManager) {
+      if (assignedBusinessId && Number(biz.id) === Number(assignedBusinessId)) return true;
+      if (grantScope) return grantScope.includes(Number(biz.id));
+      return false;
+    }
+    return true; // Owner / GM / Super Admin
+  };
+  const isPrimary = (biz: any) =>
+    assignedBusinessId != null && Number(biz.id) === Number(assignedBusinessId);
+
+  /** One business/branch chip — identical for Owners and super admins. */
   const renderBizButton = (biz: any) => {
-    const IconComp = businessIcons[biz.code] || CATEGORY_ICONS[biz.category] || Building2;
+    const IconComp = businessIcon(biz);
     const accessible = isAccessible(biz);
     return (
       <button
@@ -158,12 +301,13 @@ export default function Sidebar({
           if (accessible) selectTab(biz.code as ActiveTab);
         }}
         disabled={!accessible}
+        aria-label={biz.name}
         className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
           activeTab === biz.code
             ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
             : accessible
-            ? "hover:bg-slate-800/70 text-slate-300"
-            : "opacity-40 cursor-not-allowed text-slate-500"
+              ? "hover:bg-slate-800/70 text-slate-300"
+              : "opacity-40 cursor-not-allowed text-slate-500"
         }`}
         title={
           accessible
@@ -179,14 +323,13 @@ export default function Sidebar({
               src={biz.logo}
               alt=""
               data-testid={`sidebar-biz-logo-${biz.code}`}
-              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
+              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0"
+              loading="lazy"
+              decoding="async"
+            />
           ) : (
             <IconComp
-              className={`w-4 h-4 ${
-                activeTab === biz.code
-                  ? "text-emerald-400"
-                  : "text-slate-400"
-              }`}
+              className={`w-4 h-4 ${activeTab === biz.code ? "text-emerald-400" : "text-slate-400"}`}
             />
           )}
           <span className="truncate">{biz.name}</span>
@@ -226,819 +369,539 @@ export default function Sidebar({
       </button>
     );
   };
-  const assignedBusinessId = currentUser?.assignedBusinessId;
-  // OWNER-delegated "Manage Business / Unit" managers: owner-equivalent power
-  // strictly for the granted units — they get the same enterprise sections,
-  // but every list stays server-scoped to the units they may reach.
-  const managedBizIds = new Set(businessManageIdsOf(currentUser));
-  const isUnitManager = managedBizIds.size > 0;
 
-  // Collapsible static menu: pinned rail at all times (never hidden) — the
-  // toggle shrinks it to an icon-only strip so content gets the room back.
-  // The choice persists across reloads (per browser).
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem("gomina.sidebarCollapsed");
-      if (saved === "1") setCollapsed(true);
-      else if (saved === "0") setCollapsed(false);
-      else if (window.matchMedia("(max-width: 1023px)").matches) {
-        // No explicit choice yet: phones and tablets start in the icon rail so
-        // the page gets the screen (160px of a 390px phone is a third of it).
-        setCollapsed(true);
-      }
-      setPrefReady(true);
-    } catch {}
-  }, []);
-  // Has the user made an explicit choice? Until then the auto-collapse above
-  // decides (and a rotation/resize may flip it on tablet).
-  const [prefReady, setPrefReady] = useState(false);
-  useEffect(() => {
-    if (!prefReady) return;
-    const mq = window.matchMedia("(max-width: 1023px)");
-    const apply = () => {
-      try {
-        if (window.localStorage.getItem("gomina.sidebarCollapsed") != null) return;
-      } catch {}
-      setCollapsed(mq.matches);
-    };
-    apply();
-    mq.addEventListener?.("change", apply);
-    return () => mq.removeEventListener?.("change", apply);
-  }, [prefReady]);
-
-  const toggleCollapsed = () => {
-    setCollapsed((c) => {
-      try {
-        window.localStorage.setItem("gomina.sidebarCollapsed", c ? "0" : "1");
-      } catch {}
-      return !c;
-    });
+  /* ── manifest rows ─────────────────────────────────────────────── */
+  const isRowActive = (e: NavEntry) => {
+    if (e.id === "ADVISOR_MANAGE") return activeTab === "ADVISOR" && isExecutive;
+    if (e.id === "ADVISOR") return activeTab === "ADVISOR" && !isExecutive;
+    return activeTab === e.id;
   };
 
-  const businessIcons: Record<string, any> = {
-    "POULTRY-01": Egg,
-    "BLOCK-01": Boxes,
-    "AQUA-01": Fish,
-    "LIVESTOCK-01": Building2,
-    "FOOD-01": Utensils,
-    "TECH-01": Cpu,
-    "WASH-01": Droplets,
+  const runRow = (e: NavEntry) => {
+    if (e.action === "support") return onOpenSupportInfo?.();
+    if (e.action === "manageUnits") return onOpenManageBusinesses?.();
+    if (e.action === "onlineOrdering") return onOpenOnlineOrdering?.();
+    // The OWNER's "Farm Advisors" access console shares the ADVISOR screen
+    // with the advisor's own read-only console.
+    if (e.id === "ADVISOR_MANAGE") return selectTab("ADVISOR");
+    selectTab(e.id as ActiveTab);
   };
 
-  const CATEGORY_ICONS: Record<string, any> = {
-    "Poultry Farm": Egg,
-    "Block Factory": Boxes,
-    "Aquaculture": Fish,
-    "Livestock": typeof Beef !== "undefined" ? Beef : Building2,
-    "Restaurant & Food": Utensils,
-    "Electronic Shop": Cpu,
-    "Car Wash": Droplets,
-    "Hardware Store": HardHat,
-    "Telecom & Digital Services": Wifi,
-    Boutique: Shirt,
+  const chipFor = (e: NavEntry) => {
+    if (e.id === "FINANCE" && !isExecutive && !isUnitManager) return "GRANTED";
+    // Workers only ever see their own queue — the chip says so (as before).
+    if (e.id === "ACTION_CENTER") return isWorker ? "MY TASKS" : "ALL ACTIONS";
+    return e.chip;
   };
 
-  const selectTab = (tab: ActiveTab) => {
-    onSelectTab(tab);
-  };
-
-  // Access scope for dashboard chips: a BRANCH_MANAGER (or worker) may open
-  // the dashboards of their PRIMARY assignment plus every business the OWNER
-  // granted them (Users & Access → "Extra business access"). When the scope
-  // list is absent we fall back to the primary assignment only (the legacy
-  // behaviour); executives always see everything.
-  const grantScope = Array.isArray(accessibleBusinessIds)
-    ? accessibleBusinessIds.map((n) => Number(n))
-    : null;
-  const isAccessible = (biz: any) => {
-    if (isWorker || isBusinessManager) {
-      if (assignedBusinessId && Number(biz.id) === Number(assignedBusinessId)) return true;
-      if (grantScope) return grantScope.includes(Number(biz.id));
-      // init's business list is already server-scoped when no list was
-      // forwarded; only fall back permissively in that case.
-      return false;
-    }
-    // Owner/GM can see all
-    return true;
-  };
-  const isPrimary = (biz: any) =>
-    assignedBusinessId != null && Number(biz.id) === Number(assignedBusinessId);
-
-  return (
-    /* STATIC left navigation menu — permanently pinned on every screen
-       size (restored behavior), and COLLAPSIBLE: the header chevron folds
-       it to an icon-only rail (48–56px). Expanded width adapts so page
-       content keeps room: 160px phones, 224px tablets, 256px desktop. It
-       never slides in/out and never covers the page. */
-    <aside
-      data-testid="nav-sidebar" data-printchrome="true"
-      data-collapsed={collapsed}
-      className={`${
-        collapsed ? "w-12 sm:w-14" : "w-40 sm:w-56 lg:w-64"
-      } shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col text-slate-300 overflow-y-auto overflow-x-hidden select-none transition-[width] duration-200`}
-    >
-      {/* Collapse / expand toggle — always one tap away */}
-      <div className={`flex items-center px-1.5 py-1.5 border-b border-slate-800/60 ${collapsed ? "justify-center" : "justify-end"}`}>
-        <button
-          onClick={toggleCollapsed}
-          data-testid="sidebar-collapse-toggle"
-          aria-label={collapsed ? "Expand navigation menu" : "Collapse navigation menu"}
-          aria-expanded={!collapsed}
-          title={collapsed ? "Expand menu" : "Collapse menu"}
-          className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
-        >
-          {collapsed ? <ChevronsRight className="w-4 h-4" /> : <ChevronsLeft className="w-4 h-4" />}
-        </button>
-      </div>
-
-      {/* Top section: Farm Advisor Console (FARM_ADVISOR role only) — the
-          advisor's cross-unit home screen. */}
-      {isFarmAdvisor && (
-        <div className="p-2 sm:p-3 border-b border-slate-800">
-          <button
-            onClick={() => selectTab("ADVISOR")}
-            data-testid="advisor-console-tab"
-            className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
-              activeTab === "ADVISOR"
-                ? "bg-gradient-to-r from-teal-600 to-emerald-700 text-white shadow-lg shadow-teal-900/30 font-bold"
-                : "hover:bg-slate-800/80 text-slate-200"
-            }`}
-          >
-            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-              <Stethoscope className={`w-4 h-4 ${activeTab === "ADVISOR" ? "text-white" : "text-teal-400"}`} />
-              <span>Advisor Console</span>
-            </div>
-            <span className="hidden sm:inline text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-bold border border-teal-500/30">
-              MONITOR
+  const renderRow = (e: NavEntry, opts: { indented?: boolean; testid?: string } = {}) => {
+    const active = isRowActive(e);
+    const chip = chipFor(e);
+    const activeCls =
+      e.active ||
+      "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400";
+    return (
+      <button
+        key={e.id}
+        onClick={() => runRow(e)}
+        data-testid={opts.testid || e.testid || `sidebar-item-${e.id}`}
+        aria-current={active ? "page" : undefined}
+        aria-label={e.label}
+        title={collapsed ? `${e.label} — ${groupByKey(e.group).label || "Workspace"}` : e.label}
+        className={`w-full flex items-center ${opts.indented ? "justify-between pl-3" : "justify-between"} pr-2 sm:pr-3 py-2 rounded-lg text-xs font-medium transition ${
+          active ? activeCls : "hover:bg-slate-800/70 text-slate-300"
+        }`}
+      >
+        {collapsed ? (
+          <e.Icon className={`w-4 h-4 mx-auto ${active ? "text-white" : e.ink || "text-slate-400"}`} />
+        ) : (
+          <>
+            <span className="flex items-center space-x-1.5 sm:space-x-2.5 truncate">
+              <e.Icon className={`w-4 h-4 shrink-0 ${e.ink || "text-slate-400"}`} />
+              <span className="truncate">{e.label}</span>
             </span>
-          </button>
-        </div>
-      )}
-
-      {/* Top section: Executive Command Center (Owner / General Manager only) */}
-      {isExecutive && (
-        <div className="p-2 sm:p-3 border-b border-slate-800">
-          <button
-            onClick={() => selectTab("COMMAND_CENTER")}
-            className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
-              activeTab === "COMMAND_CENTER"
-                ? "bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-lg shadow-emerald-900/30 font-bold"
-                : "hover:bg-slate-800/80 text-slate-200"
-            }`}
-          >
-            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-              <LayoutDashboard
-                className={`w-4 h-4 ${
-                  activeTab === "COMMAND_CENTER" ? "text-white" : "text-emerald-400"
+            {chip && (
+              <span
+                className={`hidden sm:inline text-[9px] px-1 py-0.5 rounded font-bold border shrink-0 ${
+                  chip === "GRANTED"
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                    : chip === "PLATFORM"
+                      ? "bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/30"
+                      : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
                 }`}
-              />
-              <span>Command Center</span>
-            </div>
-            <span className="hidden sm:inline text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-bold border border-emerald-500/30">
-              360° HQ
-            </span>
-          </button>
-        </div>
-      )}
+              >
+                {chip}
+              </span>
+            )}
+          </>
+        )}
+      </button>
+    );
+  };
 
-      {/* Action Center — staff's cross-module to-do list (P1). Owners and
-          managers see their whole scope; workers see their own assignments.
-          The API enforces the same scoping server-side. (Farm advisors keep
-          their closed sandbox: their follow-ups live in the Advisor Console.) */}
-      {!isFarmAdvisor && (
-      <div className="p-2 sm:p-3 border-b border-slate-800">
+  /* ── quick access: favourites + recents (never the current page) ── */
+  const quickEntries = useMemo(() => {
+    if (collapsed) return [];
+    const ids = quickAccessIds(prefs, String(activeTab), 4);
+    return ids
+      .map((id) => entries.find((e) => e.id === id))
+      .filter((e): e is NavEntry => !!e && !e.action);
+  }, [collapsed, prefs, activeTab, entries]);
+
+  /* ── bottom bar (phones & tablets): the four everyday actions ── */
+  const homeTab: ActiveTab = isFarmAdvisor
+    ? "ADVISOR"
+    : isExecutive
+      ? "COMMAND_CENTER"
+      : isBusinessManager || isWorker
+        ? ((businesses.find((b) => Number(b.id) === Number(assignedBusinessId))?.code ||
+            (isBusinessManager ? "BRANCH_SALES" : "COMMAND_CENTER")) as ActiveTab)
+        : ("COMMAND_CENTER" as ActiveTab);
+  const bottomBar = (
+    <nav
+      data-testid="nav-bottom-bar"
+      data-printchrome="true"
+      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex items-stretch"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      {(
+        [
+          { id: "nb-home", label: "Home", Icon: LayoutDashboard, run: () => selectTab(homeTab) },
+          isFarmAdvisor
+            ? {
+                id: "nb-console",
+                label: "Console",
+                Icon: Stethoscope,
+                run: () => selectTab("ADVISOR" as ActiveTab),
+              }
+            : {
+                id: "nb-actions",
+                label: "Actions",
+                Icon: ListTodo,
+                run: () => selectTab("ACTION_CENTER"),
+              },
+          {
+            id: "nb-sell",
+            label: "Sell",
+            Icon: ShoppingCart,
+            run: () =>
+              selectTab(
+                (isBusinessManager
+                  ? "BRANCH_SALES"
+                  : isExecutive || isUnitManager
+                    ? "SALES_CENTER"
+                    : homeTab) as ActiveTab,
+              ),
+          },
+          { id: "nb-search", label: "Search", Icon: Search, run: () => onOpenPalette?.() },
+          { id: "nb-menu", label: "Menu", Icon: ChevronsRight, run: () => onOpenMobile?.() },
+        ] as { id: string; label: string; Icon: any; run: () => void }[]
+      ).map((b) => (
         <button
-          onClick={() => selectTab("ACTION_CENTER")}
-          data-testid="sidebar-tab-actions"
-          className={`w-full flex items-center justify-between px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
-            activeTab === "ACTION_CENTER"
-              ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg shadow-amber-900/30 font-bold"
-              : "hover:bg-slate-800/80 text-slate-200"
+          key={b.id}
+          data-testid={b.id}
+          onClick={b.run}
+          aria-label={b.label}
+          className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-slate-300 hover:text-white hover:bg-slate-800/70 transition"
+        >
+          <b.Icon className="w-4 h-4" />
+          <span className="text-[10px] font-semibold">{b.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+
+  /* ───────────────────────────── render ───────────────────────────── */
+  return (
+    <>
+      {mobileOpen && (
+        <div
+          data-testid="nav-sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => onCloseMobile?.()}
+          className="lg:hidden fixed inset-0 z-[55] bg-slate-950/60 backdrop-blur-sm"
+        />
+      )}
+      <aside
+        data-testid="nav-sidebar"
+        data-printchrome="true"
+        data-collapsed={collapsed}
+        data-mobile-open={mobileOpen}
+        aria-label="Primary navigation"
+        className={`shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col text-slate-300 overflow-y-auto overflow-x-hidden select-none
+          max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-[60] max-lg:w-72 max-lg:shadow-2xl max-lg:transition-transform max-lg:duration-200
+          ${mobileOpen ? "max-lg:translate-x-0" : "max-lg:-translate-x-full"}
+          lg:static lg:translate-x-0 lg:transition-[width] lg:duration-200
+          ${collapsed ? "lg:w-14" : "lg:w-64"}`}
+      >
+        {/* Header row — drawer close on phones, icon-rail toggle on desktop */}
+        <div
+          className={`flex items-center px-1.5 py-1.5 border-b border-slate-800/60 ${
+            collapsed ? "lg:justify-center" : "justify-between"
           }`}
         >
-          <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-            <ListTodo
-              className={`w-4 h-4 ${activeTab === "ACTION_CENTER" ? "text-white" : "text-amber-400"}`}
-            />
-            <span>Action Center</span>
-          </div>
-          <span className="hidden sm:inline text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold border border-amber-500/30">
-            {isWorker ? "MY TASKS" : "ALL ACTIONS"}
+          <span className="lg:hidden flex items-center gap-2 px-1 truncate">
+            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 text-white font-black text-[9px] flex items-center justify-center border border-emerald-400/30">
+              360
+            </span>
+            <span className="text-xs font-bold text-slate-200">Navigation</span>
           </span>
-        </button>
-      </div>
-      )}
-
-      {/* Businesses — executives see every unit; a branch manager sees the
-          dashboards of their assigned branch AND every branch the OWNER
-          granted them access to (extra branches carry the GRANTED badge).
-          The SUPER ADMIN additionally gets the Organization Lens: "My
-          Workspace" (default operational view), "All Organizations"
-          (platform oversight), or one Owner at a time — and the business
-          list is grouped by owning Owner/Organization. */}
-
-      {/* ── SUPER ADMIN: Organization Lens selector ── */}
-      {isSuperAdmin && !isWorker && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70 bg-fuchsia-900/10">
-          <div className="px-1 sm:px-3 py-1 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
-            Organization Lens
-          </div>
-          <select
-            data-testid="org-lens-select"
-            value={orgLens}
-            onChange={(e) => onLensChange?.(e.target.value)}
-            title="Choose whose workspace you are looking at right now"
-            className="mx-1 sm:mx-3 mb-1 w-[calc(100%-0.5rem)] sm:w-[calc(100%-1.5rem)] px-2 py-1.5 rounded-lg bg-slate-800 border border-fuchsia-500/40 text-fuchsia-100 text-[11px] font-bold focus:outline-none"
-          >
-            <option value="MY">My Workspace — {myOrgName}</option>
-            <option value="ALL">All Organizations (platform oversight)</option>
-            {organizations
-              .filter((o) => Number(o.id) !== 1)
-              .map((o) => (
-                <option key={o.id} value={String(o.id)}>
-                  {o.name}
-                  {o.status && o.status !== "ACTIVE" ? ` (${o.status})` : ""}
-                </option>
-              ))}
-          </select>
-          <p className="px-1 sm:px-3 text-[9px] leading-snug text-slate-500">
-            {orgLens === "MY"
-              ? "Operating view — just your own businesses, like any Owner sees."
-              : orgLens === "ALL"
-                ? "Oversight view — every Owner grouped below; Command Center shows per-org rollups + platform totals."
-                : `Focused view — ${organizations.find((o) => String(o.id) === orgLens)?.name || "one Owner"} only.`}
-          </p>
-        </div>
-      )}
-
-      {!isWorker && (
-      <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-        <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-          {isSuperAdmin
-            ? orgLens === "MY"
-              ? `My Businesses (${businesses.length})`
-              : orgLens === "ALL"
-                ? `Platform Businesses (${businesses.length} · ${businessGroups.length} owners)`
-                : `Owned by ${organizations.find((o) => String(o.id) === orgLens)?.name || "this Owner"} (${businesses.length})`
-            : isExecutive
-            ? `${businesses.length} Ghana Businesses`
-            : isFarmAdvisor
-            ? `My Farm Units (${navBusinesses.filter(isAccessible).length})`
-            : businesses.filter(isAccessible).length > 1
-            ? `My Branches (${navBusinesses.filter(isAccessible).length})`
-            : "My Branch"}
-        </div>
-        <div className="space-y-1 mt-1">
-          {/* ── SUPER ADMIN: grouped by owning Owner/Organization ── */}
-          {isSuperAdmin ? (
-            <>
-              {navBusinessGroups.map((group) => (
-                <div key={group.orgId} className="space-y-1">
-                  <div
-                    data-testid={`sidebar-org-group-${group.orgId}`}
-                    className={`flex items-center gap-1.5 px-1.5 pt-2 pb-1 text-[9px] font-black tracking-wider ${
-                      group.isMain ? "text-violet-300" : "text-sky-300"
-                    }`}
-                  >
-                    {group.orgLogo ? (
-                      <img
-                        src={group.orgLogo}
-                        alt=""
-                        data-testid={`sidebar-org-logo-${group.orgId}`}
-                        className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0" loading="lazy" decoding="async" />
-                    ) : (
-                      <span
-                        className={`inline-block w-2 h-2 rounded-full shrink-0 ${
-                          group.isMain ? "bg-violet-400" : "bg-sky-400"
-                        }`}
-                      />
-                    )}
-                    <span className="truncate">
-                      {group.isMain
-                        ? `YOUR BUSINESSES — ${group.orgName.toUpperCase()} (MAIN OWNER)`
-                        : `OWNED BY ${group.orgName.toUpperCase()}`}
-                    </span>
-                    {group.orgStatus !== "ACTIVE" && (
-                      <span className="text-[8px] font-black px-1 py-0.5 rounded border bg-slate-500/15 text-slate-400 border-slate-500/40 shrink-0">
-                        {group.orgStatus}
-                      </span>
-                    )}
-                    <span className="ml-auto text-slate-500 shrink-0">{group.businesses.length}</span>
-                  </div>
-                  {group.businesses.map((biz) => renderBizButton(biz))}
-                </div>
-              ))}
-              {businesses.length === 0 && (
-                <p className="px-1 sm:px-3 py-2 text-[10px] text-slate-500">
-                  No businesses in this view yet.
-                </p>
-              )}
-            </>
-          ) : (
-            /* ── Normal Owners & staff: the ORIGINAL flat list, unchanged ── */
-            navBusinesses.map((biz) => renderBizButton(biz))
-          )}
-        </div>
-      </div>
-      )}
-
-      {/* Customer Order & Tracking — Branch Managers (executives find it in Shared Modules) */}
-      {isBusinessManager && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Order & Tracking
-          </div>
           <button
-            onClick={() => selectTab("TRACKING")}
-            data-testid="sidebar-tab-tracking"
-            className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition mt-1 ${
-              activeTab === "TRACKING"
-                ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                : "hover:bg-slate-800/70 text-slate-300"
-            }`}
+            onClick={toggleCollapsed}
+            data-testid="sidebar-collapse-toggle"
+            aria-label={collapsed ? "Expand navigation menu" : "Collapse navigation menu"}
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand menu" : "Collapse menu"}
+            className="hidden lg:inline-flex p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
           >
-            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-              <Truck className="w-4 h-4 text-cyan-400/90" />
-              <span>Order & Tracking</span>
-            </div>
-            <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">LIVE</span>
+            {collapsed ? <ChevronsRight className="w-4 h-4" /> : <ChevronsLeft className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => onCloseMobile?.()}
+            data-testid="sidebar-drawer-close"
+            aria-label="Close navigation menu"
+            className="lg:hidden p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
-      )}
 
-      {/* Shared Enterprise Management Modules — Owner / General Manager, plus
-          any user the OWNER granted "Manage Business / Unit" power (scoped). */}
-      {(isExecutive || isUnitManager) && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Shared Enterprise Modules
+        {/* Command palette trigger — the rail's own search row */}
+        {!collapsed && onOpenPalette && (
+          <div className="px-2 sm:px-3 pt-2">
+            <button
+              onClick={() => onOpenPalette()}
+              data-testid="sidebar-search-trigger"
+              aria-label="Search or jump to a destination"
+              className="w-full flex items-center gap-2 px-2 sm:px-3 py-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/70 text-slate-400 hover:text-slate-200 transition"
+            >
+              <Search className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="text-[11px] truncate">Search or jump to…</span>
+              <kbd className="ml-auto hidden sm:inline text-[9px] px-1 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-500">
+                ⌘K
+              </kbd>
+            </button>
           </div>
-          <div className="space-y-1 mt-1">
-            {!isExecutive && isUnitManager && onOpenManageBusinesses && (
+        )}
+
+        {/* Pinned destinations: HQ / console, then the action queue */}
+        <div className="space-y-1 p-2 sm:p-3 border-b border-slate-800/70">
+          {pinned.map((e) => (
+            <button
+              key={e.id}
+              onClick={() => runRow(e)}
+              data-testid={e.testid}
+              aria-current={isRowActive(e) ? "page" : undefined}
+              aria-label={e.label}
+              title={collapsed ? e.label : undefined}
+              className={`w-full flex items-center ${
+                collapsed ? "justify-center" : "justify-between"
+              } px-2 sm:px-3.5 py-2.5 rounded-xl font-semibold text-xs sm:text-sm transition ${
+                isRowActive(e) ? e.active : "hover:bg-slate-800/80 text-slate-200"
+              }`}
+            >
+              {collapsed ? (
+                <e.Icon className={`w-4 h-4 ${e.ink || "text-slate-400"}`} />
+              ) : (
+                <>
+                  <span className="flex items-center space-x-1.5 sm:space-x-2.5 truncate">
+                    <e.Icon
+                      className={`w-4 h-4 shrink-0 ${
+                        isRowActive(e) ? "text-white" : e.ink || "text-slate-400"
+                      }`}
+                    />
+                    <span className="truncate">{e.label}</span>
+                  </span>
+                  {e.chip && (
+                    <span className="hidden sm:inline text-[10px] bg-slate-800/80 text-slate-300 px-1.5 py-0.5 rounded font-bold border border-slate-700 shrink-0">
+                      {e.chip}
+                    </span>
+                  )}
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Quick access — recents, then favourites */}
+        {quickEntries.length > 1 && (
+          <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70" data-testid="nav-quick-access">
+            <div className="flex items-center gap-1.5 px-1 sm:px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <Clock className="w-3 h-3" />
+              <span>Quick access</span>
+            </div>
+            <div className="space-y-1 mt-1">
+              {quickEntries.map((e) => renderRow(e, { testid: `nav-quick-${e.id}` }))}
+            </div>
+          </div>
+        )}
+
+        {/* ── MY BUSINESSES ─────────────────────────────────────────── */}
+        {!isWorker && (
+          <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
+            <div className="flex items-center">
               <button
-                onClick={onOpenManageBusinesses}
-                data-testid="sidebar-manage-units"
-                className="w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition text-indigo-300 hover:bg-indigo-500/15 hover:text-indigo-200 border border-indigo-500/30 bg-indigo-500/5"
+                onClick={() => toggleSection("MY_BUSINESSES")}
+                data-testid="nav-section-MY_BUSINESSES"
+                aria-expanded={sectionOpen("MY_BUSINESSES")}
+                aria-controls="nav-body-MY_BUSINESSES"
+                className="flex-1 flex items-center gap-1.5 px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 hover:text-slate-200 transition min-w-0"
               >
-                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                  <Settings2 className="w-4 h-4 text-indigo-400" />
-                  <span>Manage Units</span>
-                </div>
-                <span className="hidden sm:inline text-[8px] font-black bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded border border-amber-500/30">
-                  GRANTED
+                <ChevronDown
+                  className={`w-3 h-3 shrink-0 transition-transform ${
+                    sectionOpen("MY_BUSINESSES") ? "" : "-rotate-90"
+                  }`}
+                />
+                <span className={`truncate ${collapsed ? "hidden" : ""}`}>
+                  {isSuperAdmin
+                    ? orgLens === "MY"
+                      ? `My Businesses (${businesses.length})`
+                      : orgLens === "ALL"
+                        ? `Platform Businesses (${businesses.length} · ${businessGroups.length} owners)`
+                        : `Owned by ${
+                            organizations.find((o) => String(o.id) === orgLens)?.name || "this Owner"
+                          } (${businesses.length})`
+                    : isExecutive
+                      ? `${businesses.length} Ghana Businesses`
+                      : isFarmAdvisor
+                        ? `My Farm Units (${navBusinesses.filter(isAccessible).length})`
+                        : businesses.filter(isAccessible).length > 1
+                          ? `My Branches (${navBusinesses.filter(isAccessible).length})`
+                          : "My Branch"}
                 </span>
               </button>
-            )}
-            <button
-              onClick={() => selectTab("SALES_CENTER")}
-              data-testid="sidebar-tab-sales"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "SALES_CENTER"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <ShoppingCart className="w-4 h-4 text-cyan-400" />
-                <span>Sales & Payments</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">ALL</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("FINANCE")}
-              data-testid="sidebar-tab-finance"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "FINANCE"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Landmark className="w-4 h-4 text-cyan-400" />
-                <span>Finance & Reports</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">ALL</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("CUSTOMERS")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "CUSTOMERS"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <Users className="w-4 h-4 text-emerald-400/80" />
-              <span>Customers & CRM</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("TRACKING")}
-              data-testid="sidebar-tab-tracking"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "TRACKING"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Truck className="w-4 h-4 text-cyan-400/90" />
-                <span>Customer Order & Tracking</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">LIVE</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("PREORDERS")}
-              data-testid="sidebar-tab-preorders"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "PREORDERS"
-                  ? "bg-indigo-500/15 text-indigo-300 font-bold border-l-2 border-indigo-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <CalendarClock className="w-4 h-4 text-indigo-400/90" />
-                <span>Pre-Orders</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.5 rounded font-bold border border-indigo-500/30">SETUP</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("BI_ASSISTANT")}
-              data-testid="sidebar-tab-assistant"
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "BI_ASSISTANT"
-                  ? "bg-cyan-500/15 text-cyan-300 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <BrainCircuit className="w-4 h-4 text-cyan-400/90" />
-              <span>BI Assistant</span>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">ASK</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("DOCUMENTS")}
-              data-testid="sidebar-tab-documents"
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "DOCUMENTS"
-                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <FolderLock className="w-4 h-4 text-teal-400/90" />
-              <span>Document Vault</span>
-              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">NEW</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("SUPPLIERS")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "SUPPLIERS"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <Truck className="w-4 h-4 text-emerald-400/80" />
-              <span>Suppliers & Vendors</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("EMPLOYEES")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "EMPLOYEES"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <UserCheck className="w-4 h-4 text-emerald-400/80" />
-              <span>Employees & Payroll</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("ASSETS")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "ASSETS"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <Wrench className="w-4 h-4 text-emerald-400/80" />
-              <span>Assets & Equipment</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("INVENTORY")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "INVENTORY"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <Package className="w-4 h-4 text-emerald-400/80" />
-              <span>Inventory & Stock</span>
-            </button>
-
-            <button
-              onClick={() => selectTab("TRANSACTIONS")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "TRANSACTIONS"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <CreditCard className="w-4 h-4 text-emerald-400/80" />
-              <span>Transactions & MoMo</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* WORKER workspace note — all tools live inside the Sales Workspace tabs */}
-      {isWorker && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            My Sales Workspace
-          </div>
-          <div className="space-y-1 mt-1">
-            <div className="px-2 sm:px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[11px] text-slate-400 leading-relaxed">
-              Use the workspace tabs to record sales, receive payments, add
-              customers, view branch inventory, and track your activity.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* BRANCH_MANAGER: Worker Management panel */}
-      {isBusinessManager && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-cyan-400">
-            Branch Management
-          </div>
-          <div className="space-y-1 mt-1">
-            <button
-              onClick={() => selectTab("BRANCH_SALES")}
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "BRANCH_SALES"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <ShoppingCart className="w-4 h-4 text-cyan-400" />
-                <span>Sales & Payments</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">SALES</span>
-            </button>
-            <button
-              onClick={() => selectTab("BRANCH_ASSETS")}
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "BRANCH_ASSETS"
-                  ? "bg-purple-500/15 text-purple-300 font-bold border-l-2 border-purple-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Wrench className="w-4 h-4 text-purple-400" />
-                <span>Branch Assets</span>
-              </div>
-            </button>
-            <button
-              onClick={() => selectTab("WORKERS_MANAGE")}
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "WORKERS_MANAGE"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <ShieldAlert className="w-4 h-4 text-cyan-400" />
-                <span>Manage Sales Persons</span>
-              </div>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Oversight & Assurance — ASSIGNMENT-ONLY. No worker or manager sees
-          Audit & Review by default: only the OWNER, managers the OWNER
-          delegated (canManageAuditors), and users holding an active Auditor
-          assignment — strictly limited to the businesses, branches & modules
-          they were granted. */}
-      {(currentUser?.role === "OWNER" || currentUser?.canManageAuditors || auditEligible) && (
-        <div className="px-3 py-2">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Oversight & Assurance
-          </div>
-          <button
-            onClick={() => selectTab("AUDIT")}
-            data-testid="audit-tab"
-            className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-              activeTab === "AUDIT"
-                ? "bg-gradient-to-r from-teal-500/20 to-cyan-500/20 text-teal-300 font-bold border-l-2 border-teal-400"
-                : "hover:bg-slate-800/70 text-slate-300"
-            }`}
-          >
-            <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-              <ShieldCheck className="w-4 h-4 text-teal-400" />
-              <span>Audit & Review</span>
-            </div>
-            <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold">
-              QA
-            </span>
-          </button>
-        </div>
-      )}
-
-      {/* Finance & Reports for OWNER-granted non-executives — the ONLY shared
-          enterprise module they can open, strictly scoped to the units they
-          already access (/api/init is access-scoped; the guard in GoMinaApp
-          lets the grantee hit FINANCE and nothing else). */}
-      {!isExecutive && !!currentUser?.canViewFinance && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Shared Enterprise Modules
-          </div>
-          <div className="space-y-1 mt-1">
-            <button
-              onClick={() => selectTab("FINANCE")}
-              data-testid="sidebar-tab-finance"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "FINANCE"
-                  ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Landmark className="w-4 h-4 text-cyan-400" />
-                <span>Finance & Reports</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-emerald-500/20 text-emerald-300 px-1 py-0.5 rounded font-bold border border-emerald-500/30">GRANTED</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Customer Support (storefront HELP) editor — the OWNER always edits
-          it; a non-executive holding the OWNER's canManageSupport grant gets
-          this entry (with the GRANTED chip) and nothing else shared. */}
-      {onOpenSupportInfo && (currentUser?.role === "OWNER" || !!currentUser?.canManageSupport) && (
-        <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70" data-testid="sidebar-support-block">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Customer Storefront
-          </div>
-          <div className="space-y-1 mt-1">
-            <button
-              onClick={onOpenSupportInfo}
-              data-testid="sidebar-support-info"
-              className="w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition hover:bg-slate-800/70 text-slate-300"
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <LifeBuoy className="w-4 h-4 text-amber-400" />
-                <span>Support — Storefront HELP</span>
-              </div>
-              {currentUser?.role !== "OWNER" && (
-                <span className="hidden sm:inline text-[9px] bg-emerald-500/20 text-emerald-300 px-1 py-0.5 rounded font-bold border border-emerald-500/30">GRANTED</span>
+              {onOpenManageBusinesses && (isExecutive || isUnitManager) && (
+                <button
+                  onClick={() => onOpenManageBusinesses()}
+                  data-testid="sidebar-manage-businesses"
+                  title="Add, edit, archive or restore units"
+                  aria-label="Manage units"
+                  className="shrink-0 p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-indigo-300 transition"
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                </button>
               )}
-            </button>
-          </div>
-        </div>
-      )}
+            </div>
 
-      {/* Strategic Decision Support & Integrations — Owner / General Manager only.
-          Managers the OWNER has trusted with CCTV management also see this
-          section, strictly for the Integrations Hub (their CCTV scope). */}
-      {(isExecutive || currentUser?.canManageCctv) && (
-        <div className="px-3 py-2">
-          <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Decision Support & Hub
-          </div>
-          <div className="space-y-1 mt-1">
-            {isExecutive && (
-            <button
-              onClick={() => selectTab("AI_ADVISOR")}
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "AI_ADVISOR"
-                  ? "bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-300 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
+            <div
+              id="nav-body-MY_BUSINESSES"
+              className={
+                sectionOpen("MY_BUSINESSES")
+                  ? "transition-all duration-200"
+                  : "max-h-0 opacity-0 pointer-events-none overflow-hidden transition-all duration-200"
+              }
             >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>AI Strategic Advisor</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded font-bold">
-                AI
-              </span>
-            </button>
-            )}
-
-            {isExecutive && (
-            <button
-              onClick={() => selectTab("SCENARIO_PLANNER")}
-              className={`w-full flex items-center space-x-1.5 sm:space-x-2.5 px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "SCENARIO_PLANNER"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <Sliders className="w-4 h-4 text-teal-400" />
-              <span>Scenario Planning</span>
-            </button>
-            )}
-
-            {/* OWNER / GENERAL_MANAGER: Farm Advisor access & guidance console */}
-            {isExecutive && (
-            <button
-              onClick={() => selectTab("ADVISOR")}
-              data-testid="sidebar-advisor-manage"
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "ADVISOR"
-                  ? "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Stethoscope className="w-4 h-4 text-teal-400" />
-                <span>Farm Advisors</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-teal-500/20 text-teal-300 px-1 py-0.5 rounded font-bold border border-teal-500/30">
-                ACCESS
-              </span>
-            </button>
-            )}
-
-            <button
-              onClick={() => selectTab("INTEGRATIONS")}
-              className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === "INTEGRATIONS"
-                  ? "bg-emerald-500/15 text-emerald-400 font-bold border-l-2 border-emerald-400"
-                  : "hover:bg-slate-800/70 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                <Share2 className="w-4 h-4 text-cyan-400" />
-                <span>Integrations Hub</span>
-              </div>
-              <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold">
-                CCTV/MoMo
-              </span>
-            </button>
-
-            {/* OWNER or GENERAL_MANAGER User & Branch Assignment Management */}
-            {(currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER") && (
-              <button
-                onClick={() => selectTab("USERS_MANAGE")}
-                className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                  activeTab === "USERS_MANAGE"
-                    ? "bg-cyan-500/15 text-cyan-400 font-bold border-l-2 border-cyan-400"
-                    : "hover:bg-slate-800/70 text-slate-300"
-                }`}
-              >
-                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                  <UserCheck className="w-4 h-4 text-cyan-400" />
-                  <span>Enterprise Users</span>
+              {/* SUPER ADMIN: Organization Lens */}
+              {isSuperAdmin && (
+                <div className="mt-1 rounded-lg border border-fuchsia-500/30 bg-fuchsia-900/10 px-1.5 py-2">
+                  <div className="px-1 py-0.5 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
+                    Organization Lens
+                  </div>
+                  <select
+                    data-testid="org-lens-select"
+                    value={orgLens}
+                    onChange={(e) => onLensChange?.(e.target.value)}
+                    title="Choose whose workspace you are looking at right now"
+                    className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-fuchsia-500/40 text-fuchsia-100 text-[11px] font-bold focus:outline-none"
+                  >
+                    <option value="MY">My Workspace — {myOrgName}</option>
+                    <option value="ALL">All Organizations (platform oversight)</option>
+                    {organizations
+                      .filter((o) => Number(o.id) !== 1)
+                      .map((o) => (
+                        <option key={o.id} value={String(o.id)}>
+                          {o.name}
+                          {o.status && o.status !== "ACTIVE" ? ` (${o.status})` : ""}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="px-1 pt-1 text-[9px] leading-snug text-slate-500">
+                    {orgLens === "MY"
+                      ? "Operating view — just your own businesses, like any Owner sees."
+                      : orgLens === "ALL"
+                        ? "Oversight view — every Owner grouped below."
+                        : `Focused view — ${
+                            organizations.find((o) => String(o.id) === orgLens)?.name || "one Owner"
+                          } only.`}
+                  </p>
                 </div>
-                <span className="hidden sm:inline text-[9px] bg-cyan-500/20 text-cyan-300 px-1 py-0.5 rounded font-bold border border-cyan-500/30">HQ</span>
-              </button>
-            )}
+              )}
 
-            {/* SUPER ADMIN ONLY — Platform Owner/Organization lifecycle console */}
-            {!!currentUser?.isSuperAdmin && (
-              <button
-                onClick={() => selectTab("PLATFORM_ADMIN")}
-                className={`w-full flex items-center justify-between px-2 sm:px-3 py-2 rounded-lg text-xs font-medium transition ${
-                  activeTab === "PLATFORM_ADMIN"
-                    ? "bg-fuchsia-500/15 text-fuchsia-300 font-bold border-l-2 border-fuchsia-400"
-                    : "hover:bg-slate-800/70 text-slate-300"
-                }`}
-              >
-                <div className="flex items-center space-x-1.5 sm:space-x-2.5">
-                  <Building2 className="w-4 h-4 text-fuchsia-300" />
-                  <span>Platform Owners</span>
+              {/* Type-to-filter once the list is long enough to need it */}
+              {!collapsed && navBusinesses.length > 8 && (
+                <div className="relative mt-1">
+                  <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    value={bizFilter}
+                    onChange={(ev) => setBizFilter(ev.target.value)}
+                    data-testid="sidebar-biz-filter"
+                    aria-label="Filter units"
+                    placeholder={`Filter ${navBusinesses.length} units…`}
+                    className="w-full pl-6 pr-2 py-1.5 rounded-lg bg-slate-800/70 border border-slate-700/70 text-[11px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/60"
+                  />
                 </div>
-                <span className="hidden sm:inline text-[9px] bg-fuchsia-500/20 text-fuchsia-200 px-1 py-0.5 rounded font-bold border border-fuchsia-500/30">PLATFORM</span>
+              )}
+
+              {/* The list is BOUNDED (its own scroll box) but never truncated:
+                  every unit stays rendered and reachable — no unit disappears
+                  behind a "show more". */}
+              <div className="space-y-1 mt-1 max-h-64 overflow-y-auto pr-0.5" data-testid="nav-biz-list">
+                {isSuperAdmin ? (
+                  <>
+                    {navBusinessGroups.map((group) => (
+                      <div key={group.orgId} className="space-y-1">
+                        <div
+                          data-testid={`sidebar-org-group-${group.orgId}`}
+                          className={`flex items-center gap-1.5 px-1.5 pt-2 pb-1 text-[9px] font-black tracking-wider ${
+                            group.isMain ? "text-violet-300" : "text-sky-300"
+                          }`}
+                        >
+                          {group.orgLogo ? (
+                            <img
+                              src={group.orgLogo}
+                              alt=""
+                              data-testid={`sidebar-org-logo-${group.orgId}`}
+                              className="w-4 h-4 rounded object-cover border border-slate-600 bg-slate-800 shrink-0"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : (
+                            <span
+                              className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                                group.isMain ? "bg-violet-400" : "bg-sky-400"
+                              }`}
+                            />
+                          )}
+                          <span className="truncate">
+                            {group.isMain
+                              ? `YOUR BUSINESSES — ${group.orgName.toUpperCase()} (MAIN OWNER)`
+                              : `OWNED BY ${group.orgName.toUpperCase()}`}
+                          </span>
+                          {group.orgStatus !== "ACTIVE" && (
+                            <span className="text-[8px] font-black px-1 py-0.5 rounded border bg-slate-500/15 text-slate-400 border-slate-500/40 shrink-0">
+                              {group.orgStatus}
+                            </span>
+                          )}
+                          <span className="ml-auto text-slate-500 shrink-0">{group.businesses.length}</span>
+                        </div>
+                        {sortUnits(group.businesses.filter(matchesFilter)).map((biz) =>
+                          renderBizButton(biz),
+                        )}
+                      </div>
+                    ))}
+                    {businesses.length === 0 && (
+                      <p className="px-1 sm:px-3 py-2 text-[10px] text-slate-500">
+                        No businesses in this view yet.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {sortUnits(navBusinesses.filter(matchesFilter)).map((biz) => renderBizButton(biz))}
+                    {!collapsed && navBusinesses.filter(matchesFilter).length === 0 && (
+                      <p className="px-1 py-2 text-[10px] text-slate-500">
+                        No unit matches “{bizFilter}”.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+              {!collapsed && navBusinesses.length > 5 && (
+                <p className="px-1 pt-1 text-[9px] text-slate-500 flex items-center gap-1">
+                  <Building2 className="w-3 h-3" /> {navBusinesses.length} units · scroll or search ⌘K
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* WORKER workspace note — all tools live in the Sales Workspace tabs */}
+        {isWorker && (
+          <div className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
+            <div className="px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              My Sales Workspace
+            </div>
+            <div className="space-y-1 mt-1">
+              <div className="px-2 sm:px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[11px] text-slate-400 leading-relaxed">
+                Use the workspace tabs to record sales, receive payments, add customers, view branch
+                inventory, and track your activity.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── SECTIONED DESTINATIONS (manifest-driven) ──────────────── */}
+        {sections.map(({ group, entries: rows }) => {
+          const open = sectionOpen(group.key);
+          let hubKey: string | null = null;
+          return (
+            <div key={group.key} className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
+              <button
+                onClick={() => toggleSection(group.key)}
+                data-testid={`nav-section-${group.key}`}
+                aria-expanded={open}
+                aria-controls={`nav-body-${group.key}`}
+                title={group.hint}
+                className="w-full flex items-center gap-1.5 px-1 sm:px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 hover:text-slate-200 transition"
+              >
+                <ChevronDown
+                  className={`w-3 h-3 shrink-0 transition-transform ${open ? "" : "-rotate-90"} ${
+                    collapsed ? "mx-auto" : ""
+                  }`}
+                />
+                {!collapsed && <span className="truncate">{group.label}</span>}
+                {!collapsed && (
+                  <span className="ml-auto text-[9px] font-bold text-slate-500 shrink-0">
+                    {rows.length}
+                  </span>
+                )}
               </button>
+              <div
+                id={`nav-body-${group.key}`}
+                className={
+                  open
+                    ? "space-y-1 mt-1 transition-all duration-200"
+                    : "max-h-0 opacity-0 pointer-events-none overflow-hidden transition-all duration-200"
+                }
+              >
+                {rows.map((e) => {
+                  const nodes: React.ReactNode[] = [];
+                  if (e.hub && hubKey !== e.hub.key) {
+                    hubKey = e.hub.key;
+                    nodes.push(
+                      <div
+                        key={`hub-${e.hub.key}`}
+                        data-testid={`nav-hub-${e.hub.key}`}
+                        className="flex items-center gap-1.5 px-1 sm:px-3 pt-1.5 pb-0.5 text-[10px] font-black tracking-wide text-slate-500"
+                      >
+                        <e.hub.Icon className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{collapsed ? "" : e.hub.label}</span>
+                      </div>,
+                    );
+                  }
+                  nodes.push(renderRow(e, { indented: !!e.hub }));
+                  return <React.Fragment key={e.id}>{nodes}</React.Fragment>;
+                })}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Footer — one compact status line (was two lines + a duplicate row) */}
+        <div className="mt-auto p-2 sm:p-3 border-t border-slate-800/80 bg-slate-950/60">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <span className="text-slate-300 font-medium truncate">Command Center Active</span>
+            {!collapsed && (
+              <span className="ml-auto text-slate-500 shrink-0 hidden sm:inline">GH₵ · multi-branch</span>
             )}
           </div>
         </div>
-      )}
+      </aside>
 
-      {/* Footer Info */}
-      <div className="mt-auto p-2 sm:p-3.5 border-t border-slate-800/80 bg-slate-950/60">
-        <div className="flex items-center space-x-1.5 sm:space-x-2.5 text-xs">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
-          <span className="text-slate-300 font-medium">
-            Command Center Active
-          </span>
-        </div>
-        <p className="text-[10px] text-slate-400 mt-1">
-          GH₵ Base Currency • Multi-Branch Ready
-        </p>
-      </div>
-    </aside>
+      {/* Phone/tablet bottom bar — Home · Actions · Sell · Search · Menu.
+          (Kept out of the aside so the rail itself never has to be open.) */}
+      {bottomBar}
+    </>
   );
 }
