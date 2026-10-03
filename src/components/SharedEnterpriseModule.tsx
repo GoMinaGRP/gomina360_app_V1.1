@@ -263,6 +263,7 @@ export default function SharedEnterpriseModule({
     const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
     if (tooBig.length > 0) {
       setInvPhotoErr(`${tooBig.length === 1 ? "That photo is" : "Some photos are"} too large to process (max 20MB each).`);
+      e.target.value = ""; // let the user re-pick the same file after fixing it
       return;
     }
     try {
@@ -1122,9 +1123,11 @@ export default function SharedEnterpriseModule({
         photo: invPhotos[0] || null,
         photos: invPhotos,
         // Display thumbnails (same index order) — the storefront and
-        // in-app grids render these instead of the full photos.
+        // in-app grids render these instead of the full photos. The array is
+        // sent POSITIONALLY (null where a photo has no thumbnail) so a missing
+        // entry can never shift a later thumbnail onto the wrong photo.
         photoThumb: invPhotoThumbs[0] || null,
-        photosThumb: invPhotoThumbs.filter(Boolean),
+        photosThumb: invPhotoThumbs.map((t) => t || null),
         description: invDescUI.trim() || null,
         brand: invBrandUI.trim() || null,
         model: invModelUI.trim() || null,

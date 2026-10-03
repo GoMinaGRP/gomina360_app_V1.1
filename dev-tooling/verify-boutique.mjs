@@ -108,6 +108,15 @@ const purge = async () => {
     for (const table of ["customer_trackings", "sales_documents", "credit_sales"]) {
       await client.query(`delete from ${table} where customer_name like 'TEST %'`).catch(() => {});
     }
+    // Storefront orders auto-create a CRM customer row for each TEST buyer;
+    // deleting only the tracking left those behind (verify-online-mgmt's
+    // global "zero TEST leftovers" check caught the leak). Names are exclusive
+    // to this suite, so the purge stays scoped.
+    await client
+      .query(
+        `delete from customers where name in ('TEST Boutique Buyer', 'TEST Boutique Counter', 'TEST Boutique Credit', 'TEST Plain Regression', 'TEST Plain Online')`,
+      )
+      .catch(() => {});
     await client.query(`delete from transactions where description like '%TEST %'`).catch(() => {});
     if (testItemIds.length) {
       await client.query(`delete from inventory_variants where inventory_id = any($1::int[])`, [testItemIds]);
@@ -122,6 +131,7 @@ const purge = async () => {
         "business_metrics",
         "notifications",
         "customer_trackings",
+        "customers",
         "transactions",
         "sales_documents",
         "audit_trail",

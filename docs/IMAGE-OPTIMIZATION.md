@@ -77,6 +77,12 @@ Product photos additionally get a ≤400 px display copy at upload time, stored 
 parallel columns (`inventory_items.photo_thumb`, `photos_thumb`, shipped by
 `dev-tooling/migrate-production-schema.mjs`):
 
+* the arrays are **positionally aligned**: `photosThumb[i]` is the thumbnail of
+  `photos[i]`, and a photo without a thumbnail stores `null` in place. Filters
+  that drop empty entries would shift every later thumbnail onto the wrong
+  photo, so the writer (upload form + `POST /api/enterprise`) and both readers
+  (`/api/menu`, `/api/menu/photo`) index the raw array; the suite guards the
+  invariant on both the request body and the served bytes;
 * `/api/init` ships `photoThumb || photo` and still excludes the heavy photo
   arrays from the bootstrap payload;
 * `/api/menu` publishes `thumbs[]` index-aligned with `photos[]`;
@@ -104,12 +110,13 @@ parallel columns (`inventory_items.photo_thumb`, `photos_thumb`, shipped by
 
 ## 7. Verification
 
-`dev-tooling/verify-image-optimization.mjs` — **55 checks**, real Chromium +
+`dev-tooling/verify-image-optimization.mjs` — **62 checks**, real Chromium +
 real handlers + real Postgres:
 
 * **A · static** — every `<input type="file">` that accepts images is wired to
   the shared optimizer; the only raw `readAsDataURL` calls left are the
-  deliberate PDF pass-throughs; the preset table keeps its documented ordering.
+  deliberate PDF pass-throughs; the preset table keeps its documented ordering;
+  the writer/readers keep the positional thumbnail contract.
 * **B · desktop (1440×900)** — multi-MB inventory upload (pipeline, cap,
   thumbnail, request-body size, submission), storefront grid/lightbox/details
   byte behaviour, `/api/init` payload, legacy row without thumbnails, profile
@@ -124,7 +131,7 @@ Acceptance gates re-run green after the changes:
 
 | Suite | Result |
 | --- | --- |
-| `verify-image-optimization` | 55/55 |
+| `verify-image-optimization` | 62/62 |
 | `verify-photo-formats` (every uploader still accepts GIF/BMP/SVG/AVIF/WebP) | 11/11 |
 | `verify-logos` | 35/35 |
 | `verify-documents` | 40/40 |
@@ -158,11 +165,54 @@ bash dev-tooling/run-suite.sh dev-tooling/verify-image-optimization.mjs
 | Profile avatar (`ProfilePhotoModal`) | `avatar` | no (square crop) |
 | Business / branch / company logos (`ManageBusinessesModal`) | `logo` | no (transparency kept) |
 
-## 9. Notes / limits
+## 9. Audit round 2 (2026-10-02) — issues found and fixed
+
+Re-auditing the shipped change end-to-end (fresh database, real Chromium) found
+and fixed:
+
+1. **Thumbnail index shift (wrong image shown).** `photosThumb` was filtered to
+   drop empty entries while `photos` was not, so a gallery containing one photo
+   without a generated thumbnail shifted every later thumbnail onto the wrong
+   image — e.g. the storefront painted product B's thumbnail over product A.
+   The writer now sends the array positionally (`null` in place) and both
+   readers index the raw array; the suite proves it by serving a crafted
+   gallery with a gap (`thumb[0]` must fall back to photo A's own bytes) and
+   statically guards the writer/readers.
+2. **HR document images were capped at 2.5 MB before optimization**, unlike the
+   vault; both now accept ≤20 MB images, compress them, and refuse (with a
+   clear message) only what could not be compressed under the stored-size rule.
+3. **Vault oversize fallback**: an image the browser cannot re-encode (HEIC on
+   Chrome, etc.) could reach the API and fail at save time; it is now refused
+   up front with an actionable message.
+4. **Re-picking a file after a "too large" error did nothing** (the input kept
+   its previous value) in inventory, asset and disbursement-receipt uploads —
+   inputs now reset on every path.
+5. **Profile photo had no source-size guard**; it now refuses >20 MB before
+   decoding a huge image on a memory-tight phone.
+6. **Deployment path verified**: dropping `photo_thumb`/`photos_thumb` and
+   running `npm run build` (which runs `db:migrate`) re-adds them — the
+   additive reconciler reads `schema.ts`, so production gets the columns.
+7. **Rows already written by the first release are healed at deploy time**:
+   `npm run build` (which runs `db:migrate` on the production database) clears
+   any `photos_thumb` array whose length no longer matches its `photos` array —
+   an untrustworthy (shifted) array can only paint the wrong picture, so it is
+   dropped and the readers fall back to the full images. The suite proves the
+   heal on a crafted damaged row.
+8. **Test hygiene** (not app code): `verify-boutique` deleted its TEST orders
+   but not the CRM customers the storefront auto-created, which made
+   `verify-online-mgmt`'s global "zero TEST leftovers" check fail after an
+   unrelated suite; the purge now removes them. `fixtures-e2e` also seeds the
+   vaccination health record that `verify-documents`' vet-report checks need on
+   a fresh database.
+
+## 10. Notes / limits
 
 * Documents and PDFs deliberately keep their detail (2000 px / q 0.88 for
   images, PDF bytes untouched); only the *input* guard changed — an image up to
-  20 MB is accepted and compressed, instead of being rejected at 2.5 MB.
+  20 MB is accepted and compressed in both the Document Vault and HR documents,
+  instead of being rejected at 2.5 MB. PDFs keep the 2.5 MB rule, and an image
+  the browser cannot re-encode is refused client-side when it would still
+  exceed the vault's stored-size limit rather than failing at save time.
 * Nothing re-writes images that already exist; optimization happens on the way
   in. A backfill for legacy rows is possible later but was not required and is
   not part of this change.

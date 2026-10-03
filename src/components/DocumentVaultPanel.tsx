@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrl } from "@/lib/imageOptimize";
+import { MAX_SOURCE_IMAGE_BYTES, optimizeImage } from "@/lib/imageOptimize";
 import {
   AlertTriangle,
   Download,
@@ -128,8 +128,15 @@ export default function DocumentVaultPanel({
         return;
       }
       try {
-        const optimized = await optimizedDataUrl(f, "document");
-        setUploadDraft((d: any) => ({ ...d, fileData: optimized, fileName: f.name }));
+        const optimized = await optimizeImage(f, "document");
+        // The vault stores ≤2.5 MB rows. An optimized scan is ~400 KB, but an
+        // image the browser cannot re-encode falls back to its original bytes
+        // — refuse those here instead of letting the server reject the save.
+        if (optimized.bytes > 2.5 * 1024 * 1024) {
+          setFileErr("That image could not be compressed enough for the vault (2.5 MB stored limit) — try a photo instead of a raw scan, or attach a PDF.");
+          return;
+        }
+        setUploadDraft((d: any) => ({ ...d, fileData: optimized.dataUrl, fileName: f.name }));
       } catch {
         setFileErr("That image could not be processed — try another file.");
       }

@@ -901,11 +901,15 @@ export async function POST(request: Request) {
         ? data.photos.filter((p: any) => typeof p === "string" && p.length > 0)
         : [];
       // Display thumbnails generated in the browser at upload time
-      // (src/lib/imageOptimize) — same index order as `photos`. Optional:
-      // older clients/rows simply have none and every reader falls back.
-      const thumbsArr = Array.isArray(data.photosThumb)
-        ? data.photosThumb.filter((p: any) => typeof p === "string" && /^data:image\//.test(p))
-        : [];
+      // (src/lib/imageOptimize). POSITIONAL: entry i is the thumbnail of
+      // photos[i]; a missing/failed thumbnail stays null so indices never
+      // shift (a shifted array would show another product's picture).
+      // Optional: older clients/rows simply have none and readers fall back.
+      const thumbsRaw = Array.isArray(data.photosThumb) ? data.photosThumb : [];
+      const thumbsArr = photosArr.map((_p: any, i: number) =>
+        typeof thumbsRaw[i] === "string" && /^data:image\//.test(thumbsRaw[i]) ? thumbsRaw[i] : null,
+      );
+      const hasThumbs = thumbsArr.some((t: string | null) => !!t);
       // ── Unique QR tag — scanned or auto-generated; never duplicated. ──
       const invQr = data.qrCode ? String(data.qrCode).trim().slice(0, 200) : "";
       if (invQr) {
@@ -953,7 +957,7 @@ export async function POST(request: Request) {
             typeof data.photoThumb === "string" && /^data:image\//.test(data.photoThumb)
               ? data.photoThumb
               : thumbsArr[0] || null,
-          photosThumb: thumbsArr.length > 0 ? thumbsArr : null,
+          photosThumb: hasThumbs ? thumbsArr : null,
           description: data.description ? String(data.description).trim().slice(0, 4000) : null,
           brand: data.brand ? String(data.brand).trim().slice(0, 120) : null,
           model: data.model ? String(data.model).trim().slice(0, 120) : null,

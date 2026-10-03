@@ -132,7 +132,10 @@ export default function ApprovalInbox({
     if (!files || files.length === 0) return;
     const picked = Array.from(files).filter((f) => f.size <= MAX_SOURCE_IMAGE_BYTES);
     if (picked.length !== files.length) alert("Some files were too large to process (max 20MB each).");
-    if (picked.length === 0) return;
+    if (picked.length === 0) {
+      e.target.value = "";
+      return;
+    }
     try {
       const urls = await optimizedDataUrls(picked, "receipt");
       setPostReceipts((prev) => [...prev, ...urls]);

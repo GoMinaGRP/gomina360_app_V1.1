@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { optimizeCanvas, optimizedDataUrl } from "@/lib/imageOptimize";
+import { MAX_SOURCE_IMAGE_BYTES, optimizeCanvas, optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   UserCheck,
   X,
@@ -478,10 +478,20 @@ export function EmployeeProfile({
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
     setDocErr("");
-    if (f.type.startsWith("image/")) setDocFile({ name: f.name, data: await imageToDataUrl(f, "document") });
-    else if (f.type === "application/pdf") {
+    // Images are optimized before upload (≤2000px q0.88 — scans stay
+    // readable), so they may arrive up to 20MB. PDFs are never re-encoded and
+    // keep the 2.5MB rule; the server enforces the final stored-size cap.
+    if (f.type.startsWith("image/")) {
+      if (f.size > MAX_SOURCE_IMAGE_BYTES) {
+        return setDocErr(`That image is ${(f.size / 1024 / 1024).toFixed(1)} MB — up to 20 MB images are accepted (they are compressed automatically).`);
+      }
+      const data = await imageToDataUrl(f, "document");
+      if (data.length > 3_500_000) return setDocErr("That image could not be compressed small enough — try a smaller photo or a PDF.");
+      return setDocFile({ name: f.name, data });
+    }
+    if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
+    if (f.type === "application/pdf") {
       const r = new FileReader();
       r.onload = () => setDocFile({ name: f.name, data: String(r.result) });
       r.readAsDataURL(f);

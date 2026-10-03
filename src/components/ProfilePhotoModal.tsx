@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, ImagePlus, Loader2, RefreshCw, Trash, UserRound, X } from "lucide-react";
 import Avatar from "./Avatar";
-import { IMAGE_PRESETS, optimizeCanvas } from "@/lib/imageOptimize";
+import { IMAGE_PRESETS, MAX_SOURCE_IMAGE_BYTES, optimizeCanvas } from "@/lib/imageOptimize";
 
 interface Props {
   isOpen: boolean;
@@ -93,6 +93,10 @@ export default function ProfilePhotoModal({ isOpen, onClose, currentUser, onSave
   const acceptFile = (file: File | undefined | null) => {
     if (!file) return;
     if (!/^image\//.test(file.type)) { setError("Please choose an image file (any common format: JPEG, PNG, WebP, GIF, …)."); return; }
+    if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+      setError(`That image is ${(file.size / 1024 / 1024).toFixed(1)} MB — up to 20 MB images are accepted (the crop is stored at 320×320).`);
+      return;
+    }
     setError("");
     const img = new Image();
     img.onload = async () => {

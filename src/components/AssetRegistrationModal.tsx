@@ -713,7 +713,10 @@ export default function AssetRegistrationModal({
               type="file"
               accept="image/*"
               multiple
-              onChange={(e) => handleImageFiles(e.target.files)}
+              onChange={(e) => {
+                handleImageFiles(e.target.files);
+                e.target.value = ""; // allow re-picking the same file
+              }}
               className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-purple-600 file:px-3 file:py-2 file:text-xs file:font-bold file:text-white hover:file:bg-purple-500"
             />
             {assetImages.length > 0 && (

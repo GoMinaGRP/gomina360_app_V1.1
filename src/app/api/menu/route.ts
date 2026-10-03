@@ -287,11 +287,13 @@ export async function GET(request: Request) {
             : [];
           const allPhotos: string[] = [];
           const allThumbs: string[] = [];
-          const thumbs = Array.isArray(i.photosThumb)
-            ? i.photosThumb.filter((p: any) => typeof p === "string" && p.length > 0)
-            : [];
+          // Raw array kept intact: `photosThumb` is POSITIONALLY parallel to
+          // `photos[]` (missing entries are null/""), so filtering empties out
+          // would move every later thumbnail onto the wrong photo.
+          const thumbsRaw = Array.isArray(i.photosThumb) ? i.photosThumb : [];
           // `photosThumb` is parallel to `photos[]`, `photoThumb` to `photo`.
-          const thumbAt = (gi: number) => (typeof thumbs[gi] === "string" ? thumbs[gi] : "");
+          const thumbAt = (gi: number) =>
+            typeof thumbsRaw[gi] === "string" && thumbsRaw[gi].length > 0 ? thumbsRaw[gi] : "";
           if (typeof i.photo === "string" && i.photo.length > 0) {
             allPhotos.push(i.photo);
             allThumbs.push((typeof i.photoThumb === "string" && i.photoThumb) || thumbAt(0));

@@ -32,6 +32,7 @@
 import { createRequire } from "node:module";
 import { readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import zlib from "node:zlib";
 
 const require = createRequire("/home/user/pgtooling/package.json");
@@ -228,6 +229,58 @@ ok(!!receipt && receipt.edge >= 1600 && receipt.quality >= 0.8, "receipts stay l
 ok(!!evidence && !!avatar && evidence.edge > avatar.edge, "evidence (>avatar) sized by purpose", `${evidence?.edge} vs ${avatar?.edge}`);
 ok(/thumb:\s*\{\s*edge:\s*400/.test(optimizerSrc), "product photos generate a ≤400px display thumbnail");
 ok(/image\/gif|svg\+xml/.test(optimizerSrc), "vector/animated inputs are excluded from rasterizing");
+
+// Thumbnails are POSITIONALLY aligned with photos[]: entry i belongs to
+// photos[i]. A filter() that drops empty entries shifts every later
+// thumbnail onto the wrong photo (a real bug this suite caught), so the
+// writer must send nulls in place and the readers must index the raw array.
+const sharedSrc = readFileSync("src/components/SharedEnterpriseModule.tsx", "utf8");
+ok(
+  /photosThumb:\s*invPhotoThumbs\.map\(/.test(sharedSrc) && !/photosThumb:\s*invPhotoThumbs\.filter/.test(sharedSrc),
+  "client sends thumbnails positionally (null in place, never a shifting filter)",
+);
+const enterpriseSrc = readFileSync("src/app/api/enterprise/route.ts", "utf8");
+ok(
+  /const thumbsArr = photosArr\.map\(/.test(enterpriseSrc),
+  "inventory create aligns thumbnails to photos by index",
+);
+for (const route of ["src/app/api/menu/route.ts", "src/app/api/menu/photo/route.ts"]) {
+  const src = readFileSync(route, "utf8");
+  const shifts = /photosThumb\s*\n?\s*\?\s*[a-zA-Z.]+\s*\.filter/.test(src);
+  ok(!shifts && /thumbsRaw|galleryThumbs/.test(src), `${route.split("/").slice(-2).join("/")} indexes the raw thumbnail array (no shift)`);
+}
+
+// ── Data heal: damaged (shifted) thumbnail arrays are cleared by db:migrate ──
+// The first image-optimization release could persist a SHORT photos_thumb
+// array, which shifted later thumbnails onto the wrong photos. Production
+// databases carrying such rows are healed by `npm run build` (db:migrate);
+// readers then fall back to the full images.
+{
+  const healSku = `${TAG}-HEAL`;
+  await q(`delete from inventory_items where sku = $1`, [healSku]);
+  const photoA = "data:image/jpeg;base64," + Buffer.from("PHOTO-A-BYTES").toString("base64");
+  const photoB = "data:image/jpeg;base64," + Buffer.from("PHOTO-B-BYTES").toString("base64");
+  const thumbB = "data:image/webp;base64," + Buffer.from("THUMB-FOR-B").toString("base64");
+  await q(
+    `insert into inventory_items
+       (name, sku, business_id, category, quantity, unit, cost_price_ghs, selling_price_ghs,
+        min_stock_threshold, status, photo, photos, photo_thumb, photos_thumb)
+     values ($1, $2, 1, 'Poultry & Eggs', 1, 'Units', 1, 2, 1, 'IN_STOCK', $3, $4::jsonb, $5, $6::jsonb)`,
+    [healSku, healSku, photoA, JSON.stringify([photoA, photoB]), photoA, JSON.stringify([thumbB])],
+  );
+  const migrate = spawnSync("node", ["dev-tooling/migrate-production-schema.mjs"], {
+    cwd: process.cwd(),
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL || "postgresql://postgres:postgres@127.0.0.1:5432/app_db" },
+    encoding: "utf8",
+  });
+  const row = await q1(`select photos_thumb, photo_thumb from inventory_items where sku = $1`, [healSku]);
+  ok(
+    migrate.status === 0 && row && row.photos_thumb === null && row.photo_thumb != null,
+    "db:migrate clears damaged thumbnail arrays (readers fall back to the full images)",
+    `exit=${migrate.status} cleared=${row?.photos_thumb === null}`,
+  );
+  await q(`delete from inventory_items where sku = $1`, [healSku]);
+}
 
 /* ───────────────────────────── browser ───────────────────────────────── */
 
@@ -457,6 +510,33 @@ try {
     } else {
       ok(false, "dashboard bootstrap payload inspected", "init fetch failed inside the signed-in page");
     }
+  }
+
+  // ── B11b one photo without a thumbnail must not shift its neighbours ──
+  const ALIGN_A = "data:image/jpeg;base64," + Buffer.from("ALIGN-PHOTO-A").toString("base64");
+  const ALIGN_B = "data:image/jpeg;base64," + Buffer.from("ALIGN-PHOTO-B").toString("base64");
+  const ALIGN_TB = "data:image/webp;base64," + Buffer.from("ALIGN-THUMB-B").toString("base64");
+  const alignRow = await q1(
+    `insert into inventory_items (name, sku, business_id, branch_code, branch_name, category, quantity, unit, cost_price_ghs, selling_price_ghs, min_stock_threshold, status, photo, photos, photo_thumb, photos_thumb)
+     values ($1, $2, 1, 'POULTRY-01', 'Mina Akuafo Poultry Farm', 'Poultry & Eggs', 6, 'Units', 1, 2, 1, 'IN_STOCK', $3, $4, null, $5) returning id`,
+    [`${TAG} Align Product`, `${TAG}-ALIGN`, ALIGN_A, JSON.stringify([ALIGN_A, ALIGN_B]), JSON.stringify([null, ALIGN_TB])],
+  );
+  created.inventoryIds.push(Number(alignRow.id));
+  let aligned = null;
+  for (let attempt = 0; attempt < 8 && !aligned; attempt++) {
+    await sleep(2000); // menu cache TTL
+    const menuJson = await fetch(`${BASE}/api/menu`).then((r) => r.json()).catch(() => null);
+    aligned = (menuJson?.businesses || []).flatMap((b) => b.products || []).find((x) => Number(x.id) === Number(alignRow.id)) || null;
+  }
+  if (aligned?.thumbs?.length === 2) {
+    const bytesAt = async (url) => Buffer.from(await (await fetch(`${BASE}${url}`)).arrayBuffer()).toString();
+    const served0 = await bytesAt(aligned.thumbs[0]);
+    const served1 = await bytesAt(aligned.thumbs[1]);
+    const full0 = await bytesAt(aligned.photos[0]);
+    ok(served0 === full0, "a gallery photo without a thumbnail falls back to its OWN full image (no shift)");
+    ok(served1 === Buffer.from(ALIGN_TB.split(",")[1], "base64").toString(), "the next photo still serves ITS OWN thumbnail");
+  } else {
+    ok(false, "gallery with a thumbnail gap is served with aligned thumbnails", `thumbs=${aligned?.thumbs?.length ?? "none"}`);
   }
 
   // ── B12 legacy rows without thumbnails keep working (fallback)

@@ -664,6 +664,23 @@ try {
   await client.query(`create unique index if not exists assets_qr_code_unique on public.assets (business_id, qr_code)`);
   await client.query(`create unique index if not exists inventory_items_qr_code_unique on public.inventory_items (business_id, qr_code)`);
 
+  // ── Data heal: positional image thumbnails ──────────────────────────────
+  // The first image-optimization release could store a SHIFTED photos_thumb
+  // array (a photo without a generated thumbnail was dropped from the array,
+  // moving every later thumbnail onto the wrong photo — the storefront then
+  // painted another product's picture). A correctly written array is exactly
+  // as long as `photos`; anything else cannot be trusted, so it is cleared
+  // and every reader falls back to the full images (no visible breakage).
+  const healedThumbs = await client.query(`
+    update public.inventory_items
+       set photos_thumb = null
+     where photos_thumb is not null
+       and coalesce(jsonb_array_length(case when jsonb_typeof(photos_thumb) = 'array' then photos_thumb end), 0)
+           <> coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos end), 0)`);
+  if (healedThumbs.rowCount) {
+    console.log(`[db:migrate] cleared ${healedThumbs.rowCount} untrustworthy thumbnail array(s) (index shift from the first image-opt release)`);
+  }
+
   // Multi-owner runtime tools (used by dev-tooling/multiowner-verify.mjs):
   await client.query(`create or replace function gomina_org_of_business(bid integer)
       returns integer language sql stable as

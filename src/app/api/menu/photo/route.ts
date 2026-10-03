@@ -108,10 +108,11 @@ export async function GET(request: Request) {
     const gallery = Array.isArray(item.photos)
       ? item.photos.filter((p: any) => typeof p === "string" && p.length > 0)
       : [];
-    const galleryThumbs = Array.isArray(item.photosThumb)
-      ? item.photosThumb.filter((p: any) => typeof p === "string" && p.length > 0)
-      : [];
-    const thumbAt = (gi: number) => (typeof galleryThumbs[gi] === "string" ? galleryThumbs[gi] : "");
+    // Kept raw + positional: entry i belongs to photos[i]. Filtering empty
+    // entries would shift thumbnails onto the wrong gallery images.
+    const galleryThumbs = Array.isArray(item.photosThumb) ? item.photosThumb : [];
+    const thumbAt = (gi: number) =>
+      typeof galleryThumbs[gi] === "string" && galleryThumbs[gi].length > 0 ? galleryThumbs[gi] : "";
     if (typeof item.photo === "string" && item.photo.length > 0) {
       photos.push(item.photo);
       thumbs.push((typeof item.photoThumb === "string" && item.photoThumb) || thumbAt(0));
