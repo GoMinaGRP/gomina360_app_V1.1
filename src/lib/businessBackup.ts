@@ -10,12 +10,44 @@
  * Structure of the produced archive:
  *   backup.json          — machine-readable manifest + every table row
  *                          (this is the restorable payload)
- *   reports/summary.pdf  — human-readable overview (PDF)
- *   reports/summary.xlsx — human-readable overview (Excel)
+ *   reads/summary.txt    — human-readable overview
  *   README.txt           — plain-text description
  *
  * The import routine remaps every primary key / foreign key to
  * preserve relationships without colliding with existing data.
+ *
+ * ---------------------------------------------------------------------------
+ * ISOLATION CONTRACT (audited)
+ * ---------------------------------------------------------------------------
+ * EXPORT carries the business row plus every row of every business-scoped
+ * table (businessId / downloaderBusinessId / scopeBusinessId = this business),
+ * the child rows that hang off them (feed formulation items, batch inputs,
+ * advisor note updates, asset audit logs, credit payments, payroll entries)
+ * and ONLY the vendors those rows reference.
+ *
+ * EXPORT deliberately excludes:
+ *   • other businesses' rows — verified per row, never by "same tenant";
+ *   • accounts and access: users (only id+name+role of actors that appear on
+ *     an exported row), organizations, organization_members,
+ *     user_business_access, advisor_assignments, users_sessions, push
+ *     subscriptions/config and every other device/credential record;
+ *   • notifications (per-user inbox, meaningless in another tenant);
+ *   • platform/tenant configuration: company_settings, system_markers,
+ *     integrations, payroll_statutory_config, customer_support_info,
+ *     record_deletion_logs, and approval policies with no business scope.
+ *
+ * IMPORT (always creates a NEW business, never overwrites):
+ *   • every restored row is stamped with the IMPORTING organization
+ *     (owner_id) — the source tenant's owner id never crosses over;
+ *   • user references are never copied: nullable actor columns become NULL
+ *     (the *_name / *_role text snapshot keeps history readable) and NOT NULL
+ *     ones are attached to the account performing the restore;
+ *   • customers are re-created per business (no shared CRM row), vendors are
+ *     reused only inside the importing organization, otherwise re-created;
+ *   • globally-unique business codes that still exist in the source database
+ *     get the new unit's code appended instead of colliding;
+ *   • the whole restore is one DB transaction with per-row savepoints, so a
+ *     failure cannot leave a half-created business behind.
  */
 
 import JSZip from "jszip";
@@ -25,6 +57,8 @@ import * as schema from "@/db/schema";
 import {
   and,
   eq,
+  getTableColumns,
+  getTableName,
   inArray,
   isNull,
   or,
@@ -66,6 +100,10 @@ type TableRef = { table: any; fkBusinessId?: string };
 
 const TABLES: Record<string, TableRef> = {
   businesses: { table: schema.businesses },
+  // Vendors are tenant-scoped (owner_id) with no businessId: exported
+  // separately (only the rows the business references) and restored by the
+  // dedicated supplier pass in the importer.
+  suppliers: { table: schema.suppliers },
   businessMetrics: { table: schema.businessMetrics, fkBusinessId: "businessId" },
   serviceAreas: { table: schema.serviceAreas, fkBusinessId: "businessId" },
   pickupLocations: { table: schema.pickupLocations, fkBusinessId: "businessId" },
@@ -168,7 +206,70 @@ const TABLES: Record<string, TableRef> = {
   auditTrail: { table: schema.auditTrail, fkBusinessId: "businessId" },
   // Downloads audit
   assetDownloads: { table: schema.assetDownloads, fkBusinessId: "downloaderBusinessId" },
+  // ---------------------------------------------------------------------------
+  // Business-scoped tables added after the original catalogue was written.
+  // Anything carrying its own businessId belongs in the backup, otherwise a
+  // restored unit would silently lose the records below.
+  // ---------------------------------------------------------------------------
+  // Budgets & procurement
+  budgets: { table: schema.budgets, fkBusinessId: "businessId" },
+  supplierOrders: { table: schema.supplierOrders, fkBusinessId: "businessId" },
+  supplierQuotes: { table: schema.supplierQuotes, fkBusinessId: "businessId" },
+  supplierInvoices: { table: schema.supplierInvoices, fkBusinessId: "businessId" },
+  supplierPayments: { table: schema.supplierPayments, fkBusinessId: "businessId" },
+  goodsReceipts: { table: schema.goodsReceipts, fkBusinessId: "businessId" },
+  purchaseRequisitions: { table: schema.purchaseRequisitions, fkBusinessId: "businessId" },
+  orderPayments: { table: schema.orderPayments, fkBusinessId: "businessId" },
+  // Approval workflow — only policies scoped to THIS business (platform-wide
+  // policies with a NULL scope are tenant configuration, not business data).
+  approvalPolicies: { table: schema.approvalPolicies, fkBusinessId: "scopeBusinessId" },
+  approvalRequests: { table: schema.approvalRequests, fkBusinessId: "businessId" },
+  // Operations & CRM
+  actionTasks: { table: schema.actionTasks, fkBusinessId: "businessId" },
+  businessDocuments: { table: schema.businessDocuments, fkBusinessId: "businessId" },
+  customerInteractions: { table: schema.customerInteractions, fkBusinessId: "businessId" },
+  // Online-order fulfilment configuration
+  fulfillmentMethods: { table: schema.fulfillmentMethods, fkBusinessId: "businessId" },
+  fulfillmentOptions: { table: schema.fulfillmentOptions, fkBusinessId: "businessId" },
+  // Transport & logistics
+  transportVehicles: { table: schema.transportVehicles, fkBusinessId: "businessId" },
+  transportTrips: { table: schema.transportTrips, fkBusinessId: "businessId" },
+  transportBookings: { table: schema.transportBookings, fkBusinessId: "businessId" },
+  transportFuelLogs: { table: schema.transportFuelLogs, fkBusinessId: "businessId" },
+  transportMaintenance: { table: schema.transportMaintenance, fkBusinessId: "businessId" },
+  transportVehicleChecklists: { table: schema.transportVehicleChecklists, fkBusinessId: "businessId" },
+  transportGeofences: { table: schema.transportGeofences, fkBusinessId: "businessId" },
+  transportTrackerViolations: { table: schema.transportTrackerViolations, fkBusinessId: "businessId" },
+  // Feed / block-mix production (parents; child rows are pulled by parent id)
+  poultryBenchmarkProfiles: { table: schema.poultryBenchmarkProfiles, fkBusinessId: "businessId" },
+  poultryFeedFormulations: { table: schema.poultryFeedFormulations, fkBusinessId: "businessId" },
+  poultryFeedBatches: { table: schema.poultryFeedBatches, fkBusinessId: "businessId" },
+  poultryFeedQcChecks: { table: schema.poultryFeedQcChecks, fkBusinessId: "businessId" },
+  fishFeedFormulations: { table: schema.fishFeedFormulations, fkBusinessId: "businessId" },
+  fishFeedBatches: { table: schema.fishFeedBatches, fkBusinessId: "businessId" },
+  fishFeedQcChecks: { table: schema.fishFeedQcChecks, fkBusinessId: "businessId" },
+  blockMixFormulations: { table: schema.blockMixFormulations, fkBusinessId: "businessId" },
+  blockMixBatches: { table: schema.blockMixBatches, fkBusinessId: "businessId" },
+  aquacultureBenchmarkProfiles: { table: schema.aquacultureBenchmarkProfiles, fkBusinessId: "businessId" },
+  // Advisor content authored for this business (access GRANTS are deliberately
+  // not exported — see the note in the header comment).
+  advisorNotes: { table: schema.advisorNotes, fkBusinessId: "businessId" },
 };
+
+/**
+ * Child tables that carry no businessId of their own: they are exported by
+ * pulling the rows whose parent FK points at an exported parent row.
+ * `parent` is the TABLES key that owns them.
+ */
+const CHILD_TABLES: { name: string; table: any; parent: string; fk: string }[] = [
+  { name: "poultryFeedFormulationItems", table: schema.poultryFeedFormulationItems, parent: "poultryFeedFormulations", fk: "formulationId" },
+  { name: "poultryFeedBatchInputs", table: schema.poultryFeedBatchInputs, parent: "poultryFeedBatches", fk: "batchId" },
+  { name: "fishFeedFormulationItems", table: schema.fishFeedFormulationItems, parent: "fishFeedFormulations", fk: "formulationId" },
+  { name: "fishFeedBatchInputs", table: schema.fishFeedBatchInputs, parent: "fishFeedBatches", fk: "batchId" },
+  { name: "blockMixFormulationItems", table: schema.blockMixFormulationItems, parent: "blockMixFormulations", fk: "formulationId" },
+  { name: "blockMixBatchInputs", table: schema.blockMixBatchInputs, parent: "blockMixBatches", fk: "mixBatchId" },
+  { name: "advisorNoteUpdates", table: schema.advisorNoteUpdates, parent: "advisorNotes", fk: "noteId" },
+];
 
 // ---------------------------------------------------------------------------
 // EXPORT
@@ -284,6 +385,17 @@ export async function exportBusinessBackup(opts: {
     manifest.tables.payrollEntries = rows.map(serializeRow);
     manifest.stats.payrollEntries = rows.length;
   }
+  // Feed / mix factory child rows → by parent ids (declared in CHILD_TABLES).
+  for (const child of CHILD_TABLES) {
+    const parentIds = (manifest.tables[child.parent] || []).map((r: any) => r.id).filter(Boolean);
+    if (!parentIds.length) continue;
+    const rows = await db
+      .select()
+      .from(child.table)
+      .where(inArray(child.table[child.fk], parentIds));
+    manifest.tables[child.name] = rows.map(serializeRow);
+    manifest.stats[child.name] = rows.length;
+  }
 
   // ---- 4. Suppliers referenced by any exported row ----
   const supplierIds = new Set<number>();
@@ -302,6 +414,11 @@ export async function exportBusinessBackup(opts: {
   }
 
   // ---- 5. Referenced users (actor snapshots) ----
+  // Only the DISPLAY IDENTITY of accounts that actually appear on an exported
+  // row travels with the backup: id + name + role, never email/phone/avatar,
+  // sessions, flags or any other account data. Import never recreates users;
+  // the name/role text is what keeps the restored history readable, and the
+  // numeric ids are dropped on restore (see remapUserId in the importer).
   const userIds = new Set<number>();
   const USER_FIELDS = [
     "userId", "createdByUserId", "recordedByUserId", "approvedByUserId",
@@ -328,12 +445,7 @@ export async function exportBusinessBackup(opts: {
       .select({
         id: schema.users.id,
         name: schema.users.name,
-        email: schema.users.email,
         role: schema.users.role,
-        phone: schema.users.phone,
-        avatarUrl: schema.users.avatarUrl,
-        isActive: schema.users.isActive,
-        createdAt: schema.users.createdAt,
       })
       .from(schema.users)
       .where(inArray(schema.users.id, [...userIds]));
@@ -451,8 +563,13 @@ export interface ImportOptions {
   /** Desired code prefix; if omitted uses the original category prefix */
   codeOverride?: string;
   /** Target organization (tenant) for the imported unit — codes number and
-   *  uniqueness-check within this org (per-org sequential numbering). */
+   *  uniqueness-check within this org (per-org sequential numbering). Every
+   *  restored row is stamped with this org. */
   ownerId?: number | null;
+  /** Account performing the restore. Only used where a restored row REQUIRES
+   *  a live user reference (e.g. open action tasks): the account that ran the
+   *  import is the one account known to have access to the new unit. */
+  actorUserId?: number | null;
 }
 
 export interface ImportResult {
@@ -469,6 +586,18 @@ export interface ImportResult {
  * Creates a brand new business; never overwrites anything.
  */
 export async function importBusinessBackup(
+  backupJson: BackupManifest,
+  opts: ImportOptions = {},
+): Promise<ImportResult> {
+  // The whole restore runs in ONE transaction: a failure half-way through can
+  // never leave a partially-populated business behind. Per-row constraint
+  // failures are isolated with nested savepoints inside insertTable, so a
+  // single unimportable row degrades to a warning instead of aborting.
+  return db.transaction(async (tx) => importBusinessBackupTx(tx, backupJson, opts));
+}
+
+async function importBusinessBackupTx(
+  cx: any,
   backupJson: BackupManifest,
   opts: ImportOptions = {},
 ): Promise<ImportResult> {
@@ -489,14 +618,37 @@ export async function importBusinessBackup(
   const srcBiz = backupJson.tables.businesses[0];
   const category = srcBiz.category || source.category;
 
+  // Tenant the restored unit belongs to, and the account performing the
+  // restore. Every restored row is stamped with this org, so a backup can
+  // never drag its source tenant's owner_id (or any other tenant's rows) into
+  // the target database.
+  const targetOrgId = opts.ownerId ?? null;
+  const actorUserId = Number(opts.actorUserId) || null;
+  const srcBusinessId = Number(srcBiz.id);
+
+  // The export guarantees rows belong to the source business. Enforce it on
+  // import as well: a hand-edited archive cannot smuggle rows of another
+  // business into the restore.
+  for (const [tableName, rows] of Object.entries(backupJson.tables || {})) {
+    if (tableName === "businesses") continue;
+    for (const r of ((rows as any[]) || []) as any[]) {
+      const bid = r?.businessId ?? r?.downloaderBusinessId ?? r?.targetBusinessId ?? r?.scopeBusinessId;
+      if (bid != null && Number(bid) !== srcBusinessId) {
+        throw new Error(
+          `Backup rejected: table "${tableName}" contains a row belonging to business ${bid}, not the exported business ${srcBusinessId}.`,
+        );
+      }
+    }
+  }
+
   // 1. Determine the new business code. Numbering and collision checks are
   //    scoped to the TARGET organization: sequential codes restart per org
   //    (a second org's first Poultry unit is POULTRY-01 too); DB uniqueness
   //    is (owner_id, code).
   const orgCodeRows = opts.ownerId != null
-    ? await db.select({ code: schema.businesses.code }).from(schema.businesses).where(eq(schema.businesses.ownerId, opts.ownerId))
-    : await db.select({ code: schema.businesses.code }).from(schema.businesses).where(isNull(schema.businesses.ownerId));
-  const orgCodes = orgCodeRows.map((r) => r.code);
+    ? await cx.select({ code: schema.businesses.code }).from(schema.businesses).where(eq(schema.businesses.ownerId, opts.ownerId))
+    : await cx.select({ code: schema.businesses.code }).from(schema.businesses).where(isNull(schema.businesses.ownerId));
+  const orgCodes = orgCodeRows.map((r: any) => r.code);
   const prefix = CATEGORY_PREFIX[category] || "BIZ";
   let newCode = opts.codeOverride && !orgCodes.includes(opts.codeOverride)
     ? opts.codeOverride
@@ -505,7 +657,7 @@ export async function importBusinessBackup(
   // 2. Insert the new business row. We do NOT copy the original id (serial
   //    gives us a fresh id) nor the globally-unique code.
   const newName = opts.nameOverride || srcBiz.name || `Imported ${source.businessName || "Business"}`;
-  const [newBiz] = await db
+  const [newBiz] = await cx
     .insert(schema.businesses)
     .values({
       name: newName,
@@ -527,6 +679,7 @@ export async function importBusinessBackup(
       gpsLng: srcBiz.gpsLng ?? null,
       gpsRadiusM: srcBiz.gpsRadiusM ?? 300,
       onlineOrderingEnabled: srcBiz.onlineOrderingEnabled ?? true,
+      preOrderEnabled: srcBiz.preOrderEnabled ?? false,
       pickupEnabled: srcBiz.pickupEnabled ?? true,
       deliveryEnabled: srcBiz.deliveryEnabled ?? true,
       serviceRadiusKm: srcBiz.serviceRadiusKm ?? null,
@@ -534,7 +687,11 @@ export async function importBusinessBackup(
       customerHelpPhone: srcBiz.customerHelpPhone ?? null,
       momoNumber: srcBiz.momoNumber ?? null,
       momoName: srcBiz.momoName ?? null,
-      ownerId: opts.ownerId ?? null,
+      // Storefront settings travel with the unit (watermark branding etc.);
+      // the archive flag does not — a restored unit is always live.
+      watermarkEnabled: srcBiz.watermarkEnabled ?? false,
+      watermarkMode: srcBiz.watermarkMode ?? "NAME",
+      ownerId: targetOrgId,
     })
     .returning();
   const newBusinessId = newBiz.id;
@@ -564,15 +721,21 @@ export async function importBusinessBackup(
     if (m === undefined) return null; // broken reference → drop
     return m;
   };
-  const remapUserId = (v: any): any => {
+  /**
+   * User ids are NEVER carried across: the same numeric id in the target
+   * database is a different person (or nobody). Restored rows therefore keep
+   * their human-readable `*_name` / `*_role` snapshots and lose the account
+   * link, so no restored record can point at another tenant's worker.
+   * Columns that REQUIRE a user (open task assignments, advisor note threads)
+   * are attached to the account performing the restore — the one account we
+   * know is allowed to hold them.
+   */
+  const remapUserId = (v: any, opts?: { required?: boolean }): any => {
+    if (opts?.required) return actorUserId ?? null;
     if (v === null || v === undefined) return null;
     const n = Number(v);
     if (!n) return v;
-    // Users are NOT recreated (they may already exist with different ids,
-    // or be absent from the target system). Fall back to null so history
-    // retains name/role strings (those text fields are already snapshotted
-    // onto the rows).
-    return n;
+    return null;
   };
   const remapBranchCode = (v: any): any => {
     if (typeof v !== "string") return v;
@@ -582,6 +745,11 @@ export async function importBusinessBackup(
     return v;
   };
 
+  // Per-import registry of existing globally-unique values (never shared
+  // between imports: a long-lived server process must not remember a stale
+  // snapshot of the target database).
+  const uniqueRegistry: UniqueRegistry = new Map();
+
   // Helper to insert a batch and record new ids.
   async function insertTable(
     tableName: string,
@@ -590,26 +758,92 @@ export async function importBusinessBackup(
     pk = "id",
   ): Promise<number> {
     if (!rows || !rows.length) return 0;
-    const table = TABLES[tableName]?.table;
-    if (!table) return 0;
+    const table = TABLES[tableName]?.table || CHILD_TABLES.find((c) => c.name === tableName)?.table;
+    if (!table) {
+      // A missing catalogue entry used to make the whole table disappear
+      // silently on restore (exactly what happened to vendors). Never again.
+      warnings.push(`${tableName}: table is not in the import catalogue — ${rows.length} row(s) not restored`);
+      return 0;
+    }
+    // Column metadata drives two tenant guarantees, so a table added to the
+    // catalogue in the future is covered without touching the importer:
+    //   • owner_id is ALWAYS the target organization (never the source's);
+    //   • a NOT NULL user reference falls back to the restoring account
+    //     when the transform could not attribute it.
+    const cols = tableColumns(table);
+    // NOTE: `tableName` is the catalogue KEY (camelCase); the unique-index
+    // lookup needs the real SQL table name.
+    const uniques = await uniqueValueSets(cx, uniqueRegistry, getTableName(table), cols);
     let inserted = 0;
     for (const src of rows) {
       const values = transform({ ...src });
-      // Strip the original pk so serial generates a new one.
-      const oldId = values[pk];
+      // The original pk is used to build the old→new id map, so REMAP THE ID
+      // FROM THE SOURCE ROW: several transforms (employees, customers,
+      // assets …) build a fresh object and never copy `id`, and reading it
+      // back from `values` silently produced an empty map — every FK that
+      // pointed at those rows (customer links, employee links) was dropped.
+      const oldId = (src as any)?.[pk] ?? values[pk];
       delete values[pk];
-      // Drop createdAt/updatedAt only when we want Postgres defaults? No —
-      // keep them to preserve history timestamps.
+      if (cols.has("ownerId")) values.ownerId = targetOrgId;
+      for (const [prop, meta] of cols) {
+        // JSON archives carry timestamps as ISO strings; Drizzle's timestamp
+        // columns (mode "date") expect Date objects. Without this every table
+        // with a timestamp column other than created/updated/recorded_at
+        // (attendance clock-ins, receipt dates, QC test times …) failed to
+        // restore. `PgTimestampString` columns keep their string form.
+        const v = values[prop];
+        if (typeof v === "string" && /Timestamp/i.test(String(meta.columnType)) && !/TimestampString/i.test(String(meta.columnType))) {
+          const d = new Date(v);
+          if (!Number.isNaN(d.getTime())) values[prop] = d;
+        }
+      }
+      for (const [prop, meta] of cols) {
+        if (!/^[a-z0-9]*UserId$/.test(prop) && prop !== "userId") continue;
+        // A source user id must never survive the trip (target ids belong to
+        // other people). Nullable columns lose the link; NOT NULL columns are
+        // attached to the account performing the restore.
+        if (typeof values[prop] === "number" && values[prop] > 0) values[prop] = null;
+        if (values[prop] === undefined || values[prop] === null) {
+          if (!meta.notNull) continue;
+          if (!actorUserId) continue; // row will be reported by the constraint
+          values[prop] = actorUserId;
+        }
+      }
+      // Business codes/numbers that carry a GLOBAL unique index (tracking
+      // codes, credit codes, purchase/quote/invoice numbers, task numbers …)
+      // still exist in the source database after a restore. Keep the original
+      // value when it is free, otherwise make it unique with the new unit's
+      // code — never by touching the existing row.
+      for (const [prop, set] of uniques) {
+        const meta = cols.get(prop);
+        const v = values[prop];
+        if (v === undefined || v === null || meta?.dataType !== "string") continue;
+        const s = String(v);
+        if (!set.has(s)) {
+          set.add(s);
+          continue;
+        }
+        let candidate = `${s}-${newCode}`;
+        let n = 2;
+        while (set.has(candidate)) candidate = `${s}-${newCode}-${n++}`;
+        values[prop] = candidate;
+        set.add(candidate);
+      }
       try {
-        const returnedArr: any[] = await db.insert(table).values(values).returning() as any;
-        const returned = returnedArr?.[0];
+        // Nested transaction = SAVEPOINT: a unique/constraint failure rolls
+        // back ONLY this row, leaving the outer restore transaction usable.
+        const returned = await cx.transaction(async (sp: any) => {
+          const arr: any[] = await sp.insert(table).values(values).returning();
+          return arr?.[0];
+        });
         if (returned && oldId != null) {
           mapFor(tableName).set(Number(oldId), Number(returned[pk]));
         }
         inserted++;
       } catch (e: any) {
         // Unique/constraint failures shouldn't abort the whole import.
-        warnings.push(`${tableName}: skipped row ${oldId} — ${e.message?.slice(0, 120)}`);
+        const why = e?.cause?.message || e?.message || "unknown error";
+        warnings.push(`${tableName}: skipped row ${oldId ?? "?"} — ${String(why).slice(0, 160)}`);
       }
     }
     return inserted;
@@ -618,15 +852,25 @@ export async function importBusinessBackup(
   // 4. Insert in dependency order (parents first, children second).
   const stats: Record<string, number> = { businesses: 1 };
 
-  // Independent lookup tables first (suppliers don't carry businessId; we
-  // deduplicate by name/phone to avoid recreating the same shared vendor).
-  const existingSuppliers: any[] = await db.select().from(schema.suppliers);
+  // Independent lookup tables first. Suppliers have no businessId — they are
+  // scoped by owner_id — so dedupe is limited to the TARGET ORGANIZATION:
+  // venders already known to this tenant are reused, while a venders row of
+  // any other tenant is never linked (a restored business must not share a
+  // mutable party record across tenants).
+  const existingSuppliers: any[] = targetOrgId != null
+    ? await cx.select().from(schema.suppliers).where(eq(schema.suppliers.ownerId, targetOrgId))
+    : [];
   const supplierKey = (s: any) =>
     `${(s.name || "").toString().trim().toLowerCase()}|${(s.phone || "").toString().trim()}`;
   const existingSupplierKeys = new Set(existingSuppliers.map(supplierKey));
   const newSuppliers: any[] = [];
   for (const s of backupJson.tables.suppliers || []) {
-    if (existingSupplierKeys.has(supplierKey(s))) continue;
+    const existing = existingSuppliers.find((x) => supplierKey(x) === supplierKey(s));
+    if (existing) {
+      // Same tenant → safe to point the restored rows at the known vendor.
+      mapFor("suppliers").set(Number(s.id), Number(existing.id));
+      continue;
+    }
     newSuppliers.push(s);
   }
   stats.suppliers = await insertTable("suppliers", newSuppliers, (r) => ({
@@ -642,22 +886,13 @@ export async function importBusinessBackup(
     totalSuppliedGhs: Number(r.totalSuppliedGhs) || 0,
   }));
 
-  // Customers — deduplicate by phone/name to avoid clashing shared CRM rows.
-  const existingCustomers = await db.select().from(schema.customers);
-  const custKey = (c: any) =>
-    `${(c.name || "").toString().trim().toLowerCase()}|${(c.phone || "").toString().trim()}`;
-  const existingCustomerKeys = new Set(existingCustomers.map(custKey));
-  const newCustomers: any[] = [];
-  for (const c of backupJson.tables.customers || []) {
-    if (existingCustomerKeys.has(custKey(c))) {
-      // Re-use this customer: remember mapping to the existing id.
-      const existing = existingCustomers.find((x) => custKey(x) === custKey(c));
-      if (existing) mapFor("customers").set(Number(c.id), Number(existing.id));
-      continue;
-    }
-    newCustomers.push(c);
-  }
-  stats.customers = await insertTable("customers", newCustomers, (r) => ({
+  // Customers are ALWAYS re-created for the restored business. The previous
+  // implementation reused any existing customer row with the same name+phone
+  // — including a row owned by another business or another tenant — which
+  // silently shared one mutable CRM record between two units (balances,
+  // loyalty points and credit history leaked both ways). A restored unit gets
+  // its own copies; nothing existing is touched.
+  stats.customers = await insertTable("customers", backupJson.tables.customers || [], (r) => ({
     name: r.name,
     type: r.type || "RETAIL",
     phone: r.phone,
@@ -669,6 +904,7 @@ export async function importBusinessBackup(
     totalSpentGhs: Number(r.totalSpentGhs) || 0,
     loyaltyPoints: Number(r.loyaltyPoints) || 0,
     businessId: newBusinessId,
+    ownerId: targetOrgId,
   }));
 
   // Employees
@@ -842,10 +1078,10 @@ export async function importBusinessBackup(
       amountGhs: Number(r.amountGhs) || 0,
       paymentMethod: r.paymentMethod,
       customerId: remapFk("customers", r.customerId),
-      supplierId: r.supplierId
-        ? (existingSuppliers.find((s) => Number(s.id) === Number(r.supplierId))?.id ??
-          remapFk("suppliers", r.supplierId))
-        : null,
+      // Supplier references go through the import map only: matching a source
+      // supplier id against a target row by NUMBER would silently attach the
+      // restored expense to an unrelated vendor that happens to share the id.
+      supplierId: r.supplierId ? remapFk("suppliers", r.supplierId) : null,
       description: r.description,
       date: r.date,
       createdAt: r.createdAt ? new Date(r.createdAt) : undefined,
@@ -944,6 +1180,31 @@ export async function importBusinessBackup(
     "auditAssignments", "auditReviews", "auditTrail",
     "inventoryVariants",
     "inventoryDownloads", "assetDownloads", "universalExports",
+    // ── Tables that were exported but never restored before ──────────────
+    // (online-order tracking, credit sales, payroll runs/attendance and the
+    // employee document/history trail were silently dropped on import.)
+    "employeeDocuments", "employeeHistory",
+    "customerTrackings", "creditSales",
+    "payrollRuns", "payrollAttendance", "attendanceLogs",
+    // ── Business-scoped tables added after the original catalogue ────────
+    // Ordering matters: parents are inserted before children. Circular
+    // references (supplierOrders ⇄ purchaseRequisitions,
+    // transportTrips ⇄ transportBookings) are patched after both exist.
+    "approvalPolicies", "approvalRequests",
+    "supplierOrders", "purchaseRequisitions",
+    "supplierQuotes", "supplierInvoices", "supplierPayments", "goodsReceipts",
+    "orderPayments",
+    "budgets", "actionTasks", "businessDocuments", "customerInteractions",
+    "fulfillmentMethods", "fulfillmentOptions",
+    "transportVehicles", "transportGeofences", "transportTrips", "transportBookings",
+    "transportFuelLogs", "transportMaintenance", "transportVehicleChecklists",
+    "transportTrackerViolations",
+    "poultryBenchmarkProfiles", "poultryFeedFormulations", "poultryFeedBatches",
+    "poultryFeedQcChecks",
+    "fishFeedFormulations", "fishFeedBatches", "fishFeedQcChecks",
+    "blockMixFormulations", "blockMixBatches",
+    "aquacultureBenchmarkProfiles",
+    "advisorNotes",
   ];
 
   // Foreign key remapping per simple table, when applicable.
@@ -1040,42 +1301,6 @@ export async function importBusinessBackup(
     cctvCameras: (r) => ({
       password: null, // never import camera credentials
     }),
-    customerTrackings: (r) => ({
-      customerId: remapFk("customers", r.customerId),
-      saleDocumentId: remapFk("salesDocuments", r.saleDocumentId),
-      transactionId: remapFk("transactions", r.transactionId),
-      pickupLocationId: remapFk("pickupLocations", r.pickupLocationId),
-      trackingCode: remapCode(r.trackingCode, srcBiz.code, newCode),
-      createdByUserId: remapUserId(r.createdByUserId),
-    }),
-    creditSales: (r) => ({
-      customerId: remapFk("customers", r.customerId),
-      trackingId: remapFk("customerTrackings", r.trackingId),
-      saleDocumentId: remapFk("salesDocuments", r.saleDocumentId),
-      creditCode: remapCode(r.creditCode, srcBiz.code, newCode),
-      trackingCode: r.trackingCode ? remapCode(r.trackingCode, srcBiz.code, newCode) : null,
-      createdByUserId: remapUserId(r.createdByUserId),
-    }),
-    payrollRuns: (r) => ({
-      period: r.period,
-      createdByUserId: remapUserId(r.createdByUserId),
-    }),
-    attendanceLogs: (r) => ({
-      userId: remapUserId(r.userId),
-      employeeId: remapFk("employees", r.employeeId),
-    }),
-    payrollAttendance: (r) => ({
-      employeeId: remapFk("employees", r.employeeId),
-      recordedByUserId: remapUserId(r.recordedByUserId),
-    }),
-    employeeDocuments: (r) => ({
-      employeeId: remapFk("employees", r.employeeId),
-      uploadedByUserId: remapUserId(r.uploadedByUserId),
-    }),
-    employeeHistory: (r) => ({
-      employeeId: remapFk("employees", r.employeeId),
-      changedByUserId: remapUserId(r.changedByUserId),
-    }),
     assetAuditLogs: (r) => ({
       assetId: remapFk("assets", r.assetId),
       requestedByUserId: remapUserId(r.requestedByUserId),
@@ -1134,6 +1359,182 @@ export async function importBusinessBackup(
       businessId: newBusinessId,
     }),
     aiInsights: (r) => ({ businessId: newBusinessId }),
+
+    // ── HR history (exported but previously never restored) ──────────────
+    employeeDocuments: (r) => ({
+      employeeId: remapFk("employees", r.employeeId),
+      uploadedByUserId: remapUserId(r.uploadedByUserId),
+    }),
+    employeeHistory: (r) => ({
+      employeeId: remapFk("employees", r.employeeId),
+      changedByUserId: remapUserId(r.changedByUserId),
+    }),
+
+    // ── Orders & credit ──────────────────────────────────────────────────
+    customerTrackings: (r) => ({
+      customerId: remapFk("customers", r.customerId),
+      saleDocumentId: remapFk("salesDocuments", r.saleDocumentId),
+      transactionId: remapFk("transactions", r.transactionId),
+      pickupLocationId: remapFk("pickupLocations", r.pickupLocationId),
+      trackingCode: remapCode(r.trackingCode, srcBiz.code, newCode),
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    creditSales: (r) => ({
+      customerId: remapFk("customers", r.customerId),
+      trackingId: remapFk("customerTrackings", r.trackingId),
+      saleDocumentId: remapFk("salesDocuments", r.saleDocumentId),
+      creditCode: remapCode(r.creditCode, srcBiz.code, newCode),
+      trackingCode: r.trackingCode ? remapCode(r.trackingCode, srcBiz.code, newCode) : null,
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+
+    // ── Payroll attendance ───────────────────────────────────────────────
+    payrollRuns: (r) => ({ createdByUserId: remapUserId(r.createdByUserId) }),
+    payrollAttendance: (r) => ({
+      employeeId: remapFk("employees", r.employeeId),
+      recordedByUserId: remapUserId(r.recordedByUserId),
+    }),
+    attendanceLogs: (r) => ({
+      employeeId: remapFk("employees", r.employeeId),
+    }),
+
+    // ── Procurement & approvals ──────────────────────────────────────────
+    approvalPolicies: (r) => ({
+      scopeBusinessId: newBusinessId,
+      approverUserId: remapUserId(r.approverUserId),
+    }),
+    approvalRequests: (r) => ({
+      requestedByUserId: remapUserId(r.requestedByUserId),
+      decidedByUserId: remapUserId(r.decidedByUserId),
+    }),
+    supplierOrders: (r) => ({
+      supplierId: remapFk("suppliers", r.supplierId),
+      // requisitionId is patched after purchase_requisitions exist (circular).
+      requisitionId: null,
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    purchaseRequisitions: (r) => ({
+      // supplierOrderId is patched after supplier_orders exist (circular).
+      supplierOrderId: null,
+      approvalRequestId: remapFk("approvalRequests", r.approvalRequestId),
+      requestedByUserId: remapUserId(r.requestedByUserId),
+    }),
+    supplierQuotes: (r) => ({
+      requisitionId: remapFk("purchaseRequisitions", r.requisitionId),
+      supplierId: remapFk("suppliers", r.supplierId),
+      supplierOrderId: remapFk("supplierOrders", r.supplierOrderId),
+    }),
+    supplierInvoices: (r) => ({
+      supplierOrderId: remapFk("supplierOrders", r.supplierOrderId),
+      supplierId: remapFk("suppliers", r.supplierId),
+      attachmentDocumentId: remapFk("businessDocuments", r.attachmentDocumentId),
+    }),
+    supplierPayments: (r) => ({
+      invoiceId: remapFk("supplierInvoices", r.invoiceId),
+      supplierOrderId: remapFk("supplierOrders", r.supplierOrderId),
+      transactionId: remapFk("transactions", r.transactionId),
+      recordedByUserId: remapUserId(r.recordedByUserId),
+    }),
+    goodsReceipts: (r) => ({
+      supplierOrderId: remapFk("supplierOrders", r.supplierOrderId),
+      receivedByUserId: remapUserId(r.receivedByUserId),
+    }),
+    orderPayments: (r) => ({
+      trackingId: remapFk("customerTrackings", r.trackingId),
+      transactionId: remapFk("transactions", r.transactionId),
+      markedByUserId: remapUserId(r.markedByUserId),
+    }),
+
+    // ── Budgets, tasks, documents, CRM, fulfilment ───────────────────────
+    budgets: (r) => ({ createdByUserId: remapUserId(r.createdByUserId) }),
+    actionTasks: (r) => ({
+      // source_id is a polymorphic reference to another exported table; the
+      // label/ref text is preserved so the task stays readable.
+      assignedUserId: remapUserId(r.assignedUserId, { required: true }),
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    businessDocuments: (r) => ({
+      uploadedByUserId: remapUserId(r.uploadedByUserId),
+      // Related records keep their label; idem for polymorphic related_id.
+      relatedId: null,
+    }),
+    customerInteractions: (r) => ({
+      customerId: remapFk("customers", r.customerId),
+      actorUserId: remapUserId(r.actorUserId),
+    }),
+    fulfillmentMethods: (r) => ({ createdByUserId: remapUserId(r.createdByUserId) }),
+    fulfillmentOptions: (r) => ({
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+      methodId: remapFk("fulfillmentMethods", r.methodId),
+      supplierId: remapFk("suppliers", r.supplierId),
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+
+    // ── Transport & logistics ────────────────────────────────────────────
+    transportVehicles: (r) => ({
+      assetId: remapFk("assets", r.assetId),
+      assignedEmployeeId: remapFk("employees", r.assignedEmployeeId),
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    transportTrips: (r) => ({
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      driverEmployeeId: remapFk("employees", r.driverEmployeeId),
+      customerId: remapFk("customers", r.customerId),
+      // bookingId is patched after transport_bookings exist (circular).
+      bookingId: null,
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    transportBookings: (r) => ({
+      customerId: remapFk("customers", r.customerId),
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      tripId: remapFk("transportTrips", r.tripId),
+      createdByUserId: remapUserId(r.createdByUserId),
+    }),
+    transportFuelLogs: (r) => ({
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      driverEmployeeId: remapFk("employees", r.driverEmployeeId),
+    }),
+    transportMaintenance: (r) => ({
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      assignedToEmployeeId: remapFk("employees", r.assignedToEmployeeId),
+    }),
+    transportVehicleChecklists: (r) => ({
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      tripId: remapFk("transportTrips", r.tripId),
+      employeeId: remapFk("employees", r.employeeId),
+    }),
+    transportTrackerViolations: (r) => ({
+      vehicleId: remapFk("transportVehicles", r.vehicleId),
+      tripId: remapFk("transportTrips", r.tripId),
+    }),
+
+    // ── Feed / block-mix production ──────────────────────────────────────
+    poultryBenchmarkProfiles: (r) => ({ createdByUserId: remapUserId(r.createdByUserId) }),
+    poultryFeedBatches: (r) => ({
+      formulationId: remapFk("poultryFeedFormulations", r.formulationId),
+      finishedInventoryId: remapFk("inventoryItems", r.finishedInventoryId),
+      recordedByUserId: remapUserId(r.recordedByUserId),
+    }),
+    poultryFeedQcChecks: (r) => ({ batchId: remapFk("poultryFeedBatches", r.batchId) }),
+    fishFeedBatches: (r) => ({
+      formulationId: remapFk("fishFeedFormulations", r.formulationId),
+      finishedInventoryId: remapFk("inventoryItems", r.finishedInventoryId),
+      recordedByUserId: remapUserId(r.recordedByUserId),
+    }),
+    fishFeedQcChecks: (r) => ({ batchId: remapFk("fishFeedBatches", r.batchId) }),
+    blockMixBatches: (r) => ({
+      formulationId: remapFk("blockMixFormulations", r.formulationId),
+      consumedProductionLogId: remapFk("blockFactoryLogs", r.consumedProductionLogId),
+      recordedByUserId: remapUserId(r.recordedByUserId),
+    }),
+    aquacultureBenchmarkProfiles: (r) => ({ createdByUserId: remapUserId(r.createdByUserId) }),
+
+    // ── Advisor content (flock/batch links, thread updates handled below) ─
+    advisorNotes: (r) => ({
+      flockId: remapFk("poultryFlocks", r.flockId),
+      batchId: remapFk("aquacultureBatches", r.batchId),
+      authorUserId: remapUserId(r.authorUserId),
+    }),
   };
 
   for (const t of simpleTables) {
@@ -1144,6 +1545,89 @@ export async function importBusinessBackup(
       return genericTransform(r, () => extra);
     });
   }
+
+  // ── Circular references between tables that were both inserted above ──
+  // (patched now that both sides have real ids; the columns stay NULL when
+  // the counterpart row could not be restored).
+  const patchRefs: { table: string; column: string; from: string; source: any[] }[] = [
+    { table: "supplierOrders", column: "requisitionId", from: "purchaseRequisitions", source: backupJson.tables.supplierOrders || [] },
+    { table: "purchaseRequisitions", column: "supplierOrderId", from: "supplierOrders", source: backupJson.tables.purchaseRequisitions || [] },
+    { table: "transportTrips", column: "bookingId", from: "transportBookings", source: backupJson.tables.transportTrips || [] },
+  ];
+  for (const p of patchRefs) {
+    const table = TABLES[p.table]?.table;
+    if (!table) continue;
+    for (const src of p.source) {
+      const newId = idMap[p.table]?.get(Number(src.id));
+      const oldRef = Number(src[p.column] ?? 0);
+      const newRef = oldRef ? idMap[p.from]?.get(oldRef) : null;
+      if (!newId || !newRef) continue;
+      try {
+        await cx.update(table).set({ [p.column]: newRef }).where(eq(table.id, newId));
+      } catch (e: any) {
+        warnings.push(`${p.table}.${p.column} patch skipped — ${e.message?.slice(0, 80)}`);
+      }
+    }
+  }
+
+  // Children whose parents live in the feed/mix factory tables (no businessId
+  // of their own — they follow their parent, which is already business-scoped).
+  stats.poultryFeedFormulationItems = await insertTable(
+    "poultryFeedFormulationItems",
+    backupJson.tables.poultryFeedFormulationItems || [],
+    (r) => genericTransform(r, () => ({
+      formulationId: remapFk("poultryFeedFormulations", r.formulationId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.poultryFeedBatchInputs = await insertTable(
+    "poultryFeedBatchInputs",
+    backupJson.tables.poultryFeedBatchInputs || [],
+    (r) => genericTransform(r, () => ({
+      batchId: remapFk("poultryFeedBatches", r.batchId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.fishFeedFormulationItems = await insertTable(
+    "fishFeedFormulationItems",
+    backupJson.tables.fishFeedFormulationItems || [],
+    (r) => genericTransform(r, () => ({
+      formulationId: remapFk("fishFeedFormulations", r.formulationId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.fishFeedBatchInputs = await insertTable(
+    "fishFeedBatchInputs",
+    backupJson.tables.fishFeedBatchInputs || [],
+    (r) => genericTransform(r, () => ({
+      batchId: remapFk("fishFeedBatches", r.batchId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.blockMixFormulationItems = await insertTable(
+    "blockMixFormulationItems",
+    backupJson.tables.blockMixFormulationItems || [],
+    (r) => genericTransform(r, () => ({
+      formulationId: remapFk("blockMixFormulations", r.formulationId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.blockMixBatchInputs = await insertTable(
+    "blockMixBatchInputs",
+    backupJson.tables.blockMixBatchInputs || [],
+    (r) => genericTransform(r, () => ({
+      mixBatchId: remapFk("blockMixBatches", r.mixBatchId),
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+    })),
+  );
+  stats.advisorNoteUpdates = await insertTable(
+    "advisorNoteUpdates",
+    backupJson.tables.advisorNoteUpdates || [],
+    (r) => genericTransform(r, () => ({
+      noteId: remapFk("advisorNotes", r.noteId),
+      actorUserId: remapUserId(r.actorUserId, { required: true }),
+    })),
+  );
 
   // Children whose parents were inserted in the simple pass.
   stats.assetAuditLogs = await insertTable(
@@ -1265,6 +1749,63 @@ export async function importBusinessBackup(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Existing values of every SINGLE-COLUMN unique index on a table, keyed by
+ * the drizzle property. Used on restore to keep globally-unique business
+ * codes (tracking/credit/purchase numbers …) from colliding with the rows
+ * that still live in the source database — the restored copy gets the new
+ * unit's code appended, the original row is never modified.
+ */
+type UniqueRegistry = Map<string, Map<string, Set<string>>>;
+async function uniqueValueSets(
+  cx: any,
+  registry: UniqueRegistry,
+  tableName: string,
+  cols: Map<string, any>,
+): Promise<Map<string, Set<string>>> {
+  const cached = registry.get(tableName);
+  if (cached) return cached;
+  const out = new Map<string, Set<string>>();
+  try {
+    const res = await cx.execute(sql`
+      select a.attname as column
+        from pg_index i
+        join pg_class c on c.oid = i.indrelid
+        join pg_attribute a on a.attrelid = c.oid and a.attnum = any(i.indkey)
+       where c.relname = ${tableName}
+         and i.indisunique
+         and not i.indisprimary
+         and array_length(i.indkey, 1) = 1
+         and c.relnamespace = 'public'::regnamespace
+    `);
+    const rows = (res as any)?.rows ?? res ?? [];
+    for (const r of rows) {
+      const column = String(r.column);
+      const prop = [...cols.entries()].find(([, meta]) => meta?.name === column)?.[0];
+      if (!prop || cols.get(prop)?.dataType !== "string") continue;
+      const vals = await cx.execute(sql.raw(`select "${column}" as v from "${tableName}" where "${column}" is not null`));
+      const list = (vals as any)?.rows ?? vals ?? [];
+      out.set(prop, new Set(list.map((x: any) => String(x.v))));
+    }
+  } catch {
+    // Metadata unavailable → skip uniqueness handling (row inserts still run).
+  }
+  registry.set(tableName, out);
+  return out;
+}
+
+/** propertyName → column metadata for a drizzle table (cached per table). */
+const COLUMN_CACHE = new WeakMap<any, Map<string, any>>();
+function tableColumns(table: any): Map<string, any> {
+  let cached = COLUMN_CACHE.get(table);
+  if (!cached) {
+    const cols = getTableColumns(table) as Record<string, any>;
+    cached = new Map(Object.entries(cols).map(([prop, col]) => [prop, col]));
+    COLUMN_CACHE.set(table, cached);
+  }
+  return cached;
+}
 
 function remapCode(value: any, oldCode: string, newCode: string): any {
   if (typeof value !== "string") return value;
