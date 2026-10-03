@@ -422,7 +422,7 @@ export default function CommandCenterDashboard({
             </div>
           )}
           <p className="text-sm text-slate-300 mt-1 max-w-2xl">
-            Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across all 7 Ghanaian operating units.
+            Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across your entire business portfolio.
           </p>
         </div>
 
