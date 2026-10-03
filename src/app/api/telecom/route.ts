@@ -15,6 +15,7 @@ import { eq, and, inArray, lt, desc } from "drizzle-orm";
 import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
@@ -112,33 +113,17 @@ async function upsertTelecomCustomer(
   phone: string | null,
   amount: number
 ) {
-  const existing = await db.select().from(customers).where(eq(customers.businessId, biz.id));
-  const match =
-    existing.find((c) => phone && c.phone === phone) ||
-    existing.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + amount) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + 1,
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(amount * 100) / 100),
-      loyaltyPoints: 1,
-      businessId: biz.id,
-    })
-    .returning();
-  return created?.id ?? null;
+  // Shared CRM rule (src/lib/customerLink) — business-isolated find-or-create
+  // with the service modules' loyalty award (1 point per purchase) preserved.
+  const linked = await linkOrCreateCustomer({
+    businessId: biz.id,
+    name,
+    phone,
+    amount,
+    loyaltyPoints: 1,
+    phoneFallback: "—",
+  });
+  return linked?.id ?? null;
 }
 
 /** Mark any sold Wi-Fi voucher whose validity window has passed as EXPIRED. */

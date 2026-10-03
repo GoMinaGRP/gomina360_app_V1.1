@@ -201,8 +201,13 @@ async function main() {
     check("B5.db-row", formRow?.block_type === typeKey && Math.abs(n(formRow?.water_cement_ratio) - 0.55) < 1e-9 && n(formRow?.batch_size_kg) === 800);
     const bomLines = (await q(`SELECT * FROM block_mix_formulation_items WHERE formulation_id=$1 ORDER BY sequence`, [formId])).rows;
     check("B6.bom-3-lines", bomLines.length === 3 && bomLines.every((l) => l.inventory_id != null && (l.sku || "").startsWith("BLK-RM-")), bomLines.map((l) => l.sku).join(","));
-    const rawCats = (await q(`SELECT COUNT(*) c FROM inventory_items WHERE business_id=$1 AND category='Block Raw Materials' AND name LIKE 'TBM%'`, [BIZ])).rows[0];
-    check("B7.raw-items-created", n(rawCats?.c) === 3);
+    // The app stores the standardized umbrella category: "Block Raw Materials"
+    // is an ALIAS that normalizeInventoryCategory() maps to "Building Materials"
+    // (src/lib/inventoryCategories.ts) while the specific wording lives in
+    // subcategory — so match on the BLK-RM- SKUs the recipe created.
+    const rawItems = (await q(`SELECT name, category, subcategory FROM inventory_items WHERE business_id=$1 AND sku LIKE 'BLK-RM-%' AND name LIKE 'TBM%'`, [BIZ])).rows;
+    check("B7.raw-items-created", n(rawItems.length) === 3 && rawItems.every((r) => r.category === "Building Materials"),
+      rawItems.map((r) => `${r.name}:${r.category}`).join(" | "));
     const bDup = await blkPost(page, "MIX_FORMULATION", { businessId: BIZ, name: "TBM Sandcrete 1:8 Standard", blockType: typeKey, items: [{ ingredientName: "TBM Sharp Sand", sharePct: 100 }] });
     check("B8.dup-name-409", bDup.status === 409);
 

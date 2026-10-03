@@ -14,6 +14,7 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
@@ -126,33 +127,17 @@ async function upsertWashCustomer(
   phone: string | null,
   amount: number
 ) {
-  const existing = await db.select().from(customers).where(eq(customers.businessId, biz.id));
-  const match =
-    existing.find((c) => phone && c.phone === phone) ||
-    existing.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + amount) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + 1,
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(amount * 100) / 100),
-      loyaltyPoints: 1,
-      businessId: biz.id,
-    })
-    .returning();
-  return created?.id ?? null;
+  // Shared CRM rule (src/lib/customerLink) — business-isolated find-or-create
+  // with the service modules' loyalty award (1 point per job) preserved.
+  const linked = await linkOrCreateCustomer({
+    businessId: biz.id,
+    name,
+    phone,
+    amount,
+    loyaltyPoints: 1,
+    phoneFallback: "—",
+  });
+  return linked?.id ?? null;
 }
 
 export async function GET(request: NextRequest) {

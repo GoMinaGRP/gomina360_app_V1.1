@@ -6,16 +6,17 @@ import {
   hardwarePurchases,
   hardwareDeliveries,
   inventoryItems,
-  transactions,
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { notifyPurchase } from "@/lib/notify";
+import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
+import { linkSupplier } from "@/lib/supplierLinks";
 
 /**
  * Hardware & Building Materials store API.
@@ -29,32 +30,54 @@ import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
  * other module route).
  */
 
-async function bookRevenue(
-  businessId: number,
-  branchCode: string | null,
-  branchName: string | null,
-  amount: number,
-  category: string,
-  description: string,
+/**
+ * Order delivered → the SHARED sale engine.
+ *
+ * Hardware used to hand-roll `insert(transactions)` here, so its revenue
+ * never produced a receipt, never touched the CRM and never appeared in
+ * Order & Tracking — the audit's "second sales pipeline". It now posts
+ * through `postSale()` (ledger + receipt + CRM + tracking), keeping the
+ * module's own ledger category and wording so Finance reads exactly as
+ * before, and adds the two facts that were missing.
+ */
+async function bookOrderSale(
+  order: any,
   actorName?: string | null,
-  actorRole?: string | null
+  actorRole?: string | null,
+  actorUserId?: number | null,
+  paymentMethod?: string | null
 ) {
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(now),
-    businessId,
-    branchCode,
-    branchName,
-    type: "INCOME",
-    category,
-    amountGhs: amount,
-    paymentMethod: "CASH",
-    description,
-    date: now.toISOString().split("T")[0],
-    createdAt: new Date(),
-    status: "COMPLETED",
-    recordedBy: actorName || "Hardware Store",
-    recordedByRole: actorRole || null,
+  const qty = Number(order.quantity) || 0;
+  const unitPrice = Number(order.unitPriceGhs) || 0;
+  const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+  const amount = Number(order.totalGhs) || lineTotal;
+  const discount = Math.max(0, Math.round((lineTotal - amount) * 100) / 100);
+  const [inv] = order.inventoryId
+    ? await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(order.inventoryId)))
+    : [null];
+  return postSale({
+    businessId: order.businessId,
+    branchCode: order.branchCode,
+    lines: [
+      {
+        inventoryId: order.inventoryId ? Number(order.inventoryId) : null,
+        sku: inv?.sku ?? null,
+        description: `${order.itemName} (${order.orderNumber})`,
+        quantity: qty,
+        unit: inv?.unit ?? "Units",
+        category: inv?.category ?? null,
+        unitPrice,
+        costPrice: Number(inv?.costPriceGhs) || 0,
+      },
+    ],
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    customerId: order.customerId ?? null,
+    paymentMethod: paymentMethod || "CASH",
+    category: "HARDWARE_ORDER_SALE",
+    description: `Order ${order.orderNumber} delivered: ${qty}× ${order.itemName} — ${order.customerName}`,
+    discount,
+    actor: { name: actorName || "Hardware Store", role: actorRole || null, id: actorUserId ?? null },
   });
 }
 
@@ -161,6 +184,17 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Math.max(0.5, Number(data.quantity) || 1);
       const price = Number(data.unitPriceGhs) || 0;
+      // Link the buyer into the shared CRM at order time (one record per
+      // phone/name) so the order, the receipt and the customer directory
+      // all point at the same person.
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db
         .insert(hardwareOrders)
         .values({
@@ -169,6 +203,7 @@ export async function POST(request: NextRequest) {
           orderNumber: data.orderNumber || `ORD-HW-${new Date().getFullYear()}-${stamp}`,
           customerName: data.customerName || "Walk-in Customer",
           customerPhone: data.customerPhone || null,
+          customerId: buyer?.id ?? null,
           itemName: data.itemName || "Hardware Materials",
           inventoryId: data.inventoryId ? Number(data.inventoryId) : null,
           quantity: qty,
@@ -312,6 +347,28 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
     });
   }
 
+  // Supplier ledger link (feed-mill pattern, shared via supplierLinks): naming
+  // a vendor on a received purchase creates/refreshes that supplier org-wide so
+  // the shared Suppliers module stops reading zero for this unit's vendors.
+  if (purchase.supplierName && qty * cost > 0) {
+    const orgId = await ownerOrgOfBusiness(purchase.businessId).catch(() => null);
+    const linked = await linkSupplier({
+      ownerId: orgId ?? (biz as any)?.ownerId ?? null,
+      name: purchase.supplierName,
+      category: "Building Materials",
+      suppliedGhs: qty * cost,
+      paymentMethod: data.paymentMethod,
+      logTag: "[hardware]",
+    });
+    if (linked?.supplier?.id && purchase.id) {
+      await db
+        .update(hardwarePurchases)
+        .set({ supplierId: linked.supplier.id })
+        .where(eq(hardwarePurchases.id, Number(purchase.id)))
+        .catch(() => {});
+    }
+  }
+
   if (data.recordExpense !== false && qty * cost > 0) {
     await bookExpense(
       purchase.businessId,
@@ -359,17 +416,21 @@ export async function PATCH(request: NextRequest) {
         .returning();
       if (row.status === "DELIVERED" && before?.status !== "DELIVERED" && !row.fulfilledDate) {
         if (row.inventoryId) await stockOutItem(Number(row.inventoryId), Number(row.quantity) || 0);
-        const [biz] = await db.select().from(businesses).where(eq(businesses.id, row.businessId));
-        await bookRevenue(
-          row.businessId,
-          row.branchCode,
-          biz?.name || null,
-          row.totalGhs || (Number(row.quantity) || 0) * (row.unitPriceGhs || 0),
-          "HARDWARE_ORDER_SALE",
-          `Order ${row.orderNumber} delivered: ${row.quantity}× ${row.itemName} — ${row.customerName}`,
+        // One writer for money: ledger + receipt + CRM + tracking.
+        const posted = await bookOrderSale(
+          row,
           data?.actorName || row.createdByName,
-          data?.actorRole || row.createdByRole
+          data?.actorRole || row.createdByRole,
+          data?.createdByUserId,
+          data?.paymentMethod
         );
+        if (posted.success) {
+          await db
+            .update(hardwareOrders)
+            .set({ customerId: posted.customerId ?? row.customerId ?? null })
+            .where(eq(hardwareOrders.id, row.id));
+          row.customerId = posted.customerId ?? row.customerId;
+        }
         await db.update(hardwareOrders).set({ fulfilledDate: today }).where(eq(hardwareOrders.id, row.id));
         row.fulfilledDate = today;
       }

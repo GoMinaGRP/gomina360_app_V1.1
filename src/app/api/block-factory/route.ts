@@ -24,6 +24,7 @@ import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { linkSupplier } from "@/lib/supplierLinks";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
 import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
@@ -460,11 +461,21 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Number(data.quantity) || 0;
       const price = Number(data.unitPriceGhs) || 0;
+      // Shared CRM: link the buyer at order time (one record per name/phone).
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db.insert(blockFactoryOrders).values({
         businessId, branchCode,
         orderNumber: data.orderNumber || `ORD-BLK-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`,
         customerName: data.customerName || "Walk-in Customer",
         customerPhone: data.customerPhone || null,
+        customerId: buyer?.id ?? null,
         blockType: data.blockType || "6-INCH-SOLID",
         quantity: qty,
         unitPriceGhs: price,

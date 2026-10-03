@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
-import { transactions, inventoryItems, salesDocuments, businesses, customers, customerTrackings } from "@/db/schema";
+import { inventoryItems } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { buildTrackingCode } from "@/lib/tracking";
 import { apiError } from "@/lib/apiError";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
 import { variantSuffix } from "@/lib/boutiqueSizes";
+import { computeSaleTotals, normalizeSaleLines, postSale } from "@/lib/salePosting";
 
 /**
  * POST /api/sales
@@ -193,6 +192,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── 1b. Validate the money maths BEFORE anything moves ───────────
+    // (A bad discount used to be rejected only after the stock had already
+    // been deducted, leaving inventory wrong on a 400 response.)
+    const preview = computeSaleTotals(normalizeSaleLines(lineItems), discount, discountPercent);
+    if (preview.error || !preview.totals) {
+      return NextResponse.json({ success: false, error: preview.error }, { status: 400 });
+    }
+
     // ── 2. Deduct inventory quantities ───────────────────────────────
     // Boutique lines first hit their exact variant row (atomic conditional
     // decrement), then the item's aggregate is recomputed FROM the variant
@@ -219,232 +226,39 @@ export async function POST(request: NextRequest) {
         .where(eq(inventoryItems.id, update.id));
     }
 
-    // ── 3. Calculate totals ──────────────────────────────────────────
-    const subtotal = lineItems.reduce((acc: number, li: any) => acc + li.total, 0);
-    // Percentage discount is the primary mode (auto-calculates the amount);
-    // a flat GH₵ amount stays supported for backward compatibility.
-    const r2 = (n: number) => Math.round(n * 100) / 100;
-    let discountPct = 0;
-    let discountAmount = 0;
-    if (discountPercent !== undefined && discountPercent !== null && discountPercent !== "") {
-      const pct = Number(discountPercent);
-      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-        return NextResponse.json(
-          { success: false, error: "Discount percent must be between 0 and 100." },
-          { status: 400 },
-        );
-      }
-      discountPct = r2(pct);
-      discountAmount = r2((subtotal * discountPct) / 100);
-    } else {
-      discountAmount = r2(Number(discount) || 0);
-      discountPct = subtotal > 0 ? r2((discountAmount / subtotal) * 100) : 0;
-    }
-    if (discountAmount < 0 || discountAmount > subtotal) {
-      return NextResponse.json(
-        { success: false, error: "Discount cannot exceed the sale subtotal." },
-        { status: 400 },
-      );
-    }
-    const total = r2(subtotal - discountAmount);
-    // Cost of goods sold (inventory cost × qty) → real profit per sale
-    const cogs = lineItems.reduce((acc: number, li: any) => acc + (li.costTotal || 0), 0);
-    const grossProfit = total - cogs;
-
-    // ── 3b. Link / accumulate the customer record (shared CRM) ──────
-    let linkedCustomerId: number | null = null;
-    try {
-      const allCustomers = await db.select().from(customers);
-      const norm = (s: any) => String(s || "").trim().toLowerCase();
-      // Business-isolated CRM: prefer a match ALREADY belonging to this
-      // business, then fall back to legacy group-shared rows (null); brand
-      // new customers are stamped to THIS unit so a new business never
-      // inherits another's clientele.
-      const belongs = (c: any) => c.businessId === Number(businessId);
-      const shared = (c: any) => c.businessId === null;
-      const cust =
-        (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && belongs(c))) ||
-        (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && belongs(c))) ||
-        (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && shared(c))) ||
-        (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && shared(c))) ||
-        null;
-      if (cust) {
-        linkedCustomerId = cust.id;
-        await db
-          .update(customers)
-          .set({
-            totalSpentGhs: (cust.totalSpentGhs || 0) + total,
-            loyaltyPoints: (cust.loyaltyPoints || 0) + Math.floor(total / 100),
-          })
-          .where(eq(customers.id, cust.id));
-      } else if (customerName && String(customerName).trim() && norm(customerName) !== "walk-in" && norm(customerName) !== "walk-in customer") {
-        const [created] = await db
-          .insert(customers)
-          .values({
-            name: String(customerName).trim(),
-            type: "RETAIL",
-            // phone is NOT NULL in the schema — store "" when the sale has no
-            // number so walk-in customers still get a CRM record
-            phone: customerPhone || "",
-            totalSpentGhs: total,
-            loyaltyPoints: Math.floor(total / 100),
-            businessId: Number(businessId),
-          })
-          .returning();
-        linkedCustomerId = created?.id ?? null;
-      }
-    } catch (custErr) {
-      console.error("/api/sales customer link warning:", custErr);
-    }
-
-    // ── 4. Get branch info ───────────────────────────────────────────
-    const [biz] = await db
-      .select()
-      .from(businesses)
-      .where(eq(businesses.id, Number(businessId)));
-    const resolvedBranchCode = branchCode || biz?.code || "";
-    const resolvedBranchName = biz?.name || "";
-
-    // ── 5. Create financial transaction ──────────────────────────────
-    const trxNum = nextTrxNumber();
-    const dateStr = new Date().toISOString().split("T")[0];
-
-    const lineDesc = lineItems
-      .map((li: any) => `${li.quantity}× ${li.description}`)
-      .join(", ");
-
-    const [newTrx] = await db
-      .insert(transactions)
-      .values({
-        transactionNumber: trxNum,
-        businessId: Number(businessId),
-        branchCode: resolvedBranchCode,
-        branchName: resolvedBranchName,
-        type: "INCOME",
-        category: "Inventory Sale",
-        amountGhs: total,
-        paymentMethod: paymentMethod || "CASH",
-        customerId: linkedCustomerId,
-        description: `[INV:${trxNum}] ${lineDesc} — ${customerName || "Walk-in"}${discountAmount > 0 ? ` · ${discountPct}% discount −GH₵${discountAmount.toFixed(2)}` : ""}`,
-        date: dateStr,
-        createdAt: new Date(),
-        status: "COMPLETED",
-        recordedBy: createdByName || "Sales Center",
-        recordedByRole: createdByRole || null,
-        recordedByUserId: createdByUserId ? Number(createdByUserId) : null,
-      })
-      .returning();
-
-    // ── 6. Create receipt sales document ─────────────────────────────
-    const docNum = `RCP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-
-    const [newDoc] = await db
-      .insert(salesDocuments)
-      .values({
-        documentNumber: docNum,
-        documentType: "RECEIPT",
-        businessId: Number(businessId),
-        branchCode: resolvedBranchCode,
-        branchName: resolvedBranchName,
-        customerId: linkedCustomerId,
-        customerName: customerName || "Walk-in Customer",
-        customerPhone: customerPhone || null,
-        lineItems,
-        subtotalGhs: subtotal,
-        discountGhs: discountAmount,
-        discountPercent: discountPct,
-        totalGhs: total,
-        cogsGhs: cogs,
-        grossProfitGhs: grossProfit,
-        currency: "GHS",
-        status: "PAID",
-        notes: notes || null,
-        paymentMethod: paymentMethod || "CASH",
-        linkedTransactionId: newTrx.id,
-        createdByUserId: createdByUserId ? Number(createdByUserId) : null,
-        createdByName: createdByName || "Sales Center",
-        createdByRole: createdByRole || null,
-      })
-      .returning();
-
-    // ── 7. Auto-mint a customer tracking code for this order ─────────
-    // Every sale/order gets a unique GM-* code the customer can follow on
-    // the public /track page without logging in. Wrapped so a tracking
-    // hiccup can never break a sale.
-    let trackingCode: string | null = null;
-    try {
-      let code = buildTrackingCode(biz?.code);
-      for (let i = 0; i < 6; i++) {
-        const clash = await db
-          .select({ id: customerTrackings.id })
-          .from(customerTrackings)
-          .where(eq(customerTrackings.trackingCode, code));
-        if (clash.length === 0) break;
-        code = buildTrackingCode(biz?.code);
-      }
-      const now2 = new Date();
-      await db.insert(customerTrackings).values({
-        trackingCode: code,
-        businessId: Number(businessId),
-        branchCode: resolvedBranchCode,
-        branchName: resolvedBranchName,
-        customerId: linkedCustomerId,
-        customerName: customerName || "Walk-in Customer",
-        customerPhone: customerPhone || null,
-        saleDocumentId: newDoc.id,
-        transactionId: newTrx.id,
-        items: lineItems.map((li: any) => ({
-          description: li.description,
-          sku: li.sku || null,
-          quantity: li.quantity,
-          unit: li.unit || null,
-          unitPrice: li.unitPrice,
-          total: li.total,
-          ...(li.size || li.color
-            ? { size: li.size || null, color: li.color || null, variantId: li.variantId ?? null }
-            : {}),
-        })),
-        totalGhs: total,
-        currency: "GHS",
-        fulfillmentType: "PICKUP",
-        status: "RECEIVED",
-        statusHistory: [
-          {
-            status: "RECEIVED",
-            at: now2.toISOString(),
-            by: createdByName || "Sales Center",
-            byRole: createdByRole || "WORKER",
-            note: `Sale recorded (${docNum}). Order registered for customer tracking.`,
-          },
-        ],
-        orderSource: "SALE",
-        paymentChoice: null,
-        paymentStatus: "PAID",
-        paymentMethod: paymentMethod || "CASH",
-        paymentMarkedBy: createdByName || "Sales Center",
-        paymentMarkedAt: now2,
-        stockCommitted: true,
-        createdByUserId: createdByUserId ? Number(createdByUserId) : null,
-        createdByName: createdByName || "Sales Center",
-        createdByRole: createdByRole || null,
-        createdAt: now2,
-        updatedAt: now2,
-      });
-      trackingCode = code;
-    } catch (trackErr) {
-      console.error("/api/sales tracking warning:", trackErr);
+    // ── 3. Post the sale through the SHARED engine ───────────────────
+    // One writer for money: ledger INCOME transaction + RECEIPT sales
+    // document + CRM link/accrual + tracking code. The module fulfilment
+    // paths (hardware/electronics deliveries, restaurant tickets) call the
+    // very same engine, so Finance, Receipts, CRM and Tracking can never
+    // disagree about what was sold.
+    const posted = await postSale({
+      businessId: Number(businessId),
+      branchCode: branchCode || null,
+      lines: lineItems,
+      customerName,
+      customerPhone,
+      paymentMethod,
+      notes,
+      discount,
+      discountPercent,
+      tag: "INV",
+      actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+    });
+    if (!posted.success) {
+      return NextResponse.json({ success: false, error: posted.error }, { status: 400 });
     }
 
     return NextResponse.json({
       success: true,
-      transaction: newTrx,
-      receipt: newDoc,
-      lineItems,
-      cogsGhs: cogs,
-      grossProfitGhs: grossProfit,
-      customerId: linkedCustomerId,
-      trackingCode,
-      trackUrl: trackingCode ? `/track?code=${encodeURIComponent(trackingCode)}` : null,
+      transaction: posted.transaction,
+      receipt: posted.receipt,
+      lineItems: posted.lineItems,
+      cogsGhs: posted.totals.cogs,
+      grossProfitGhs: posted.totals.grossProfit,
+      customerId: posted.customerId,
+      trackingCode: posted.trackingCode,
+      trackUrl: posted.trackingCode ? `/track?code=${encodeURIComponent(posted.trackingCode)}` : null,
       priceOverrides: priceAuditEntries,
       inventoryUpdates: inventoryUpdates.map((u) => ({
         inventoryId: u.id,

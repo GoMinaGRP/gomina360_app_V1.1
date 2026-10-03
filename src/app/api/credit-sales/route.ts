@@ -28,6 +28,7 @@ import {
   SETTLED_EPSILON,
 } from "@/lib/credit";
 import { uniqueTrackingCode } from "@/lib/trackingServer";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
 import { variantSuffix } from "@/lib/boutiqueSizes";
 import { apiError } from "@/lib/apiError";
@@ -166,45 +167,22 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
   return { validationErrors, inventoryUpdates, lineItems, variantUpdates, variantItemIds };
 }
 
-/** Find-or-create the CRM customer and accrue their spend (business-isolated). */
+/** Find-or-create the CRM customer and accrue their spend (shared rule). */
 async function linkCustomer(
   businessId: number,
   customerName: string,
   customerPhone: string | null,
   total: number
 ): Promise<number | null> {
-  const allCustomers = await db.select().from(customers);
-  const norm = (s: any) => String(s || "").trim().toLowerCase();
-  const belongs = (c: any) => c.businessId === Number(businessId);
-  const shared = (c: any) => c.businessId === null;
-  const cust =
-    (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && belongs(c))) ||
-    (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && belongs(c))) ||
-    (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && shared(c))) ||
-    (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && shared(c))) ||
-    null;
-  if (cust) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: (cust.totalSpentGhs || 0) + total,
-        loyaltyPoints: (cust.loyaltyPoints || 0) + Math.floor(total / 100),
-      })
-      .where(eq(customers.id, cust.id));
-    return cust.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name: customerName.trim(),
-      type: "RETAIL",
-      phone: customerPhone || "",
-      totalSpentGhs: total,
-      loyaltyPoints: Math.floor(total / 100),
-      businessId: Number(businessId),
-    })
-    .returning();
-  return created?.id ?? null;
+  const linked = await linkOrCreateCustomer({
+    businessId,
+    name: customerName,
+    phone: customerPhone,
+    amount: total,
+    phoneFallback: "",
+    includeLegacyShared: true,
+  });
+  return linked?.id ?? null;
 }
 
 /**

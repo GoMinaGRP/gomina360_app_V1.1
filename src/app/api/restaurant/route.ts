@@ -7,15 +7,16 @@ import {
   restaurantWaste,
   restaurantPurchases,
   inventoryItems,
-  transactions,
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { notifyPurchase } from "@/lib/notify";
+import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
+import { linkSupplier } from "@/lib/supplierLinks";
 
 // NOTE: the Restaurant menu master list starts EMPTY for every business — no
 // sample dishes are auto-seeded (owner directive: new / reset units begin with
@@ -139,6 +140,15 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Math.max(1, Number(data.quantity) || 1);
       const price = Number(data.unitPriceGhs) || 0;
+      // Shared CRM: link the guest at ticket time (one record per buyer).
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db
         .insert(restaurantOrders)
         .values({
@@ -146,6 +156,8 @@ export async function POST(request: NextRequest) {
           branchCode,
           orderNumber: data.orderNumber || `ORD-KIT-${new Date().getFullYear()}-${stamp}`,
           customerName: data.customerName || "Walk-in Guest",
+          customerPhone: data.customerPhone || null,
+          customerId: buyer?.id ?? null,
           itemName: data.itemName || "Menu Item",
           menuItemId: data.menuItemId ? Number(data.menuItemId) : null,
           quantity: qty,
@@ -305,6 +317,62 @@ export async function PATCH(request: NextRequest) {
         .where(eq(restaurantOrders.id, Number(id)))
         .returning();
       if (!row) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
+
+      // ── Served ticket → the SHARED sale engine, exactly once ──────────
+      // Kitchen tickets used to be operational-only: serving a table moved no
+      // money, so the ledger (and therefore Finance, Receipts, CRM, Tracking)
+      // only ever saw the sales staff remembered to re-key. Now serving posts
+      // the ticket through the same engine every other module uses — ledger
+      // INCOME + RECEIPT + CRM accrual + tracking code — guarded by
+      // `transactionId` so re-serving (or a status ping-pong) never
+      // double-counts.
+      if (row.status === "SERVED" && !row.transactionId) {
+        const qty = Number(row.quantity) || 0;
+        const unitPrice = Number(row.unitPriceGhs) || 0;
+        const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+        const amount = Number(row.totalGhs) || lineTotal;
+        // Recipe cost per plate drives real COGS/profit on the receipt.
+        const menuRow = row.menuItemId
+          ? (await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.id, Number(row.menuItemId))))[0]
+          : null;
+        const posted = await postSale({
+          businessId: row.businessId,
+          branchCode: row.branchCode,
+          lines: [
+            {
+              description: `${row.itemName} (${row.orderNumber})`,
+              quantity: qty,
+              unit: "plates",
+              category: menuRow?.category || "MENU",
+              unitPrice,
+              costPrice: Number(menuRow?.costGhs) || 0,
+              total: amount,
+              originalPrice: unitPrice,
+            },
+          ],
+          customerName: row.customerName,
+          customerPhone: row.customerPhone,
+          customerId: row.customerId ?? null,
+          paymentMethod: data?.paymentMethod || "CASH",
+          category: "RESTAURANT_ORDER_SALE",
+          description: `Ticket ${row.orderNumber} served: ${qty}× ${row.itemName} — ${row.customerName}`,
+          discount: Math.max(0, Math.round((lineTotal - amount) * 100) / 100),
+          actor: { name: data?.actorName || row.createdByName, role: data?.actorRole || row.createdByRole, id: data?.actorUserId ?? null },
+        });
+        if (posted.success) {
+          const [saved] = await db
+            .update(restaurantOrders)
+            .set({
+              transactionId: posted.transaction?.id ?? null,
+              salesDocumentId: posted.receipt?.id ?? null,
+              postedAt: new Date(),
+              customerId: posted.customerId ?? row.customerId ?? null,
+            })
+            .where(eq(restaurantOrders.id, row.id))
+            .returning();
+          return NextResponse.json({ success: true, item: saved || row, posted: true, transaction: posted.transaction, trackingCode: posted.trackingCode });
+        }
+      }
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -345,6 +413,28 @@ export async function PATCH(request: NextRequest) {
         .set({ status: newStatus, receivedDate: newStatus === "RECEIVED" ? today : existing.receivedDate })
         .where(eq(restaurantPurchases.id, Number(id)))
         .returning();
+      if (row.supplierName && Number(row.totalGhs) > 0 && existing.status !== "RECEIVED") {
+        const orgId = await ownerOrgOfBusiness(existing.businessId).catch(() => null);
+        const [purchaseBiz] = orgId == null
+          ? await db.select().from(businesses).where(eq(businesses.id, existing.businessId))
+          : [null];
+        const linked = await linkSupplier({
+          ownerId: orgId ?? (purchaseBiz as any)?.ownerId ?? null,
+          name: row.supplierName,
+          category: "Food & Ingredients",
+          suppliedGhs: Number(row.totalGhs) || 0,
+          paymentMethod: data?.paymentMethod,
+          logTag: "[restaurant]",
+        });
+        if (linked?.supplier?.id) {
+          await db
+            .update(restaurantPurchases)
+            .set({ supplierId: linked.supplier.id })
+            .where(eq(restaurantPurchases.id, row.id))
+            .catch(() => {});
+        }
+      }
+
       if (newStatus === "RECEIVED" && existing.status !== "RECEIVED") {
         const [biz] = await db.select().from(businesses).where(eq(businesses.id, existing.businessId));
         await receiveStock(existing.businessId, existing.branchCode, { ...existing, ...data }, existing.quantity, existing.unitCostGhs);

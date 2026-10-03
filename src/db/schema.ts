@@ -1646,6 +1646,8 @@ export const blockFactoryOrders = pgTable("block_factory_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   blockType: text("block_type").notNull(),
   quantity: integer("quantity").notNull(),
   unitPriceGhs: doublePrecision("unit_price_ghs").notNull(),
@@ -2327,6 +2329,8 @@ export const hardwareOrders = pgTable("hardware_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   inventoryId: integer("inventory_id"),
   quantity: doublePrecision("quantity").notNull(),
@@ -2354,6 +2358,8 @@ export const hardwarePurchases = pgTable("hardware_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(), // e.g. "PO-HW-2026-231"
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: doublePrecision("quantity").notNull(),
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull(),
@@ -3437,6 +3443,8 @@ export const electronicsOrders = pgTable("electronics_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   inventoryId: integer("inventory_id"),
   quantity: integer("quantity").notNull(),
@@ -3444,7 +3452,10 @@ export const electronicsOrders = pgTable("electronics_orders", {
   totalGhs: doublePrecision("total_ghs").notNull(),
   status: text("status").notNull().default("PENDING"), // PENDING, READY, DELIVERED, CANCELLED
   dueDate: text("due_date"),
-  fulfilledDate: text("fulfilled_date"), // set when the order completed its sale (stock deducted + finance recorded)
+  fulfilledDate: text("fulfilled_date"),
+  /** Ledger transaction posted on delivery (idempotency for the shared sale engine). */
+  transactionId: integer("transaction_id"),
+  salesDocumentId: integer("sales_document_id"), // set when the order completed its sale (stock deducted + finance recorded)
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
@@ -3507,6 +3518,8 @@ export const electronicsPurchases = pgTable("electronics_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(),
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: integer("quantity").notNull(),
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull(),
@@ -3530,6 +3543,9 @@ export const restaurantOrders = pgTable("restaurant_orders", {
   branchCode: text("branch_code"),
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
+  customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per guest). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   menuItemId: integer("menu_item_id"),
   quantity: integer("quantity").notNull(),
@@ -3541,6 +3557,10 @@ export const restaurantOrders = pgTable("restaurant_orders", {
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+  /** Set the moment SERVED posts the ticket through the shared sale engine. */
+  transactionId: integer("transaction_id"),
+  salesDocumentId: integer("sales_document_id"),
+  postedAt: timestamp("posted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 },
   (t) => [
@@ -3592,6 +3612,8 @@ export const restaurantPurchases = pgTable("restaurant_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(),
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: doublePrecision("quantity").notNull(),
   unit: text("unit").default("Kg"),

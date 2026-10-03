@@ -21,6 +21,7 @@ import {
   transportVehicles,
 } from "@/db/schema";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { computeStockStatus } from "@/lib/stock";
 import {
@@ -130,34 +131,20 @@ async function bookTransaction(
   return row;
 }
 
-/** Find-or-create a branch customer (same rule as the other modules). */
+/** Find-or-create a branch customer (shared rule) — bookings add no spend,
+ *  trip fares accrue spend + 1 loyalty point and the org owner is stamped on
+ *  newly created rows (unchanged behaviour, one implementation). */
 async function upsertCustomer(bizId: number, name: string, phone: string | null, spendGhs: number, orgOwnerId: number | null) {
-  const rows = await db.select().from(customers).where(eq(customers.businessId, bizId));
-  const match = rows.find((c) => phone && c.phone === phone) || rows.find((c) => (c.name || "").toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + spendGhs) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + (spendGhs > 0 ? 1 : 0),
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(spendGhs * 100) / 100),
-      loyaltyPoints: spendGhs > 0 ? 1 : 0,
-      businessId: bizId,
-      ownerId: orgOwnerId,
-    })
-    .returning();
-  return created?.id ?? null;
+  const linked = await linkOrCreateCustomer({
+    businessId: bizId,
+    name,
+    phone,
+    amount: spendGhs,
+    loyaltyPoints: spendGhs > 0 ? 1 : 0,
+    phoneFallback: "—",
+    ownerId: orgOwnerId,
+  });
+  return linked?.id ?? null;
 }
 
 /** Auto-raise AI signals (maintenance overdue, compliance expiry, fuel
