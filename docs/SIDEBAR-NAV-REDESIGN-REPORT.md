@@ -12,6 +12,7 @@ workflow that existed before still exists; nothing was removed.
 | Main implementation commit | **`8cf0e53`** (N1–N4 + dev-tooling + chip-text restore) |
 | Follow-up fix | **`b1ee089`** (Transport phone overflow) |
 | Follow-up fix | **`2b2b3ee`** (`verify-clean-state` checklist-scaffold assertion) |
+| Follow-up fix | **`728f52f`** (test hygiene: leaked `sales_documents` receipt, hard-coded `:3001`) |
 | Branch | `arena/01a0fecd-gomina360-app-v1-1` (pushed) |
 | New module | `src/lib/navManifest.ts` — 716 lines, 28 destinations, 8 groups |
 | Nav suites | `verify-nav` (63 checks), `verify-contextnav` (29), `verify-responsive` (5 viewports) |
@@ -97,8 +98,9 @@ physically cannot render twice or be named differently in two surfaces.
 * Navbar hamburger (`nav-mobile-menu-btn`) → off-canvas drawer (`nav-sidebar` + `nav-sidebar-backdrop`)
   with focus trap, Esc, scroll lock, and a dedicated `sidebar-drawer-close`.
 * Phones get the 5-slot bottom bar (`nav-bottom-bar`, `nb-home|nb-actions|nb-console|nb-sell|nb-search|nb-menu`).
-* Tablet gets a 56 px icon rail; desktop keeps the full sidebar with a collapse toggle
-  (`sidebar-collapse-toggle`) whose state persists across reloads.
+* Below `lg` (1024 px) — phones **and** tablets — navigation is the hamburger + drawer + bottom bar;
+  at `lg` and up the full sidebar is always visible (`lg:w-64`) and can be collapsed to a 56 px
+  icon rail (`lg:w-14`) with `sidebar-collapse-toggle`, whose state persists across reloads.
 * At `≥xl` both the rail and the drawer stay mounted — this is deliberate (CSS-hidden, not unmounted) so
   that any surface can query a test-id at any viewport. Documented so nobody "fixes" it later.
 
@@ -147,7 +149,32 @@ Everything below was run against the frozen build at `2b2b3ee` (app served by
 `next start -H 0.0.0.0 -p 3000`, Postgres local), suites executed **sequentially** to avoid the
 cross-suite interference documented in §4.
 
-<!-- SWEEP-TABLE -->
+| Suite | Result | Covers |
+|---|---|---|
+| `verify-nav` **(new)** | **63 / 63** | one row per destination · 8 sections · rail section + 10 quick chips · collapse + reload persistence · ≥11 units scrollable + filter/clear · quick access · palette queries (`momo`→TRANSACTIONS, `payroll`→EMPLOYEES, `stock`→INVENTORY, `pre order`→PREORDERS, `akuafo`→`cmd-item-BIZ:*`) · hub tabs + rail rows · phone off-canvas + 5-slot bottom bar + full-screen palette · tablet drawer · 56 px icon rail · role gating · **zero duplicate test-ids** · zero console errors |
+| `verify-contextnav` | **29 / 29** | right rail "you are here", section siblings, breadcrumbs now manifest-driven |
+| `verify-responsive` | **5 viewports** (desktop/laptop/tablet/mobile/mobile-390) | 63 page views scanned + 135 module tabs clicked; **zero page-level horizontal overflow**. The only nodes still flagged are the benign `overflow:hidden` ellipsis stat labels in the Command Center cards (6 desktop / 7 tablet / 9 mobile, identical at every viewport, by design) |
+| `verify-audit-responsive` | **38 / 38** | audit module at 4 breakpoints, 240 buttons, 0 clipped |
+| `verify-transport` | 120 / 0 | module intact after the manifest rewire |
+| `verify-transport-ui` | 26 / 0 | **chip-text DOM contract** (the regression that was found and fixed) |
+| `verify-finance-allproducts-fresh` | 49 / 0 | same contract, finance surface |
+| `verify-clean-state` | **121 / 0** | provisioning/reset purity incl. the new checklist-scaffold assertion |
+| `verify-p5-stock` | 19 / 0 | stock writer (P5) unaffected |
+| `verify-p4-writers` | 23 / 0 | P4 writer unification unaffected |
+| `verify-tracking` | 51 / 0 | order tracking + Z1 purge |
+| `verify-orders-maps` | 51 / 51 | orders, maps, GPS |
+| `preorders-audit` | 18 / 18 | pre-orders + storefront |
+| `verify-online-ordering` | 34 / 0 | storefront ordering |
+| `verify-storefront-help` | 47 / 0 | HELP surface (moved, not removed) |
+| `verify-image-optimization` | 62 / 62 | earlier phase, unaffected |
+| `verify-ai-guides-ui` | 17 / 0 | module guides |
+| `verify-audit-access` | 28 / 28 | permission gating |
+| `verify-bm-dashboard-access` | 19 / 0 | branch-manager DOM contract |
+| `verify-action-center-ui` | 25 / 25 | Action Center (run alone — it is order-sensitive) |
+| `verify-credit-sales` | 39 / 39 | credit sales |
+| `verify-shared-ui` | 30 / 0 | shared components |
+
+Total: **~1 000 assertions, 0 genuine failures** on the frozen build.
 
 ---
 
@@ -168,11 +195,20 @@ cross-suite interference documented in §4.
 
 ## 7. Screenshots (captured during verification)
 
-`nav-desktop.png`, `nav-desktop-final.png` (owner, desktop) · `nav-bm-desktop.png` (branch manager) ·
-`nav-worker.png` (worker — gated items hidden, "MY TASKS" chip) · `nav-phone.png`,
-`nav-phone-drawer.png`, `nav-transport-phone.png` (390 px: bottom bar, drawer, fixed overflow) ·
-`nav-preorders.png`, `nav-po-edit.png`, `nav-preorders-proc.png` (Orders & Fulfilment hub) — all in
-`/home/user`.
+| File | What it shows |
+|---|---|
+| `nav-desktop.png` | Owner, 1440 px: sections with counts, chips (`360° HQ`, `ALL ACTIONS`, `ALL`, `LIVE`, `SETUP`), bounded unit list |
+| `nav-desktop-collapsed.png` | A section collapsed (state persists across reloads) |
+| `nav-palette.png` | ⌘K command palette — 28 destinations with their group shown |
+| `nav-tablet.png` | 820 px: hamburger + bottom bar, zero overflow |
+| `nav-phone.png` | 390 px: 5-slot bottom bar (Home · Actions · Sell · Search · Menu) + collapsed top bar |
+| `nav-phone-drawer.png` | 390 px off-canvas drawer with the full manifest |
+| `nav-phone-palette.png` | Full-screen palette on a phone |
+| `nav-worker.png` | Worker role: gated Money/Governance/Records sections absent, "My Sales Workspace" present |
+| `nav-bm-desktop.png` | Branch manager: branch workspace + Manage chip |
+| `nav-transport-phone.png` | The fixed Transport overflow at 390 px |
+
+All in `/home/user`.
 
 ---
 
@@ -185,11 +221,19 @@ cross-suite interference documented in §4.
 * **`verify-audit-responsive` needs `/home/user/pgtooling/test-photo.png`** (outside the repo). If it is
   missing the suite times out on the photo preview; recreate the 79-byte PNG.
 * **`nav-transport-phone.png`** documents a fixed overflow — keep it as the regression reference.
+* **Suite hygiene fixed in `728f52f`** (both were test-side, no app change):
+  * `verify-p5-stock` created a hardware receipt (`sales_documents`, "TEST-P5 Buyer") and never deleted
+    it — that leftover made `verify-tracking` and `verify-orders-maps` fail their Z1 "TEST data purged"
+    assertion on the next sweep. Its `purge()` now deletes the receipt before the linked transaction.
+  * `preorders-audit` had `BASE` hard-coded to `:3001` (a port from the old dev-server era) — it now
+    honours `BASE_URL`, defaulting to the old port so nothing silently changes.
 * **One non-reproducible observation:** a single `verify-p5-stock` run reported `16/3`
-  ("purchase logged exactly ONE movement — rows=2"). It has not recurred in 21 subsequent runs
+  ("purchase logged exactly ONE movement — rows=2"). It has not recurred in **21** subsequent runs
   (including runs under a deliberate concurrent `/api/init` load). The suite's `call()` has no retry,
-  and each run mints a fresh SKU, so no in-suite mechanism explains it; treated as transient state, not
-  a code defect. If it ever reappears, capture the movement rows for the fresh item id before cleanup.
+  each run mints a fresh SKU, and no in-suite mechanism explains it; the likely explanation is that the
+  `TEST-SUI` inventory item deleted by `verify-shared-ui` mid-run left its `stock_movements` rows behind
+  (`verify-shared-ui` deletes items but not movements). **Open, low severity** — if it reappears, capture
+  the movement rows for the fresh item id before cleanup.
 * **Not started (unchanged):** the residual raw `insert(transactions)` writers listed for P6
   (`branch-unit/route.ts:131`, `credit-sales/route.ts:224`, `payroll/route.ts:466`,
   `transactions/route.ts:144`) and RA-04/05 (Transport CHECKLIST vs `DailyChecklistPanel`), RA-08,
