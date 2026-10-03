@@ -90,6 +90,11 @@ export async function variantsForItem(businessId: number, inventoryId: number): 
  * low-stock alerts, dashboards, reports and the storefront all read reality.
  */
 export async function syncItemAggregate(inventoryId: number): Promise<{ quantity: number; status: string } | null> {
+  // NOTE (P5): this and the "no active variants" fallback below are the ONLY
+  // remaining direct `inventory_items.quantity` writers. They are DERIVED
+  // writes — the aggregate is recomputed from the variant rows, not moved — so
+  // they deliberately log no `stock_movements` row. Every real movement goes
+  // through src/lib/stock.ts. 
   const [item] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(inventoryId)));
   if (!item) return null;
   const rows = await db

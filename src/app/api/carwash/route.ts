@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -12,7 +13,7 @@ import {
   customers,
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
@@ -82,23 +83,22 @@ async function bookTransaction(
   actorRole?: string | null,
   actorUserId?: number | null
 ) {
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(now),
+  // P5: ONE service-sale writer for module revenue (shared with transport and
+  // telecom).
+  await postServiceSale({
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,
-    type,
     category,
-    amountGhs: amount,
-    paymentMethod: paymentMethod || "CASH",
     description,
-    date: now.toISOString().split("T")[0],
-    createdAt: now,
-    status: "COMPLETED",
-    recordedBy: actorName || "Auto Wash",
-    recordedByRole: actorRole || null,
-    recordedByUserId: actorUserId ? Number(actorUserId) : null,
+    amountGhs: amount,
+    paymentMethod,
+    actor: {
+      id: actorUserId ? Number(actorUserId) : null,
+      name: actorName || "Auto Wash",
+      role: actorRole || null,
+    },
+    recordedByFallback: "Auto Wash",
   });
 }
 
@@ -113,11 +113,15 @@ async function stockOutLiters(inventoryId: number, liters: number) {
   const m = /\((\d+(?:\.\d+)?)\s*L\)/i.exec(inv.name || "");
   const litersPerUnit = m ? Number(m[1]) : 50;
   const qty = liters / litersPerUnit;
-  const newQty = Math.max(0, Number(((inv.quantity || 0) - qty).toFixed(4)));
-  await db
-    .update(inventoryItems)
-    .set({ quantity: newQty, status: computeStockStatus(newQty, inv.minStockThreshold || 0) })
-    .where(eq(inventoryItems.id, inv.id));
+  // P5: ONE stock writer — chemical draw is a CONSUMPTION movement.
+  await applyStockChange({
+    businessId: inv.businessId,
+    inventoryId: inv.id,
+    delta: -qty,
+    reason: "CONSUMPTION",
+    refType: "CARWASH_CHEMICAL",
+    note: `${liters} L drawn (${litersPerUnit} L per ${inv.unit || "unit"})`,
+  });
 }
 
 /** Find-or-create a branch customer and accrue spend + loyalty from a job. */

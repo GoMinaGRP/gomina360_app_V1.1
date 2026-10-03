@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { and, desc, eq } from "drizzle-orm";
@@ -24,7 +25,7 @@ import {
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness } from "@/lib/notify";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import {
   GPS_PROVIDER_LIBRARY,
   assertTransportBizAccess,
@@ -106,30 +107,23 @@ async function bookTransaction(
     });
     return res.transaction || null;
   }
-  const now = new Date();
-  const [row] = await db
-    .insert(transactions)
-    .values({
-      transactionNumber: nextTrxNumber(now),
-      businessId: biz.id,
-      branchCode: biz.code,
-      branchName: biz.name,
-      type,
-      category,
-      amountGhs: amount,
-      paymentMethod: paymentMethod || "CASH",
-      customerId: refs?.customerId ?? null,
-      supplierId: refs?.supplierId ?? null,
-      description,
-      date: refs?.dateStr || now.toISOString().split("T")[0],
-      createdAt: now,
-      status: "COMPLETED",
-      recordedBy: actor?.name || "Transportation",
-      recordedByRole: actor?.role || null,
-      recordedByUserId: actor?.id ? Number(actor.id) : null,
-    })
-    .returning();
-  return row;
+  // P5: ONE service-sale writer for module revenue (ledger row shape shared
+  // with car-wash and telecom; expenses keep using the approval-gated helper).
+  const posted = await postServiceSale({
+    businessId: biz.id,
+    branchCode: biz.code,
+    branchName: biz.name,
+    category,
+    description,
+    amountGhs: amount,
+    paymentMethod,
+    date: refs?.dateStr || null,
+    customerId: refs?.customerId ?? null,
+    supplierId: refs?.supplierId ?? null,
+    actor,
+    recordedByFallback: "Transportation",
+  });
+  return posted.transaction || null;
 }
 
 /** Find-or-create a branch customer (shared rule) — bookings add no spend,
@@ -762,8 +756,17 @@ export async function POST(request: NextRequest) {
           if (qty > 0) {
             const [inv] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.id, invId), eq(inventoryItems.businessId, businessId)));
             if (inv) {
-              const q = Math.max(0, Number((Number(inv.quantity || 0) - qty).toFixed(4)));
-              await db.update(inventoryItems).set({ quantity: q, status: computeStockStatus(q, inv.minStockThreshold || 0) }).where(eq(inventoryItems.id, inv.id));
+              // P5: ONE stock writer — parts used on a job are a CONSUMPTION movement.
+              await applyStockChange({
+                businessId,
+                inventoryId: inv.id,
+                delta: -qty,
+                reason: "CONSUMPTION",
+                refType: "TRANSPORT_MAINTENANCE",
+                refId: Number(id) || null,
+                note: `Parts used on maintenance #${id}`,
+                actor,
+              });
             }
           }
         }

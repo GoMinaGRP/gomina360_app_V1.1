@@ -23,7 +23,7 @@ import {
   recordDeletionLogs,
 } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { setVariantsForItem } from "@/lib/boutique";
 import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
@@ -447,11 +447,41 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const [updated] = await db
-      .update(table)
-      .set(updates)
-      .where(eq(table.id, recordId))
-      .returning();
+    // P5: an un-gated quantity edit is an ADJUSTMENT movement, so the trail
+    // records who corrected stock and from what. Variant-tracked products keep
+    // their aggregate derived from the variant rows (syncItemAggregate) — the
+    // edit is applied to the parent register exactly as before.
+    let updated: any = null;
+    if (
+      moduleKey === "INVENTORY" &&
+      updates.quantity !== undefined &&
+      Number(updates.quantity) !== Number(existing.quantity)
+    ) {
+      const target = Number(updates.quantity);
+      const delta = target - Number(existing.quantity);
+      delete updates.quantity;
+      delete updates.status;
+      if (Object.keys(updates).length) {
+        [updated] = await db.update(table).set(updates).where(eq(table.id, recordId)).returning();
+      }
+      const applied = await applyStockChange({
+        businessId: Number(existing.businessId),
+        inventoryId: recordId,
+        delta,
+        reason: "ADJUSTMENT",
+        refType: "INVENTORY_EDIT",
+        note: d.adjustmentReason ? String(d.adjustmentReason) : "Manual quantity correction",
+        actor,
+        clampAtZero: true,
+      });
+      updated = applied.item || updated;
+    } else {
+      [updated] = await db
+        .update(table)
+        .set(updates)
+        .where(eq(table.id, recordId))
+        .returning();
+    }
     return NextResponse.json({ success: true, item: updated });
   } catch (error: any) {
     return apiError(error);
@@ -942,12 +972,14 @@ export async function POST(request: Request) {
           branchName: branchName || null,
           category: normalizeInventoryCategory(data.category),
           subcategory: deriveInventorySubcategory(data.category, data.subcategory),
-          quantity: qty,
+          // Registered EMPTY: the opening quantity is applied through the one
+          // stock writer below (so it appears in the movement trail).
+          quantity: 0,
           unit: data.unit || "Units",
           costPriceGhs: Number(data.costPriceGhs) || 20,
           sellingPriceGhs: Number(data.sellingPriceGhs) || 35,
           minStockThreshold: threshold,
-          status: computeStockStatus(qty, threshold),
+          status: "OUT_OF_STOCK",
           expiryDate: data.expiryDate || null,
           photo: typeof data.photo === "string" && data.photo ? data.photo : photosArr[0] || null,
           photos: photosArr,
@@ -966,6 +998,20 @@ export async function POST(request: Request) {
           registeredByUserId: data.registeredByUserId ? Number(data.registeredByUserId) : null,
         })
         .returning();
+
+      // Opening stock through the ONE writer (skipped for variant products:
+      // their stock lives on the variant rows, applied by setVariantsForItem).
+      if (qty > 0 && boutiqueMatrix.length === 0) {
+        await applyStockChange({
+          businessId: bizId,
+          inventoryId: inserted.id,
+          delta: qty,
+          reason: "OPENING",
+          refType: "INVENTORY_REGISTER",
+          note: `Opening stock — ${inserted.name}`,
+          actor: { name: data.registeredByName || null },
+        });
+      }
 
       if (boutiqueMatrix.length > 0) {
         try {

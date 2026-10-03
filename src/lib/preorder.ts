@@ -16,7 +16,8 @@
  */
 
 import { db } from "@/db";
-import { nextTrxNumber } from "@/lib/idNumbers";
+import { postServiceSale } from "@/lib/servicePosting";
+import { applyStockChange } from "@/lib/stock";
 import { deductOrderStock } from "@/lib/trackingServer";
 import {
   auditTrail,
@@ -29,7 +30,6 @@ import {
   orderPayments,
   supplierOrders,
   suppliers,
-  transactions,
 } from "@/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
@@ -227,31 +227,23 @@ export async function bookPaymentEvent({
   staff: { id?: number; name?: string; role?: string };
   biz: any;
 }): Promise<{ paymentId: number; transactionId: number }> {
-  const dateStr = new Date().toISOString().split("T")[0];
-  const trxNum = nextTrxNumber();
   const label =
     kind === "DEPOSIT" ? "Order Deposit" : kind === "BALANCE" ? "Order Balance" : "Online Order Sale";
   const ownerId = biz?.ownerId != null ? Number(biz.ownerId) : await ownerOrgOfBusiness(tracking.businessId);
-  const [trx] = await db
-    .insert(transactions)
-    .values({
-      transactionNumber: trxNum,
-      businessId: tracking.businessId,
-      branchCode: tracking.branchCode || biz?.code || null,
-      branchName: tracking.branchName || biz?.name || null,
-      type: "INCOME",
-      category: label,
-      amountGhs,
-      paymentMethod: method,
-      customerId: tracking.customerId || null,
-      description: `[ORDER:${tracking.trackingCode}] ${label} — ${tracking.customerName}`,
-      date: dateStr,
-      status: "COMPLETED",
-      recordedBy: staff.name || "Staff",
-      recordedByRole: staff.role || null,
-      recordedByUserId: staff.id ?? null,
-    })
-    .returning();
+  // P5: ONE service-sale writer (shared with the order-confirm path).
+  const posted = await postServiceSale({
+    businessId: Number(tracking.businessId),
+    branchCode: tracking.branchCode || biz?.code || null,
+    branchName: tracking.branchName || biz?.name || null,
+    category: label,
+    description: `${label} — ${tracking.customerName}`,
+    amountGhs: Number(amountGhs) || 0,
+    paymentMethod: method,
+    customerId: tracking.customerId || null,
+    actor: { id: staff.id ?? null, name: staff.name || "Staff", role: staff.role || null },
+    tag: `ORDER:${tracking.trackingCode}`,
+  });
+  const trx = posted.transaction;
   const [ev] = await db
     .insert(orderPayments)
     .values({
@@ -443,14 +435,17 @@ export async function postGoodsReceipt({
   for (const li of receiptItems) {
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, li.inventoryId));
     if (!inv) continue;
-    const newQty = (Number(inv.quantity) || 0) + li.qty;
-    await db
-      .update(inventoryItems)
-      .set({
-        quantity: newQty,
-        status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-      })
-      .where(eq(inventoryItems.id, inv.id));
+    // P5: ONE stock writer — received goods are a PURCHASE movement.
+    const { quantityAfter } = await applyStockChange({
+      businessId: Number(inv.businessId),
+      inventoryId: inv.id,
+      delta: li.qty,
+      reason: "PURCHASE",
+      refType: "GOODS_RECEIPT",
+      note: `Goods received (${receiptNumber})`,
+      actor: { name: staff?.name || null, role: staff?.role || null },
+    });
+    const newQty = quantityAfter;
     li.newQty = newQty;
     if (newQty > (inv.minStockThreshold || 0)) {
       try {

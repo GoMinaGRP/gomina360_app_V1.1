@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
@@ -87,23 +88,22 @@ async function bookTransaction(
       metadata: { source: "TELECOM" },
     });
   }
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(now),
+  // P5: ONE service-sale writer for module revenue (shared with transport and
+  // car-wash); expenses keep using the approval-gated helper above.
+  await postServiceSale({
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,
-    type,
     category,
-    amountGhs: Math.round(amount * 100) / 100,
-    paymentMethod: paymentMethod || "CASH",
     description,
-    date: now.toISOString().split("T")[0],
-    createdAt: now,
-    status: "COMPLETED",
-    recordedBy: actorName || "Telecom Desk",
-    recordedByRole: actorRole || null,
-    recordedByUserId: actorUserId ? Number(actorUserId) : null,
+    amountGhs: amount,
+    paymentMethod,
+    actor: {
+      id: actorUserId ? Number(actorUserId) : null,
+      name: actorName || "Telecom Desk",
+      role: actorRole || null,
+    },
+    recordedByFallback: "Telecom Desk",
   });
 }
 

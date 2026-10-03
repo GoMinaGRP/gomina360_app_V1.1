@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyStockChange } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -79,7 +80,7 @@ interface CartLine {
 /** Validate + reserve a cart against inventory (identical rules to /api/sales). */
 async function validateCart(businessId: number, cartItems: CartLine[]) {
   const validationErrors: string[] = [];
-  const inventoryUpdates: { id: number; newQty: number; newStatus: string }[] = [];
+  const inventoryUpdates: { id: number; newQty: number; newStatus: string; qty: number }[] = [];
   const lineItems: any[] = [];
   // Boutique: variant deductions ride alongside their aggregate item update.
   const variantUpdates: { variantId: number; inventoryId: number; qty: number; label: string }[] = [];
@@ -132,7 +133,7 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
     const newQty = inv.quantity - Number(quantity);
     const newStatus =
       newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK";
-    inventoryUpdates.push({ id: inv.id, newQty, newStatus });
+    inventoryUpdates.push({ id: inv.id, newQty, newStatus, qty: Number(quantity) });
     if (variantRow) {
       variantUpdates.push({
         variantId: Number(variantRow.id),
@@ -623,13 +624,19 @@ export async function POST(request: NextRequest) {
     }
     for (const update of inventoryUpdates) {
       if (variantItemIds.has(update.id)) {
+        // Derived write: the aggregate is recomputed FROM the variant rows.
         await syncItemAggregate(update.id);
         continue;
       }
-      await db
-        .update(inventoryItems)
-        .set({ quantity: update.newQty, status: update.newStatus })
-        .where(eq(inventoryItems.id, update.id));
+      // P5: ONE stock writer for real movements.
+      await applyStockChange({
+        businessId: Number(businessId),
+        inventoryId: update.id,
+        delta: -update.qty,
+        reason: "SALE",
+        refType: "CREDIT_SALE",
+        actor: me,
+      });
     }
 
     // 4. CRM customer (business-isolated) + accrue spend.

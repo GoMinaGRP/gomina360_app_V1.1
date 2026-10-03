@@ -65,7 +65,7 @@ const stamp = Date.now().toString().slice(-6);
 
 const purge = async () => {
   try {
-    await client.query(`delete from customer_trackings where customer_name like $1`, [`${TAG}%`]).catch(() => {});
+    await client.query(`delete from customer_trackings where customer_name like $1 or customer_phone like $2`, [`${TAG}%`, `%${stamp}%`]).catch(() => {});
     await client.query(`delete from sales_documents where customer_name like $1`, [`${TAG}%`]).catch(() => {});
     await client.query(`delete from transactions where description like $1`, [`%${TAG}%`]).catch(() => {});
     await client.query(`delete from credit_sales where customer_name like $1`, [`${TAG}%`]).catch(() => {});

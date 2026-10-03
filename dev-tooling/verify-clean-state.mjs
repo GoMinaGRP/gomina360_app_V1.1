@@ -85,6 +85,7 @@ const BUSINESS_SCOPED = [
   "employee_documents", "employee_history", "employees", "expense_categories",
   "hardware_deliveries", "hardware_logs", "hardware_orders", "hardware_purchases",
   "inventory_items", "livestock_logs", "notifications", "payroll_attendance",
+  "stock_movements",
   "payroll_entries", "payroll_runs", "pickup_locations",
   "poultry_feed_logs", "poultry_flocks", "poultry_health_records", "poultry_logs",
   "poultry_production", "poultry_products", "poultry_water_logs", "poultry_weight_logs",

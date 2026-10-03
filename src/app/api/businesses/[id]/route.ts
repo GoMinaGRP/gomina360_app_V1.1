@@ -12,6 +12,7 @@ import {
   assets,
   assetAuditLogs,
   inventoryItems,
+  stockMovements,
   universalExports,
   transactions,
   expenseCategories,
@@ -216,6 +217,7 @@ async function relatedCounts(businessId: number) {
 
   const groups: Record<string, number> = {
     inventoryItems: await count(inventoryItems, inventoryItems.businessId),
+    stockMovements: await count(stockMovements, stockMovements.businessId),
     employees: await count(employees, employees.businessId),
     customers: await count(customers, customers.businessId),
     assets: await count(assets, assets.businessId),
@@ -453,6 +455,7 @@ async function purgeBusinessAllRecords(
     [budgets, budgets.businessId],
     [universalExports, universalExports.businessId],
     [inventoryItems, inventoryItems.businessId],
+    [stockMovements, stockMovements.businessId],
     [customers, customers.businessId],
     [employees, employees.businessId],
     [assets, assets.businessId],

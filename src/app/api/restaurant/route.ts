@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyStockChange } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -32,33 +33,46 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
     target = inv.find((i: any) => i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12)));
   }
   if (target) {
-    const newQty = (target.quantity || 0) + qty;
-    await db
-      .update(inventoryItems)
-      .set({
-        quantity: newQty,
-        costPriceGhs: cost || target.costPriceGhs,
-        expiryDate: data.expiryDate || target.expiryDate || null,
-        status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-      })
-      .where(eq(inventoryItems.id, target.id));
+    // P5: ONE stock writer (quantity + status + movement trail).
+    await applyStockChange({
+      businessId,
+      branchCode,
+      inventoryId: target.id,
+      delta: qty,
+      reason: "PURCHASE",
+      refType: "RESTAURANT_PURCHASE",
+      note: data.itemName ? `Purchase: ${data.itemName}` : null,
+      setCostPriceGhs: cost,
+      setExpiryDate: data.expiryDate || null,
+    });
   } else {
     const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
     let sku = `FOOD-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
     let n = 2;
     while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-    await db.insert(inventoryItems).values({
+    // Created EMPTY, then stocked through the one writer (movement trail).
+    const [created] = await db.insert(inventoryItems).values({
       name: data.itemName,
       sku,
       businessId,
       category: "Food & Ingredients",
-      quantity: qty,
+      quantity: 0,
       unit: data.unit || "Kg",
       costPriceGhs: cost,
       sellingPriceGhs: Number(data.sellingPriceGhs) || 0,
       minStockThreshold: 5,
-      status: "IN_STOCK",
+      status: "OUT_OF_STOCK",
       expiryDate: data.expiryDate || null,
+    }).returning();
+    await applyStockChange({
+      businessId,
+      inventoryId: created.id,
+      delta: qty,
+      reason: "OPENING",
+      refType: "RESTAURANT_PURCHASE",
+      note: `Opening stock: ${data.itemName}`,
+      setCostPriceGhs: cost,
+      setExpiryDate: data.expiryDate || null,
     });
   }
 }
@@ -226,11 +240,16 @@ export async function POST(request: NextRequest) {
         target = inv.find((i: any) => i.name?.toUpperCase().includes(key));
       }
       if (target) {
-        const newQty = Math.max(0, (target.quantity || 0) - qty);
-        await db
-          .update(inventoryItems)
-          .set({ quantity: newQty, status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK" })
-          .where(eq(inventoryItems.id, target.id));
+        // P5: ONE stock writer — waste/usage never bypasses the trail.
+        await applyStockChange({
+          businessId,
+          inventoryId: target.id,
+          delta: -qty,
+          reason: "WASTE",
+          refType: "RESTAURANT_WASTE",
+          refId: row?.id != null ? Number(row.id) : null,
+          note: data.reason ? `Waste: ${data.reason}` : null,
+        });
       }
       return NextResponse.json({ success: true, item: row });
     }

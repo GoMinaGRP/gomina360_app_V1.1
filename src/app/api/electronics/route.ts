@@ -10,7 +10,7 @@ import {
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -29,11 +29,15 @@ async function fulfillElectronicsOrder(order: any, businessId: number, branchCod
   if (order.inventoryId) {
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(order.inventoryId)));
     if (inv) {
-      const newQty = Math.max(0, (inv.quantity || 0) - (order.quantity || 0));
-      await db
-        .update(inventoryItems)
-        .set({ quantity: newQty, status: computeStockStatus(newQty, inv.minStockThreshold || 0) })
-        .where(eq(inventoryItems.id, inv.id));
+      // P5: ONE stock writer (clamps at zero, logs the movement).
+      await applyStockChange({
+        businessId: inv.businessId,
+        inventoryId: inv.id,
+        delta: -(Number(order.quantity) || 0),
+        reason: "SALE",
+        refType: "ELECTRONICS_ORDER",
+        refId: Number(order.id) || null,
+      });
     }
     // Mark matching in-stock serials as SOLD to this customer
     const serialRows = await db
@@ -332,31 +336,41 @@ export async function POST(request: NextRequest) {
           target = inv.find((i: any) => i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12)));
         }
         if (target) {
-          const newQty = (target.quantity || 0) + qty;
-          await db
-            .update(inventoryItems)
-            .set({
-              quantity: newQty,
-              costPriceGhs: cost || target.costPriceGhs,
-              status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-            })
-            .where(eq(inventoryItems.id, target.id));
+          await applyStockChange({
+            businessId,
+            inventoryId: target.id,
+            delta: qty,
+            reason: "PURCHASE",
+            refType: "ELECTRONICS_PURCHASE",
+            note: data.itemName ? `Purchase: ${data.itemName}` : null,
+            setCostPriceGhs: cost,
+          });
         } else {
           const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
           let sku = `TEC-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
           let n = 2;
           while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-          await db.insert(inventoryItems).values({
+          // Created EMPTY, then stocked through the one writer.
+          const [created] = await db.insert(inventoryItems).values({
             name: data.itemName,
             sku,
             businessId,
             category: "Electronics & Solar",
-            quantity: qty,
+            quantity: 0,
             unit: "Units",
             costPriceGhs: cost,
             sellingPriceGhs: Number(data.sellingPriceGhs) || Math.round(cost * 1.3 * 100) / 100,
             minStockThreshold: 5,
-            status: "IN_STOCK",
+            status: "OUT_OF_STOCK",
+          }).returning();
+          await applyStockChange({
+            businessId,
+            inventoryId: created.id,
+            delta: qty,
+            reason: "OPENING",
+            refType: "ELECTRONICS_PURCHASE",
+            note: `Opening stock: ${data.itemName}`,
+            setCostPriceGhs: cost,
           });
         }
 

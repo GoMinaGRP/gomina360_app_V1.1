@@ -9,7 +9,7 @@ import {
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -117,11 +117,14 @@ async function bookExpense(
 async function stockOutItem(inventoryId: number, qty: number) {
   const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, inventoryId));
   if (!inv) return;
-  const newQty = Math.max(0, (inv.quantity || 0) - qty);
-  await db
-    .update(inventoryItems)
-    .set({ quantity: newQty, status: computeStockStatus(newQty, inv.minStockThreshold || 0) })
-    .where(eq(inventoryItems.id, inv.id));
+  // P5: ONE stock writer (clamps at zero, logs the movement).
+  await applyStockChange({
+    businessId: inv.businessId,
+    inventoryId: inv.id,
+    delta: -qty,
+    reason: "SALE",
+    refType: "HARDWARE_DELIVERY",
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -317,15 +320,16 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
     );
   }
   if (target) {
-    const newQty = (target.quantity || 0) + qty;
-    await db
-      .update(inventoryItems)
-      .set({
-        quantity: newQty,
-        costPriceGhs: cost || target.costPriceGhs,
-        status: computeStockStatus(newQty, target.minStockThreshold || 0),
-      })
-      .where(eq(inventoryItems.id, target.id));
+    await applyStockChange({
+      businessId: purchase.businessId,
+      inventoryId: target.id,
+      delta: qty,
+      reason: "PURCHASE",
+      refType: "HARDWARE_PURCHASE",
+      refId: Number(data.id) || null,
+      note: purchase.itemName ? `Purchase: ${purchase.itemName}` : null,
+      setCostPriceGhs: cost,
+    });
   } else {
     const taken = new Set(
       (await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku)
@@ -333,17 +337,28 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
     let sku = `HW-${String(purchase.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
     let n = 2;
     while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-    await db.insert(inventoryItems).values({
+    // Created EMPTY, then stocked through the one writer so the opening
+    // quantity is a logged movement too.
+    const [created] = await db.insert(inventoryItems).values({
       name: purchase.itemName,
       sku,
       businessId: purchase.businessId,
       category: "Building Materials",
-      quantity: qty,
+      quantity: 0,
       unit: data.unit || "Units",
       costPriceGhs: cost,
       sellingPriceGhs: Number(data.sellingPriceGhs) || Math.round(cost * 1.25 * 100) / 100,
       minStockThreshold: 10,
-      status: computeStockStatus(qty, 10),
+      status: "OUT_OF_STOCK",
+    }).returning();
+    await applyStockChange({
+      businessId: purchase.businessId,
+      inventoryId: created.id,
+      delta: qty,
+      reason: "OPENING",
+      refType: "HARDWARE_PURCHASE",
+      note: `Opening stock: ${purchase.itemName}`,
+      setCostPriceGhs: cost,
     });
   }
 

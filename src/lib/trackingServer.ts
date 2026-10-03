@@ -1,9 +1,9 @@
 import { db } from "@/db";
-import { nextTrxNumber } from "@/lib/idNumbers";
+import { postServiceSale } from "@/lib/servicePosting";
+import { applyStockChange } from "@/lib/stock";
 import {
   customerTrackings,
   inventoryItems,
-  transactions,
   customers,
   notifications,
 } from "@/db/schema";
@@ -79,7 +79,7 @@ export async function deductOrderStock(
 ): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
   const plan: (
-    | { kind: "plain"; id: number; newQty: number; newStatus: string }
+    | { kind: "plain"; id: number; businessId: number; qty: number }
     | { kind: "variant"; variantId: number; inventoryId: number; qty: number; label: string }
   )[] = [];
   for (const li of items || []) {
@@ -113,13 +113,7 @@ export async function deductOrderStock(
       problems.push(`Not enough stock for "${inv.name}": ${qty} ${inv.unit} requested, ${inv.quantity} ${inv.unit} available.`);
       continue;
     }
-    const newQty = inv.quantity - qty;
-    plan.push({
-      kind: "plain",
-      id: inv.id,
-      newQty,
-      newStatus: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-    });
+    plan.push({ kind: "plain", id: inv.id, businessId: Number(inv.businessId), qty });
   }
   if (problems.length > 0) return { ok: false, problems };
   for (const p of plan) {
@@ -133,7 +127,14 @@ export async function deductOrderStock(
       }
       await syncItemAggregate(p.inventoryId);
     } else {
-      await db.update(inventoryItems).set({ quantity: p.newQty, status: p.newStatus }).where(eq(inventoryItems.id, p.id));
+      // P5: ONE stock writer (the pre-validated deduction is applied as a delta).
+      await applyStockChange({
+        businessId: Number(p.businessId),
+        inventoryId: p.id,
+        delta: -(Number(p.qty) || 0),
+        reason: "SALE",
+        refType: "ORDER_COMMIT",
+      });
     }
   }
   if (problems.length > 0) return { ok: false, problems };
@@ -154,14 +155,14 @@ export async function restoreOrderStock(items: any[]): Promise<void> {
         await syncItemAggregate(inv.id);
         continue;
       }
-      const newQty = inv.quantity + qty;
-      await db
-        .update(inventoryItems)
-        .set({
-          quantity: newQty,
-          status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-        })
-        .where(eq(inventoryItems.id, inv.id));
+      // P5: ONE stock writer — a cancelled order gives stock back (RESTORE).
+      await applyStockChange({
+        businessId: Number(inv.businessId),
+        inventoryId: inv.id,
+        delta: qty,
+        reason: "RESTORE",
+        refType: "ORDER_CANCELLED",
+      });
     } catch (e) {
       console.error("restoreOrderStock warning:", e);
     }
@@ -225,33 +226,23 @@ export async function bookOrderPayment({
   staff: { name?: string; role?: string; id?: number };
   business: any;
 }): Promise<number> {
-  const trxNum = nextTrxNumber();
-  const dateStr = new Date().toISOString().split("T")[0];
   const itemsDesc = (tracking.items || [])
     .map((li: any) => `${li.quantity}× ${li.description}`)
     .join(", ");
-  const [trx] = await db
-    .insert(transactions)
-    .values({
-      transactionNumber: trxNum,
-      businessId: tracking.businessId,
-      branchCode: tracking.branchCode || business?.code || null,
-      branchName: tracking.branchName || business?.name || null,
-      type: "INCOME",
-      category: "Online Order Sale",
-      amountGhs: tracking.totalGhs || 0,
-      paymentMethod: method,
-      customerId: tracking.customerId || null,
-      description: `[ORDER:${tracking.trackingCode}] ${itemsDesc || "Online order"} — ${tracking.customerName}`,
-      date: dateStr,
-      createdAt: new Date(),
-      status: "COMPLETED",
-      recordedBy: staff.name || "Staff",
-      recordedByRole: staff.role || null,
-      recordedByUserId: staff.id ?? null,
-    })
-    .returning();
-  return trx.id;
+  // P5: ONE service-sale writer (shared with car-wash / telecom / transport).
+  const posted = await postServiceSale({
+    businessId: Number(tracking.businessId),
+    branchCode: tracking.branchCode || business?.code || null,
+    branchName: tracking.branchName || business?.name || null,
+    category: "Online Order Sale",
+    description: `${itemsDesc || "Online order"} — ${tracking.customerName}`,
+    amountGhs: Number(tracking.totalGhs) || 0,
+    paymentMethod: method,
+    customerId: tracking.customerId || null,
+    actor: { id: staff.id ?? null, name: staff.name || "Staff", role: staff.role || null },
+    tag: `ORDER:${tracking.trackingCode}`,
+  });
+  return posted.transaction?.id ?? 0;
 }
 
 /** Bell-notify the branch team + owner that an online order arrived. */

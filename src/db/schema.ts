@@ -739,6 +739,45 @@ export const inventoryVariants = pgTable("inventory_variants", {
   uniqueIndex("inventory_variants_business_sku_uq").on(t.businessId, t.sku),
 ]);
 
+/**
+ * 6c. Stock movements — the audit trail behind every quantity change.
+ *
+ * Until P5 the quantity column was written by ~20 different code paths with no
+ * record of WHY it moved, so "why is stock 42 and not 50?" was unanswerable.
+ * `src/lib/stock.ts` (applyStockChange / stockIn / stockOut) is now the single
+ * writer and appends one row here per real movement. Derived recomputes (the
+ * boutique variant aggregate) intentionally write quantity directly and log
+ * nothing — they are not movements, they are a re-derivation.
+ */
+export const stockMovements = pgTable("stock_movements", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  inventoryId: integer("inventory_id").notNull(),
+  sku: text("sku"),
+  itemName: text("item_name"),
+  /** Signed change applied to the item (+ in, − out, 0 for a pure re-status). */
+  delta: doublePrecision("delta").notNull(),
+  quantityAfter: doublePrecision("quantity_after").notNull(),
+  /** PRODUCTION | PURCHASE | SALE | CONSUMPTION | WASTE | HARVEST | RESTOCK |
+   *  ADJUSTMENT | RESTORE | OPENING | RETURN */
+  reason: text("reason").notNull(),
+  /** Optional origin of the movement (order/booking/transaction/task id). */
+  refType: text("ref_type"),
+  refId: integer("ref_id"),
+  note: text("note"),
+  /** Variant-level movement: the parent aggregate also moved. */
+  variantId: integer("variant_id"),
+  actorUserId: integer("actor_user_id"),
+  actorName: text("actor_name"),
+  actorRole: text("actor_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("stock_movements_business_id_idx").on(t.businessId),
+  index("stock_movements_inventory_id_idx").on(t.inventoryId),
+  index("stock_movements_created_at_idx").on(t.createdAt),
+]);
+
 // 8b. Inventory Downloads audit trail
 export const inventoryDownloads = pgTable("inventory_downloads", {
   id: serial("id").primaryKey(),

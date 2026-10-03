@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { eq } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { tasksForBusiness } from "@/lib/checklistDefaults";
 
 /**
@@ -383,14 +383,24 @@ export async function provisionBusiness(
           // customer marketplace from day one.
           category: normalizeInventoryCategory(item.category),
           subcategory: deriveInventorySubcategory(item.category, item.subcategory),
-          quantity: qty,
+          // Registered EMPTY, then stocked through the ONE writer so the
+          // opening kit appears in the movement trail like any other stock-in.
+          quantity: 0,
           unit: item.unit,
           costPriceGhs: item.costPriceGhs,
           sellingPriceGhs: item.sellingPriceGhs,
           minStockThreshold: item.minStockThreshold,
-          status: computeStockStatus(qty, item.minStockThreshold),
+          status: "OUT_OF_STOCK",
         })
         .returning();
+      await applyStockChange({
+        businessId,
+        inventoryId: row.id,
+        delta: qty,
+        reason: "OPENING",
+        refType: "STARTER_KIT",
+        note: `Opening stock — ${row.name}`,
+      });
       kitCost += qty * (Number(item.costPriceGhs) || 0);
       createdItems.push(row);
     }

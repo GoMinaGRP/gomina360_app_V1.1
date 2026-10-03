@@ -117,6 +117,9 @@ const TABLES: Record<string, TableRef> = {
   // Boutique size × colour stock — rows hang off inventory items and are
   // remapped on import so a restored unit keeps its per-size stock.
   inventoryVariants: { table: schema.inventoryVariants, fkBusinessId: "businessId" },
+  // P5 stock audit trail — hangs off inventory items, remapped on import so a
+  // restored unit keeps the full "why did stock move" history.
+  stockMovements: { table: schema.stockMovements, fkBusinessId: "businessId" },
   inventoryDownloads: { table: schema.inventoryDownloads, fkBusinessId: "downloaderBusinessId" },
   universalExports: { table: schema.universalExports, fkBusinessId: "businessId" },
   transactions: { table: schema.transactions, fkBusinessId: "businessId" },
@@ -1176,7 +1179,7 @@ async function importBusinessBackupTx(
     "dailyNotes", "businessInsights",
     "aiInsights",
     "auditAssignments", "auditReviews", "auditTrail",
-    "inventoryVariants",
+    "inventoryVariants", "stockMovements",
     "inventoryDownloads", "assetDownloads", "universalExports",
     // ── Tables that were exported but never restored before ──────────────
     // (online-order tracking, credit sales, payroll runs/attendance and the
@@ -1336,6 +1339,11 @@ async function importBusinessBackupTx(
     }),
     scenarioSimulations: (r) => ({
       targetBusinessId: newBusinessId,
+    }),
+    stockMovements: (r) => ({
+      inventoryId: remapFk("inventoryItems", r.inventoryId),
+      branchCode: null,
+      actorUserId: remapUserId(r.actorUserId),
     }),
     inventoryVariants: (r) => ({
       inventoryId: remapFk("inventoryItems", r.inventoryId),

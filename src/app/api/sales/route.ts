@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyStockChange } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { inventoryItems } from "@/db/schema";
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     // ── 1. Validate every item against inventory ──────────────────────
     const validationErrors: string[] = [];
-    const inventoryUpdates: { id: number; newQty: number; newStatus: string }[] = [];
+    const inventoryUpdates: { id: number; newQty: number; newStatus: string; qty: number }[] = [];
     // Boutique: variant rows deducted alongside their aggregate item.
     const variantUpdates: { variantId: number; inventoryId: number; qty: number; label: string }[] = [];
     const variantItemIds = new Set<number>();
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
           ? "LOW_STOCK"
           : "IN_STOCK";
 
-      inventoryUpdates.push({ id: inv.id, newQty, newStatus });
+      inventoryUpdates.push({ id: inv.id, newQty, newStatus, qty: Number(quantity) });
       if (variantRow) {
         variantUpdates.push({
           variantId: Number(variantRow.id),
@@ -217,13 +218,19 @@ export async function POST(request: NextRequest) {
     }
     for (const update of inventoryUpdates) {
       if (variantItemIds.has(update.id)) {
+        // Derived write: the aggregate is recomputed FROM the variant rows.
         await syncItemAggregate(update.id);
         continue;
       }
-      await db
-        .update(inventoryItems)
-        .set({ quantity: update.newQty, status: update.newStatus })
-        .where(eq(inventoryItems.id, update.id));
+      // P5: ONE stock writer for real movements (pre-validated delta).
+      await applyStockChange({
+        businessId: Number(businessId),
+        inventoryId: update.id,
+        delta: -update.qty,
+        reason: "SALE",
+        refType: "SALES_CENTER",
+        actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+      });
     }
 
     // ── 3. Post the sale through the SHARED engine ───────────────────

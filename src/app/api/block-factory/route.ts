@@ -19,7 +19,7 @@ import {
 } from "@/db/schema";
 import { deriveDensityKgm3 } from "@/lib/blockQc";
 import { and, eq } from "drizzle-orm";
-import { computeStockStatus, ensureInventoryItem, stockIn, stockOut } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, ensureInventoryItem, stockIn, stockOut } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
@@ -426,12 +426,16 @@ export async function POST(request: NextRequest) {
       let stock: any = null;
       if (goodBlocks > 0) {
         const { item } = await resolveBlockTypeItem(businessId, blockType, { autoCreate: true });
-        const newQty = (item.quantity || 0) + goodBlocks;
-        const [updated] = await db
-          .update(inventoryItems)
-          .set({ quantity: newQty, status: computeStockStatus(newQty, item.minStockThreshold || 0) })
-          .where(eq(inventoryItems.id, item.id))
-          .returning();
+        // P5: ONE stock writer — production output is a PRODUCTION movement.
+        const { item: updated } = await applyStockChange({
+          businessId,
+          inventoryId: item.id,
+          delta: goodBlocks,
+          reason: "PRODUCTION",
+          refType: "BLOCK_PRODUCTION",
+          note: `${goodBlocks} blocks moulded${blocksBroken ? ` (${blocksBroken} broken)` : ""}`,
+          actor: __authSession.user,
+        });
         stock = {
           sku: updated.sku,
           name: updated.name,
@@ -689,17 +693,17 @@ export async function POST(request: NextRequest) {
       }
 
       const unitCost = Number(data.unitCostGhs) || 0;
-      const newQty = (item.quantity || 0) + qty;
-      const set: any = {
-        quantity: newQty,
-        status: computeStockStatus(newQty, item.minStockThreshold || 0),
-      };
-      if (unitCost > 0) set.costPriceGhs = unitCost;
-      const [updated] = await db
-        .update(inventoryItems)
-        .set(set)
-        .where(eq(inventoryItems.id, item.id))
-        .returning();
+      // P5: ONE stock writer.
+      const { item: updated } = await applyStockChange({
+        businessId,
+        inventoryId: item.id,
+        delta: qty,
+        reason: "RESTOCK",
+        refType: "BLOCK_RESTOCK",
+        note: data.note || data.itemName ? `Restock ${qty}× ${item.name}` : null,
+        actor: __authSession.user,
+        setCostPriceGhs: unitCost,
+      });
 
       let expenseRow = null;
       let pendingApproval = false;
@@ -1029,10 +1033,17 @@ export async function POST(request: NextRequest) {
           if ((d as any).actualKg > 0) {
             const [item] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, (d as any).inventoryId));
             if (item) {
-              const newQty = r3((item.quantity || 0) + (d as any).actualKg);
-              await db.update(inventoryItems)
-                .set({ quantity: newQty, status: computeStockStatus(newQty, item.minStockThreshold || 0) })
-                .where(eq(inventoryItems.id, item.id));
+              // P5: ONE stock writer — recovered raw material is a RETURN.
+              await applyStockChange({
+                businessId,
+                inventoryId: item.id,
+                delta: Number((d as any).actualKg),
+                reason: "RETURN",
+                refType: "BLOCK_MIX_REJECTED",
+                refId: batch.id,
+                note: `Recovered ${(d as any).actualKg} kg from rejected batch`,
+                actor: me,
+              });
               recoveredKg = r3(recoveredKg + (d as any).actualKg);
             }
           }
