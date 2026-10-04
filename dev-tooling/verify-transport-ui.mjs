@@ -12,6 +12,7 @@
  * Screenshots land in dev-tooling/.verify-out/. Exits non-zero on failure.
  */
 import { createRequire } from "node:module";
+import { revealAllUnits } from "./rail-util.mjs";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
 const fs = req("fs");
@@ -54,6 +55,8 @@ async function login(page) {
 }
 
 async function openTransportTab(page) {
+  // N5: the rail previews 5 units — reveal the rest so the transport chip exists.
+  await revealAllUnits(page);
   // Sidebar business chip: logo/img node carries data-testid=sidebar-biz-logo-TRANSPORT-01.
   // Click its enclosing button (text fallback for logo-less chips).
   for (let attempt = 0; attempt < 3; attempt++) {

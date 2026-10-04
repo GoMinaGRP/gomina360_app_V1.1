@@ -300,6 +300,14 @@ try {
   page.on("pageerror", (e) => consoleErrors.push(String(e.message || e).slice(0, 160)));
   await login(page);
 
+  // N5: the rail previews 5 units and reveals the rest with "Show all N units"
+  // (one scroll container instead of a nested scroll box). Expand it first so
+  // this suite still scans EVERY unit page, exactly as before.
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="nav-biz-show-all"]');
+    if (btn && btn.textContent.includes("Show all")) btn.click();
+  });
+  await sleep(600);
   const units = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-biz-code]')].map((b) => ({
       code: b.getAttribute("data-biz-code"),

@@ -22,6 +22,7 @@
  * Run (app on :3000):  bash dev-tooling/run-suite.sh dev-tooling/verify-shared-ui.mjs
  */
 import { createRequire } from "node:module";
+import { revealAllUnits } from "./rail-util.mjs";
 import fs from "node:fs";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
@@ -185,6 +186,7 @@ try {
     await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: T }).catch(() => {});
     await waitSel('[data-testid="nav-sidebar"]', T);
     await sleep(1500);
+    await revealAllUnits(page);
     await clickTid(`sidebar-biz-${m.code}`, 20000).catch(() => {});
     await sleep(2600);
     await clickByText(m.tab).catch(() => {});

@@ -1066,8 +1066,13 @@ export default function CustomerTrackingPanel({
           </div>
         ) : (
           <>
+            {/* overflow-x-auto (not hidden): the ten order columns need ~1180px,
+                and the content column is ~900px on a 1440 laptop — without a
+                horizontal scroller the Payment / Status / Date columns render
+                underneath the right rail where they cannot be read or reached. */}
             <div className="hidden lg:block bg-slate-800/90 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl" data-testid="ct-orders-table">
-              <table className="w-full text-left">
+              <div className="overflow-x-auto">
+              <table className="w-full text-left min-w-[1080px]">
                 <thead>
                   <tr className="text-[9px] uppercase tracking-wider text-slate-500 border-b border-slate-700">
                     <th className="px-3 py-2">Order ID</th>
@@ -1151,6 +1156,7 @@ export default function CustomerTrackingPanel({
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* Compact order cards for phones/tablets */}

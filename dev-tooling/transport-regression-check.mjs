@@ -16,6 +16,7 @@
  * Exit code 0 = all checks pass. BASE_URL default http://127.0.0.1:3000.
  */
 import { createRequire } from "node:module";
+import { revealAllUnits } from "./rail-util.mjs";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
 const fs = req("fs");
@@ -59,6 +60,8 @@ async function login() {
 }
 
 async function clickBiz(codePrefix) {
+  // N5: the rail previews 5 units — reveal the rest before hunting for a chip.
+  await revealAllUnits(page);
   // Clicks a sidebar business chip by code prefix (logo img or text child).
   for (let i = 0; i < 3; i++) {
     try {

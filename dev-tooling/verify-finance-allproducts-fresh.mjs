@@ -193,15 +193,33 @@ async function sectionQ(browser, cookies) {
   await uiLogin(page, OWNER);
   await sleep(1500);
 
+  // N5: the rail previews 5 units; nine fresh units therefore need the
+  // "Show all N units" disclosure before they are reachable by name.
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="nav-biz-show-all"]');
+    if (btn && (btn.textContent || "").includes("Show all")) btn.click();
+  });
+  await sleep(700);
+
   for (const c of CATEGORIES) {
-    // open the unit from the sidebar by its name
+    // open the unit from the sidebar by its name — and PROVE it opened: the
+    // sidebar preview/scroll changes made a bare "found some button with this
+    // text" click silently hit an unrelated element (an alert card), so the
+    // suite used to sail on and then fail every tab check.
     const opened = await page.evaluate((name) => {
-      const btn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").includes(name));
+      const btn = document.querySelector(`[data-testid="nav-sidebar"] [data-biz-code]`) &&
+        [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-biz-code]')]
+          .find((b) => (b.textContent || "").includes(name));
       if (btn) { btn.click(); return true; }
       return false;
     }, c.name);
     if (!opened) { ok(`Q.${c.category}: openable from the sidebar`, false); continue; }
     await sleep(2200);
+    const arrived = await page.evaluate((name) => {
+      const txt = document.body.innerText || "";
+      return txt.includes(name);
+    }, c.name);
+    if (!arrived) { ok(`Q.${c.category}: unit dashboard opened`, false, "navigation did not land on the unit"); continue; }
     let clean = true;
     for (const tab of c.tabs) {
       const clicked = await clickExact(page, tab);
