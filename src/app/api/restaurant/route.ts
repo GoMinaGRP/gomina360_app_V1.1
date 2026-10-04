@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyStockChange, stockRefusal } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -7,23 +8,28 @@ import {
   restaurantWaste,
   restaurantPurchases,
   inventoryItems,
-  transactions,
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { notifyPurchase } from "@/lib/notify";
+import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
+import { linkSupplier } from "@/lib/supplierLinks";
 
 // NOTE: the Restaurant menu master list starts EMPTY for every business — no
 // sample dishes are auto-seeded (owner directive: new / reset units begin with
 // zero sample, test or unrelated data). The demo flagship FOOD-01 receives its
 // signature menu from the seed (seed.ts) only.
 
-// Stock-in a received purchase: match inventory by id/name, else create the item.
-async function receiveStock(businessId: number, branchCode: string | null, data: any, qty: number, cost: number) {
+/**
+ * Stock-in a received purchase: match inventory by id/name, else create the
+ * item. Returns a refusal message when the target is a variant product that
+ * needs a size/colour choice (the caller answers 400 with it).
+ */
+async function receiveStock(businessId: number, branchCode: string | null, data: any, qty: number, cost: number): Promise<string | null> {
   const inv = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
   let target = data.inventoryId ? inv.find((i: any) => i.id === Number(data.inventoryId)) : undefined;
   if (!target) {
@@ -31,35 +37,52 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
     target = inv.find((i: any) => i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12)));
   }
   if (target) {
-    const newQty = (target.quantity || 0) + qty;
-    await db
-      .update(inventoryItems)
-      .set({
-        quantity: newQty,
-        costPriceGhs: cost || target.costPriceGhs,
-        expiryDate: data.expiryDate || target.expiryDate || null,
-        status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-      })
-      .where(eq(inventoryItems.id, target.id));
+    // P5: ONE stock writer (quantity + status + movement trail).
+    const applied = await applyStockChange({
+      businessId,
+      branchCode,
+      inventoryId: target.id,
+      delta: qty,
+      reason: "PURCHASE",
+      refType: "RESTAURANT_PURCHASE",
+      note: data.itemName ? `Purchase: ${data.itemName}` : null,
+      setCostPriceGhs: cost,
+      setExpiryDate: data.expiryDate || null,
+    });
+    const refusal = stockRefusal(applied);
+    if (refusal) return refusal;
   } else {
     const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
     let sku = `FOOD-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
     let n = 2;
     while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-    await db.insert(inventoryItems).values({
+    // Created EMPTY, then stocked through the one writer (movement trail).
+    const [created] = await db.insert(inventoryItems).values({
       name: data.itemName,
       sku,
       businessId,
       category: "Food & Ingredients",
-      quantity: qty,
+      quantity: 0,
       unit: data.unit || "Kg",
       costPriceGhs: cost,
       sellingPriceGhs: Number(data.sellingPriceGhs) || 0,
       minStockThreshold: 5,
-      status: "IN_STOCK",
+      status: "OUT_OF_STOCK",
       expiryDate: data.expiryDate || null,
+    }).returning();
+    await applyStockChange({
+      businessId,
+      inventoryId: created.id,
+      delta: qty,
+      reason: "OPENING",
+      refType: "RESTAURANT_PURCHASE",
+      note: `Opening stock: ${data.itemName}`,
+      setCostPriceGhs: cost,
+      setExpiryDate: data.expiryDate || null,
     });
   }
+
+  return null;
 }
 
 // Book the purchase expense into the shared Finance ledger.
@@ -139,6 +162,15 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Math.max(1, Number(data.quantity) || 1);
       const price = Number(data.unitPriceGhs) || 0;
+      // Shared CRM: link the guest at ticket time (one record per buyer).
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db
         .insert(restaurantOrders)
         .values({
@@ -146,6 +178,8 @@ export async function POST(request: NextRequest) {
           branchCode,
           orderNumber: data.orderNumber || `ORD-KIT-${new Date().getFullYear()}-${stamp}`,
           customerName: data.customerName || "Walk-in Guest",
+          customerPhone: data.customerPhone || null,
+          customerId: buyer?.id ?? null,
           itemName: data.itemName || "Menu Item",
           menuItemId: data.menuItemId ? Number(data.menuItemId) : null,
           quantity: qty,
@@ -214,11 +248,18 @@ export async function POST(request: NextRequest) {
         target = inv.find((i: any) => i.name?.toUpperCase().includes(key));
       }
       if (target) {
-        const newQty = Math.max(0, (target.quantity || 0) - qty);
-        await db
-          .update(inventoryItems)
-          .set({ quantity: newQty, status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK" })
-          .where(eq(inventoryItems.id, target.id));
+        // P5: ONE stock writer — waste/usage never bypasses the trail.
+        const applied = await applyStockChange({
+          businessId,
+          inventoryId: target.id,
+          delta: -qty,
+          reason: "WASTE",
+          refType: "RESTAURANT_WASTE",
+          refId: row?.id != null ? Number(row.id) : null,
+          note: data.reason ? `Waste: ${data.reason}` : null,
+        });
+        const refusal = stockRefusal(applied);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
       }
       return NextResponse.json({ success: true, item: row });
     }
@@ -265,7 +306,8 @@ export async function POST(request: NextRequest) {
       });
 
       if (status === "RECEIVED") {
-        await receiveStock(businessId, branchCode, data, qty, cost);
+        const refusal = await receiveStock(businessId, branchCode, data, qty, cost);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         if (data.recordExpense !== false) {
           await bookExpense(businessId, biz, branchCode, { ...data, quantity: qty }, row.purchaseNumber, qty * cost, data.receivedDate || today);
         }
@@ -305,6 +347,62 @@ export async function PATCH(request: NextRequest) {
         .where(eq(restaurantOrders.id, Number(id)))
         .returning();
       if (!row) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
+
+      // ── Served ticket → the SHARED sale engine, exactly once ──────────
+      // Kitchen tickets used to be operational-only: serving a table moved no
+      // money, so the ledger (and therefore Finance, Receipts, CRM, Tracking)
+      // only ever saw the sales staff remembered to re-key. Now serving posts
+      // the ticket through the same engine every other module uses — ledger
+      // INCOME + RECEIPT + CRM accrual + tracking code — guarded by
+      // `transactionId` so re-serving (or a status ping-pong) never
+      // double-counts.
+      if (row.status === "SERVED" && !row.transactionId) {
+        const qty = Number(row.quantity) || 0;
+        const unitPrice = Number(row.unitPriceGhs) || 0;
+        const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+        const amount = Number(row.totalGhs) || lineTotal;
+        // Recipe cost per plate drives real COGS/profit on the receipt.
+        const menuRow = row.menuItemId
+          ? (await db.select().from(restaurantMenuItems).where(eq(restaurantMenuItems.id, Number(row.menuItemId))))[0]
+          : null;
+        const posted = await postSale({
+          businessId: row.businessId,
+          branchCode: row.branchCode,
+          lines: [
+            {
+              description: `${row.itemName} (${row.orderNumber})`,
+              quantity: qty,
+              unit: "plates",
+              category: menuRow?.category || "MENU",
+              unitPrice,
+              costPrice: Number(menuRow?.costGhs) || 0,
+              total: amount,
+              originalPrice: unitPrice,
+            },
+          ],
+          customerName: row.customerName,
+          customerPhone: row.customerPhone,
+          customerId: row.customerId ?? null,
+          paymentMethod: data?.paymentMethod || "CASH",
+          category: "RESTAURANT_ORDER_SALE",
+          description: `Ticket ${row.orderNumber} served: ${qty}× ${row.itemName} — ${row.customerName}`,
+          discount: Math.max(0, Math.round((lineTotal - amount) * 100) / 100),
+          actor: { name: data?.actorName || row.createdByName, role: data?.actorRole || row.createdByRole, id: data?.actorUserId ?? null },
+        });
+        if (posted.success) {
+          const [saved] = await db
+            .update(restaurantOrders)
+            .set({
+              transactionId: posted.transaction?.id ?? null,
+              salesDocumentId: posted.receipt?.id ?? null,
+              postedAt: new Date(),
+              customerId: posted.customerId ?? row.customerId ?? null,
+            })
+            .where(eq(restaurantOrders.id, row.id))
+            .returning();
+          return NextResponse.json({ success: true, item: saved || row, posted: true, transaction: posted.transaction, trackingCode: posted.trackingCode });
+        }
+      }
       return NextResponse.json({ success: true, item: row });
     }
 
@@ -345,9 +443,32 @@ export async function PATCH(request: NextRequest) {
         .set({ status: newStatus, receivedDate: newStatus === "RECEIVED" ? today : existing.receivedDate })
         .where(eq(restaurantPurchases.id, Number(id)))
         .returning();
+      if (row.supplierName && Number(row.totalGhs) > 0 && existing.status !== "RECEIVED") {
+        const orgId = await ownerOrgOfBusiness(existing.businessId).catch(() => null);
+        const [purchaseBiz] = orgId == null
+          ? await db.select().from(businesses).where(eq(businesses.id, existing.businessId))
+          : [null];
+        const linked = await linkSupplier({
+          ownerId: orgId ?? (purchaseBiz as any)?.ownerId ?? null,
+          name: row.supplierName,
+          category: "Food & Ingredients",
+          suppliedGhs: Number(row.totalGhs) || 0,
+          paymentMethod: data?.paymentMethod,
+          logTag: "[restaurant]",
+        });
+        if (linked?.supplier?.id) {
+          await db
+            .update(restaurantPurchases)
+            .set({ supplierId: linked.supplier.id })
+            .where(eq(restaurantPurchases.id, row.id))
+            .catch(() => {});
+        }
+      }
+
       if (newStatus === "RECEIVED" && existing.status !== "RECEIVED") {
         const [biz] = await db.select().from(businesses).where(eq(businesses.id, existing.businessId));
-        await receiveStock(existing.businessId, existing.branchCode, { ...existing, ...data }, existing.quantity, existing.unitCostGhs);
+        const refusal = await receiveStock(existing.businessId, existing.branchCode, { ...existing, ...data }, existing.quantity, existing.unitCostGhs);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         await notifyPurchase({
           businessId: existing.businessId,
           branchCode: existing.branchCode,

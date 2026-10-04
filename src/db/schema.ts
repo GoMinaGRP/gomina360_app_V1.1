@@ -469,6 +469,11 @@ export const customers = pgTable("customers", {
 },
   (t) => [
     index("customers_business_id_idx").on(t.businessId),
+    // CRM match lookups (src/lib/customerLink): the find-or-create path probes
+    // by phone and by lower-cased name inside a business. Without these the
+    // matcher degrades to a full scan of the customers table on every sale.
+    index("customers_business_phone_idx").on(t.businessId, t.phone),
+    index("customers_business_name_idx").on(t.businessId, t.name),
   ]);
 
 // 5. Suppliers & Vendors
@@ -599,6 +604,12 @@ export const assets = pgTable("assets", {
   recorderName: text("recorder_name"), // name of the user who recorded the asset
   recordedAt: timestamp("recorded_at").defaultNow(), // automatic date/time stamp
   assetImages: jsonb("asset_images"), // array of uploaded image data URLs / URLs
+  /** Display thumbnails (≤400px) parallel to `assetImages` — grids/modals paint
+   *  these (~20 KB) instead of the full inspection photos (~260 KB). POSITIONAL
+   *  like the inventory thumbnails: null where a thumbnail is missing, so an
+   *  index never shifts onto the wrong image. NULL for legacy rows (readers
+   *  fall back to `assetImages`). */
+  assetImagesThumb: jsonb("asset_images_thumb"),
   /** QR identity tag — globally unique when set; scanned or auto-generated at
    *  registration and printed on the asset tag. */
   qrCode: text("qr_code"),
@@ -644,6 +655,10 @@ export const inventoryItems = pgTable("inventory_items", {
   branchCode: text("branch_code"),
   branchName: text("branch_name"),
   category: text("category").notNull(),
+  /** Standardized umbrella category (src/lib/inventoryCategories.ts) — the
+   *  marketplace groups similar products from every business under this name.
+   *  The optional subcategory keeps the branch's own specific wording. */
+  subcategory: text("subcategory"),
   quantity: doublePrecision("quantity").notNull(),
   unit: text("unit").notNull(), // 'Bags', 'Trays', 'Tons', 'Kg', 'Units', 'Vehicles'
   costPriceGhs: doublePrecision("cost_price_ghs").notNull(),
@@ -651,9 +666,18 @@ export const inventoryItems = pgTable("inventory_items", {
   minStockThreshold: doublePrecision("min_stock_threshold").notNull(),
   status: text("status").default("IN_STOCK"), // 'IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'
   expiryDate: text("expiry_date"), // perishable stock safety tracking (used by Restaurant & Kitchen)
-  /** Primary product photo (data URL) + full set — uploaded or camera-captured. */
+  /** Primary product photo (data URL) + full set — uploaded or camera-captured.
+   *  Images are optimized in the browser before upload (src/lib/imageOptimize):
+   *  longest edge ≤ 1600px, JPEG q0.82 — a 12 MP capture drops from ~4 MB to
+   *  ~200 KB with no visible loss at any size this app renders. */
   photo: text("photo"),
   photos: jsonb("photos"),
+  /** Display thumbnails (≤400px) generated alongside the photos — the SAME
+   *  index order as `photos`. Grids and the public storefront render these
+   *  (~18 KB vs ~200 KB per tile); the lightbox keeps using the full photo.
+   *  NULL for legacy rows: every reader falls back to `photo`/`photos`. */
+  photoThumb: text("photo_thumb"),
+  photosThumb: jsonb("photos_thumb"),
   /** Rich product details registered ONCE at stock-in and served verbatim on
    *  the customer storefront product view (no duplicate entry anywhere):
    *  free description, brand/model, typed specifications (key/value rows —
@@ -664,7 +688,20 @@ export const inventoryItems = pgTable("inventory_items", {
   brand: text("brand"),
   model: text("model"),
   specifications: jsonb("specifications"),
+  /** Legacy display-only chips (pre-variant-engine). Superseded by
+   *  `inventory_variants`; kept read-only so existing products keep rendering. */
   variants: jsonb("variants"),
+  /** Boutique (and any size/colour retail) — when TRUE this item's stock is
+   *  tracked per SIZE/COLOUR variant in `inventory_variants`; `quantity` stays
+   *  the live AGGREGATE (sum of active variants) so every existing module
+   *  (low stock, finance, reports, dashboards) keeps working unchanged.
+   *  Existing items keep the column NULL/false and behave exactly as before. */
+  tracksVariants: boolean("tracks_variants").default(false),
+  /** What the two variant axes MEAN for this product (Size, Shoe size,
+   *  Capacity, Style, Model, Colour, Pack size, …). Labels are presentation
+   *  only — storage stays `inventory_variants.size` / `.color`. */
+  optionAxis1Label: text("option_axis1_label"),
+  optionAxis2Label: text("option_axis2_label"),
   /** QR identity tag — globally unique when set; scanned with the camera or
    *  auto-generated at registration, printed on the stock label. */
   qrCode: text("qr_code"),
@@ -679,6 +716,79 @@ export const inventoryItems = pgTable("inventory_items", {
   // NULLs (unset QRs) may repeat.
   uniqueIndex("inventory_items_qr_code_unique").on(t.businessId, t.qrCode),
   index("inventory_items_business_id_idx").on(t.businessId)
+]);
+
+// 8a-bis. Boutique / apparel stock variants — SIZE × COLOUR rows for one
+// inventory item, each carrying its own live quantity. The parent item's
+// `quantity` is the aggregate of the active rows (kept in sync by
+// lib/boutique.ts), so Sales, Orders, Low Stock, Finance and Reports can keep
+// treating an item as one stock line while the register still knows exactly
+// which size/colour left the shelf. Purely additive: an item with no rows
+// (every existing item) behaves exactly as before.
+export const inventoryVariants = pgTable("inventory_variants", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  inventoryId: integer("inventory_id").notNull(),
+  /** Display + matching values. Empty string (never NULL) for "no axis" so
+   *  the (inventory,size,colour) uniqueness can be enforced in Postgres. */
+  size: text("size").notNull().default(""),
+  color: text("color").notNull().default(""),
+  /** LETTER | SHOE_UK | SHOE_EU | SHOE_US | NUMERIC | KIDS | FREE | CUSTOM */
+  sizeSystem: text("size_system").default("CUSTOM"),
+  /** Per-variant SKU (unique per business) — used for scanning/reordering. */
+  sku: text("sku"),
+  quantity: doublePrecision("quantity").notNull().default(0),
+  minStockThreshold: doublePrecision("min_stock_threshold").notNull().default(0),
+  status: text("status").default("IN_STOCK"), // IN_STOCK | LOW_STOCK | OUT_OF_STOCK
+  isActive: boolean("is_active").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  uniqueIndex("inventory_variants_item_size_color_uq").on(t.inventoryId, t.size, t.color),
+  index("inventory_variants_business_id_idx").on(t.businessId),
+  index("inventory_variants_inventory_id_idx").on(t.inventoryId),
+  uniqueIndex("inventory_variants_business_sku_uq").on(t.businessId, t.sku),
+]);
+
+/**
+ * 6c. Stock movements — the audit trail behind every quantity change.
+ *
+ * Until P5 the quantity column was written by ~20 different code paths with no
+ * record of WHY it moved, so "why is stock 42 and not 50?" was unanswerable.
+ * `src/lib/stock.ts` (applyStockChange / stockIn / stockOut) is now the single
+ * writer and appends one row here per real movement. Derived recomputes (the
+ * boutique variant aggregate) intentionally write quantity directly and log
+ * nothing — they are not movements, they are a re-derivation.
+ */
+export const stockMovements = pgTable("stock_movements", {
+  id: serial("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  branchCode: text("branch_code"),
+  inventoryId: integer("inventory_id").notNull(),
+  sku: text("sku"),
+  itemName: text("item_name"),
+  /** Signed change applied to the item (+ in, − out, 0 for a pure re-status). */
+  delta: doublePrecision("delta").notNull(),
+  quantityAfter: doublePrecision("quantity_after").notNull(),
+  /** PRODUCTION | PURCHASE | SALE | CONSUMPTION | WASTE | HARVEST | RESTOCK |
+   *  ADJUSTMENT | RESTORE | OPENING | RETURN */
+  reason: text("reason").notNull(),
+  /** Optional origin of the movement (order/booking/transaction/task id). */
+  refType: text("ref_type"),
+  refId: integer("ref_id"),
+  note: text("note"),
+  /** Variant-level movement: the parent aggregate also moved. */
+  variantId: integer("variant_id"),
+  actorUserId: integer("actor_user_id"),
+  actorName: text("actor_name"),
+  actorRole: text("actor_role"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("stock_movements_business_id_idx").on(t.businessId),
+  index("stock_movements_inventory_id_idx").on(t.inventoryId),
+  index("stock_movements_created_at_idx").on(t.createdAt),
 ]);
 
 // 8b. Inventory Downloads audit trail
@@ -1547,25 +1657,6 @@ export const poultryFeedQcChecks = pgTable("poultry_feed_qc_checks", {
     index("poultry_feed_qc_checks_business_id_idx").on(t.businessId),
   ]);
 
-// P6. Daily Activity Checklist
-export const poultryChecklists = pgTable("poultry_checklists", {  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. FEED_MORNING, WATER_CHECK
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // FEEDING, WATER, HEALTH, CLEANING, SECURITY, PRODUCTION
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("poultry_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 11. Block Factory Log (Blocks molded, bags cement used, breakage rate)
 export const blockFactoryLogs = pgTable("block_factory_logs", {
   id: serial("id").primaryKey(),
@@ -1593,6 +1684,8 @@ export const blockFactoryOrders = pgTable("block_factory_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   blockType: text("block_type").notNull(),
   quantity: integer("quantity").notNull(),
   unitPriceGhs: doublePrecision("unit_price_ghs").notNull(),
@@ -1631,25 +1724,6 @@ export const blockFactoryDeliveries = pgTable("block_factory_deliveries", {
   ]);
 
 // 11d. Block Factory Daily Activity Checklist
-export const blockFactoryChecklists = pgTable("block_factory_checklists", {
-  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. MACHINE_STARTUP, MATERIAL_COUNT
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // PRODUCTION, MATERIALS, MACHINERY, QUALITY, CLEANING, SECURITY, DELIVERIES
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("block_factory_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 11e. Block Types Master List (production master data — user-extensible)
 export const blockTypes = pgTable("block_types", {
   id: serial("id").primaryKey(),
@@ -2162,25 +2236,6 @@ export const aquacultureBenchmarkProfiles = pgTable("aquaculture_benchmark_profi
   ]);
 
 // A6. Daily Tasks / Checklist for Aquaculture
-export const aquacultureChecklists = pgTable("aquaculture_checklists", {
-  id: serial("id").primaryKey(),
-  businessId: integer("business_id").notNull(),
-  branchCode: text("branch_code"),
-  checklistDate: text("checklist_date").notNull(),
-  taskKey: text("task_key").notNull(), // e.g. AERATION_CHECK, DO_PH_TEST, FEED_MORNING, MORTALITY_CHECK, FILTER_CLEAN
-  taskLabel: text("task_label").notNull(),
-  category: text("category"), // WATER, FEEDING, HEALTH, CLEANING, SECURITY, PRODUCTION
-  isCompleted: boolean("is_completed").default(false),
-  completedByName: text("completed_by_name"),
-  completedByRole: text("completed_by_role"),
-  completedAt: timestamp("completed_at"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-},
-  (t) => [
-    index("aquaculture_checklists_business_id_idx").on(t.businessId),
-  ]);
-
 // 13. Livestock Log (Cattle, Small Ruminants tags, vaccination, breeding)
 export const livestockLogs = pgTable("livestock_logs", {
   id: serial("id").primaryKey(),
@@ -2274,6 +2329,8 @@ export const hardwareOrders = pgTable("hardware_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   inventoryId: integer("inventory_id"),
   quantity: doublePrecision("quantity").notNull(),
@@ -2301,6 +2358,8 @@ export const hardwarePurchases = pgTable("hardware_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(), // e.g. "PO-HW-2026-231"
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: doublePrecision("quantity").notNull(),
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull(),
@@ -3384,6 +3443,8 @@ export const electronicsOrders = pgTable("electronics_orders", {
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per buyer). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   inventoryId: integer("inventory_id"),
   quantity: integer("quantity").notNull(),
@@ -3391,7 +3452,10 @@ export const electronicsOrders = pgTable("electronics_orders", {
   totalGhs: doublePrecision("total_ghs").notNull(),
   status: text("status").notNull().default("PENDING"), // PENDING, READY, DELIVERED, CANCELLED
   dueDate: text("due_date"),
-  fulfilledDate: text("fulfilled_date"), // set when the order completed its sale (stock deducted + finance recorded)
+  fulfilledDate: text("fulfilled_date"),
+  /** Ledger transaction posted on delivery (idempotency for the shared sale engine). */
+  transactionId: integer("transaction_id"),
+  salesDocumentId: integer("sales_document_id"), // set when the order completed its sale (stock deducted + finance recorded)
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
@@ -3454,6 +3518,8 @@ export const electronicsPurchases = pgTable("electronics_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(),
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: integer("quantity").notNull(),
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull(),
@@ -3477,6 +3543,9 @@ export const restaurantOrders = pgTable("restaurant_orders", {
   branchCode: text("branch_code"),
   orderNumber: text("order_number").notNull().unique(),
   customerName: text("customer_name").notNull(),
+  customerPhone: text("customer_phone"),
+  /** Shared CRM customer (linked on order create — one customer record per guest). */
+  customerId: integer("customer_id"),
   itemName: text("item_name").notNull(),
   menuItemId: integer("menu_item_id"),
   quantity: integer("quantity").notNull(),
@@ -3488,6 +3557,10 @@ export const restaurantOrders = pgTable("restaurant_orders", {
   notes: text("notes"),
   createdByName: text("created_by_name"),
   createdByRole: text("created_by_role"),
+  /** Set the moment SERVED posts the ticket through the shared sale engine. */
+  transactionId: integer("transaction_id"),
+  salesDocumentId: integer("sales_document_id"),
+  postedAt: timestamp("posted_at"),
   createdAt: timestamp("created_at").defaultNow(),
 },
   (t) => [
@@ -3539,6 +3612,8 @@ export const restaurantPurchases = pgTable("restaurant_purchases", {
   branchCode: text("branch_code"),
   purchaseNumber: text("purchase_number").notNull().unique(),
   supplierName: text("supplier_name").notNull(),
+  /** Shared supplier ledger (organizations-scoped) linked on receipt/restock. */
+  supplierId: integer("supplier_id"),
   itemName: text("item_name").notNull(),
   quantity: doublePrecision("quantity").notNull(),
   unit: text("unit").default("Kg"),

@@ -25,11 +25,17 @@ import {
   UniversalExportType,
 } from "@/lib/universalExport";
 import { resolveLogo } from "@/lib/logos";
+import BusinessScopeBar from "./BusinessScopeBar";
+import { myOrgIdOf, scopeOwners, scopeUnits } from "@/lib/businessScope";
 
 interface Props {
   activeModule: string;
   currentUser: any;
   businesses: any[];
+  /** Owner directory (Super Admin) — only used for owner-group labels. */
+  organizations?: { id: number; name: string }[];
+  /** Name of the workspace the data was scoped to (the Organization Lens). */
+  lensLabel?: string;
   data: {
     metrics: any[];
     users: any[];
@@ -71,6 +77,7 @@ const MODULE_LABELS: Record<string, string> = {
   "TECH-01": "Electronics Shop Management",
   "WASH-01": "Car Wash Management",
   "TELECOM-01": "Telecom & Digital Services Management",
+  "BOUTIQUE-01": "Boutique Management",
 };
 
 const BUSINESS_MODULES = new Set([
@@ -82,6 +89,7 @@ const BUSINESS_MODULES = new Set([
   "TECH-01",
   "WASH-01",
   "TELECOM-01",
+  "BOUTIQUE-01",
 ]);
 
 function addSection(section: string, rows: any[]) {
@@ -127,13 +135,33 @@ function dashboardSummary(records: any[]) {
   });
 }
 
-export default function UniversalExportCenter({ activeModule, currentUser, businesses, data }: Props) {
+export default function UniversalExportCenter({ activeModule, currentUser, businesses, data, organizations = [], lensLabel = "" }: Props) {
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<"CREATE" | "AUDIT">("CREATE");
   const [format, setFormat] = useState<UniversalExportFormat>("PDF");
   const [exportType, setExportType] = useState<UniversalExportType>("REPORT");
+  // Export scope: "ALL" = every permitted unit (the whole current workspace),
+  // or one unit id. The unit list itself is already the caller's permitted
+  // (Lens-scoped) set, so the DEFAULT — all units of the current workspace —
+  // is "My Workspace" for everyone who is not looking at another owner.
   const [scopeBusinessId, setScopeBusinessId] = useState<string>("ALL");
+  const myOrgId = useMemo(() => myOrgIdOf(currentUser), [currentUser]);
+  const scopeCatalogue = useMemo(() => scopeUnits(businesses, organizations, myOrgId), [businesses, organizations, myOrgId]);
+  // Group labels only (the Owner control itself is the app-wide Organization
+  // Lens) — a cross-owner list still groups its units under their owner.
+  const scopeOwnersList = useMemo(() => scopeOwners(scopeCatalogue, myOrgId), [scopeCatalogue, myOrgId]);
+  const scopeSelection = useMemo(
+    () => ({ ownerId: "ALL" as const, unitId: scopeBusinessId === "ALL" ? ("ALL" as const) : Number(scopeBusinessId), typeKey: "ALL" }),
+    [scopeBusinessId],
+  );
+  // The unit list IS the caller's permitted, Lens-scoped set, so the honest
+  // summary names that workspace and its unit count (never "All owners" — the
+  // other owners are simply not in this payload).
+  const scopeChip = useMemo(() => {
+    const n = scopeCatalogue.length;
+    return `${n} unit${n === 1 ? "" : "s"}${lensLabel ? ` in ${lensLabel}` : ""}`;
+  }, [scopeCatalogue.length, lensLabel]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState(false);
@@ -622,18 +650,25 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-400 mb-1">Business / Branch Scope</label>
-                      <select
-                        value={scopeBusinessId}
-                        disabled={branchLocked}
-                        onChange={(e) => setScopeBusinessId(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-xs sm:text-sm text-white disabled:opacity-60 focus:outline-none focus:border-emerald-500"
-                      >
-                        {isExecutive && !activeBusiness && <option value="ALL">All Businesses &amp; Branches</option>}
-                        {businesses
-                          .filter((b) => isExecutive || b.id === currentUser?.assignedBusinessId)
-                          .map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
-                      </select>
-                      {branchLocked && <p className="text-[10px] text-slate-500 mt-1">Scope is locked to the selected or assigned branch.</p>}
+                      {/* Shared scope control: owner-grouped, countable, searchable.
+                          The Owner dimension is the app-wide Organization Lens, so
+                          it is not repeated here; selecting no unit means "every unit
+                          in the current workspace" (My Workspace by default). */}
+                      <BusinessScopeBar
+                        testid="export"
+                        units={scopeCatalogue}
+                        owners={scopeOwnersList}
+                        types={[]}
+                        selection={scopeSelection}
+                        onChange={(next) => setScopeBusinessId(next.unitId === "ALL" ? "ALL" : String(next.unitId))}
+                        showOwner={false}
+                        lockedToUnit={branchLocked}
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1" data-testid="export-scope-note">
+                        {branchLocked
+                          ? "Scope is locked to the selected or assigned branch."
+                          : `Exports ${scopeChip} — pick a unit to narrow, or switch the Organization Lens in the sidebar for another owner.`}
+                      </p>
                     </div>
                   </div>
 

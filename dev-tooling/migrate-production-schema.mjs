@@ -335,6 +335,44 @@ try {
   // ──────────────────────────────────────────────────────────────────────────────
 
   // ──────────────────────────────────────────────────────────────────────────────
+  // Standardized inventory categories (non-destructive, idempotent).
+  //
+  // Every inventory row's `category` becomes one of the shared standard
+  // umbrella categories from src/lib/inventoryCategories.ts; the branch's own
+  // original wording is preserved in the new `subcategory` column (only when
+  // it adds information). This is what lets the customer marketplace group
+  // similar products from different businesses under ONE category. Nothing is
+  // deleted: the original free text is either equal to the standard name or
+  // stored verbatim as the subcategory.
+  // ──────────────────────────────────────────────────────────────────────────────
+  {
+    const invTable = await client.query("select to_regclass('public.inventory_items') as name");
+    if (invTable.rows[0]?.name) {
+      await client.query("alter table public.inventory_items add column if not exists subcategory text");
+      const { normalizeInventoryCategory, deriveInventorySubcategory } = await import("../src/lib/inventoryCategories.ts");
+      const rows = await client.query(
+        "select id, category, subcategory from public.inventory_items order by id",
+      );
+      let moved = 0;
+      for (const row of rows.rows) {
+        const standard = normalizeInventoryCategory(row.category);
+        const sub = deriveInventorySubcategory(row.category, row.subcategory);
+        const changedCategory = standard !== row.category;
+        const changedSub = (sub ?? null) !== (row.subcategory ?? null);
+        if (!changedCategory && !changedSub) continue;
+        await client.query(
+          "update public.inventory_items set category = $1, subcategory = $2 where id = $3",
+          [standard, sub, row.id],
+        );
+        moved += 1;
+      }
+      if (moved > 0) {
+        console.log(`[db:migrate] standardized ${moved} inventory categor${moved === 1 ? "y" : "ies"} (originals kept as subcategory)`);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
   // Multi-Owner upgrade (additive, idempotent, backfilled — mirrors
   // dev-tooling/migrate-multiowner.mjs). Creates the Organization layer and the
   // tenant ownership columns without touching any existing row's meaning.
@@ -625,6 +663,23 @@ try {
   await client.query(`create unique index if not exists assets_business_asset_code_unique on public.assets (business_id, asset_code)`);
   await client.query(`create unique index if not exists assets_qr_code_unique on public.assets (business_id, qr_code)`);
   await client.query(`create unique index if not exists inventory_items_qr_code_unique on public.inventory_items (business_id, qr_code)`);
+
+  // ── Data heal: positional image thumbnails ──────────────────────────────
+  // The first image-optimization release could store a SHIFTED photos_thumb
+  // array (a photo without a generated thumbnail was dropped from the array,
+  // moving every later thumbnail onto the wrong photo — the storefront then
+  // painted another product's picture). A correctly written array is exactly
+  // as long as `photos`; anything else cannot be trusted, so it is cleared
+  // and every reader falls back to the full images (no visible breakage).
+  const healedThumbs = await client.query(`
+    update public.inventory_items
+       set photos_thumb = null
+     where photos_thumb is not null
+       and coalesce(jsonb_array_length(case when jsonb_typeof(photos_thumb) = 'array' then photos_thumb end), 0)
+           <> coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos end), 0)`);
+  if (healedThumbs.rowCount) {
+    console.log(`[db:migrate] cleared ${healedThumbs.rowCount} untrustworthy thumbnail array(s) (index shift from the first image-opt release)`);
+  }
 
   // Multi-owner runtime tools (used by dev-tooling/multiowner-verify.mjs):
   await client.query(`create or replace function gomina_org_of_business(bid integer)

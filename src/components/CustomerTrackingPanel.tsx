@@ -46,6 +46,8 @@ import {
   parseGoogleMapsPin,
 } from "@/lib/tracking";
 import { validatePhone } from "@/lib/phone";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 
 const STATUS_STYLES: Record<string, string> = {
   RECEIVED: "bg-sky-500/15 text-sky-300 border-sky-500/40",
@@ -948,10 +950,7 @@ export default function CustomerTrackingPanel({
             className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200"
             data-testid="ct-filter-biz"
           >
-            <option value="">All my businesses</option>
-            {scopedBusinesses.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <UnitScopeOptions units={scopedBusinesses} myOrgId={myOrgIdOf(currentUser)} />
           </select>
         )}
         <div className="relative flex-1 min-w-[180px] max-w-sm">
@@ -1066,8 +1065,13 @@ export default function CustomerTrackingPanel({
           </div>
         ) : (
           <>
+            {/* overflow-x-auto (not hidden): the ten order columns need ~1180px,
+                and the content column is ~900px on a 1440 laptop — without a
+                horizontal scroller the Payment / Status / Date columns render
+                underneath the right rail where they cannot be read or reached. */}
             <div className="hidden lg:block bg-slate-800/90 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl" data-testid="ct-orders-table">
-              <table className="w-full text-left">
+              <div className="overflow-x-auto">
+              <table className="w-full text-left min-w-[1080px]">
                 <thead>
                   <tr className="text-[9px] uppercase tracking-wider text-slate-500 border-b border-slate-700">
                     <th className="px-3 py-2">Order ID</th>
@@ -1151,6 +1155,7 @@ export default function CustomerTrackingPanel({
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* Compact order cards for phones/tablets */}

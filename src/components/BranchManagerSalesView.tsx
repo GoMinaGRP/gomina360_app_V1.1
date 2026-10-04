@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   ShoppingCart,
@@ -22,7 +24,6 @@ import {
   Building2,
   ClipboardEdit,
   BarChart3,
-  Landmark,
   HandCoins,
   Download,
   Eye,
@@ -34,10 +35,11 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { COMPANY_INFO } from "@/lib/companyInfo";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import SalesDocumentBuilder from "./SalesDocumentBuilder";
-import FinancialReportSection from "./FinancialReportSection";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import ProductVariantPicker, { type VariantSelection } from "./ProductVariantPicker";
 import { generateSalesDocumentPDF, printSalesDocument, downloadFile as downloadPDFFile } from "@/lib/salesDocument";
+import CustomerQuickAddForm from "@/components/shared/CustomerQuickAddForm";
 import {
   BarChart,
   Bar,
@@ -68,6 +70,12 @@ interface BranchManagerSalesViewProps {
   onRefreshData: () => void;
   /** Executives (Owner / General Manager) can sell across every branch. */
   isExecutive?: boolean;
+  /**
+   * Opens a canonical enterprise module (Customers & CRM / Inventory & Stock).
+   * Only supplied when the signed-in user may actually open those modules, so
+   * the shortcut never lands on the "Access Restricted" screen.
+   */
+  onNavigate?: (tab: string) => void;
 }
 
 export default function BranchManagerSalesView({
@@ -84,8 +92,9 @@ export default function BranchManagerSalesView({
   isOnline,
   onRefreshData,
   isExecutive = false,
+  onNavigate,
 }: BranchManagerSalesViewProps) {
-  type SalesTab = "NEW_SALE" | "CREDIT" | "INVOICES" | "QUOTATIONS" | "ANALYTICS" | "FIN_REPORT" | "PAYMENTS" | "RECEIPTS" | "RETURNS" | "CUSTOMERS" | "INVENTORY";
+  type SalesTab = "NEW_SALE" | "CREDIT" | "INVOICES" | "QUOTATIONS" | "ANALYTICS" | "PAYMENTS" | "RECEIPTS" | "RETURNS" | "CUSTOMERS" | "INVENTORY";
   const [activeSubTab, setActiveSubTab] = useState<SalesTab>("NEW_SALE");
 
   // Sales documents (invoices, quotations, receipts)
@@ -155,8 +164,15 @@ export default function BranchManagerSalesView({
     sellingPrice: number;
     customPriceReason: string;
     isCustomPrice: boolean;
+    /** Boutique: the exact size/colour variant sold (null for plain items). */
+    variantId?: number | null;
+    variantLabel?: string | null;
   }
   const [cart, setCart] = useState<CartItem[]>([]);
+  // ── Boutique variants for the operating branch (lazy, per business) ──
+  const [variantsByItem, setVariantsByItem] = useState<Record<string, any[]>>({});
+  const [variantPickerInv, setVariantPickerInv] = useState<any | null>(null);
+  const [variantPickSel, setVariantPickSel] = useState<VariantSelection>(null);
   const [salePaymentMethod, setSalePaymentMethod] = useState("MTN_MOMO");
   const [saleCustomerName, setSaleCustomerName] = useState("Walk-in Customer");
   const [saleCustomerPhone, setSaleCustomerPhone] = useState("");
@@ -179,12 +195,33 @@ export default function BranchManagerSalesView({
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
   const [returnSuccess, setReturnSuccess] = useState(false);
 
-  // ─────── Customer form state ───────
-  const [newCustName, setNewCustName] = useState("");
-  const [newCustPhone, setNewCustPhone] = useState("+233 24 ");
-  const [newCustEmail, setNewCustEmail] = useState("");
-  const [newCustType, setNewCustType] = useState("RETAIL");
-  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+
+  // ── Boutique variant matrix for the operating branch ────────────────
+  // Fetched lazily (small projection) so the POS can offer size/colour
+  // selection without bloating the app-wide /api/init payload.
+  useEffect(() => {
+    const bizId = activeBiz?.id;
+    if (!bizId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/boutique?businessId=${bizId}&variantsOnly=1`);
+        const body = await res.json().catch(() => null);
+        if (!cancelled && body?.success) setVariantsByItem(body.variants || {});
+      } catch {
+        /* variant layer is optional — a failed fetch just hides the chooser */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBiz?.id]);
+
+  /** Variant rows of one branch product (active only), [] when plain. */
+  const variantsOfItem = (invId: number): any[] => {
+    const rows = variantsByItem[String(invId)];
+    return Array.isArray(rows) ? rows.filter((v: any) => v.isActive !== false) : [];
+  };
 
   // ─────── Derived data ───────
   const branchInventory = inventory.filter(
@@ -381,13 +418,23 @@ export default function BranchManagerSalesView({
     return true;
   });
 
-  const addToCart = (inv: any) => {
-    const existing = cart.find((c) => c.inventoryId === inv.id);
+  /** One cart line per (product × size/colour) pair. */
+  const cartKeyOf = (inventoryId: number, variantId?: number | null) =>
+    `${inventoryId}:${variantId ? Number(variantId) : 0}`;
+
+  const addToCart = (inv: any, variant?: any | null) => {
+    const variantId = variant ? Number(variant.id) : null;
+    const variantLabel = variant
+      ? [variant.size ? `Size ${variant.size}` : null, variant.color || null].filter(Boolean).join(" · ")
+      : null;
+    const lineKey = cartKeyOf(inv.id, variantId);
+    const available = variant ? Number(variant.quantity) || 0 : inv.quantity;
+    const existing = cart.find((c) => cartKeyOf(c.inventoryId, c.variantId) === lineKey);
     if (existing) {
-      if (existing.quantity >= inv.quantity) return; // can't exceed stock
+      if (existing.quantity >= existing.availableQty) return; // can't exceed stock
       setCart(
         cart.map((c) =>
-          c.inventoryId === inv.id ? { ...c, quantity: c.quantity + 1 } : c
+          cartKeyOf(c.inventoryId, c.variantId) === lineKey ? { ...c, quantity: c.quantity + 1 } : c
         )
       );
     } else {
@@ -399,47 +446,49 @@ export default function BranchManagerSalesView({
           name: inv.name,
           category: inv.category,
           unit: inv.unit,
-          availableQty: inv.quantity,
+          availableQty: available,
           quantity: 1,
           originalPrice: inv.sellingPriceGhs,
           sellingPrice: inv.sellingPriceGhs,
           customPriceReason: "",
           isCustomPrice: false,
+          variantId,
+          variantLabel,
         },
       ]);
     }
   };
 
-  const updateCartQty = (inventoryId: number, qty: number) => {
+  const updateCartQty = (lineKey: string, qty: number) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey
           ? { ...c, quantity: Math.max(1, Math.min(qty, c.availableQty)) }
           : c
       )
     );
   };
 
-  const updateCartPrice = (inventoryId: number, price: number) => {
+  const updateCartPrice = (lineKey: string, price: number) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey
           ? { ...c, sellingPrice: price, isCustomPrice: price !== c.originalPrice }
           : c
       )
     );
   };
 
-  const updateCartPriceReason = (inventoryId: number, reason: string) => {
+  const updateCartPriceReason = (lineKey: string, reason: string) => {
     setCart(
       cart.map((c) =>
-        c.inventoryId === inventoryId ? { ...c, customPriceReason: reason } : c
+        cartKeyOf(c.inventoryId, c.variantId) === lineKey ? { ...c, customPriceReason: reason } : c
       )
     );
   };
 
-  const removeFromCart = (inventoryId: number) => {
-    setCart(cart.filter((c) => c.inventoryId !== inventoryId));
+  const removeFromCart = (lineKey: string) => {
+    setCart(cart.filter((c) => cartKeyOf(c.inventoryId, c.variantId) !== lineKey));
   };
 
   const cartSubtotal = cart.reduce(
@@ -467,6 +516,8 @@ export default function BranchManagerSalesView({
       originalPrice: c.originalPrice,
       sellingPrice: c.sellingPrice,
       customPriceReason: c.isCustomPrice ? c.customPriceReason : undefined,
+      // Boutique: the exact size/colour variant being sold.
+      ...(c.variantId ? { variantId: c.variantId } : {}),
     }));
 
     try {
@@ -712,39 +763,6 @@ export default function BranchManagerSalesView({
     }
   };
 
-  const handleCreateCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCustName.trim()) return;
-    setIsCreatingCustomer(true);
-    try {
-      const res = await fetch("/api/enterprise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entityType: "customer",
-          data: {
-            name: newCustName,
-            type: newCustType,
-            phone: newCustPhone,
-            email: newCustEmail || `${newCustName.toLowerCase().replace(/\s/g, ".")}@client.gh`,
-            businessId: activeBiz?.id,
-          },
-        }),
-      });
-      if (res.ok) {
-        setNewCustName("");
-        setNewCustPhone("+233 24 ");
-        setNewCustEmail("");
-        setNewCustType("RETAIL");
-        onRefreshData();
-      }
-    } catch (err) {
-      console.error("Customer creation error:", err);
-    } finally {
-      setIsCreatingCustomer(false);
-    }
-  };
-
   const hasManyCustomers = branchCustomers.length > 0;
 
   // ─────── Tab config ───────
@@ -755,7 +773,6 @@ export default function BranchManagerSalesView({
     { key: "QUOTATIONS", label: "Quotations", icon: ClipboardEdit },
     { key: "RECEIPTS", label: "Receipts", icon: Receipt },
     { key: "ANALYTICS", label: "Analytics", icon: BarChart3 },
-    { key: "FIN_REPORT", label: "Financial Report", icon: Landmark },
     { key: "PAYMENTS", label: "Payments", icon: CreditCard },
     { key: "RETURNS", label: "Returns", icon: RotateCcw },
     { key: "CUSTOMERS", label: "Customers", icon: Users },
@@ -974,11 +991,7 @@ export default function BranchManagerSalesView({
             data-testid="bm-branch-select"
             className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500 max-w-xs"
           >
-            {businesses.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name} ({b.code})
-              </option>
-            ))}
+            <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} includeAll={false} showCode />
           </select>
         </div>
       )}
@@ -1074,6 +1087,70 @@ export default function BranchManagerSalesView({
                 </div>
               )}
 
+              {/* ── Boutique size/colour chooser (opened from a product tile) ── */}
+              {variantPickerInv && (
+                <div className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4" data-testid="pos-variant-modal">
+                  <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-white truncate">{variantPickerInv.name}</div>
+                        <div className="text-[10px] text-slate-400">
+                          Choose size &amp; colour — {formatMoney(variantPickerInv.sellingPriceGhs, currentCurrency)} per {variantPickerInv.unit}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setVariantPickerInv(null); setVariantPickSel(null); }}
+                        className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="p-4">
+                      <ProductVariantPicker
+                        product={{ id: variantPickerInv.id, variantOptions: { sizes: [], colors: [], variants: variantsOfItem(variantPickerInv.id).map((v: any) => ({ id: Number(v.id), size: v.size || null, color: v.color || null, sizeSystem: v.sizeSystem || null, available: Number(v.quantity) || 0, inStock: (Number(v.quantity) || 0) > 0 })) } }}
+                        value={variantPickSel}
+                        onChange={setVariantPickSel}
+                        tone="dark"
+                        testidPrefix="pos"
+                      />
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setVariantPickerInv(null); setVariantPickSel(null); }}
+                          className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!(variantPickSel?.size || variantPickSel?.color)}
+                          onClick={() => {
+                            const inv = variantPickerInv;
+                            const picked = variantPickSel
+                              ? variantsOfItem(inv.id).find(
+                                  (v: any) => (v.size || null) === (variantPickSel.size || null) && (v.color || null) === (variantPickSel.color || null),
+                                )
+                              : null;
+                            if (!picked) {
+                              setSaleError("Choose an in-stock size/colour for this product.");
+                              return;
+                            }
+                            addToCart(inv, picked);
+                            setVariantPickerInv(null);
+                            setVariantPickSel(null);
+                          }}
+                          className="flex-1 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-xs font-black"
+                          data-testid="pos-variant-confirm"
+                        >
+                          Add to Cart
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* ── Product Picker ── */}
               <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-700/70 mb-3">
@@ -1094,13 +1171,24 @@ export default function BranchManagerSalesView({
                 {filteredProducts.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
                     {filteredProducts.map((inv: any) => {
-                      const inCart = cart.find((c) => c.inventoryId === inv.id);
+                      const itemVariants = variantsOfItem(inv.id);
+                      const inCart = cart.some((c) => c.inventoryId === inv.id);
+                      const shownQty = itemVariants.length
+                        ? itemVariants.reduce((sum: number, v: any) => sum + (Number(v.quantity) || 0), 0)
+                        : inv.quantity;
                       return (
                         <button
                           key={inv.id}
                           type="button"
-                          onClick={() => addToCart(inv)}
-                          disabled={inv.quantity <= 0}
+                          onClick={() => {
+                            if (itemVariants.length > 0) {
+                              setVariantPickSel(null);
+                              setVariantPickerInv(inv);
+                              return;
+                            }
+                            addToCart(inv);
+                          }}
+                          disabled={shownQty <= 0}
                           className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition text-xs ${
                             inCart ? "bg-emerald-500/10 border-emerald-500/40" : "bg-slate-900/60 border-slate-700 hover:border-slate-500"
                           } disabled:opacity-40`}
@@ -1115,7 +1203,12 @@ export default function BranchManagerSalesView({
                           </div>
                           <div className="text-right shrink-0">
                             <div className="font-bold text-emerald-400">{formatMoney(inv.sellingPriceGhs, currentCurrency)}</div>
-                            <div className="text-[10px] text-slate-400">{inv.quantity} {inv.unit} avail</div>
+                            <div className="text-[10px] text-slate-400">
+                              {shownQty} {inv.unit} avail
+                              {itemVariants.length > 0 && (
+                                <span className="ml-1 text-amber-300 font-bold">· sizes/colours</span>
+                              )}
+                            </div>
                           </div>
                         </button>
                       );
@@ -1139,13 +1232,20 @@ export default function BranchManagerSalesView({
                 {cart.length > 0 ? (
                   <div className="space-y-2">
                     {cart.map((item) => (
-                      <div key={item.inventoryId} className="p-3 rounded-lg border border-slate-700 bg-slate-900/60 space-y-2">
+                      <div key={cartKeyOf(item.inventoryId, item.variantId)} className="p-3 rounded-lg border border-slate-700 bg-slate-900/60 space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="min-w-0 flex-1 mr-2">
-                            <div className="text-xs font-bold text-slate-100 truncate">{item.name}</div>
+                            <div className="text-xs font-bold text-slate-100 truncate">
+                              {item.name}
+                              {item.variantLabel && (
+                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/40 text-[9px] font-bold text-amber-200" data-testid="pos-cart-variant">
+                                  {item.variantLabel}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-slate-400">{item.sku} • {item.category} • {item.availableQty} {item.unit} in stock</div>
                           </div>
-                          <button type="button" onClick={() => removeFromCart(item.inventoryId)} className="p-1 rounded hover:bg-rose-500/20 text-rose-400 shrink-0">
+                          <button type="button" onClick={() => removeFromCart(cartKeyOf(item.inventoryId, item.variantId))} className="p-1 rounded hover:bg-rose-500/20 text-rose-400 shrink-0">
                             <X className="w-4 h-4" />
                           </button>
                         </div>
@@ -1154,7 +1254,7 @@ export default function BranchManagerSalesView({
                           {/* Quantity */}
                           <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Qty (max {item.availableQty})</label>
-                            <input type="number" min={1} max={item.availableQty} value={item.quantity} onChange={(e) => updateCartQty(item.inventoryId, Number(e.target.value))} className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-white text-xs text-center" />
+                            <input type="number" min={1} max={item.availableQty} value={item.quantity} onChange={(e) => updateCartQty(cartKeyOf(item.inventoryId, item.variantId), Number(e.target.value))} className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-white text-xs text-center" />
                           </div>
                           {/* Unit Price */}
                           <div>
@@ -1169,7 +1269,7 @@ export default function BranchManagerSalesView({
                                   setSaleError("Only Owner or General Manager can override product prices.");
                                   return;
                                 }
-                                updateCartPrice(item.inventoryId, Number(e.target.value));
+                                updateCartPrice(cartKeyOf(item.inventoryId, item.variantId), Number(e.target.value));
                               }}
                               className={`w-full px-2 py-1.5 bg-slate-800 border rounded text-white text-xs text-right ${
                                 item.isCustomPrice ? "border-amber-500/60" : "border-slate-700"
@@ -1191,7 +1291,7 @@ export default function BranchManagerSalesView({
                             <label className="block text-[10px] text-amber-300 mb-0.5">
                               Reason for price change (original: {formatMoney(item.originalPrice, currentCurrency)})
                             </label>
-                            <input type="text" value={item.customPriceReason} onChange={(e) => updateCartPriceReason(item.inventoryId, e.target.value)} placeholder="e.g. Bulk discount approved by manager" className="w-full px-2 py-1 bg-slate-800 border border-amber-500/40 rounded text-white text-[11px]" />
+                            <input type="text" value={item.customPriceReason} onChange={(e) => updateCartPriceReason(cartKeyOf(item.inventoryId, item.variantId), e.target.value)} placeholder="e.g. Bulk discount approved by manager" className="w-full px-2 py-1 bg-slate-800 border border-amber-500/40 rounded text-white text-[11px]" />
                           </div>
                         )}
                       </div>
@@ -1867,37 +1967,10 @@ export default function BranchManagerSalesView({
             </div>
           )}
 
-          {/* ~~~~~~~~~~ FINANCIAL REPORT (complete, live-linked) ~~~~~~~~~~ */}
-          {activeSubTab === "FIN_REPORT" && (
-            <FinancialReportSection
-              mode="business"
-              businessInfo={activeBiz}
-              businessMetric={activeBizMetrics}
-              transactions={transactions}
-              inventory={inventory}
-              customers={customers}
-              salesDocuments={salesDocuments}
-              currentCurrency={currentCurrency}
-              accent="emerald"
-              testid="fin-report-branch"
-              aiModuleKey="SALES_CENTER"
-              opsLinks={[
-                {
-                  label: "Invoices issued",
-                  value: String(branchInvoices.length),
-                  note: `${branchInvoices.filter((i: any) => i.status === "PAID").length} fully paid`,
-                  tone: "emerald",
-                },
-                {
-                  label: "Quotations open",
-                  value: String(branchQuotations.filter((q: any) => !["CONVERTED", "REJECTED", "EXPIRED"].includes(q.status)).length),
-                  tone: "sky",
-                },
-              ]}
-            />
-          )}
+          {/* The Financial Report tab used to be a third entry point to the same
+              FinancialReportSection that Finance & Reports already renders (unit scope).
+              The report lives there once, for both scopes — this tab is retired. */}
 
-          {/* ~~~~~~~~~~ PAYMENTS ~~~~~~~~~~ */}
           {activeSubTab === "PAYMENTS" && (
             <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl">
               <div className="flex items-center space-x-2 pb-4 border-b border-slate-700/70">
@@ -2208,59 +2281,24 @@ export default function BranchManagerSalesView({
           {activeSubTab === "CUSTOMERS" && (
             <div className="space-y-4">
               <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-xl">
-                <div className="flex items-center space-x-2 pb-4 border-b border-slate-700/70">
-                  <UserPlus className="w-5 h-5 text-amber-400" />
-                  <h3 className="text-base font-bold text-white">Add New Customer</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-700/70">
+                  <div className="flex items-center space-x-2">
+                    <UserPlus className="w-5 h-5 text-amber-400" />
+                    <h3 className="text-base font-bold text-white">Add New Customer</h3>
+                  </div>
+                  {onNavigate && (
+                    <button type="button" onClick={() => onNavigate("CUSTOMERS")}
+                      data-testid="bm-open-crm"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-amber-500/50 text-[11px] font-bold text-slate-300 hover:text-amber-300 transition">
+                      Full Customers &amp; CRM <ArrowUpRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
-                <form onSubmit={handleCreateCustomer} className="mt-4 space-y-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Full Name *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={newCustName}
-                      onChange={(e) => setNewCustName(e.target.value)}
-                      placeholder="Customer full name"
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Phone Number
-                      </label>
-                      <input
-                        type="text"
-                        value={newCustPhone}
-                        onChange={(e) => setNewCustPhone(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">
-                        Type
-                      </label>
-                      <select
-                        value={newCustType}
-                        onChange={(e) => setNewCustType(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm"
-                      >
-                        <option value="RETAIL">Retail</option>
-                        <option value="WHOLESALE">Wholesale</option>
-                        <option value="CORPORATE">Corporate</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isCreatingCustomer}
-                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg transition disabled:opacity-50"
-                  >
-                    {isCreatingCustomer ? "Creating..." : "Create Customer"}
-                  </button>
-                </form>
+                <CustomerQuickAddForm
+                  businessId={activeBiz?.id}
+                  onCreated={onRefreshData}
+                  testidPrefix="custq"
+                />
               </div>
 
               {hasManyCustomers && (
@@ -2306,9 +2344,18 @@ export default function BranchManagerSalesView({
           {/* ~~~~~~~~~~ INVENTORY ~~~~~~~~~~ */}
           {activeSubTab === "INVENTORY" && (
             <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl overflow-hidden shadow-xl">
-              <div className="px-5 py-4 border-b border-slate-700 flex items-center space-x-2">
-                <Package className="w-5 h-5 text-cyan-400" />
-                <h3 className="text-base font-bold text-white">Branch Inventory Oversight</h3>
+              <div className="px-5 py-4 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <Package className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-base font-bold text-white">Branch Inventory Oversight</h3>
+                </div>
+                {onNavigate && (
+                  <button type="button" onClick={() => onNavigate("INVENTORY")}
+                    data-testid="bm-open-inventory"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-cyan-500/50 text-[11px] font-bold text-slate-300 hover:text-cyan-300 transition">
+                    Inventory &amp; Stock <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs sm:text-sm">

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
 import {
   Sliders,
   TrendingUp,
@@ -18,6 +19,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 interface ScenarioPlannerViewProps {
   scenarios: any[];
   businesses: any[];
+  /** the caller's own organization (groups the unit picker "My Workspace first"). */
+  myOrgId?: number;
   currentCurrency: CurrencyCode;
   onRefreshScenarios: () => void;
 }
@@ -25,6 +28,7 @@ interface ScenarioPlannerViewProps {
 export default function ScenarioPlannerView({
   scenarios,
   businesses,
+  myOrgId,
   currentCurrency,
   onRefreshScenarios,
 }: ScenarioPlannerViewProps) {
@@ -72,7 +76,7 @@ export default function ScenarioPlannerView({
   };
 
   const getBusinessName = (id: number | null) => {
-    if (!id) return "All Businesses (Enterprise)";
+    if (!id) return "All units (enterprise)";
     const b = businesses.find((x) => x.id === id);
     return b ? b.name : "Operating Unit";
   };
@@ -182,12 +186,7 @@ export default function ScenarioPlannerView({
               data-testid="scen-scope"
               title="Scope of the simulation baseline"
             >
-              <option value="ALL">All Businesses (Enterprise)</option>
-              {businesses.map((b) => (
-                <option key={b.id} value={String(b.id)}>
-                  {b.name}
-                </option>
-              ))}
+              <UnitScopeOptions units={businesses} myOrgId={myOrgId} allValue="ALL" allLabel="All units (enterprise)" showCode />
             </select>
             <select
               value={liveVariable}
@@ -451,12 +450,7 @@ export default function ScenarioPlannerView({
                   onChange={(e) => setTargetBusinessId(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                 >
-                  <option value="">All Businesses (Enterprise-Wide)</option>
-                  {businesses.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.branchLocation})
-                    </option>
-                  ))}
+                  <UnitScopeOptions units={businesses} myOrgId={myOrgId} allLabel="All units (enterprise-wide)" />
                 </select>
               </div>
 

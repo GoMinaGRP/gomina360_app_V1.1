@@ -193,15 +193,33 @@ async function sectionQ(browser, cookies) {
   await uiLogin(page, OWNER);
   await sleep(1500);
 
+  // N5: the rail previews 5 units; nine fresh units therefore need the
+  // "Show all N units" disclosure before they are reachable by name.
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="nav-biz-show-all"]');
+    if (btn && (btn.textContent || "").includes("Show all")) btn.click();
+  });
+  await sleep(700);
+
   for (const c of CATEGORIES) {
-    // open the unit from the sidebar by its name
+    // open the unit from the sidebar by its name — and PROVE it opened: the
+    // sidebar preview/scroll changes made a bare "found some button with this
+    // text" click silently hit an unrelated element (an alert card), so the
+    // suite used to sail on and then fail every tab check.
     const opened = await page.evaluate((name) => {
-      const btn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").includes(name));
+      const btn = document.querySelector(`[data-testid="nav-sidebar"] [data-biz-code]`) &&
+        [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-biz-code]')]
+          .find((b) => (b.textContent || "").includes(name));
       if (btn) { btn.click(); return true; }
       return false;
     }, c.name);
     if (!opened) { ok(`Q.${c.category}: openable from the sidebar`, false); continue; }
     await sleep(2200);
+    const arrived = await page.evaluate((name) => {
+      const txt = document.body.innerText || "";
+      return txt.includes(name);
+    }, c.name);
+    if (!arrived) { ok(`Q.${c.category}: unit dashboard opened`, false, "navigation did not land on the unit"); continue; }
     let clean = true;
     for (const tab of c.tabs) {
       const clicked = await clickExact(page, tab);
@@ -288,14 +306,19 @@ async function sectionS(browser) {
   baseline.stockProbeQty = Number(eggsLike.stockQty ?? eggsLike.qty ?? eggsLike.available ?? 0) || 0;
   baseline.stockProbeQty = ((await pg.query(`SELECT quantity::float q FROM inventory_items WHERE id=$1`, [eggsLike.id])).rows[0] || {}).q ?? baseline.stockProbeQty;
 
-  const land = await page.evaluate(() => ({
+  const shopChipCount = `[...document.querySelectorAll('[data-testid^="oo-biz-"]')]
+    .filter((el) => !/-(area|dist|out)-/.test(el.dataset.testid) && el.dataset.testid !== "oo-biz-all").length`;
+  const sectionCount = `[...document.querySelectorAll('[data-testid^="oo-catsec-"]')]
+    .filter((el) => !/count/.test(el.dataset.testid)).length`;
+  const land = await page.evaluate((shops, secs) => ({
     allChip: !!document.querySelector('[data-testid="oo-biz-all"]'),
-    groups: [...document.querySelectorAll('[data-testid^="oo-bizsec-"]')].length,
+    groups: eval(shops),
+    sections: eval(secs),
     cards: document.querySelectorAll('[data-testid^="oo-prod-"]').length,
     chips: [...document.querySelectorAll('[data-testid^="oo-cat-"]')].map((el) => el.textContent.trim()),
-  }));
-  ok("S1 the storefront lands on a ONE-PAGE all-businesses catalog by default",
-    land.allChip && land.groups >= 4, JSON.stringify(land));
+  }), shopChipCount, sectionCount);
+  ok("S1 the storefront lands on a ONE-PAGE all-shops catalog by default (category-first)",
+    land.allChip && land.groups >= 4 && land.sections >= 2, JSON.stringify(land));
   // Category chips span MULTIPLE businesses (poultry + building materials is
   // asserted strictly only when those chips exist in the current seed).
   const allChipPresent = await page.evaluate(() => !!document.querySelector('[data-testid="oo-cat-ALL"]'));
@@ -303,22 +326,39 @@ async function sectionS(browser) {
   const strictPair = land.chips.some((c) => /poultry/i.test(c)) && land.chips.some((c) => /cement|block|hardware|building/i.test(c));
   ok("S1b category chips span EVERY business (≥2 departments across the grid)",
     allChipPresent && (strictPair || distinctChips.size >= 3), land.chips.join("|"));
-  const groupsHaveHeaders = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid^="oo-bizsec-"]')].every((g) =>
-      /· \d+ product/.test(g.textContent || "") && g.querySelector('[data-testid^="oo-catsec-"]')),
-  );
-  ok("S2 every business group carries its header + category sections inside", groupsHaveHeaders);
+  // Product-first IA: the spine is CATEGORY sections (each counting its own
+  // cards), and every card still names the shop that sells it.
+  const attribution = await page.evaluate((secs) => ({
+    countsOk: eval(secs) > 0 && [...document.querySelectorAll('[data-testid^="oo-catsec-"]')]
+      .filter((el) => !/count/.test(el.dataset.testid))
+      .every((sec) => {
+        const name = sec.dataset.testid.replace("oo-catsec-", "");
+        const badge = document.querySelector(`[data-testid="oo-catsec-count-${name}"]`);
+        const n = Number(((badge && badge.textContent) || "").match(/\d+/)?.[0] ?? -1);
+        return n === sec.querySelectorAll('[data-testid^="oo-prod-"]').length;
+      }),
+    cards: document.querySelectorAll('[data-testid^="oo-prod-"]').length,
+    named: [...document.querySelectorAll('[data-testid^="oo-prod-"]')].filter((c) => {
+      const id = c.dataset.testid.replace("oo-prod-", "");
+      return !!document.querySelector(`[data-testid="oo-sold-by-shop-${id}"]`);
+    }).length,
+  }), sectionCount);
+  ok("S2 every category section counts its own cards, and every card is attributed to its shop",
+    attribution.countsOk && attribution.cards >= 5 && attribution.named === attribution.cards,
+    JSON.stringify(attribution));
 
   // Global search filters across the entire grid — dynamic unique term.
   await page.type('[data-testid="oo-search"]', searchTerm);
   await sleep(800);
-  const afterSearch = await page.evaluate((p, q) => ({
-    groups: [...document.querySelectorAll('[data-testid^="oo-bizsec-"]')].length,
+  const afterSearch = await page.evaluate((p, q, secs) => ({
+    groups: eval(secs),
+    summary: (document.querySelector('[data-testid="oo-search-summary"]')?.textContent || "").trim(),
     eggsShown: !!document.querySelector(`[data-testid="${p}"]`),
     otherShown: !!document.querySelector(`[data-testid="${q}"]`),
-  }), tid(eggsLike), tid(hwLike));
-  ok("S3 search narrows the whole multi-business grid (unique term → one group, that product only)",
-    afterSearch.groups === 1 && afterSearch.eggsShown && !afterSearch.otherShown, JSON.stringify(afterSearch));
+  }), tid(eggsLike), tid(hwLike), sectionCount);
+  ok("S3 search narrows the whole multi-shop grid (unique term → one category section, that product only, result bar shown)",
+    afterSearch.groups === 1 && afterSearch.eggsShown && !afterSearch.otherShown && /product/i.test(afterSearch.summary),
+    JSON.stringify(afterSearch));
   await page.$eval('[data-testid="oo-search"]', (el) => {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
     setter.call(el, "");
@@ -332,16 +372,21 @@ async function sectionS(browser) {
   await sleep(800);
   const focused = await page.evaluate((p, q) => ({
     singleChips: document.querySelectorAll('[data-testid="oo-cat-ALL"]') ? 1 : 0,
-    groups: [...document.querySelectorAll('[data-testid^="oo-bizsec-"]')].length,
+    soldBy: document.querySelectorAll('[data-testid^="oo-sold-by-shop-"]').length,
     hw: !!document.querySelector(`[data-testid="${p}"]`),
     eggs: !!document.querySelector(`[data-testid="${q}"]`),
   }), tid(hwLike), tid(eggsLike));
-  ok("S4 a group's Focus chip narrows to that single shop (other shop's product leaves the grid)",
-    focused.groups === 0 && focused.hw && !focused.eggs, JSON.stringify(focused));
+  ok("S4 the shop chip narrows to that single shop (other shop's product leaves the grid, attribution no longer needed)",
+    focused.singleChips === 1 && focused.hw && !focused.eggs && focused.soldBy === 0, JSON.stringify(focused));
   await page.evaluate(() => document.querySelector('[data-testid="oo-biz-all"]')?.click());
   await sleep(800);
-  const backAll = await page.evaluate(() => document.querySelectorAll('[data-testid^="oo-bizsec-"]').length);
-  ok("S5 the All businesses chip restores the one-page grid", backAll >= 4, `groups=${backAll}`);
+  const backAll = await page.evaluate((shops, secs) => ({
+    groups: eval(shops),
+    sections: eval(secs),
+    soldBy: document.querySelectorAll('[data-testid^="oo-sold-by-shop-"]').length,
+  }), shopChipCount, sectionCount);
+  ok("S5 the All shops chip restores the one-page multi-shop grid",
+    backAll.groups >= 4 && backAll.sections >= 2 && backAll.soldBy > 0, JSON.stringify(backAll));
 
   // Cross-business cart: confirm switches, deny keeps
   const clickTid = async (tid) => {

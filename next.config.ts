@@ -50,6 +50,17 @@ const securityHeaders = [
     : []),
 ];
 
+/**
+ * Stored image bytes are DATA, not documents. `/api/menu/photo` and
+ * `/api/branding` stream caller-supplied blobs (legacy rows can hold an
+ * `image/svg+xml`, which is a scriptable document), so if a user opens one of
+ * those URLs directly it must not be able to load subresources or run script
+ * in the app's origin. These paths therefore carry the lockdown CSP instead of
+ * the app CSP above. Embedding them via `<img src>` is unaffected — a CSP on an
+ * image response does not constrain the page that paints it.
+ */
+const imageLockdownCsp = "default-src 'none'; sandbox; img-src 'none'";
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "*.e2b.app",
@@ -57,7 +68,13 @@ const nextConfig: NextConfig = {
     "localhost",
   ],
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // Later, narrower rules win for the headers they set (the routes set the
+      // same policy themselves as a second layer).
+      { source: "/api/menu/photo", headers: [{ key: "Content-Security-Policy", value: imageLockdownCsp }] },
+      { source: "/api/branding", headers: [{ key: "Content-Security-Policy", value: imageLockdownCsp }] },
+    ];
   },
 };
 

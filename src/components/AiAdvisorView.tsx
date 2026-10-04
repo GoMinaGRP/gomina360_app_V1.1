@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
 import {
   Sparkles,
   TrendingUp,
@@ -17,6 +18,8 @@ import { CurrencyCode, formatMoney } from "@/lib/currency";
 interface AiAdvisorViewProps {
   insights: any[];
   businesses: any[];
+  /** the caller's own organization (groups the unit picker "My Workspace first"). */
+  myOrgId?: number;
   currentCurrency: CurrencyCode;
   onRefreshInsights: () => void;
 }
@@ -24,6 +27,7 @@ interface AiAdvisorViewProps {
 export default function AiAdvisorView({
   insights,
   businesses,
+  myOrgId,
   currentCurrency,
   onRefreshInsights,
 }: AiAdvisorViewProps) {
@@ -115,12 +119,7 @@ export default function AiAdvisorView({
               onChange={(e) => setSelectedBizId(e.target.value)}
               className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-200"
             >
-              <option value="ALL">Target: Enterprise-Wide</option>
-              {businesses.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
+              <UnitScopeOptions units={businesses} myOrgId={myOrgId} allValue="ALL" allLabel="Target: Enterprise-Wide" />
             </select>
           </div>
         </div>

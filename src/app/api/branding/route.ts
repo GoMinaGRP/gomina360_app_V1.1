@@ -62,7 +62,14 @@ export async function GET(request: Request) {
     if (request.headers.get("if-none-match") === etag) {
       return new Response(null, {
         status: 304,
-        headers: { ETag: etag, "Cache-Control": "private, max-age=604800, stale-while-revalidate=86400" },
+        headers: {
+          ETag: etag,
+          "Cache-Control": "private, max-age=604800, stale-while-revalidate=86400",
+          // Logo blobs ship as JSON strings (data URLs); the lockdown matches
+          // /api/menu/photo so a stored SVG can never run as a document.
+          "Content-Security-Policy": "default-src 'none'; sandbox; img-src 'none'",
+          "X-Content-Type-Options": "nosniff",
+        },
       });
     }
 
@@ -82,6 +89,8 @@ export async function GET(request: Request) {
           "Content-Encoding": "gzip",
           "Content-Length": String(gz.length),
           Vary: "Accept-Encoding",
+          "Content-Security-Policy": "default-src 'none'; sandbox; img-src 'none'",
+          "X-Content-Type-Options": "nosniff",
           ETag: etag,
           "Cache-Control": "private, max-age=604800, stale-while-revalidate=86400",
         },
@@ -92,6 +101,8 @@ export async function GET(request: Request) {
       headers: {
         "Content-Type": "application/json",
         Vary: "Accept-Encoding",
+        "Content-Security-Policy": "default-src 'none'; sandbox; img-src 'none'",
+        "X-Content-Type-Options": "nosniff",
         ETag: etag,
         "Cache-Control": "private, max-age=604800, stale-while-revalidate=86400",
       },

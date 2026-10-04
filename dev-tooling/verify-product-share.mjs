@@ -169,7 +169,8 @@ const hookPage = (page, tag) => {
     await page.waitForSelector(`[data-testid="oo-prod-${P.id}"]`, { timeout: 60000 });
 
     ok("B1 link opens focused on the product's business (not the all-shops grid)",
-      (await page.$$('[data-testid^="oo-bizsec-"]')).length === 0);
+      (await page.$$('[data-testid^="oo-sold-by-"]')).length === 0 &&
+      !!(await page.$(`[data-testid="oo-biz-${P.biz}"]`)));
 
     await page.waitForSelector('[data-testid="oo-lightbox"]', { timeout: 15000 });
     const lbText = await page.$eval('[data-testid="oo-lightbox"]', (el) => (el.textContent || "").replace(/\s+/g, " "));

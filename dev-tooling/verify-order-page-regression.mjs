@@ -253,6 +253,97 @@ try {
   ok("delivery order placed end-to-end", !!code, placeErr ? `oo-error: ${placeErr}` : body.slice(0, 220));
   if (code) console.log(`   tracking code: ${code}`);
 
+  /* ═══ ENQ · product ↔ selling shop enquiry links (P2) ══════════════════
+     Every product must stay clearly linked to ITS OWN selling shop with that
+     shop's own contact options (customerHelpPhone → contactPhone), never the
+     platform helpdesk and never another shop's number. */
+  console.log("\n— ENQ · product enquiry links —");
+  const menu = await fetch(`${BASE}/api/menu`).then((r) => r.json()).catch(() => null);
+  const shopOf = {};
+  for (const b of menu?.businesses || [])
+    for (const pr of b.products || []) shopOf[pr.id] = b;
+  await page.goto(`${BASE}/order`, { waitUntil: "networkidle2", timeout: 60000 });
+  await page.waitForSelector('[data-testid^="oo-prod-"]', { timeout: 30000 });
+  const attributed = await page.evaluate((map) => {
+    const out = { cards: 0, missing: [], wrong: [], noDir: [] };
+    const dg = (v) => String(v || "").replace(/\D/g, "");
+    for (const card of document.querySelectorAll('[data-testid^="oo-prod-"]')) {
+      const id = Number(card.dataset.testid.replace("oo-prod-", ""));
+      const shop = map[id];
+      out.cards++;
+      if (!shop) { out.missing.push(id); continue; }
+      const call = card.querySelector(`[data-testid="oo-call-${id}"]`);
+      const wa = card.querySelector(`[data-testid="oo-wa-${id}"]`);
+      const dir = card.querySelector(`[data-testid="oo-dir-${id}"]`);
+      const raw = dg(shop.customerHelpPhone || shop.contactPhone || "");
+      // WhatsApp wants international format; the tel: link keeps the raw number.
+      const intl = !raw ? "" : raw.startsWith("233") ? raw : raw.startsWith("0") ? "233" + raw.slice(1) : raw.length === 9 ? "233" + raw : raw;
+      if (raw) {
+        if (!call || dg(call.getAttribute("href")) !== raw) out.wrong.push(`call:${id}`);
+        if (!wa || !dg(wa.getAttribute("href")).startsWith(intl)) out.wrong.push(`wa:${id}`);
+        if (!/\?text=/.test(wa?.getAttribute("href") || "")) out.wrong.push(`watext:${id}`);
+      }
+      const hasLoc = (shop.gpsLat != null && shop.gpsLng != null) ||
+        (shop.pickupLocations || []).some((p) => p && (p.lat != null || (p.address || "").trim()));
+      if (hasLoc && !dir) out.noDir.push(id);
+      if (!call && !wa && !dir) out.missing.push(id);
+    }
+    return out;
+  }, shopOf);
+  ok("ENQ1 every all-shops card links to its OWN shop's phone/WhatsApp/directions (no cross-shop or helpdesk leak)",
+    attributed.cards >= 5 && attributed.missing.length === 0 && attributed.wrong.length === 0 && attributed.noDir.length === 0,
+    JSON.stringify(attributed).slice(0, 200));
+  const waMsg = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid^="oo-wa-"]');
+    return el ? decodeURIComponent(el.getAttribute("href") || "") : "";
+  });
+  ok("ENQ2 the WhatsApp enquiry names the item (shop + product + SKU, ready to send)",
+    /I would like to ask about/.test(waMsg) && /GoMina 360/.test(waMsg), waMsg.slice(0, 160));
+
+  await page.evaluate(() => document.querySelector('[data-testid^="oo-photo-"]')?.click());
+  await page.waitForSelector('[data-testid="oo-lightbox"]', { timeout: 15000 });
+  await sleep(700);
+  const lb = await page.evaluate(() => {
+    const ask = document.querySelector('[data-testid^="oo-ask-"]');
+    return {
+      seller: !!document.querySelector('[data-testid="oo-lightbox-seller"]'),
+      shop: (document.querySelector('[data-testid="oo-lightbox-shop"]') || {}).textContent || "",
+      call: (document.querySelector('[data-testid="oo-lightbox-call"]') || {}).getAttribute?.("href") || "",
+      dir: (document.querySelector('[data-testid="oo-lightbox-dir"]') || {}).getAttribute?.("href") || "",
+      askTid: ask?.dataset.testid || "",
+      askHref: decodeURIComponent(ask?.getAttribute("href") || ""),
+    };
+  });
+  ok("ENQ3 the lightbox shows the selling shop with its own Call / Directions options",
+    lb.seller && lb.shop.length > 2 && lb.call.startsWith("tel:") && /maps\/dir/.test(lb.dir), JSON.stringify(lb).slice(0, 200));
+  ok("ENQ4 “Ask about this item” opens WhatsApp with the item's own storefront link",
+    /^oo-ask-\d+$/.test(lb.askTid) && /wa\.me\//.test(lb.askHref) && /\/order\?biz=\d+&p=\d+/.test(lb.askHref) &&
+    /I would like to ask about/.test(lb.askHref), lb.askHref.slice(0, 200));
+  await page.evaluate(() => document.querySelector('[data-testid="oo-lightbox-close"]')?.click());
+  await sleep(400);
+
+  // Focused shop → slim seller strip; all-shops view → no strip (cards carry it).
+  await page.evaluate(() => document.querySelector('[data-testid="oo-biz-1"]')?.click());
+  await sleep(1000);
+  const focused = await page.evaluate(() => ({
+    strip: !!document.querySelector('[data-testid="oo-shop-strip"]'),
+    name: (document.querySelector('[data-testid="oo-shop-strip-name"]') || {}).textContent || "",
+    call: (document.querySelector('[data-testid="oo-shop-call"]') || {}).getAttribute?.("href") || "",
+    dir: (document.querySelector('[data-testid="oo-shop-dir"]') || {}).getAttribute?.("href") || "",
+    address: (document.querySelector('[data-testid="oo-shop-address"]') || {}).textContent || "",
+  }));
+  ok("ENQ5 focusing a shop shows one slim seller strip (its phone, address & directions) — not the org helpdesk",
+    focused.strip && focused.name.length > 2 && focused.call.startsWith("tel:") && focused.dir.length > 10,
+    JSON.stringify(focused).slice(0, 200));
+  await page.evaluate(() => document.querySelector('[data-testid="oo-shop-strip-all"]')?.click());
+  await sleep(900);
+  const backAll = await page.evaluate(() => ({
+    strip: !!document.querySelector('[data-testid="oo-shop-strip"]'),
+    contactRows: document.querySelectorAll('[data-testid^="oo-contact-"]').length,
+  }));
+  ok("ENQ6 back to all shops: the strip disappears and the cards carry the contact rows again",
+    !backAll.strip && backAll.contactRows >= 5, JSON.stringify(backAll));
+
   ok("zero page errors across the whole flow", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 
   // Clean up the TEST order so live data stays untouched.

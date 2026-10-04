@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import { MapPin, AlertTriangle, RefreshCw, LocateFixed, Clock, Users, ShieldAlert, Timer } from "lucide-react";
 
 /**
@@ -153,8 +155,7 @@ export default function AttendanceReviewPanel({
           <div>
             <label className="block text-[10px] text-slate-500 mb-1">Business / Branch</label>
             <select data-testid="attl-filter-biz" value={fBiz} onChange={(e) => setFBiz(e.target.value)} className={sel}>
-              <option value="ALL">All accessible</option>
-              {businesses.map((b: any) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
+              <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allValue="ALL" showCode />
             </select>
           </div>
           <div>

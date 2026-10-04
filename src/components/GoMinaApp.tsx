@@ -4,6 +4,9 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import Navbar from "./Navbar";
 import LoginScreen from "./LoginScreen";
 import Sidebar, { ActiveTab } from "./Sidebar";
+import CommandPalette from "./nav/CommandPalette";
+import OrdersFulfilmentHub from "./OrdersFulfilmentHub";
+import { navCtx } from "@/lib/navManifest";
 import ContextNavigator, { ContextBar } from "./ContextNavigator";
 import NotificationBell from "./NotificationBell";
 import PushNotifications from "./PushNotifications";
@@ -78,8 +81,11 @@ const HardwareStoreModule = lazyMod(() => import("./HardwareStoreModule"));
 const CarWashModule = lazyMod(() => import("./CarWashModule"));
 const TelecomServicesModule = lazyMod(() => import("./TelecomServicesModule"));
 const TransportModule = lazyMod(() => import("./TransportModule"));
+const BoutiqueModule = lazyMod(() => import("./BoutiqueModule"));
 const BusinessDashboardModule = lazyMod(() => import("./BusinessDashboardModule"));
 const UniversalExportCenter = lazyMod(() => import("./UniversalExportCenter"));
+import { OrgDirectoryProvider } from "@/components/OrgDirectoryContext";
+import { myOrgIdOf } from "@/lib/businessScope";
 
 export default function GoMinaApp() {
   const [loading, setLoading] = useState(true);
@@ -161,6 +167,9 @@ export default function GoMinaApp() {
   const [manageBizOnlineId, setManageBizOnlineId] = useState<number | null>(null);
   // Right-side navigation & "you are here" panel — drawer below xl.
   const [contextNavOpen, setContextNavOpen] = useState(false);
+  // Left navigation: off-canvas drawer below lg + command palette (⌘K).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [isUserAccessOpen, setIsUserAccessOpen] = useState(false);
   const [isSupportOpen, setIsSupportOpen] = useState(false);
   // Bell → gear opens phone/laptop (Web Push) notification settings.
@@ -725,9 +734,74 @@ export default function GoMinaApp() {
     }
   };
 
+  // One handler for "Online Storefront & Delivery Areas" — used by the navbar
+  // account menu, the left rail's Settings section and the command palette.
+  const openOnlineOrdering = useCallback(() => {
+    if (!(currentUser?.role === "OWNER" || !!currentUser?.canManageOnline)) return;
+    const preset =
+      currentUser?.role === "BRANCH_MANAGER"
+        ? currentUser?.assignedBusinessId ?? null
+        : businesses.length === 1
+          ? scopedBusinesses[0]?.id ?? null
+          : null;
+    setManageBizOnlineId(preset);
+    setIsManageBizOpen(true);
+  }, [currentUser, businesses.length, scopedBusinesses]);
+
+  // ONE navigation context for the rail, the palette and the right rail —
+  // eligibility can never drift between surfaces again.
+  const navContext = useMemo(
+    () =>
+      navCtx(currentUser, {
+        isUnitManager: businessManageIdsOf(currentUser).length > 0,
+        auditEligible,
+        hasSupportEditor: true,
+        hasManageBusinesses: true,
+        hasOnlineOrdering: currentUser?.role === "OWNER" || !!currentUser?.canManageOnline,
+        advisorCount: usersList.some((u: any) => u?.role === "FARM_ADVISOR") ? 1 : 0,
+      }),
+    [currentUser, auditEligible, usersList],
+  );
+
+  // ⌘K / Ctrl-K (and "/" outside a text field) opens the command palette.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if ((ev.key === "k" || ev.key === "K") && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        setPaletteOpen((v) => !v);
+        return;
+      }
+      if (ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+        ev.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const runPaletteAction = (action: "support" | "manageUnits" | "onlineOrdering") => {
+    if (action === "support") setIsSupportOpen(true);
+    else if (action === "manageUnits") {
+      setManageBizOnlineId(null);
+      setIsManageBizOpen(true);
+    } else if (action === "onlineOrdering") openOnlineOrdering();
+  };
+
   const renderActiveView = () => {
     const isExecutive =
       currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
+    // Deep links from the branch workspace into the canonical enterprise modules
+    // (Customers & CRM / Inventory & Stock) are offered whenever the module guard
+    // below would let that user open them.
+    const canOpenEnterpriseModules = isExecutive || businessManageIdsOf(currentUser).length > 0;
     const isBranchManager = currentUser?.role === "BRANCH_MANAGER";
 
     // ── Farm Advisor workspace ─────────────────────────────────────────
@@ -789,7 +863,13 @@ export default function GoMinaApp() {
       return (
         <AuditCommandCenter
           currentUser={currentUser}
-          businesses={scopedBusinesses}
+          // The FULL accessible list (not lens-filtered): the Audit center's own
+          // Owner control IS the Organization Lens for a Super Admin, so it must
+          // be able to offer every owner — while starting on "My Workspace".
+          businesses={businesses}
+          organizations={orgDirectory}
+          orgLens={orgLens}
+          onLensChange={setOrgLens}
           currentCurrency={currentCurrency}
           focusIssueId={auditFocusIssue}
           onFocusHandled={() => setAuditFocusIssue(null)}
@@ -898,6 +978,8 @@ export default function GoMinaApp() {
             metrics={liveMetrics}
             currentCurrency={currentCurrency}
             isOnline={isOnline}
+
+            onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
             onRefreshData={refreshAllData}
           />
         );
@@ -919,6 +1001,8 @@ export default function GoMinaApp() {
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
+
+          onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
           onRefreshData={refreshAllData}
           isExecutive
         />
@@ -1022,6 +1106,8 @@ export default function GoMinaApp() {
           metrics={liveMetrics}
           currentCurrency={currentCurrency}
           isOnline={isOnline}
+
+          onNavigate={canOpenEnterpriseModules ? setActiveTab : undefined}
           onRefreshData={refreshAllData}
         />
       );
@@ -1102,8 +1188,11 @@ export default function GoMinaApp() {
       Transportation: "TRANSPORT",
       "Transport & Logistics": "TRANSPORT",
       Logistics: "TRANSPORT",
+      Boutique: "BOUTIQUE",
+      "Boutique & Fashion": "BOUTIQUE",
+      "Fashion & Apparel": "BOUTIQUE",
     };
-    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT"];
+    const KNOWN_PREFIXES = ["POULTRY", "BLOCK", "TECH", "FOOD", "AQUA", "LIVESTOCK", "WASH", "HARDWARE", "TELECOM", "TRANSPORT", "BOUTIQUE"];
     const tabCandidates = scopedBusinesses.filter((b) => b.code === activeTab);
     const tabBiz = tabCandidates.find((b) => b.id === lastOpenedBizIdRef.current) ?? tabCandidates[0];
     if (tabBiz) {
@@ -1313,6 +1402,29 @@ export default function GoMinaApp() {
         );
       }
 
+      // Boutique (fashion / clothing / apparel) units get the dedicated
+      // boutique dashboard: size × colour stock, boutique POS, customer
+      // orders, low stock and best-selling products/sizes/colours — all on
+      // the shared Inventory, Sales, Finance, Orders, Reports and Audit
+      // backbone.
+      if (moduleKey === "BOUTIQUE") {
+        return (
+          <BoutiqueModule
+            currentUser={currentUser}
+            businessInfo={bizInfo}
+            businessMetrics={bizMetric}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            suppliers={scopedSuppliers}
+            transactions={scopedTransactions}
+            assets={scopedAssets}
+            employees={scopedEmployees}
+            currentCurrency={currentCurrency}
+            onRefreshData={refreshAllData}
+          />
+        );
+      }
+
       // Transportation / fleet units get the full fleet module (trips, GPS…).
       if (moduleKey === "TRANSPORT") {
         return (
@@ -1375,14 +1487,6 @@ export default function GoMinaApp() {
     // get the same console embedded as a tab inside their sales workspace.
     // Pre-Orders hub (Setup + Procurement + Guide) — executives see every
     // business; Manage-Unit grantees stay scoped to their server-vetted units.
-    if (activeTab === "PREORDERS") {
-      return (
-        <PreordersHubView
-          currentUser={currentUser}
-          businesses={scopedBusinesses}
-        />
-      );
-    }
 
     // R5 — Unified BI Assistant: deterministic Q&A + the cross-module feed
     // (OWNER / GM / BM — the API enforces the same gate).
@@ -1396,18 +1500,28 @@ export default function GoMinaApp() {
       return <DocumentVaultPanel currentUser={currentUser} businesses={scopedBusinesses} />;
     }
 
-    if (activeTab === "TRACKING") {
+    // Orders & Fulfilment — ONE hub, two tabs (Live Orders + Pre-Orders &
+    // Procurement). Both screens mount exactly as they did before; only the
+    // wrapper that owns the tab strip is new.
+    if (activeTab === "TRACKING" || activeTab === "PREORDERS") {
       return (
-        <CustomerTrackingPanel
-          currentUser={currentUser}
-          businesses={scopedBusinesses}
-          currentCurrency={currentCurrency}
-          focusTrackingCode={trackingFocusCode}
-          focusTrackingId={trackingFocusId}
-          onFocusHandled={() => {
-            setTrackingFocusCode(null);
-            setTrackingFocusId(null);
-          }}
+        <OrdersFulfilmentHub
+          activeTab={activeTab}
+          onSelectTab={(t) => handleSelectTab(t as ActiveTab)}
+          live={
+            <CustomerTrackingPanel
+              currentUser={currentUser}
+              businesses={scopedBusinesses}
+              currentCurrency={currentCurrency}
+              focusTrackingCode={trackingFocusCode}
+              focusTrackingId={trackingFocusId}
+              onFocusHandled={() => {
+                setTrackingFocusCode(null);
+                setTrackingFocusId(null);
+              }}
+            />
+          }
+          preorders={<PreordersHubView currentUser={currentUser} businesses={scopedBusinesses} />}
         />
       );
     }
@@ -1448,6 +1562,7 @@ export default function GoMinaApp() {
       return (
         <AiAdvisorView
           insights={scopedAiInsights}
+          myOrgId={myOrgIdOf(currentUser)}
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshInsights={refreshAllData}
@@ -1459,6 +1574,7 @@ export default function GoMinaApp() {
       return (
         <ScenarioPlannerView
           scenarios={scopedScenarios}
+          myOrgId={myOrgIdOf(currentUser)}
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshScenarios={refreshAllData}
@@ -1562,20 +1678,10 @@ export default function GoMinaApp() {
         }
         onOpenOnlineOrdering={
           currentUser?.role === "OWNER" || !!currentUser?.canManageOnline
-            ? () => {
-                // Branch managers land straight on their own unit's Online
-                // panel; everyone else picks a unit from the list first.
-                const preset =
-                  currentUser?.role === "BRANCH_MANAGER"
-                    ? currentUser?.assignedBusinessId ?? null
-                    : businesses.length === 1
-                    ? scopedBusinesses[0].id
-                    : null;
-                setManageBizOnlineId(preset);
-                setIsManageBizOpen(true);
-              }
+            ? openOnlineOrdering
             : undefined
         }
+        onOpenMobileNav={() => setMobileNavOpen(true)}
         bellSlot={
           <NotificationBell
             currentUser={currentUser}
@@ -1759,7 +1865,15 @@ export default function GoMinaApp() {
         />
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      {/*
+        overflow-x-CLIP (not hidden): still clips any stray horizontal bleed,
+        but — unlike `hidden` — it does not create a scroll container, so the
+        sidebar's `position: sticky` keeps working against the page scroller.
+        Before this, the rail simply scrolled away with the page (measured:
+        top = -635px after a 700px scroll), putting the last nav rows ~1700px
+        below the fold on every laptop size.
+      */}
+      <div className="flex flex-1 overflow-x-clip">
         <Sidebar
           activeTab={activeTab}
           onSelectTab={handleSelectTab}
@@ -1772,9 +1886,23 @@ export default function GoMinaApp() {
           onOpenSupportInfo={() => setIsSupportOpen(true)}
           accessibleBusinessIds={accessibleIds}
           onOpenManageBusinesses={() => { setManageBizOnlineId(null); setIsManageBizOpen(true); }}
+          navContext={navContext}
+          mobileOpen={mobileNavOpen}
+          onCloseMobile={() => setMobileNavOpen(false)}
+          onOpenMobile={() => setMobileNavOpen(true)}
+          onOpenPalette={() => setPaletteOpen(true)}
+          /* Fail-open: only a positively-known empty advisor list hides the
+             Farm Advisors row (they are created in Users & Access). */
+          hasFarmAdvisors={usersList.some((u: any) => u?.role === "FARM_ADVISOR")}
+          onOpenOnlineOrdering={
+            currentUser?.role === "OWNER" || !!currentUser?.canManageOnline
+              ? openOnlineOrdering
+              : undefined
+          }
         />
 
-        <main className="flex-1 min-w-0 overflow-y-auto bg-slate-950/95 pb-12">
+        <OrgDirectoryProvider value={orgDirectory}>
+        <main className="flex-1 min-w-0 overflow-y-auto bg-slate-950/95 pb-12 max-lg:pb-24">
           <div data-printchrome="true" className="sticky top-0 z-30 flex items-center justify-between xl:justify-end gap-2 px-4 sm:px-6 py-2 bg-slate-950/90 backdrop-blur border-b border-slate-800/80">
             {/* Compact "you are here" bar — phones/tablets/small laptops
                 (the full right rail takes over at xl and wider). */}
@@ -1790,6 +1918,8 @@ export default function GoMinaApp() {
               activeModule={activeTab}
               currentUser={currentUser}
               businesses={scopedBusinesses}
+              organizations={orgDirectory}
+              lensLabel={activeLensOrgName}
               data={{
                 metrics: liveMetrics,
                 users: scopedUsers,
@@ -1820,7 +1950,7 @@ export default function GoMinaApp() {
               return (
                 <div
                   data-testid={`org-identity-banner-${openBiz.code}`}
-                  className={`mx-4 sm:mx-6 mt-3 flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 ${
+                  className={`mx-4 sm:mx-6 mt-3 flex flex-wrap items-center gap-2.5 rounded-xl border px-3.5 py-2.5 ${
                     mine
                       ? "bg-violet-500/10 border-violet-500/40"
                       : "bg-sky-500/10 border-sky-500/40"
@@ -1830,7 +1960,7 @@ export default function GoMinaApp() {
                     <img src={openBiz.logo} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-600 bg-slate-800" loading="lazy" decoding="async" />
                   )}
                   <div className="min-w-0">
-                    <div className="text-[11px] font-black tracking-wide text-white truncate">
+                    <div className="text-[11px] font-black tracking-wide text-white leading-snug break-words">
                       {mine ? "YOUR BUSINESS" : "OWNED BY ANOTHER OWNER"} · {orgName}
                     </div>
                     <div className={`text-[10px] ${mine ? "text-violet-300" : "text-sky-300"}`}>
@@ -1853,6 +1983,7 @@ export default function GoMinaApp() {
             })()}
           {renderActiveView()}
         </main>
+        </OrgDirectoryProvider>
 
         {/* Right-side navigation & location panel (persistent rail ≥xl,
             slide-in drawer on smaller screens) — shows current Business,
@@ -1924,6 +2055,20 @@ export default function GoMinaApp() {
         onClose={() => setIsProfilePhotoOpen(false)}
         currentUser={currentUser}
         onSaved={refreshAllData}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        ctx={navContext}
+        businesses={scopedBusinesses}
+        accessibleBusinessIds={accessibleIds}
+        currentUser={currentUser}
+        onSelectTab={(tab, bizId) => {
+          handleSelectTab(tab, bizId);
+          setPaletteOpen(false);
+        }}
+        onRunAction={runPaletteAction}
       />
 
       <ManageBusinessesModal

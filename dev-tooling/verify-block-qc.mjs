@@ -289,9 +289,15 @@ async function main() {
     check("D6 UI save landed in DB linked to batch + branch + type",
       !!r0 && r0.batch_id === "TEST-QC-B01" && r0.branch_code === "BLOCK-01" && r0.block_type === "6-INCH-SOLID",
       JSON.stringify(r0 || {}).slice(0, 300));
+    // Evidence photos are optimized in the browser before upload
+    // (src/lib/imageOptimize, preset `evidence`). Already-small sources are
+    // stored byte-for-byte in their original image format (the 1×1 PNG fixture
+    // here stays PNG), everything larger is re-encoded to JPEG — so assert an
+    // image data URL, not a specific codec.
     check("D7 evidence stored: photo + tester + density + datetime",
-      !!r0 && String(r0.photo || "").startsWith("data:image/jpeg") && r0.tester_name === "TEST Kwame QC" &&
-      Math.abs(Number(r0.density_kgm3) - 1382) < 5 && r0.tested_at, JSON.stringify(r0 || {}).slice(0, 300));
+      !!r0 && /^data:image\//.test(String(r0.photo || "")) && r0.tester_name === "TEST Kwame QC" &&
+      Math.abs(Number(r0.density_kgm3) - 1382) < 5 && r0.tested_at,
+      `photo=${String(r0?.photo || "").slice(0, 22)} · ${JSON.stringify(r0 || {}).slice(0, 220)}`);
     check("D8 verdict recorded PASS w/ measurement columns",
       !!r0 && r0.pass_fail === "PASS" && Number(r0.weight_kg) === 18.3 && Number(r0.compressive_strength_mpa) === 4.0);
 

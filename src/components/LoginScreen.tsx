@@ -50,7 +50,7 @@ export default function LoginScreen({ onSuccess, notice }: { onSuccess: (user: a
             GoMina 360
           </h1>
           <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mt-1">
-            Ghana Enterprise Command Center
+            Enterprise Command Center
           </p>
         </div>
 

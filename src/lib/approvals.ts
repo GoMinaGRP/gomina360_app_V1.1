@@ -39,7 +39,7 @@ import {
   users,
 } from "@/db/schema";
 import { auditLog } from "@/lib/audit";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { notifyApprovalDecision, notifyApprovalRequest, ownerOrgOfBusiness } from "@/lib/notify";
 import { ttlInvalidate } from "@/lib/ttlCache";
 
@@ -353,13 +353,16 @@ async function applyDecisionEffect(
     if (!Number.isFinite(newQty)) return "Adjustment payload missing newQuantity";
     const [item] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, inventoryId));
     if (!item) return "Inventory item no longer exists";
-    await db
-      .update(inventoryItems)
-      .set({
-        quantity: newQty,
-        status: computeStockStatus(newQty, Number(item.minStockThreshold || 0)),
-      })
-      .where(eq(inventoryItems.id, inventoryId));
+    // P5: ONE stock writer — an approved adjustment is a SET expressed as a delta.
+    await applyStockChange({
+      businessId: Number(item.businessId),
+      inventoryId: item.id,
+      delta: newQty - (Number(item.quantity) || 0),
+      reason: "ADJUSTMENT",
+      refType: "APPROVAL_REQUEST",
+      refId: Number(request.id) || null,
+      note: `Approved adjustment${request.targetLabel ? ` — ${request.targetLabel}` : ""}`,
+    });
     return `Stock quantity set to ${newQty} (was ${payload.oldQuantity ?? item.quantity})`;
   }
 

@@ -73,13 +73,11 @@ async function purge() {
   if (made.health.length) await q(`DELETE FROM poultry_health_records WHERE id = ANY($1)`, [made.health]);
   if (made.feedP.length) await q(`DELETE FROM poultry_feed_logs WHERE id = ANY($1)`, [made.feedP]);
   if (made.flock.length) await q(`DELETE FROM poultry_flocks WHERE id = ANY($1)`, [made.flock]);
-  await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP]);
-  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateA]);
-  await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateP]);
-  await q(`DELETE FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateA]);
-  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateA]);
-  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateP]);
-  await q(`DELETE FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP]);
+  // P3: the module checklist endpoints write the SHARED store (checklist_entries)
+  // — the per-module legacy tables are retired, so the suite cleans/sees the
+  // canonical rows (same contract: idempotent per business+date).
+  await q(`DELETE FROM checklist_entries WHERE business_id IN ($1,$2) AND checklist_date IN ($3,$4)`,
+    [BIZ_POULTRY, BIZ_AQUA, made.checklistDateP, made.checklistDateA]);
   // txns/audit rows use auto-built descriptions (MARK is NOT embedded) —
   // purge by id baseline; the suite runs alone (sequential discipline).
   await q(`DELETE FROM transactions WHERE id > $1`, [made.txnBaseline]);
@@ -156,10 +154,10 @@ async function main() {
   ok("B5 flock PATCH writes audit-trail row", b4audit.length >= 1);
   // checklist toggle tenant gate
   await call("/api/poultry", "POST", { entity: "CHECKLIST", data: { businessId: BIZ_AQUA, checklistDate: made.checklistDateP, tasks: [{ taskKey: "TEST_T", taskLabel: "TEST A task", category: "GENERAL" }] } }, tOwner);
-  const clRow = (await q(`SELECT id FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2 LIMIT 1`, [BIZ_AQUA, made.checklistDateP])).rows[0];
+  const clRow = (await q(`SELECT id FROM checklist_entries WHERE business_id=$1 AND checklist_date=$2 LIMIT 1`, [BIZ_AQUA, made.checklistDateP])).rows[0];
   r = await call("/api/poultry", "PATCH", { entity: "CHECKLIST", id: clRow?.id, data: { completedByName: "TEST Worker" } }, tWorker);
   ok("B6 worker toggles checklist outside her business → 403", r.status === 403, JSON.stringify(r.status));
-  const clAfter = (await q(`SELECT is_completed FROM poultry_checklists WHERE id=$1`, [clRow?.id])).rows[0];
+  const clAfter = (await q(`SELECT is_completed FROM checklist_entries WHERE id=$1`, [clRow?.id])).rows[0];
   ok("B7 cross-tenant checklist row untouched", clAfter?.is_completed === false, JSON.stringify(clAfter));
 
   // ═══ C. Poultry validations + EGGS precedence + ledger dates ═══
@@ -285,20 +283,20 @@ async function main() {
   console.log("── E. daily checklist idempotence ──");
   const clp1 = await call("/api/poultry", "POST", { entity: "CHECKLIST", data: { businessId: BIZ_POULTRY, checklistDate: made.checklistDateP, tasks: [{ taskKey: "TEST_AM_FEED", taskLabel: "TEST morning feed", category: "FEEDING" }] } }, tOwner);
   const clp2 = await call("/api/poultry", "POST", { entity: "CHECKLIST", data: { businessId: BIZ_POULTRY, checklistDate: made.checklistDateP, tasks: [{ taskKey: "TEST_AM_FEED", taskLabel: "TEST morning feed", category: "FEEDING" }] } }, tOwner);
-  const clpCount = (await q(`SELECT count(*)::int c FROM poultry_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP])).rows[0].c;
+  const clpCount = (await q(`SELECT count(*)::int c FROM checklist_entries WHERE business_id=$1 AND checklist_date=$2`, [BIZ_POULTRY, made.checklistDateP])).rows[0].c;
   ok("E1 poultry checklist second generate returns existing rows",
     clp1.status === 200 && clp2.status === 200 && clp2.json?.alreadyExists === true && clpCount === 1,
     JSON.stringify([clp2.json?.alreadyExists, clpCount]));
   const cla1 = await call("/api/aquaculture", "POST", { entity: "CHECKLIST", data: { businessId: BIZ_AQUA, checklistDate: made.checklistDateA } }, tOwner);
   const cla2 = await call("/api/aquaculture", "POST", { entity: "CHECKLIST", data: { businessId: BIZ_AQUA, checklistDate: made.checklistDateA } }, tOwner);
-  const claCount = (await q(`SELECT count(*)::int c FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateA])).rows[0].c;
+  const claCount = (await q(`SELECT count(*)::int c FROM checklist_entries WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, made.checklistDateA])).rows[0].c;
   ok("E2 aqua checklist idempotent (6 tasks once, alreadyExists on retry)",
     cla1.status === 200 && cla2.json?.alreadyExists === true && claCount === 6,
     JSON.stringify([cla2.json?.alreadyExists, claCount]));
 
   // other date unaffected (first generate on aqua date didn't touch aqua today)
-  const todayCount = (await q(`SELECT count(*)::int c FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, D(0)])).rows[0].c;
-  ok("E3 today's real aqua checklist untouched by TEST dates", todayCount === (await q(`SELECT count(*)::int c FROM aquaculture_checklists WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, D(0)])).rows[0].c);
+  const todayCount = (await q(`SELECT count(*)::int c FROM checklist_entries WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, D(0)])).rows[0].c;
+  ok("E3 today's real aqua checklist untouched by TEST dates", todayCount === (await q(`SELECT count(*)::int c FROM checklist_entries WHERE business_id=$1 AND checklist_date=$2`, [BIZ_AQUA, D(0)])).rows[0].c);
 
   // ═══ Z. purge + forensics ═══
   await purge();
@@ -308,8 +306,7 @@ async function main() {
            (SELECT count(*) FROM aquaculture_batches WHERE batch_number LIKE $1) +
            (SELECT count(*) FROM poultry_production WHERE recorded_by_name='TEST Aud' AND recorded_date >= $2) +
            (SELECT count(*) FROM transactions WHERE id > $3) +
-           (SELECT count(*) FROM poultry_checklists WHERE checklist_date IN ($4,$5) AND business_id IN (${BIZ_POULTRY},${BIZ_AQUA})) +
-           (SELECT count(*) FROM aquaculture_checklists WHERE checklist_date = $5 AND business_id = ${BIZ_AQUA}) +
+           (SELECT count(*) FROM checklist_entries WHERE checklist_date IN ($4,$5) AND business_id IN (${BIZ_POULTRY},${BIZ_AQUA})) +
            (SELECT count(*) FROM audit_trail WHERE id > $6 AND (action LIKE 'POULTRY_%' OR action LIKE 'AQUA_%')) AS n`,
     [`%${MARK}%`, D(-400), made.txnBaseline, made.checklistDateP, made.checklistDateA, made.auditBaseline])).rows[0].n;
   ok("Z1 zero TEST-AUD rows remain", Number(leftovers) === 0, leftovers);

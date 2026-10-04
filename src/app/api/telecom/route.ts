@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -15,6 +17,7 @@ import { eq, and, inArray, lt, desc } from "drizzle-orm";
 import QRCode from "qrcode";
 import crypto from "node:crypto";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 
@@ -85,23 +88,22 @@ async function bookTransaction(
       metadata: { source: "TELECOM" },
     });
   }
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}-${crypto.randomInt(10, 99)}`,
+  // P5: ONE service-sale writer for module revenue (shared with transport and
+  // car-wash); expenses keep using the approval-gated helper above.
+  await postServiceSale({
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,
-    type,
     category,
-    amountGhs: Math.round(amount * 100) / 100,
-    paymentMethod: paymentMethod || "CASH",
     description,
-    date: now.toISOString().split("T")[0],
-    createdAt: now,
-    status: "COMPLETED",
-    recordedBy: actorName || "Telecom Desk",
-    recordedByRole: actorRole || null,
-    recordedByUserId: actorUserId ? Number(actorUserId) : null,
+    amountGhs: amount,
+    paymentMethod,
+    actor: {
+      id: actorUserId ? Number(actorUserId) : null,
+      name: actorName || "Telecom Desk",
+      role: actorRole || null,
+    },
+    recordedByFallback: "Telecom Desk",
   });
 }
 
@@ -112,33 +114,17 @@ async function upsertTelecomCustomer(
   phone: string | null,
   amount: number
 ) {
-  const existing = await db.select().from(customers).where(eq(customers.businessId, biz.id));
-  const match =
-    existing.find((c) => phone && c.phone === phone) ||
-    existing.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + amount) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + 1,
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(amount * 100) / 100),
-      loyaltyPoints: 1,
-      businessId: biz.id,
-    })
-    .returning();
-  return created?.id ?? null;
+  // Shared CRM rule (src/lib/customerLink) — business-isolated find-or-create
+  // with the service modules' loyalty award (1 point per purchase) preserved.
+  const linked = await linkOrCreateCustomer({
+    businessId: biz.id,
+    name,
+    phone,
+    amount,
+    loyaltyPoints: 1,
+    phoneFallback: "—",
+  });
+  return linked?.id ?? null;
 }
 
 /** Mark any sold Wi-Fi voucher whose validity window has passed as EXPIRED. */

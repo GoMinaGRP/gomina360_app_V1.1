@@ -8,11 +8,12 @@ console.error = (...args) => {
   return origError(...args);
 };
 import { NextResponse } from "next/server";
+import { createEmployeeRecord } from "@/lib/employeeCreate";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { db } from "@/db";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import {
   employees,
-  employeeHistory,
   assets,
   assetAuditLogs,
   inventoryItems,
@@ -22,13 +23,16 @@ import {
   recordDeletionLogs,
 } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
+import { adjustVariantStock, setVariantsForItem, variantsForItem } from "@/lib/boutique";
+import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
-import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, resolveUserOrgIds, businessIdsOfOrgs, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 import { approvalRequests } from "@/db/schema";
+import { validateImageArray, validateOptionalImage, THUMB_BUDGET_BYTES } from "@/lib/mediaValidation";
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
@@ -62,11 +66,27 @@ export async function GET(request: Request) {
       // QR labels are unique PER BUSINESS: two independent organizations may
       // legitimately carry the same label value (their unit codes can match).
       // Resolve the caller's accessible match — not just the first global row.
+      //
+      // A platform super admin (allowed == null) can see every match, so with
+      // several candidates the row order would decide which unit answers the
+      // scan. Prefer the caller's own organization first, then fall back to the
+      // first accessible match — scanning your own label always returns your
+      // own item, never another org's.
+      const ownOrgBizIds = async (): Promise<Set<number>> => {
+        const orgIds = await resolveUserOrgIds(session.user);
+        return new Set(orgIds.length ? (await businessIdsOfOrgs(orgIds)).map(Number) : []);
+      };
+      const pick = async (rows: any[]) => {
+        const visible = rows.filter((r: any) => canSee(r.businessId));
+        if (visible.length <= 1) return visible[0];
+        const own = await ownOrgBizIds();
+        return visible.find((r: any) => own.has(Number(r.businessId))) ?? visible[0];
+      };
       const itemRows = await db
         .select()
         .from(inventoryItems)
         .where(eq(inventoryItems.qrCode, code));
-      const item = itemRows.find((r: any) => canSee(r.businessId));
+      const item = await pick(itemRows);
       if (item) {
         return NextResponse.json({ success: true, found: true, kind: "inventory", record: item });
       }
@@ -74,7 +94,7 @@ export async function GET(request: Request) {
         .select()
         .from(assets)
         .where(eq(assets.qrCode, code));
-      const asset = assetRows.find((r: any) => canSee(r.businessId));
+      const asset = await pick(assetRows);
       if (asset) {
         return NextResponse.json({ success: true, found: true, kind: "asset", record: asset });
       }
@@ -230,6 +250,9 @@ export async function PATCH(request: Request) {
 
     const d = data || {};
     const updates: Record<string, any> = {};
+    // Set when a variant-targeted quantity edit was applied (the item total is
+    // DERIVED from the rows, so `updates` legitimately stays empty).
+    let variantQuantityApplied = false;
     // Reassignment to a different business must stay inside the actor's scope.
     if (moduleKey !== "SUPPLIERS" && d.businessId !== undefined && Number(d.businessId) && Number(d.businessId) !== Number(existing.businessId)) {
       if (!(await canAccessBusiness(actor, Number(d.businessId)))) {
@@ -266,8 +289,26 @@ export async function PATCH(request: Request) {
       // the IN_STOCK / LOW_STOCK / OUT_OF_STOCK status that drives alerts.
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
       if (typeof d.sku === "string" && d.sku.trim()) updates.sku = d.sku.trim();
-      if (typeof d.category === "string" && d.category.trim()) updates.category = d.category.trim();
+      // Category is standardized across every business (marketplace grouping):
+      // the incoming wording is normalized to the shared umbrella and, when it
+      // is more specific, preserved as the subcategory.
+      if (typeof d.category === "string" && d.category.trim()) {
+        updates.category = normalizeInventoryCategory(d.category);
+        updates.subcategory = deriveInventorySubcategory(d.category, d.subcategory);
+      } else if (d.subcategory !== undefined) {
+        updates.subcategory = d.subcategory ? String(d.subcategory).trim().slice(0, 120) : null;
+      }
       if (typeof d.unit === "string" && d.unit.trim()) updates.unit = d.unit.trim();
+      // VARIANT products: the size/colour rows are the truth and the item's
+      // quantity is a DERIVED aggregate. Editing it directly would be silently
+      // reverted by the next variant movement (lost deduction = oversell), so
+      // the register refuses it. A `variantId` targets the exact combination.
+      const existingBusinessId = Number((existing as any).businessId);
+      const activeVariants =
+        existing.tracksVariants === true
+          ? (await variantsForItem(existingBusinessId, existing.id)).filter((v) => v.isActive !== false)
+          : [];
+      const variantEdit = d.variantId != null ? Number(d.variantId) : null;
       if (d.quantity !== undefined) {
         const qty = Number(d.quantity);
         if (!Number.isFinite(qty) || qty < 0) {
@@ -276,7 +317,39 @@ export async function PATCH(request: Request) {
             { status: 400 }
           );
         }
-        updates.quantity = qty;
+        if (existing.tracksVariants === true) {
+          if (!variantEdit) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: `"${existing.name}" is stocked by size/colour — update a specific combination instead of the item total.`,
+              },
+              { status: 400 }
+            );
+          }
+          if (!activeVariants.some((v) => Number(v.id) === variantEdit)) {
+            return NextResponse.json(
+              { success: false, error: "That size/colour is not sold by this product any more." },
+              { status: 400 }
+            );
+          }
+          const applied = await adjustVariantStock({
+            businessId: existingBusinessId,
+            variantId: variantEdit,
+            quantity: qty,
+            minStockThreshold: d.minStockThreshold !== undefined ? Number(d.minStockThreshold) : null,
+            reason: "ADJUSTMENT",
+            refType: "ENTERPRISE_EDIT",
+            refId: existing.id,
+            actor: { id: (actor as any)?.id ?? null, name: (actor as any)?.name ?? null, role: (actor as any)?.role ?? null },
+          });
+          if (!applied.ok) {
+            return NextResponse.json({ success: false, error: applied.error || "That combination could not be updated." }, { status: 400 });
+          }
+          variantQuantityApplied = true;
+        } else {
+          updates.quantity = qty;
+        }
       }
       if (d.costPriceGhs !== undefined) {
         const v = Number(d.costPriceGhs);
@@ -317,10 +390,21 @@ export async function PATCH(request: Request) {
       if (d.model !== undefined) updates.model = d.model ? String(d.model).trim().slice(0, 120) : null;
       if (d.specifications !== undefined) updates.specifications = sanitizeSpecList(d.specifications);
       if (d.variants !== undefined) updates.variants = sanitizeVariantList(d.variants);
+      if (d.optionAxis1Label !== undefined)
+        updates.optionAxis1Label = d.optionAxis1Label ? String(d.optionAxis1Label).trim().slice(0, 24) : null;
+      if (d.optionAxis2Label !== undefined)
+        updates.optionAxis2Label = d.optionAxis2Label ? String(d.optionAxis2Label).trim().slice(0, 24) : null;
       // Recompute stock status from the (possibly updated) quantity/threshold.
-      const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
-      const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
-      updates.status = computeStockStatus(Number(nextQty), Number(nextThreshold));
+      // Variant products keep their DERIVED aggregate/status: syncItemAggregate
+      // is the only thing allowed to write them.
+      if (existing.tracksVariants === true) {
+        if (updates.quantity === undefined) delete updates.quantity;
+        delete updates.status;
+      } else {
+        const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
+        const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
+        updates.status = computeStockStatus(Number(nextQty), Number(nextThreshold));
+      }
     } else {
       // EMPLOYEES
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
@@ -343,7 +427,7 @@ export async function PATCH(request: Request) {
     if (d.district !== undefined) updates.district = d.district || null;
     if (d.town !== undefined) updates.town = d.town || null;
 
-    if (Object.keys(updates).length === 0) {
+    if (Object.keys(updates).length === 0 && !variantQuantityApplied) {
       return NextResponse.json(
         { success: false, error: "Nothing to update." },
         { status: 400 }
@@ -420,11 +504,45 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const [updated] = await db
-      .update(table)
-      .set(updates)
-      .where(eq(table.id, recordId))
-      .returning();
+    // P5: an un-gated quantity edit is an ADJUSTMENT movement, so the trail
+    // records who corrected stock and from what. Variant-tracked products keep
+    // their aggregate derived from the variant rows (syncItemAggregate) — the
+    // edit is applied to the parent register exactly as before.
+    let updated: any = null;
+    if (
+      moduleKey === "INVENTORY" &&
+      updates.quantity !== undefined &&
+      Number(updates.quantity) !== Number(existing.quantity)
+    ) {
+      const target = Number(updates.quantity);
+      const delta = target - Number(existing.quantity);
+      delete updates.quantity;
+      delete updates.status;
+      if (Object.keys(updates).length) {
+        [updated] = await db.update(table).set(updates).where(eq(table.id, recordId)).returning();
+      }
+      const applied = await applyStockChange({
+        businessId: Number(existing.businessId),
+        inventoryId: recordId,
+        delta,
+        reason: "ADJUSTMENT",
+        refType: "INVENTORY_EDIT",
+        note: d.adjustmentReason ? String(d.adjustmentReason) : "Manual quantity correction",
+        actor,
+        clampAtZero: true,
+      });
+      updated = applied.item || updated;
+    } else if (Object.keys(updates).length > 0) {
+      [updated] = await db
+        .update(table)
+        .set(updates)
+        .where(eq(table.id, recordId))
+        .returning();
+    } else {
+      // A variant-targeted quantity edit already applied (the item total is
+      // derived from the rows, so there is nothing to write on the parent).
+      [updated] = await db.select().from(table).where(eq(table.id, recordId));
+    }
     return NextResponse.json({ success: true, item: updated });
   } catch (error: any) {
     return apiError(error);
@@ -643,40 +761,22 @@ export async function POST(request: Request) {
       if (!(await canAccessBusiness(session.user, empBizId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      // Quick-add path — auto-assign the employee number and record the
-      // registration in the employee record history (same as the full
-      // Employee Registration flow in /api/employees).
-      // Staff numbers are PER UNIT (each unit numbers its own roster from
-      // EMP-0001) — never a continuation of another unit's or organization's
-      // sequence.
-      const maxRows = await db
-        .select({ v: sql<string>`max(nullif(regexp_replace(coalesce(${employees.employeeNo}, ''), '\\D', '', 'g'), '')::int)` })
-        .from(employees)
-        .where(eq(employees.businessId, empBizId));
-      const employeeNo = `EMP-${String((Number(maxRows[0]?.v) || 0) + 1).padStart(4, "0")}`;
-      const [inserted] = await db
-        .insert(employees)
-        .values({
-          name: data.name || "New Employee",
-          role: data.role || "Staff",
-          businessId: empBizId,
-          branch: data.branch || "Accra Main",
-          ...loc,
-          salaryGhs: Number(data.salaryGhs) || 3000,
-          phone: data.phone || "+233 24 000 0000",
-          hireDate: data.hireDate || new Date().toISOString().split("T")[0],
-          status: "ACTIVE",
-          employeeNo,
-        })
-        .returning();
-      await db.insert(employeeHistory).values({
-        employeeId: inserted.id,
-        businessId: inserted.businessId,
-        action: "CREATED",
-        summary: `Registered ${inserted.name} (${employeeNo}) — ${inserted.role}, quick add`,
-        changedByUserId: session.user.id,
-        changedByName: session.user.name,
-        changedByRole: session.user.role,
+      // Quick-add path — the SAME create core as the full Employee
+      // Registration flow (src/lib/employeeCreate), so staff numbering and
+      // the employee_history trail can never drift between the two intakes.
+      const inserted = await createEmployeeRecord({
+        businessId: empBizId,
+        name: data.name || "New Employee",
+        role: data.role || "Staff",
+        branch: data.branch || "Accra Main",
+        region: data.region,
+        district: data.district,
+        town: data.town,
+        salaryGhs: Number(data.salaryGhs) || 3000,
+        phone: data.phone || "+233 24 000 0000",
+        hireDate: data.hireDate,
+        status: "ACTIVE",
+        actor: session.user,
       });
       return NextResponse.json({ success: true, item: inserted });
     }
@@ -795,6 +895,28 @@ export async function POST(request: Request) {
       }
 
       const assetQrValue = assetQr || null;
+      // Asset photos + display thumbnails, validated centrally: shape, budget
+      // (≤400 KB per image, ≤60 KB per thumbnail) and the per-record cap (6).
+      const assetImgCheck = validateImageArray(data.assetImages, "asset", { label: "Asset photo" });
+      if (!assetImgCheck.ok) return NextResponse.json({ success: false, error: assetImgCheck.error }, { status: 400 });
+      const assetThumbCheck = validateImageArray(data.assetImagesThumb, "asset", {
+        label: "Asset thumbnail",
+        max: 6,
+        maxBytes: THUMB_BUDGET_BYTES,
+        allowNulls: true,
+      });
+      if (!assetThumbCheck.ok) return NextResponse.json({ success: false, error: assetThumbCheck.error }, { status: 400 });
+      const assetImagesArr: string[] = Array.isArray(data.assetImages)
+        ? data.assetImages.filter((p: any) => typeof p === "string" && p.length > 0)
+        : [];
+      // POSITIONAL, like inventory: entry i is the thumbnail of images[i]; a
+      // missing thumbnail stays null so indices never shift.
+      const assetThumbsRaw = Array.isArray(data.assetImagesThumb) ? data.assetImagesThumb : [];
+      const assetThumbs = assetImagesArr.map((_p: any, i: number) =>
+        typeof assetThumbsRaw[i] === "string" && /^data:image\//.test(assetThumbsRaw[i]) ? assetThumbsRaw[i] : null,
+      );
+      const assetThumbsArr = assetThumbs.some((t: string | null) => !!t) ? assetThumbs : null;
+
       const [inserted] = await db
         .insert(assets)
         .values({
@@ -826,7 +948,8 @@ export async function POST(request: Request) {
             : null,
           recorderName: data.recorderName || data.requestedByName || "Unknown Recorder",
           recordedAt: new Date(),
-          assetImages: Array.isArray(data.assetImages) ? data.assetImages : [],
+          assetImages: assetImagesArr,
+          assetImagesThumb: assetThumbsArr,
         })
         .returning();
 
@@ -846,7 +969,7 @@ export async function POST(request: Request) {
           businessId: inserted.businessId,
           branchCode: inserted.branchCode,
           currentValueGhs: inserted.currentValueGhs,
-          imageCount: Array.isArray(data.assetImages) ? data.assetImages.length : 0,
+          imageCount: assetImagesArr.length,
         },
       });
 
@@ -886,9 +1009,39 @@ export async function POST(request: Request) {
           if (!branchName) branchName = biz.name;
         }
       }
+      // Photos + thumbnails are validated centrally (src/lib/mediaValidation):
+      // shape, stored-byte budget and the per-record photo cap (6). The browser
+      // already sizes them; this is the enforcement point.
+      const photosCheck = validateImageArray(data.photos, "product", { label: "Product photo" });
+      if (!photosCheck.ok) return NextResponse.json({ success: false, error: photosCheck.error }, { status: 400 });
+      const thumbsCheck = validateImageArray(data.photosThumb, "product", {
+        label: "Product thumbnail",
+        max: 6,
+        maxBytes: THUMB_BUDGET_BYTES,
+        allowNulls: true,
+      });
+      if (!thumbsCheck.ok) return NextResponse.json({ success: false, error: thumbsCheck.error }, { status: 400 });
+      const primaryPhotoCheck = validateOptionalImage(data.photo, "product", { label: "Product photo" });
+      if (!primaryPhotoCheck.ok) return NextResponse.json({ success: false, error: primaryPhotoCheck.error }, { status: 400 });
+      const primaryThumbCheck = validateOptionalImage(data.photoThumb, "product", {
+        label: "Product thumbnail",
+        maxBytes: THUMB_BUDGET_BYTES,
+      });
+      if (!primaryThumbCheck.ok) return NextResponse.json({ success: false, error: primaryThumbCheck.error }, { status: 400 });
+
       const photosArr = Array.isArray(data.photos)
         ? data.photos.filter((p: any) => typeof p === "string" && p.length > 0)
         : [];
+      // Display thumbnails generated in the browser at upload time
+      // (src/lib/imageOptimize). POSITIONAL: entry i is the thumbnail of
+      // photos[i]; a missing/failed thumbnail stays null so indices never
+      // shift (a shifted array would show another product's picture).
+      // Optional: older clients/rows simply have none and readers fall back.
+      const thumbsRaw = Array.isArray(data.photosThumb) ? data.photosThumb : [];
+      const thumbsArr = photosArr.map((_p: any, i: number) =>
+        typeof thumbsRaw[i] === "string" && /^data:image\//.test(thumbsRaw[i]) ? thumbsRaw[i] : null,
+      );
+      const hasThumbs = thumbsArr.some((t: string | null) => !!t);
       // ── Unique QR tag — scanned or auto-generated; never duplicated. ──
       const invQr = data.qrCode ? String(data.qrCode).trim().slice(0, 200) : "";
       if (invQr) {
@@ -908,6 +1061,15 @@ export async function POST(request: Request) {
           );
         }
       }
+      // Boutique: a stock item registered with a size/colour matrix becomes a
+      // variant-tracked product. The matrix is validated + persisted right
+      // after the row exists, and it REPLACES the parent quantity with the
+      // live sum of variants (the register stays the one stock truth).
+      const boutiqueMatrix = data.tracksVariants === true ? normalizeVariantMatrix(data.boutiqueVariants) : [];
+      // What the two axes MEAN for this product (Size / Shoe size / Capacity /
+      // Style / Model / Colour / Pack size …). Presentation only.
+      const axis1Label = String(data.optionAxis1Label || "").trim().slice(0, 24) || null;
+      const axis2Label = String(data.optionAxis2Label || "").trim().slice(0, 24) || null;
       const [inserted] = await db
         .insert(inventoryItems)
         .values({
@@ -916,26 +1078,74 @@ export async function POST(request: Request) {
           businessId: bizId,
           branchCode: branchCode || null,
           branchName: branchName || null,
-          category: data.category || "General Stock",
-          quantity: qty,
+          category: normalizeInventoryCategory(data.category),
+          subcategory: deriveInventorySubcategory(data.category, data.subcategory),
+          // Registered EMPTY: the opening quantity is applied through the one
+          // stock writer below (so it appears in the movement trail).
+          quantity: 0,
           unit: data.unit || "Units",
           costPriceGhs: Number(data.costPriceGhs) || 20,
           sellingPriceGhs: Number(data.sellingPriceGhs) || 35,
           minStockThreshold: threshold,
-          status: computeStockStatus(qty, threshold),
+          status: "OUT_OF_STOCK",
           expiryDate: data.expiryDate || null,
           photo: typeof data.photo === "string" && data.photo ? data.photo : photosArr[0] || null,
           photos: photosArr,
+          photoThumb:
+            typeof data.photoThumb === "string" && /^data:image\//.test(data.photoThumb)
+              ? data.photoThumb
+              : thumbsArr[0] || null,
+          photosThumb: hasThumbs ? thumbsArr : null,
           description: data.description ? String(data.description).trim().slice(0, 4000) : null,
           brand: data.brand ? String(data.brand).trim().slice(0, 120) : null,
           model: data.model ? String(data.model).trim().slice(0, 120) : null,
           specifications: sanitizeSpecList(data.specifications),
           variants: sanitizeVariantList(data.variants),
+          optionAxis1Label: boutiqueMatrix.length > 0 ? axis1Label : null,
+          optionAxis2Label: boutiqueMatrix.length > 0 ? axis2Label : null,
           qrCode: invQr || null,
           registeredByName: data.registeredByName ? String(data.registeredByName).slice(0, 120) : null,
           registeredByUserId: data.registeredByUserId ? Number(data.registeredByUserId) : null,
         })
         .returning();
+
+      // Opening stock through the ONE writer (skipped for variant products:
+      // their stock lives on the variant rows, applied by setVariantsForItem).
+      if (qty > 0 && boutiqueMatrix.length === 0) {
+        await applyStockChange({
+          businessId: bizId,
+          inventoryId: inserted.id,
+          delta: qty,
+          reason: "OPENING",
+          refType: "INVENTORY_REGISTER",
+          note: `Opening stock — ${inserted.name}`,
+          actor: { name: data.registeredByName || null },
+        });
+      }
+
+      if (boutiqueMatrix.length > 0) {
+        try {
+          await setVariantsForItem({
+            reason: "OPENING",
+            refType: "INVENTORY_REGISTER",
+            note: "Opening stock registered with the product",
+            businessId: bizId,
+            inventoryId: inserted.id,
+            variants: boutiqueMatrix,
+            replace: true,
+            actorName: data.registeredByName ? String(data.registeredByName) : null,
+          });
+          const [fresh] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, inserted.id));
+          return NextResponse.json({ success: true, item: fresh || inserted, variants: boutiqueMatrix.length });
+        } catch (e: any) {
+          // Never leave a half-configured variant product ambiguous: the item
+          // exists (still sellable as plain stock) and the message tells the
+          // owner exactly what to fix in the Sizes & Colours tab.
+          return NextResponse.json(
+            { success: true, item: inserted, variantWarning: e.message || "Variants could not be saved." },
+          );
+        }
+      }
       return NextResponse.json({ success: true, item: inserted });
     }
 

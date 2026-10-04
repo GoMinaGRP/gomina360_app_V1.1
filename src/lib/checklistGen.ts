@@ -854,3 +854,73 @@ export async function sweepOverdueCritical(
   }
   return { swept, businesses: new Set([...byGroup.values()].map((g) => g.bizId)).size };
 }
+
+/**
+ * Materialise an explicit task list into the canonical daily-checklist store.
+ *
+ * Poultry / aquaculture / block-factory each had their own checklist table and
+ * a route handler writing to it. Those tables are retired (P3): the modules'
+ * legacy-compatible checklist endpoints now write HERE, into the same
+ * `checklist_entries` the shared engine reads and the audit trail is built on.
+ *
+ * Idempotent per (businessId, checklistDate): when the day already has entries
+ * they are returned untouched with `alreadyExists: true` — the contract the
+ * legacy endpoints always advertised.
+ */
+export async function insertDailyEntries(opts: {
+  businessId: number;
+  branchCode?: string | null;
+  date: string;
+  tasks: { taskKey: string; taskLabel: string; category?: string | null }[];
+}): Promise<{ items: any[]; alreadyExists: boolean }> {
+  const { businessId, date } = opts;
+  const branchCode = opts.branchCode ?? null;
+  const existing = await db
+    .select()
+    .from(checklistEntries)
+    .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, date)));
+  if (existing.length > 0) {
+    return { items: existing.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)), alreadyExists: true };
+  }
+  const rows: any[] = [];
+  for (const t of opts.tasks || []) {
+    const [row] = await db
+      .insert(checklistEntries)
+      .values({
+        businessId,
+        branchCode,
+        checklistDate: date,
+        taskKey: t.taskKey,
+        taskLabel: t.taskLabel,
+        category: t.category || "GENERAL",
+        isCompleted: false,
+      })
+      .returning();
+    rows.push(row);
+  }
+  return { items: rows, alreadyExists: false };
+}
+
+/**
+ * Toggle one canonical checklist entry (shared by the legacy-compatible module
+ * endpoints). Returns null when the row does not exist.
+ */
+export async function toggleChecklistEntry(
+  id: number,
+  actor: { name?: string | null; role?: string | null } = {},
+): Promise<any | null> {
+  const [existing] = await db.select().from(checklistEntries).where(eq(checklistEntries.id, Number(id)));
+  if (!existing) return null;
+  const nowCompleted = !existing.isCompleted;
+  const [row] = await db
+    .update(checklistEntries)
+    .set({
+      isCompleted: nowCompleted,
+      completedByName: nowCompleted ? actor.name || "Staff" : null,
+      completedByRole: nowCompleted ? actor.role || null : null,
+      completedAt: nowCompleted ? new Date() : null,
+    })
+    .where(eq(checklistEntries.id, Number(id)))
+    .returning();
+  return row;
+}

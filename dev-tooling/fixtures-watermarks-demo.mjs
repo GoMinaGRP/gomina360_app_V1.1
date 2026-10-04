@@ -66,7 +66,7 @@ if (!have.rowCount) {
        (name, sku, business_id, category, unit, cost_price_ghs, selling_price_ghs, quantity,
         min_stock_threshold, status, photo, photos, branch_code)
      values
-       ('Org-2 Watermark Demo Item', $2, $1, 'GENERAL', 'pcs', 5, 12.5, 25,
+       ('Org-2 Watermark Demo Item', $2, $1, 'Other / General Merchandise', 'pcs', 5, 12.5, 25,
         3, 'IN_STOCK', $3, $4, $5)`,
     [bizId, `${BIZ_CODE}-SKU1`, photo, JSON.stringify([photo]), BIZ_CODE],
   );

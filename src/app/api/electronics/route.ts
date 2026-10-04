@@ -7,33 +7,41 @@ import {
   electronicsWarranties,
   electronicsPurchases,
   inventoryItems,
-  transactions,
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { notifyPurchase } from "@/lib/notify";
+import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
+import { linkSupplier } from "@/lib/supplierLinks";
 
 /**
  * Complete a delivered electronics order as a real sale:
  * deduct the stock, record the INCOME transaction, and mark the matching
  * in-stock serials SOLD for the customer. Idempotent via fulfilledDate.
  */
-async function fulfillElectronicsOrder(order: any, businessId: number, branchCode: string | null, actorName?: string | null, actorRole?: string | null) {
+async function fulfillElectronicsOrder(order: any, businessId: number, branchCode: string | null, actorName?: string | null, actorRole?: string | null, actorUserId?: number | null, paymentMethod?: string | null) {
   const today = new Date().toISOString().split("T")[0];
-  const stamp = Date.now().toString().slice(-5);
+  let stockWarning: string | null = null;
   if (order.inventoryId) {
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(order.inventoryId)));
     if (inv) {
-      const newQty = Math.max(0, (inv.quantity || 0) - (order.quantity || 0));
-      await db
-        .update(inventoryItems)
-        .set({ quantity: newQty, status: computeStockStatus(newQty, inv.minStockThreshold || 0) })
-        .where(eq(inventoryItems.id, inv.id));
+      // P5: ONE stock writer (clamps at zero, logs the movement).
+      const applied = await applyStockChange({
+        businessId: inv.businessId,
+        inventoryId: inv.id,
+        delta: -(Number(order.quantity) || 0),
+        reason: "SALE",
+        refType: "ELECTRONICS_ORDER",
+        refId: Number(order.id) || null,
+      });
+      // Variant products need their combination named — the delivery still
+      // completes (money + serial lifecycle) but the stock move is reported.
+      stockWarning = stockRefusal(applied);
     }
     // Mark matching in-stock serials as SOLD to this customer
     const serialRows = await db
@@ -48,27 +56,51 @@ async function fulfillElectronicsOrder(order: any, businessId: number, branchCod
         .where(eq(electronicsSerials.id, s.id));
     }
   }
-  // Revenue into Finance so dashboards / reports update
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(),
+  // Revenue through the SHARED sale engine (was a hand-rolled insert that
+  // produced no receipt, no CRM link and no tracking row). The module keeps
+  // its own ledger category + wording; Finance reads exactly as before.
+  const qty = Number(order.quantity) || 0;
+  const unitPrice = Number(order.unitPriceGhs) || 0;
+  const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+  const amount = Number(order.totalGhs) || lineTotal;
+  const discount = Math.max(0, Math.round((lineTotal - amount) * 100) / 100);
+  const [inv] = order.inventoryId
+    ? await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(order.inventoryId)))
+    : [null];
+  const posted = await postSale({
     businessId,
     branchCode,
-    branchName: null,
-    type: "INCOME",
+    lines: [
+      {
+        inventoryId: order.inventoryId ? Number(order.inventoryId) : null,
+        sku: inv?.sku ?? null,
+        description: `${order.itemName} (${order.orderNumber})`,
+        quantity: qty,
+        unit: inv?.unit ?? "Units",
+        category: inv?.category ?? null,
+        unitPrice,
+        costPrice: Number(inv?.costPriceGhs) || 0,
+      },
+    ],
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    customerId: order.customerId ?? null,
+    paymentMethod: paymentMethod || "CASH",
     category: "ELECTRONICS_ORDER_SALE",
-    amountGhs: order.totalGhs || (order.quantity || 0) * (order.unitPriceGhs || 0),
-    paymentMethod: "CASH",
-    description: `Order ${order.orderNumber} delivered: ${order.quantity}× ${order.itemName} — ${order.customerName}`,
-    date: today,
-    createdAt: new Date(),
-    status: "COMPLETED",
-    recordedBy: actorName || "Electronics Shop",
-    recordedByRole: actorRole || null,
+    description: `Order ${order.orderNumber} delivered: ${qty}× ${order.itemName} — ${order.customerName}`,
+    discount,
+    actor: { name: actorName || "Electronics Shop", role: actorRole || null, id: actorUserId ?? null },
   });
   await db
     .update(electronicsOrders)
-    .set({ fulfilledDate: today })
+    .set({
+      fulfilledDate: today,
+      transactionId: posted.transaction?.id ?? null,
+      salesDocumentId: posted.receipt?.id ?? null,
+      customerId: posted.customerId ?? order.customerId ?? null,
+    })
     .where(eq(electronicsOrders.id, order.id));
+  return { ...posted, stockWarning };
 }
 
 export async function GET(request: NextRequest) {
@@ -126,6 +158,15 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Math.max(1, Number(data.quantity) || 1);
       const price = Number(data.unitPriceGhs) || 0;
+      // Shared CRM: one customer record per buyer, linked from the order.
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db
         .insert(electronicsOrders)
         .values({
@@ -134,6 +175,7 @@ export async function POST(request: NextRequest) {
           orderNumber: data.orderNumber || `ORD-TEC-${new Date().getFullYear()}-${stamp}`,
           customerName: data.customerName || "Walk-in Customer",
           customerPhone: data.customerPhone || null,
+          customerId: buyer?.id ?? null,
           itemName: data.itemName || "Electronics Item",
           inventoryId: data.inventoryId ? Number(data.inventoryId) : null,
           quantity: qty,
@@ -148,11 +190,15 @@ export async function POST(request: NextRequest) {
         .returning();
       // Orders created straight as DELIVERED complete their sale immediately
       // (stock deduction + finance + serial lifecycle).
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED") {
-        await fulfillElectronicsOrder(row, businessId, branchCode, data.createdByName, data.createdByRole);
+        const posted = await fulfillElectronicsOrder(row, businessId, branchCode, data.createdByName, data.createdByRole, data.createdByUserId, data.paymentMethod);
+        stockWarning = (posted as any).stockWarning || null;
         row.fulfilledDate = today;
+        row.transactionId = posted.transaction?.id ?? null;
+        row.customerId = posted.customerId ?? row.customerId;
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     // ── SERIAL: register a unit for serial number tracking ─────────────
@@ -264,6 +310,27 @@ export async function POST(request: NextRequest) {
         actorName: data.createdByName || null,
       });
 
+      // Supplier ledger link (shared helper): the shared Suppliers module now
+      // sees this unit's vendors, and the row carries their id.
+      if (row.supplierName && Number(row.totalGhs) > 0) {
+        const orgId = await ownerOrgOfBusiness(businessId).catch(() => null);
+        const linked = await linkSupplier({
+          ownerId: orgId ?? (biz as any)?.ownerId ?? null,
+          name: row.supplierName,
+          category: "Electronics & Appliances",
+          suppliedGhs: Number(row.totalGhs) || 0,
+          paymentMethod: data.paymentMethod,
+          logTag: "[electronics]",
+        });
+        if (linked?.supplier?.id) {
+          await db
+            .update(electronicsPurchases)
+            .set({ supplierId: linked.supplier.id })
+            .where(eq(electronicsPurchases.id, row.id))
+            .catch(() => {});
+        }
+      }
+
       if (status === "RECEIVED") {
         // Stock-in: match an inventory item by explicit id, then by name prefix; create if absent
         const inv = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
@@ -275,31 +342,43 @@ export async function POST(request: NextRequest) {
           target = inv.find((i: any) => i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12)));
         }
         if (target) {
-          const newQty = (target.quantity || 0) + qty;
-          await db
-            .update(inventoryItems)
-            .set({
-              quantity: newQty,
-              costPriceGhs: cost || target.costPriceGhs,
-              status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= target.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-            })
-            .where(eq(inventoryItems.id, target.id));
+          const applied = await applyStockChange({
+            businessId,
+            inventoryId: target.id,
+            delta: qty,
+            reason: "PURCHASE",
+            refType: "ELECTRONICS_PURCHASE",
+            note: data.itemName ? `Purchase: ${data.itemName}` : null,
+            setCostPriceGhs: cost,
+          });
+          const refusal = stockRefusal(applied);
+          if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         } else {
           const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
           let sku = `TEC-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
           let n = 2;
           while (taken.has(sku)) sku = `${sku.slice(0, 20)}-${n++}`;
-          await db.insert(inventoryItems).values({
+          // Created EMPTY, then stocked through the one writer.
+          const [created] = await db.insert(inventoryItems).values({
             name: data.itemName,
             sku,
             businessId,
             category: "Electronics & Solar",
-            quantity: qty,
+            quantity: 0,
             unit: "Units",
             costPriceGhs: cost,
             sellingPriceGhs: Number(data.sellingPriceGhs) || Math.round(cost * 1.3 * 100) / 100,
             minStockThreshold: 5,
-            status: "IN_STOCK",
+            status: "OUT_OF_STOCK",
+          }).returning();
+          await applyStockChange({
+            businessId,
+            inventoryId: created.id,
+            delta: qty,
+            reason: "OPENING",
+            refType: "ELECTRONICS_PURCHASE",
+            note: `Opening stock: ${data.itemName}`,
+            setCostPriceGhs: cost,
           });
         }
 
@@ -362,11 +441,15 @@ export async function PATCH(request: NextRequest) {
       if (!row) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
       // Completing the delivery converts the order into a sale exactly once:
       // stock is deducted, finance records the revenue, serials become SOLD.
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED" && before?.status !== "DELIVERED" && !row.fulfilledDate) {
-        await fulfillElectronicsOrder(row, row.businessId, row.branchCode, data?.actorName || row.createdByName, data?.actorRole || row.createdByRole);
+        const posted = await fulfillElectronicsOrder(row, row.businessId, row.branchCode, data?.actorName || row.createdByName, data?.actorRole || row.createdByRole, data?.createdByUserId, data?.paymentMethod);
+        stockWarning = (posted as any).stockWarning || null;
         row.fulfilledDate = today;
+        row.transactionId = posted.transaction?.id ?? null;
+        row.customerId = posted.customerId ?? row.customerId;
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     // ── WARRANTY claim lifecycle; resolving restores the linked serial ──

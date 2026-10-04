@@ -23,7 +23,21 @@ import {
   PieChart, Pie, Cell, LineChart, Line,
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
+import BusinessScopeBar from "./BusinessScopeBar";
+import {
+  DEFAULT_SELECTION,
+  ScopeSelection,
+  myOrgIdOf,
+  businessIdsOf,
+  scopeLabel,
+  scopeOwners,
+  scopeUnits,
+  normalizeSelection,
+  typesInScope,
+  unitsInScope,
+} from "@/lib/businessScope";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 import { csvSafeCell } from "@/lib/universalExport";
 
 const MODULES = ["OPERATIONS", "FINANCE", "INVENTORY", "EMPLOYEES", "PAYROLL", "ATTENDANCE", "ASSETS", "CCTV", "USERS"];
@@ -144,13 +158,34 @@ function fieldList(rec: any): { key: string; label: string; value: string; kind:
 type Rec = any;
 type Rev = any;
 
-export default function AuditCommandCenter({ currentUser, businesses, currentCurrency = "GHS", focusIssueId, onFocusHandled }: { currentUser: any; businesses: any[]; currentCurrency?: CurrencyCode; focusIssueId?: number | null; onFocusHandled?: () => void }) {
+export default function AuditCommandCenter({
+  currentUser,
+  businesses,
+  organizations = [],
+  orgLens = "MY",
+  onLensChange,
+  currentCurrency = "GHS",
+  focusIssueId,
+  onFocusHandled,
+}: {
+  currentUser: any;
+  /** Every business this caller may see (the grouping source — NOT pre-filtered). */
+  businesses: any[];
+  /** Super Admin org directory (empty for every other role). */
+  organizations?: { id: number; name: string; status?: string }[];
+  /** The app-wide Organization Lens — the Audit center FOLLOWS it. */
+  orgLens?: string;
+  onLensChange?: (lens: string) => void;
+  currentCurrency?: CurrencyCode;
+  focusIssueId?: number | null;
+  onFocusHandled?: () => void;
+}) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [tab, setTab] = useState<"RECORDS" | "ISSUES" | "REPORTS" | "ACCESS" | "LOG">("RECORDS");
-  const [filters, setFilters] = useState({ businessId: "", module: "", recordType: "", branchCode: "", worker: "", status: "", q: "", from: "", to: "" });
+  const [filters, setFilters] = useState({ businessId: "", businessIds: "", ownerId: "", module: "", recordType: "", branchCode: "", worker: "", status: "", q: "", from: "", to: "" });
   // Records declutter: TODAY's activities show by default; everything older
   // lives in a collapsible History section (collapsed until asked for). All
   // historical data stays intact and reachable — the split is a pure view
@@ -185,7 +220,49 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
   const [detailErr, setDetailErr] = useState("");
   const isWide = useIsWide();
 
-  const bizSource = data?.bizList?.length ? data.bizList : businesses;
+  // ── Business scope (Owner → Unit → Type) ────────────────────────────────
+  // The catalogue is built from the FULL accessible list so the Owner control
+  // can count every workspace; what the screen then filters by is the audit
+  // center's own owner/unit/type scope, which starts at "My Workspace" — the
+  // same default the Organization Lens uses everywhere else.
+  const isSuperAdmin = !!currentUser?.isSuperAdmin;
+  // "My Workspace" = the caller's OWN organization (org 1 for the platform
+  // Super Admin, their own org for every other owner) — see businessScope.ts.
+  const myOrgId = useMemo(() => myOrgIdOf(currentUser), [currentUser]);
+  const allUnits = useMemo(() => scopeUnits(businesses, organizations, myOrgId), [businesses, organizations, myOrgId]);
+  const owners = useMemo(() => scopeOwners(allUnits, myOrgId), [allUnits, myOrgId]);
+  // The Owner control IS the lens for a Super Admin (one "whose data" concept,
+  // not two): picking an owner here also moves the rest of the app, and the
+  // sidebar shows the same value.
+  const ownerSelection: ScopeSelection["ownerId"] = isSuperAdmin
+    ? orgLens === "ALL"
+      ? "ALL"
+      : orgLens === "MY"
+        ? "MY"
+        : Number(orgLens) || "MY"
+    : "MY";
+  const [bizScope, setBizScope] = useState<ScopeSelection>(DEFAULT_SELECTION);
+  useEffect(() => setBizScope((s) => normalizeSelection({ ...s, ownerId: ownerSelection }, allUnits, myOrgId)), [ownerSelection, allUnits, myOrgId]);
+  const scopeUnitsVisible = useMemo(() => unitsInScope(allUnits, bizScope, myOrgId), [allUnits, bizScope, myOrgId]);
+  const scopeTypeOptions = useMemo(() => typesInScope(allUnits, bizScope, myOrgId), [allUnits, bizScope, myOrgId]);
+
+  // Push the scope into the server filters (owner + the unit set the type filter
+  // resolves to). Both are NARROWING ONLY — /api/audit intersects them with the
+  // caller's own permission scope, so nothing can be widened from here.
+  useEffect(() => {
+    const ownerParam = isSuperAdmin ? (bizScope.ownerId === "ALL" ? "" : String(bizScope.ownerId === "MY" ? 1 : bizScope.ownerId)) : "";
+    const typeIds =
+      bizScope.unitId === "ALL" && bizScope.typeKey !== "ALL"
+        ? businessIdsOf(unitsInScope(allUnits, { ownerId: bizScope.ownerId, typeKey: bizScope.typeKey }, myOrgId)).join(",")
+        : "";
+    setFilters((f) => {
+      const unit = bizScope.unitId === "ALL" ? "" : String(bizScope.unitId);
+      if (f.ownerId === ownerParam && f.businessId === unit && f.businessIds === typeIds) return f;
+      return { ...f, ownerId: ownerParam, businessId: unit, businessIds: typeIds };
+    });
+  }, [bizScope, isSuperAdmin, allUnits, myOrgId]);
+
+  const bizSource = data?.bizList?.length ? data.bizList : scopeUnitsVisible;
   const bizName = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.name || "(deleted unit)", [bizSource]);
   const bizCode = useCallback((id: number) => bizSource.find((b: any) => b.id === id)?.code || "", [bizSource]);
 
@@ -323,17 +400,32 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
     return MODULES.filter((m) => set.has(m));
   }, [scope]);
   const allowedBusinessIds: number[] | null = scope?.businessIds ?? null;
+  const scopeUnitIds = useMemo(() => new Set(scopeUnitsVisible.map((u) => u.id)), [scopeUnitsVisible]);
   const visibleBusinesses = useMemo(
-    () => (allowedBusinessIds === null || allowedBusinessIds === undefined ? bizSource : bizSource.filter((b: any) => (allowedBusinessIds as number[]).includes(b.id))),
-    [bizSource, allowedBusinessIds]
+    () =>
+      (allowedBusinessIds === null || allowedBusinessIds === undefined
+        ? bizSource
+        : bizSource.filter((b: any) => (allowedBusinessIds as number[]).includes(b.id))
+      ).filter((b: any) => scopeUnitIds.has(Number(b.id))),
+    [bizSource, allowedBusinessIds, scopeUnitIds]
   );
   // Businesses the granter may CREATE grants for (OWNER: all; delegated
   // manager: only inside their accessible businesses — independent of any
   // audit grants they themselves hold).
   const grantableBusinessIds: number[] | null = scope?.canGrant ? (scope?.grantBusinessIds ?? null) : [];
-  const grantableBusinesses = useMemo(
-    () => (grantableBusinessIds === null ? bizSource : bizSource.filter((b: any) => (grantableBusinessIds as number[]).includes(b.id))),
-    [bizSource, grantableBusinessIds]
+  const grantableBusinesses = useMemo(() => {
+    const rows = grantableBusinessIds === null ? bizSource : bizSource.filter((b: any) => (grantableBusinessIds as number[]).includes(b.id));
+    const ownerOf = new Map(allUnits.map((u) => [u.id, u]));
+    return [...rows].sort((a: any, b: any) => {
+      const ua = ownerOf.get(Number(a.id));
+      const ub = ownerOf.get(Number(b.id));
+      if (!!ua?.isMine !== !!ub?.isMine) return ua?.isMine ? -1 : 1;
+      return String(ua?.ownerName || "").localeCompare(String(ub?.ownerName || "")) || String(a.name).localeCompare(String(b.name));
+    });
+  }, [bizSource, grantableBusinessIds, allUnits]);
+  const ownerNameFor = useCallback(
+    (id: number) => allUnits.find((u) => u.id === Number(id))?.ownerName || "",
+    [allUnits]
   );
   // Branch candidates per business: the business code itself + every branch
   // code seen on records in scope.
@@ -391,13 +483,17 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
     return () => window.removeEventListener("keydown", handleKey);
   }, [actionModal, verifyModal, correctModal, detail]);
 
-  const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Evidence photo — optimized in the browser (≤1400px, q0.78) so the issue
+   *  thread carries readable proof without multi-megabyte payloads. */
+  const onPhoto = (setter: (v: string) => void, err: (v: string) => void) => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) { err("Evidence photo must be an image file."); return; }
-    const r = new FileReader();
-    r.onload = () => setter(String(r.result));
-    r.readAsDataURL(file);
+    try {
+      setter(await optimizedDataUrl(file, "evidence"));
+    } catch {
+      err("That photo could not be processed — try another image.");
+    }
   };
 
   // ── Shared record renderers (used by BOTH the lg table and the <lg card
@@ -571,7 +667,7 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
   ] as any[];
 
   const kpis = report ? [
-    { label: "Records in scope", value: report.totals.records.toLocaleString(), sub: `${visibleBusinesses.length} business(es)` },
+    { label: "Records in scope", value: report.totals.records.toLocaleString(), sub: scopeLabel(bizScope, allUnits, myOrgId) },
     { label: "Reviews logged", value: report.totals.reviews.toLocaleString(), sub: `${report.totals.reviewedRecords} record(s) covered`, tint: "text-teal-300" },
     { label: "Verified", value: report.totals.verified.toLocaleString(), sub: "records confirmed", tint: "text-emerald-300" },
     { label: "Open issues", value: report.totals.openIssues.toLocaleString(), sub: `${report.totals.flaggedNow} flagged · ${report.totals.underReview} in review · ${report.totals.correctionsRequired} corrections`, tint: "text-amber-300" },
@@ -629,14 +725,30 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
 
       {/* Filters (records / issues / log) */}
       {(tab === "RECORDS" || tab === "ISSUES" || tab === "LOG") && (
-        <div className="bg-slate-900 border border-slate-700/80 rounded-xl p-3 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-9 gap-2" data-testid="aud-filters">
-          <div>
-            <label className={labelCls}>Business</label>
-            <select className={inputCls} value={filters.businessId} onChange={(e) => setFilters({ ...filters, businessId: e.target.value })} data-testid="aud-f-business">
-              <option value="">All in scope</option>
-              {visibleBusinesses.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </div>
+        <div className="bg-slate-900 border border-slate-700/80 rounded-xl p-3" data-testid="aud-filters">
+          {/* Owner → Unit → Type + search. Defaults to the caller's own
+              workspace; a Super Admin can switch owner (this also moves the
+              app-wide Organization Lens) or widen to every owner. */}
+          <BusinessScopeBar
+            testid="aud"
+            units={allUnits}
+            owners={owners}
+            types={scopeTypeOptions}
+            selection={bizScope}
+            onChange={(next) => {
+              // The Audit center has ONE owner concept: its Owner control is the
+              // app-wide Organization Lens, so choosing an owner here moves the
+              // whole workspace (and the sidebar shows the same value).
+              if (isSuperAdmin && next.ownerId !== bizScope.ownerId) {
+                onLensChange?.(next.ownerId === "MY" ? "MY" : next.ownerId === "ALL" ? "ALL" : String(next.ownerId));
+              }
+              setBizScope(next);
+            }}
+            showOwner={isSuperAdmin}
+            ownerHint={isSuperAdmin ? "Switches the app-wide Organization Lens" : undefined}
+            className="mb-3"
+          />
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
           {tab === "RECORDS" && (<>
             <div>
               <label className={labelCls}>Activity / module</label>
@@ -689,6 +801,7 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
               <input className={`${inputCls} pl-8`} value={filters.q} placeholder="ref, title, person…" onChange={(e) => setFilters({ ...filters, q: e.target.value })} data-testid="aud-f-q" />
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -1176,8 +1289,14 @@ export default function AuditCommandCenter({ currentUser, businesses, currentCur
                             branches: on ? Object.fromEntries(Object.entries(gf.branches).filter(([k]) => Number(k) !== b.id)) : gf.branches,
                           }))}
                           className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition ${on ? "bg-teal-500/15 text-teal-300 border-teal-500/40" : "bg-slate-800/60 text-slate-500 border-slate-700 hover:border-slate-500"}`}
-                          data-testid={`aud-grant-biz-${b.id}`}>
+                          data-testid={`aud-grant-biz-${b.id}`}
+                          title={owners.length > 1 ? `${ownerNameFor(b.id)} · ${b.name}` : b.name}>
                           {b.name}
+                          {owners.length > 1 && (
+                            <span className="block text-[8px] font-semibold opacity-70 truncate max-w-[140px]">
+                              {ownerNameFor(b.id) || "Owner"}
+                            </span>
+                          )}
                         </button>
                       );
                     })}

@@ -2,15 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
+  checklistEntries,
   aquaculturePonds,
   aquacultureBatches,
   aquacultureFeedLogs,
   aquacultureWaterQualityLogs,
   aquacultureHarvests,
-  aquacultureChecklists,
   aquacultureWeightLogs,
   aquacultureBenchmarkProfiles,
-  transactions,
   businesses,
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -21,8 +20,9 @@ import { canViewSection } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
-import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { postSale } from "@/lib/salePosting";
+import { insertDailyEntries, toggleChecklistEntry } from "@/lib/checklistGen";
 
 // Species → canonical sellable product in Inventory (sold by the Kg).
 const AQUA_PRODUCTS: Record<string, { sku: string; name: string; unit: string; costPriceGhs: number; sellingPriceGhs: number; minStockThreshold: number }> = {
@@ -65,6 +65,8 @@ export async function GET(request: NextRequest) {
     const scope = (table: any) =>
       db.select().from(table).where(eq(table.businessId, businessId));
 
+    // Daily checklists ARE the shared engine's rows (checklist_entries) — the
+    // per-module legacy table is retired, the payload shape is unchanged.
     const [ponds, batches, feedLogs, waterLogs, harvests, checklists, weightLogs, benchmarkProfiles] =
       await Promise.all([
         scope(aquaculturePonds),
@@ -72,7 +74,7 @@ export async function GET(request: NextRequest) {
         scope(aquacultureFeedLogs),
         scope(aquacultureWaterQualityLogs),
         scope(aquacultureHarvests),
-        scope(aquacultureChecklists),
+        scope(checklistEntries),
         scope(aquacultureWeightLogs),
         scope(aquacultureBenchmarkProfiles),
       ]);
@@ -416,23 +418,35 @@ export async function POST(request: NextRequest) {
         stockNote += ` | −${out.deducted}kg sold from stock`;
       }
 
-      // Auto-create income transaction for fish sales
+      // Auto-create income transaction for fish sales (shared sale engine,
+      // P1/P3): harvest revenue is a farm event, not a counter sale — receipt,
+      // tracking and CRM stay off so the ledger row is unchanged, while every
+      // INCOME in the app is written by ONE engine.
       if (revenue > 0) {
-        const trxNum = nextTrxNumber();
-        await db.insert(transactions).values({
-          transactionNumber: trxNum,
-          businessId, branchCode, branchName: data.branchName || null,
-          type: "INCOME",
+        await postSale({
+          businessId,
+          branchCode,
+          lines: [
+            {
+              description: `${row.species} harvest`,
+              quantity: totalWt || 1,
+              unit: "Kg",
+              unitPrice: totalWt > 0 ? revenue / totalWt : revenue,
+              total: revenue,
+            },
+          ],
           category: "AQUA_HARVEST_SALE",
-          amountGhs: revenue,
-          paymentMethod: data.paymentMethod || "CASH",
           description: `Harvest: ${row.species} — ${harvested} fish, ${totalWt}kg | Buyer: ${data.buyerName || "Unknown"}${stockNote}`,
+          paymentMethod: data.paymentMethod || "CASH",
           date: data.saleDate || today,
-          createdAt: now,
-          status: "COMPLETED",
-          recordedBy: data.recordedByName || "Aquaculture User",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          receipt: false,
+          tracking: false,
+          linkCustomer: false,
+          actor: {
+            id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+            name: data.recordedByName || "Aquaculture User",
+            role: data.recordedByRole || null,
+          },
         });
       }
 
@@ -458,45 +472,30 @@ export async function POST(request: NextRequest) {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    //  CHECKLIST (create today
-    // ─────────────────────────────────────────────────────────────────
+    //  CHECKLIST (create today's list)
+    //  Legacy-compatible endpoint, now backed by the SHARED checklist store
+    //  (checklist_entries) — aquaculture_checklists is retired. Contract kept:
+    //  idempotent per day, {items, alreadyExists} response.
     if (entity === "CHECKLIST") {
       const tasks = [
-        { key: "AERATION_CHECK", label: "Check aerators and oxygen meters", category: "WATER" },
-        { key: "DO_PH_TEST", label: "Test DO/pH in all ponds and cages", category: "WATER" },
-        { key: "FEED_MORNING", label: "Morning feeding (all ponds and cages)", category: "FEEDING" },
-        { key: "MORTALITY_CHECK", label: "Count and log mortalities", category: "HEALTH" },
-        { key: "FILTER_CLEAN", label: "Clean water filters", category: "CLEANING" },
-        { key: "SECURITY_CHECK", label: "Inspect moorings and biosecurity", category: "SECURITY" },
+        { taskKey: "AERATION_CHECK", taskLabel: "Check aerators and oxygen meters", category: "WATER" },
+        { taskKey: "DO_PH_TEST", taskLabel: "Test DO/pH in all ponds and cages", category: "WATER" },
+        { taskKey: "FEED_MORNING", taskLabel: "Morning feeding (all ponds and cages)", category: "FEEDING" },
+        { taskKey: "MORTALITY_CHECK", taskLabel: "Count and log mortalities", category: "HEALTH" },
+        { taskKey: "FILTER_CLEAN", taskLabel: "Clean water filters", category: "CLEANING" },
+        { taskKey: "SECURITY_CHECK", taskLabel: "Inspect moorings and biosecurity", category: "SECURITY" },
       ];
       const targetDate = data.checklistDate || today;
-      // Idempotent per day: re-generating today's checklist returns the
-      // existing rows instead of duplicating them (Block Factory contract).
-      const existing = await db
-        .select()
-        .from(aquacultureChecklists)
-        .where(
-          and(
-            eq(aquacultureChecklists.businessId, businessId),
-            eq(aquacultureChecklists.checklistDate, targetDate),
-          )
-        );
-      if (existing.length > 0) {
-        return NextResponse.json({ success: true, items: existing.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)), alreadyExists: true });
-      }
-      const rows = [];
-      for (const t of tasks) {
-        const [row] = await db.insert(aquacultureChecklists).values({
-          businessId, branchCode,
-          checklistDate: targetDate,
-          taskKey: t.key,
-          taskLabel: t.label,
-          category: t.category,
-          isCompleted: false,
-        }).returning();
-        rows.push(row);
-      }
-      return NextResponse.json({ success: true, items: rows });
+      const { items, alreadyExists } = await insertDailyEntries({
+        businessId,
+        branchCode,
+        date: targetDate,
+        tasks,
+      });
+      ttlInvalidate("init");
+      return NextResponse.json(
+        alreadyExists ? { success: true, items, alreadyExists: true } : { success: true, items },
+      );
     }
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });
@@ -513,23 +512,20 @@ export async function PATCH(request: NextRequest) {
     const { entity, id, data } = body;
 
     if (entity === "CHECKLIST" && id) {
-      const [existing] = await db.select().from(aquacultureChecklists).where(eq(aquacultureChecklists.id, Number(id)));
+      const [existing] = await db
+        .select()
+        .from(checklistEntries)
+        .where(eq(checklistEntries.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist item not found" }, { status: 404 });
       }
       if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      const [row] = await db
-        .update(aquacultureChecklists)
-        .set({
-          isCompleted: !existing.isCompleted,
-          completedByName: !existing.isCompleted ? data?.completedByName || "Staff" : null,
-          completedByRole: !existing.isCompleted ? data?.completedByRole || null : null,
-          completedAt: !existing.isCompleted ? new Date() : null,
-        })
-        .where(eq(aquacultureChecklists.id, Number(id)))
-        .returning();
+      const row = await toggleChecklistEntry(Number(id), {
+        name: data?.completedByName,
+        role: data?.completedByRole,
+      });
       return NextResponse.json({ success: true, item: row });
     }
 

@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
 import { apiError } from "@/lib/apiError";
+import { validateImageDataUrl } from "@/lib/mediaValidation";
 
 /**
  * Company & business logo management.
@@ -26,10 +27,15 @@ import { apiError } from "@/lib/apiError";
  * payslip, report and PDF resolves the same logo everywhere.
  */
 
-const MAX_LEN = 1_800_000; // ~1.35MB base64 (client resizes to ≤512px)
-
+/**
+ * Logos are validated by the shared media validator: data-URL shape plus the
+ * logo stored-byte budget (700 KB — alpha logos stay lossless PNG, so the size
+ * is content-dependent; the previous 1.8M-char cap ≈ 1.35 MB is now the hard
+ * ceiling only for already-stored legacy rows). ANY image format is accepted
+ * (the client rasterises SVG/GIF so the crest still reaches PDFs).
+ */
 function validLogo(logo: any): logo is string {
-  return typeof logo === "string" && logo.startsWith("data:image/") && logo.length <= MAX_LEN;
+  return validateImageDataUrl(logo, "logo", { label: "Logo" }).ok;
 }
 
 export async function GET(request: Request) {

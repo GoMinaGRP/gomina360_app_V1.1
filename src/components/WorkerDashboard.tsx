@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   ShoppingCart,
@@ -24,6 +24,7 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import MyTasksCard from "./MyTasksCard";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import CustomerQuickAddForm from "@/components/shared/CustomerQuickAddForm";
 
 interface WorkerDashboardProps {
   currentUser: any;
@@ -55,6 +56,37 @@ export default function WorkerDashboard({
 }: WorkerDashboardProps) {
   const [activeSubTab, setActiveSubTab] = useState<"SALES" | "CUSTOMERS" | "INVENTORY" | "MY_ACTIVITY" | "TRACKING">("SALES");
 
+  /**
+   * The mobile bottom bar's "Sell" slot targets this workspace's Record Sale
+   * tab. Before, a worker's "Sell" and "Home" both rendered this same screen
+   * (verified: identical screenshot), so the slot was dead. Keeping the
+   * request as a window event means the rail can drive the workspace from
+   * outside without threading new props through GoMinaApp.
+   */
+  useEffect(() => {
+    const onSubTab = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail;
+      const allowed = ["SALES", "CUSTOMERS", "INVENTORY", "MY_ACTIVITY", "TRACKING"];
+      if (typeof detail === "string" && allowed.includes(detail)) {
+        setActiveSubTab(detail as typeof activeSubTab);
+      }
+    };
+    window.addEventListener("gomina:worker-subtab", onSubTab);
+    return () => window.removeEventListener("gomina:worker-subtab", onSubTab);
+  }, []);
+
+  /** Tell the rail which workspace tab is showing, so the mobile bottom bar
+   *  can highlight the right slot (and never claim two at once). */
+  useEffect(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("gomina:worker-subtab-changed", { detail: activeSubTab }),
+      );
+    } catch {
+      /* non-browser / blocked */
+    }
+  }, [activeSubTab]);
+
   // Inventory-linked sale (cart)
   interface CartItem {
     inventoryId: number;
@@ -84,12 +116,7 @@ export default function WorkerDashboard({
   const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
 
   // Customer form
-  const [newCustName, setNewCustName] = useState("");
-  const [newCustPhone, setNewCustPhone] = useState("+233 24 ");
-  const [newCustEmail, setNewCustEmail] = useState("");
-  const [newCustType, setNewCustType] = useState("RETAIL");
-  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
-
+          
   // Expense form (if permitted) — uses the shared Record Expense Information form
   const [showExpense, setShowExpense] = useState(false);
 
@@ -229,41 +256,6 @@ export default function WorkerDashboard({
 
   const confirmKind = confirmEntry ? classifyEntry(confirmEntry.entity) : null;
   const confirmView = confirmKind ? confirmMeta(confirmKind, confirmEntry?.data) : null;
-
-  const handleCreateCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCustName.trim()) return;
-    setIsCreatingCustomer(true);
-
-    try {
-      const res = await fetch("/api/enterprise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entityType: "customer",
-          data: {
-            name: newCustName,
-            type: newCustType,
-            phone: newCustPhone,
-            email: newCustEmail || `${newCustName.toLowerCase().replace(/\s/g, ".")}@client.gh`,
-            businessId: businessInfo?.id,
-          },
-        }),
-      });
-      if (res.ok) {
-        setNewCustName("");
-        setNewCustPhone("+233 24 ");
-        setNewCustEmail("");
-        setNewCustType("RETAIL");
-        flashSaved("✓ Customer added — form cleared for the next one.");
-        onRefreshData();
-      }
-    } catch (err) {
-      console.error("Error creating customer:", err);
-    } finally {
-      setIsCreatingCustomer(false);
-    }
-  };
 
   if (!isWorkerEnabled) {
     return (
@@ -597,70 +589,12 @@ export default function WorkerDashboard({
                 <h3 className="text-base font-bold text-white">Add New Customer</h3>
               </div>
 
-              <form onSubmit={handleCreateCustomer} className="mt-4 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Customer full name"
-                    value={newCustName}
-                    onChange={(e) => setNewCustName(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Phone Number
-                    </label>
-                    <input
-                      type="text"
-                      value={newCustPhone}
-                      onChange={(e) => setNewCustPhone(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Customer Type
-                    </label>
-                    <select
-                      value={newCustType}
-                      onChange={(e) => setNewCustType(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm"
-                    >
-                      <option value="RETAIL">Retail</option>
-                      <option value="WHOLESALE">Wholesale</option>
-                      <option value="CORPORATE">Corporate</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">
-                    Email (optional)
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="customer@email.com"
-                    value={newCustEmail}
-                    onChange={(e) => setNewCustEmail(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isCreatingCustomer}
-                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg transition disabled:opacity-50"
-                >
-                  {isCreatingCustomer ? "Creating..." : "Create Customer"}
-                </button>
-              </form>
+              <CustomerQuickAddForm
+                businessId={businessInfo?.id}
+                onCreated={onRefreshData}
+                onSaved={flashSaved}
+                testidPrefix="wd-custq"
+              />
             </div>
           </div>
         )}

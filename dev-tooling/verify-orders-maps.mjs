@@ -446,8 +446,10 @@ async function sectionD() {
   await page.type('[data-testid="oo-name"]', "TEST UI Pinner");
   await page.type('[data-testid="oo-phone"]', "0551230456");
   await page.type('[data-testid="oo-dest-input"]', "TEST Osu, Oxford Street");
-  // D1 — placing without a pin is blocked with guidance
-  await page.click('[data-testid="oo-place"]');
+  // D1 — placing without a pin is blocked with guidance.
+  // The Place button sits at the end of the form, under the fixed cart bar on a
+  // phone viewport: centre it first so the tap reaches the button.
+  await centreClick('[data-testid="oo-place"]');
   await page.waitForSelector('[data-testid="oo-error"]', { timeout: 10000 });
   const errTxt = await page.$eval('[data-testid="oo-error"]', (el) => el.textContent || "");
   ok("D1 delivery requires pinning the exact delivery point first", /Pin your exact delivery point/i.test(errTxt), errTxt.slice(0, 120));
@@ -708,6 +710,10 @@ async function cleanup() {
   if (baseline.branchGpsSet) {
     await pg.query(`UPDATE businesses SET gps_lat=NULL, gps_lng=NULL WHERE id=1`);
   }
+  // Restore a pin that a PREVIOUS suite had left (see the baseline above).
+  if (baseline.gpsWasSet && (baseline.gpsWasSet.gps_lat !== null || baseline.gpsWasSet.gps_lng !== null)) {
+    await pg.query(`UPDATE businesses SET gps_lat=$1, gps_lng=$2 WHERE id=1`, [baseline.gpsWasSet.gps_lat, baseline.gpsWasSet.gps_lng]);
+  }
   if (baseline.invTouched) await restoreInv(baseline.invTouched.id, baseline.invTouched.qty);
 
   const trk = await pg.query(`DELETE FROM customer_trackings WHERE customer_name LIKE 'TEST%' RETURNING id`);
@@ -730,8 +736,16 @@ async function cleanup() {
   const gpsNow = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
   const bizCount = (await pg.query(`SELECT count(*)::int c FROM businesses`)).rows[0].c;
   const userCount = (await pg.query(`SELECT count(*)::int c FROM users`)).rows[0].c;
+  // The anchor must be back to whatever the branch had BEFORE the suite ran:
+  // a live branch may legitimately carry a pin (every seeded business does),
+  // so asserting a bare NULL would fail on a healthy database just because
+  // the suite restored the very pin it found.
+  const wantGps = baseline.gpsWasSet || { gps_lat: null, gps_lng: null };
   ok("Z4 branch GPS anchor restored & business/user counts unchanged",
-    gpsNow.gps_lat === null && gpsNow.gps_lng === null && bizCount === baseline.bizCount && userCount === baseline.userCount);
+    String(gpsNow.gps_lat) === String(wantGps.gps_lat) &&
+      String(gpsNow.gps_lng) === String(wantGps.gps_lng) &&
+      bizCount === baseline.bizCount && userCount === baseline.userCount,
+    `gps=${gpsNow.gps_lat},${gpsNow.gps_lng} want ${wantGps.gps_lat},${wantGps.gps_lng}`);
   console.log(`   purged: trackings=${trk.rowCount} docs=${docs.rowCount} trxns=${trxs.rowCount} notifications=${ntfs.rowCount} customers=${custs.rowCount} sessions=${sess.rowCount}`);
 }
 
@@ -744,6 +758,14 @@ async function main() {
   baseline.ntfMax = (await pg.query(`SELECT COALESCE(MAX(id),0)::int m FROM notifications`)).rows[0].m;
   baseline.custMax = (await pg.query(`SELECT COALESCE(MAX(id),0)::int m FROM customers`)).rows[0].m;
   baseline.sessMax = (await pg.query(`SELECT COALESCE(MAX(id),0)::int m FROM user_sessions`)).rows[0].m;
+  // The branch GPS anchor is expected to be UNSET when this suite starts
+  // (section E sets it and Z4 asserts it is null again). Another suite in a
+  // sweep may have left a pin behind, which used to fail Z4 and abort the
+  // whole run — clear it here and restore whatever was there in cleanup.
+  baseline.gpsWasSet = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
+  if (baseline.gpsWasSet?.gps_lat !== null || baseline.gpsWasSet?.gps_lng !== null) {
+    await pg.query(`UPDATE businesses SET gps_lat=NULL, gps_lng=NULL WHERE id=1`);
+  }
   baseline.bizCount = (await pg.query(`SELECT count(*)::int c FROM businesses`)).rows[0].c;
   baseline.userCount = (await pg.query(`SELECT count(*)::int c FROM users`)).rows[0].c;
   baseline.preExistingIds = (await pg.query(`SELECT id FROM customer_trackings WHERE id <= $1 ORDER BY id`, [baseline.trMax])).rows.map((r) => r.id);

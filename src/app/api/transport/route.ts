@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -21,8 +23,9 @@ import {
   transportVehicles,
 } from "@/db/schema";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness } from "@/lib/notify";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, stockRefusal } from "@/lib/stock";
 import {
   GPS_PROVIDER_LIBRARY,
   assertTransportBizAccess,
@@ -37,6 +40,8 @@ import {
 } from "@/lib/transport";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -104,60 +109,39 @@ async function bookTransaction(
     });
     return res.transaction || null;
   }
-  const now = new Date();
-  const [row] = await db
-    .insert(transactions)
-    .values({
-      transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}-${Math.floor(Math.random() * 900 + 100)}`,
-      businessId: biz.id,
-      branchCode: biz.code,
-      branchName: biz.name,
-      type,
-      category,
-      amountGhs: amount,
-      paymentMethod: paymentMethod || "CASH",
-      customerId: refs?.customerId ?? null,
-      supplierId: refs?.supplierId ?? null,
-      description,
-      date: refs?.dateStr || now.toISOString().split("T")[0],
-      createdAt: now,
-      status: "COMPLETED",
-      recordedBy: actor?.name || "Transportation",
-      recordedByRole: actor?.role || null,
-      recordedByUserId: actor?.id ? Number(actor.id) : null,
-    })
-    .returning();
-  return row;
+  // P5: ONE service-sale writer for module revenue (ledger row shape shared
+  // with car-wash and telecom; expenses keep using the approval-gated helper).
+  const posted = await postServiceSale({
+    businessId: biz.id,
+    branchCode: biz.code,
+    branchName: biz.name,
+    category,
+    description,
+    amountGhs: amount,
+    paymentMethod,
+    date: refs?.dateStr || null,
+    customerId: refs?.customerId ?? null,
+    supplierId: refs?.supplierId ?? null,
+    actor,
+    recordedByFallback: "Transportation",
+  });
+  return posted.transaction || null;
 }
 
-/** Find-or-create a branch customer (same rule as the other modules). */
+/** Find-or-create a branch customer (shared rule) — bookings add no spend,
+ *  trip fares accrue spend + 1 loyalty point and the org owner is stamped on
+ *  newly created rows (unchanged behaviour, one implementation). */
 async function upsertCustomer(bizId: number, name: string, phone: string | null, spendGhs: number, orgOwnerId: number | null) {
-  const rows = await db.select().from(customers).where(eq(customers.businessId, bizId));
-  const match = rows.find((c) => phone && c.phone === phone) || rows.find((c) => (c.name || "").toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + spendGhs) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + (spendGhs > 0 ? 1 : 0),
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(spendGhs * 100) / 100),
-      loyaltyPoints: spendGhs > 0 ? 1 : 0,
-      businessId: bizId,
-      ownerId: orgOwnerId,
-    })
-    .returning();
-  return created?.id ?? null;
+  const linked = await linkOrCreateCustomer({
+    businessId: bizId,
+    name,
+    phone,
+    amount: spendGhs,
+    loyaltyPoints: spendGhs > 0 ? 1 : 0,
+    phoneFallback: "—",
+    ownerId: orgOwnerId,
+  });
+  return linked?.id ?? null;
 }
 
 /** Auto-raise AI signals (maintenance overdue, compliance expiry, fuel
@@ -317,14 +301,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       business: { id: biz.id, name: biz.name, code: biz.code },
-      vehicles: vehicles.map(strip),
+      // Wire policy (src/lib/imagePayload): photos no screen renders stay in
+      // the database. Vehicle/fuel/checklist images become `hasPhoto` flags,
+      // the ledger carries `receiptCount`, and stock rows carry `photoCount` /
+      // `hasPhoto` (the fleet screens never paint a product image).
+      vehicles: stripPhotos(vehicles.map(strip), ["photo"]),
       drivers,
-      trips, bookings, fuelLogs: fuels, maintenance: maint, checklists: checks,
+      trips, bookings, fuelLogs: stripPhotos(fuels, ["receiptPhoto"]), maintenance: maint,
+      checklists: stripPhotos(checks, ["photo"]),
       checklistTemplates: templates,
       geofences: fences,
       violations,
-      transactions: txns,
-      inventory: inv,
+      transactions: stripReceipts(txns),
+      inventory: slimInventoryRows(inv, { keepImage: false }),
       insights,
       providers: GPS_PROVIDER_LIBRARY,
       metrics,
@@ -774,8 +763,19 @@ export async function POST(request: NextRequest) {
           if (qty > 0) {
             const [inv] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.id, invId), eq(inventoryItems.businessId, businessId)));
             if (inv) {
-              const q = Math.max(0, Number((Number(inv.quantity || 0) - qty).toFixed(4)));
-              await db.update(inventoryItems).set({ quantity: q, status: computeStockStatus(q, inv.minStockThreshold || 0) }).where(eq(inventoryItems.id, inv.id));
+              // P5: ONE stock writer — parts used on a job are a CONSUMPTION movement.
+              const applied = await applyStockChange({
+                businessId,
+                inventoryId: inv.id,
+                delta: -qty,
+                reason: "CONSUMPTION",
+                refType: "TRANSPORT_MAINTENANCE",
+                refId: Number(id) || null,
+                note: `Parts used on maintenance #${id}`,
+                actor,
+              });
+              const refusal = stockRefusal(applied);
+              if (refusal) console.warn(`[transport] parts usage skipped: ${refusal}`);
             }
           }
         }
@@ -977,6 +977,10 @@ export async function POST(request: NextRequest) {
           finalNotes = finalNotes ? `${finalNotes}\n${customBlock}` : customBlock;
         }
 
+        const checklistCheck = validateOptionalImage(body.photo, "evidence", { label: "Checklist photo" });
+        if (!checklistCheck.ok) return NextResponse.json({ success: false, error: checklistCheck.error }, { status: 400 });
+        const checklistPhoto = body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null;
+
         const [row] = await db.insert(transportVehicleChecklists).values({
           businessId, branchCode: biz.code, ownerId,
           vehicleId, tripId: body.tripId ? Number(body.tripId) : null,
@@ -987,7 +991,7 @@ export async function POST(request: NextRequest) {
           fireExtinguisherOk: bool("fireExtinguisherOk"), firstAidOk: bool("firstAidOk"),
           documentationOk: bool("documentationOk"), cleaningOk: bool("cleaningOk"),
           notes: finalNotes || null,
-          photo: body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null,
+          photo: checklistPhoto,
           userName: user.name, userRole: user.role,
           employeeId: body.employeeId ? Number(body.employeeId) : null,
         }).returning();

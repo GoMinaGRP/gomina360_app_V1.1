@@ -25,6 +25,7 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import { canViewSection } from "@/lib/advisorSections";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
 
 interface Props {
   currentUser: any;
@@ -107,15 +108,18 @@ export default function AquacultureModule({
   const refresh = useCallback(async () => {
     if (!bizId) return;
     try {
+      // The route serves `checklists` from the unified enterprise checklist
+      // engine (checklist_entries): the module's own legacy table is retired, so
+      // the dashboard KPIs and analytics read exactly what the checklist tab shows.
       const res = await fetch(`/api/aquaculture?businessId=${bizId}`);
       const d = await res.json();
       if (d.success) {
+        setChecklists(d.checklists || []);
         setPonds(d.ponds || []);
         setBatches(d.batches || []);
         setFeedLogs(d.feedLogs || []);
         setWaterLogs(d.waterLogs || []);
         setHarvests(d.harvests || []);
-        setChecklists(d.checklists || []);
         setWeightLogs(d.weightLogs || []);
         setBenchmarkProfiles(d.benchmarkProfiles || []);
       }
@@ -894,26 +898,9 @@ export default function AquacultureModule({
 // ────────────────────────────────────────────────────────────────────────────
 //  Form component
 // ────────────────────────────────────────────────────────────────────────────
-function FormField({ f, set, label, k, t = "text", ...rest }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-}
-function FormSelect({ f, set, label, k, opts }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-}
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField tone="slate900" {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect tone="slate900" {...p} />; }
 
 function PondSelect({ ponds, f, set, required, hint }: any) {
   return (

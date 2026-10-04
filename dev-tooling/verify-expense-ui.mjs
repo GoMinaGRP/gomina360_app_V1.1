@@ -20,6 +20,7 @@
  * (requires the app running on http://localhost:3000)
  */
 import { createRequire } from "node:module";
+import { revealAllUnits } from "./rail-util.mjs";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
 const pg = req("pg");
@@ -52,6 +53,9 @@ page.on("pageerror", (e) => console.error("PAGEERROR:", String(e).slice(0, 200))
 const waitSel = (sel, t = 20000) => page.waitForSelector(sel, { timeout: t });
 const clickTid = async (tid) => { await waitSel(`[data-testid="${tid}"]`); await page.$eval(`[data-testid="${tid}"]`, (e) => e.click()); };
 const clickSidebarButton = async (text) => {
+  // N5 keeps a 5-unit preview in the rail — expand it first so a unit that is
+  // further down the list is actually in the DOM when we look for it.
+  await revealAllUnits(page);
   const clicked = await page.evaluate((want) => {
     const btns = [...document.querySelectorAll('[data-testid="nav-sidebar"] button')];
     const b = btns.find((x) => (x.textContent || "").includes(want));

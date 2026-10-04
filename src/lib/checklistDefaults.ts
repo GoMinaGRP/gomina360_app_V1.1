@@ -100,6 +100,17 @@ const TELECOM_TASKS: TaskSeed[] = [
   { taskKey: "SHOP_SECURE", taskLabel: "Lock till, secure SIMs & close kiosk", category: "SECURITY" },
 ];
 
+const BOUTIQUE_TASKS: TaskSeed[] = [
+  { taskKey: "SHOP_OPEN_DISPLAY", taskLabel: "Open shop, switch on lights & dress window display", category: "ADMIN" },
+  { taskKey: "FITTING_ROOM_CHECK", taskLabel: "Check fitting rooms, mirrors & hangers", category: "CLEANING" },
+  { taskKey: "SIZE_COLOR_STOCK_COUNT", taskLabel: "Count fast-moving sizes & colours on the rail", category: "STOCK" },
+  { taskKey: "POS_FLOAT_RECON", taskLabel: "Record cash & MoMo opening float", category: "FINANCE" },
+  { taskKey: "NEW_ARRIVALS_TAG", taskLabel: "Tag & shelve new arrivals (sizes/colours labelled)", category: "STOCK" },
+  { taskKey: "LOW_SIZE_FOLLOWUP", taskLabel: "Flag low-stock sizes/colours for reorder", category: "STOCK" },
+  { taskKey: "WINDOW_STEAM", taskLabel: "Steam/iron displayed garments & fix sizing", category: "CLEANING" },
+  { taskKey: "CLOSE_TILL_SECURE", taskLabel: "Close till, secure stock room & lock up", category: "SECURITY" },
+];
+
 const HARDWARE_TASKS: TaskSeed[] = [
   { taskKey: "SILO_CEMENT_COUNT", taskLabel: "Count cement bags & steel sections before opening", category: "STOCK" },
   { taskKey: "DELIVERY_SCHEDULE", taskLabel: "Confirm today's site delivery & dispatch schedule", category: "DELIVERIES" },
@@ -142,6 +153,7 @@ const DEFAULT_TASKS_BY_CATEGORY: Record<string, TaskSeed[]> = {
   "Hardware Store": HARDWARE_TASKS,
   "Telecom & Digital Services": TELECOM_TASKS,
   Transportation: TRANSPORT_TASKS,
+  Boutique: BOUTIQUE_TASKS,
 };
 
 /** Pick the best task set for a business: exact code → category → generic. */

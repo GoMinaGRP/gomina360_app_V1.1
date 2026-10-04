@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
+  checklistEntries,
   blockFactoryLogs,
   blockFactoryOrders,
   blockFactoryDeliveries,
-  blockFactoryChecklists,
   blockTypes,
   blockQcChecks,
   blockMixFormulations,
@@ -19,15 +19,19 @@ import {
 } from "@/db/schema";
 import { deriveDensityKgm3 } from "@/lib/blockQc";
 import { and, eq } from "drizzle-orm";
-import { computeStockStatus, ensureInventoryItem, stockIn, stockOut } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, ensureInventoryItem, stockIn, stockOut, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { linkSupplier } from "@/lib/supplierLinks";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
+import { insertDailyEntries, toggleChecklistEntry } from "@/lib/checklistGen";
 import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -225,13 +229,15 @@ export async function GET(request: NextRequest) {
       return FORBIDDEN("You do not have access to that business.");
     }
 
+    // Daily checklists ARE the shared engine's rows (checklist_entries) — the
+    // per-module legacy table is retired, the payload shape is unchanged.
     const [production, orders, deliveries, inventory, checklists, existingTypes, qcChecks,
       mixFormulations, mixFormulationItems, mixBatches, mixBatchInputs] = await Promise.all([
       db.select().from(blockFactoryLogs).where(eq(blockFactoryLogs.businessId, businessId)),
       db.select().from(blockFactoryOrders).where(eq(blockFactoryOrders.businessId, businessId)),
       db.select().from(blockFactoryDeliveries).where(eq(blockFactoryDeliveries.businessId, businessId)),
       db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId)),
-      db.select().from(blockFactoryChecklists).where(eq(blockFactoryChecklists.businessId, businessId)),
+      db.select().from(checklistEntries).where(eq(checklistEntries.businessId, businessId)),
       db.select().from(blockTypes).where(eq(blockTypes.businessId, businessId)),
       db.select().from(blockQcChecks).where(eq(blockQcChecks.businessId, businessId)),
       db.select().from(blockMixFormulations).where(eq(blockMixFormulations.businessId, businessId)),
@@ -260,15 +266,19 @@ export async function GET(request: NextRequest) {
       production: production.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       orders: orders.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       deliveries: deliveries.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      inventory,
+      // Wire policy (src/lib/imagePayload): stock rows carry `photoCount` /
+      // `hasPhoto` only (the factory paints names and quantities, never the
+      // image); QC evidence photos become `hasPhoto` (the register paints a 📷
+      // indicator, never the image itself).
+      inventory: slimInventoryRows(inventory, { keepImage: false }),
       checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       blockTypes: types.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
-      qcChecks: qcChecks.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
+      qcChecks: stripPhotos(qcChecks.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)), ["photo"]),
       mixFormulations: mixFormulations.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       mixFormulationItems: mixFormulationItems.filter((i: any) => mixFormIds.has(i.formulationId)),
       mixBatches: mixBatches.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       mixBatchInputs: mixBatchInputs.filter((i: any) => mixBatchIds.has(i.mixBatchId)),
-      mixRawMaterials: inventory.filter((i: any) => i.category === MIX_RAW_CATEGORY),
+      mixRawMaterials: slimInventoryRows(inventory, { keepImage: false }).filter((i: any) => i.category === MIX_RAW_CATEGORY),
     });
   } catch (error: any) {
     return apiError(error);
@@ -422,12 +432,20 @@ export async function POST(request: NextRequest) {
       let stock: any = null;
       if (goodBlocks > 0) {
         const { item } = await resolveBlockTypeItem(businessId, blockType, { autoCreate: true });
-        const newQty = (item.quantity || 0) + goodBlocks;
-        const [updated] = await db
-          .update(inventoryItems)
-          .set({ quantity: newQty, status: computeStockStatus(newQty, item.minStockThreshold || 0) })
-          .where(eq(inventoryItems.id, item.id))
-          .returning();
+        // P5: ONE stock writer — production output is a PRODUCTION movement.
+        const { item: updated, ...appliedProduction } = await applyStockChange({
+          businessId,
+          inventoryId: item.id,
+          delta: goodBlocks,
+          reason: "PRODUCTION",
+          refType: "BLOCK_PRODUCTION",
+          note: `${goodBlocks} blocks moulded${blocksBroken ? ` (${blocksBroken} broken)` : ""}`,
+          actor: __authSession.user,
+        });
+        {
+          const refusal = stockRefusal(appliedProduction as any);
+          if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
+        }
         stock = {
           sku: updated.sku,
           name: updated.name,
@@ -460,11 +478,21 @@ export async function POST(request: NextRequest) {
     if (entity === "ORDER") {
       const qty = Number(data.quantity) || 0;
       const price = Number(data.unitPriceGhs) || 0;
+      // Shared CRM: link the buyer at order time (one record per name/phone).
+      const buyer = await linkOrCreateCustomer({
+        businessId,
+        name: data.customerName,
+        phone: data.customerPhone,
+        amount: 0,
+        loyaltyPoints: 0,
+        phoneFallback: "—",
+      });
       const [row] = await db.insert(blockFactoryOrders).values({
         businessId, branchCode,
         orderNumber: data.orderNumber || `ORD-BLK-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`,
         customerName: data.customerName || "Walk-in Customer",
         customerPhone: data.customerPhone || null,
+        customerId: buyer?.id ?? null,
         blockType: data.blockType || "6-INCH-SOLID",
         quantity: qty,
         unitPriceGhs: price,
@@ -516,41 +544,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, item: expRes.transaction, pendingApproval: expRes.pendingApproval });
     }
 
-    // ── CHECKLIST (create a day's task list; idempotent per business+branch+date) ──
+    // ── CHECKLIST (create a day's task list; idempotent per business+date) ──
+    // Backed by the SHARED checklist store (checklist_entries) — the
+    // block_factory_checklists table is retired. Same contract as before
+    // ({items, alreadyExists}); the day is keyed by business+date, exactly like
+    // the shared engine, so the module dashboard and /api/checklists agree.
     if (entity === "CHECKLIST") {
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       const targetDate = data.checklistDate || today;
-      const existing = await db
-        .select()
-        .from(blockFactoryChecklists)
-        .where(
-          and(
-            eq(blockFactoryChecklists.businessId, businessId),
-            eq(blockFactoryChecklists.branchCode, branchCode),
-            eq(blockFactoryChecklists.checklistDate, targetDate),
-          ),
-        );
-      if (existing.length > 0) {
-        return NextResponse.json({ success: true, items: existing, alreadyExists: true });
-      }
-      const rows = [];
-      for (const t of tasks) {
-        const [row] = await db
-          .insert(blockFactoryChecklists)
-          .values({
-            businessId,
-            branchCode,
-            checklistDate: data.checklistDate || today,
-            taskKey: t.taskKey,
-            taskLabel: t.taskLabel,
-            category: t.category || "GENERAL",
-            isCompleted: false,
-            notes: t.notes || null,
-          })
-          .returning();
-        rows.push(row);
-      }
-      return NextResponse.json({ success: true, items: rows });
+      const { items, alreadyExists } = await insertDailyEntries({
+        businessId,
+        branchCode,
+        date: targetDate,
+        tasks: tasks.map((t: any) => ({
+          taskKey: t.taskKey,
+          taskLabel: t.taskLabel,
+          category: t.category || "GENERAL",
+        })),
+      });
+      ttlInvalidate("init");
+      return NextResponse.json(
+        alreadyExists ? { success: true, items, alreadyExists: true } : { success: true, items },
+      );
     }
 
     // ── QC_CHECK (Quality Control at any pipeline stage) ─────────────────
@@ -617,6 +632,13 @@ export async function POST(request: NextRequest) {
         densityKgm3: num(data.densityKgm3),
       });
 
+      // QC evidence photo: validated centrally (size + shape) — see
+      // src/lib/mediaValidation.ts. Oversized/corrupt images are refused with
+      // a plain reason instead of being stored as-is.
+      const qcCheck = validateOptionalImage(data.photo, "evidence", { label: "QC photo" });
+      if (!qcCheck.ok) return NextResponse.json({ success: false, error: qcCheck.error }, { status: 400 });
+      const qcPhoto = typeof data.photo === "string" && data.photo ? data.photo : null;
+
       const [row] = await db.insert(blockQcChecks).values({
         businessId,
         branchCode: data.branchCode || batchRow?.branchCode || mixRow?.branchCode || branchCode,
@@ -643,7 +665,7 @@ export async function POST(request: NextRequest) {
         curingDays: num(data.curingDays) === null ? null : Math.round(num(data.curingDays)!),
         rejectedBlocks: Math.max(0, Math.round(num(data.rejectedBlocks) || 0)),
         notes: data.notes || null,
-        photo: data.photo || null,
+        photo: qcPhoto,
         testedAt: data.testedAt ? new Date(data.testedAt) : new Date(),
         testerName: data.testerName || __authSession.user?.name || null,
         testerRole: data.testerRole || __authSession.user?.role || null,
@@ -688,17 +710,21 @@ export async function POST(request: NextRequest) {
       }
 
       const unitCost = Number(data.unitCostGhs) || 0;
-      const newQty = (item.quantity || 0) + qty;
-      const set: any = {
-        quantity: newQty,
-        status: computeStockStatus(newQty, item.minStockThreshold || 0),
-      };
-      if (unitCost > 0) set.costPriceGhs = unitCost;
-      const [updated] = await db
-        .update(inventoryItems)
-        .set(set)
-        .where(eq(inventoryItems.id, item.id))
-        .returning();
+      // P5: ONE stock writer.
+      const { item: updated, ...appliedRestock } = await applyStockChange({
+        businessId,
+        inventoryId: item.id,
+        delta: qty,
+        reason: "RESTOCK",
+        refType: "BLOCK_RESTOCK",
+        note: data.note || data.itemName ? `Restock ${qty}× ${item.name}` : null,
+        actor: __authSession.user,
+        setCostPriceGhs: unitCost,
+      });
+      {
+        const refusal = stockRefusal(appliedRestock as any);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
+      }
 
       let expenseRow = null;
       let pendingApproval = false;
@@ -1028,10 +1054,17 @@ export async function POST(request: NextRequest) {
           if ((d as any).actualKg > 0) {
             const [item] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, (d as any).inventoryId));
             if (item) {
-              const newQty = r3((item.quantity || 0) + (d as any).actualKg);
-              await db.update(inventoryItems)
-                .set({ quantity: newQty, status: computeStockStatus(newQty, item.minStockThreshold || 0) })
-                .where(eq(inventoryItems.id, item.id));
+              // P5: ONE stock writer — recovered raw material is a RETURN.
+              await applyStockChange({
+                businessId,
+                inventoryId: item.id,
+                delta: Number((d as any).actualKg),
+                reason: "RETURN",
+                refType: "BLOCK_MIX_REJECTED",
+                refId: batch.id,
+                note: `Recovered ${(d as any).actualKg} kg from rejected batch`,
+                actor: me,
+              });
               recoveredKg = r3(recoveredKg + (d as any).actualKg);
             }
           }
@@ -1079,25 +1112,18 @@ export async function PATCH(request: NextRequest) {
     if (entity === "CHECKLIST" && id) {
       const [existing] = await db
         .select()
-        .from(blockFactoryChecklists)
-        .where(eq(blockFactoryChecklists.id, Number(id)));
+        .from(checklistEntries)
+        .where(eq(checklistEntries.id, Number(id)));
       if (!existing) {
         return NextResponse.json({ success: false, error: "Checklist task not found" }, { status: 404 });
       }
       if (!(await canAccessBusiness(__authSession.user, existing.businessId))) {
         return FORBIDDEN("You do not have access to that business.");
       }
-      const nowCompleted = !existing.isCompleted;
-      const [row] = await db
-        .update(blockFactoryChecklists)
-        .set({
-          isCompleted: nowCompleted,
-          completedByName: nowCompleted ? data?.completedByName || "Staff" : null,
-          completedByRole: nowCompleted ? data?.completedByRole || null : null,
-          completedAt: nowCompleted ? new Date() : null,
-        })
-        .where(eq(blockFactoryChecklists.id, Number(id)))
-        .returning();
+      const row = await toggleChecklistEntry(Number(id), {
+        name: data?.completedByName,
+        role: data?.completedByRole,
+      });
       return NextResponse.json({ success: true, item: row });
     }
 

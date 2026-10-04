@@ -289,17 +289,47 @@ export async function GET(request: Request) {
       creditSales: scopedCreditSales,
       suppliers: snap.suppliers.filter((s: any) => inMyOrg(s.ownerId)), // per-organization supplier directory
       employees: filterByAccess(snap.employees, allowed),
-      assets: filterByAccess(snap.assets, allowed),
+      // Assets: the lists paint ONE image per row (the QR record modal shows
+      // the first) and a count. Ship the ≤400px display thumbnail when the row
+      // has one, so a 6-photo air-conditioner record costs ~20 KB on the wire
+      // instead of ~1.5 MB of inspection photos.
+      assets: filterByAccess(snap.assets, allowed).map((a: any) => {
+        const { assetImages, assetImagesThumb, ...rest } = a;
+        const images = Array.isArray(assetImages) ? assetImages : [];
+        const thumbs = Array.isArray(assetImagesThumb) ? assetImagesThumb : [];
+        const first = (typeof thumbs[0] === "string" && thumbs[0]) || (typeof images[0] === "string" && images[0]) || null;
+        return { ...rest, assetImages: first ? [first] : [], assetImageCount: images.length };
+      }),
       // Slim transport: the `photos[]` arrays (N× base64 data URLs per row —
       // the single heaviest column family in this payload) never leave the
-      // server on dashboard bootstrap. `photo` (the one thumbnail the UI
-      // actually renders) stays, and `photoCount` preserves the "N photos"
-      // indicator. Full photos still ship in the dedicated detail endpoints.
-      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => ({
-        ...item,
-        photoCount: Number(item.photoCount ?? (Array.isArray(item.photos) ? item.photos.length : 0)),
-      })),
-      transactions: filterByAccess(snap.transactions, allowed),
+      // server on dashboard bootstrap. What the lists paint is the ≤400px
+      // display thumbnail generated at upload time (`photoThumb`, ~18 KB);
+      // legacy rows without one fall back to the full `photo` exactly as
+      // before. `photoCount` preserves the "N photos" indicator. Full photos
+      // still ship in the dedicated detail endpoints.
+      inventory: filterByAccess(snap.inventory, allowed).map((item: any) => {
+        const { photoThumb, photo, ...rest } = item;
+        return {
+          ...rest,
+          photo: photoThumb || photo || null,
+          photoCount: Number(item.photoCount ?? (Array.isArray(item.photos) ? item.photos.length : 0)),
+        };
+      }),
+      // Slim the ledger like inventory: receipt photos (base64) are the
+      // heaviest per-row payload here, and no bootstrap screen paints them —
+      // the counts keep "N receipts" indicators working, and the audit /
+      // approval endpoints read the full images server-side on demand. A
+      // workspace with 300 photographed receipts used to pay ~80-100 MB of
+      // base64 on every login; now it pays a few dozen bytes per row.
+      transactions: filterByAccess(snap.transactions, allowed).map((t: any) => {
+        const { receiptImage, receiptImages, ...rest } = t;
+        const count = Array.isArray(receiptImages) && receiptImages.length > 0
+          ? receiptImages.length
+          : receiptImage
+            ? 1
+            : 0;
+        return { ...rest, receiptCount: count };
+      }),
       aiInsights: (allowed === null
         ? snap.aiInsights
         : snap.aiInsights.filter(

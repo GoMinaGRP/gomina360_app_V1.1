@@ -16,6 +16,7 @@ import {
   Factory,
   HandCoins,
   MapPin,
+  MessageCircle,
   Navigation,
   PackageCheck,
   PackageSearch,
@@ -31,6 +32,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { googleMapsEmbed, googleMapsLink, googleMapsRouteLink } from "@/lib/tracking";
+import CustomerHeader from "@/components/CustomerHeader";
+import { shopPhone, telHref, waHref, shopDirectionsUrl } from "@/lib/shopContact";
 import { qrDataUrl } from "@/lib/qrRegistry";
 
 const STEP_DEFS = [
@@ -57,7 +60,7 @@ const STAGE_ICONS: Record<string, any> = {
 };
 
 /** Preorder-only stages get the indigo treatment, everything else the standard emerald. */
-const PREORDER_GLOW = "bg-indigo-500/15 border-indigo-400 text-indigo-300";
+const PREORDER_GLOW = "bg-indigo-500/15 border-indigo-400 text-indigo-700";
 
 function fmtMoney(amount: number | null | undefined, _currency: string) {
   // Public customer tracking remains in GHS to match marketplace checkout and
@@ -174,35 +177,41 @@ function TrackInner() {
   };
 
   const t = result;
+  /** Resolved after mount so the WhatsApp enquiry can carry this order's own
+   *  tracking link without desynchronising the server-rendered markup. */
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    if (typeof window !== "undefined") setOrigin(window.location.origin);
+  }, []);
   const isCancelled = t?.status === "CANCELLED";
   const scopeItems = t?.items || [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      {/* Customer-facing header — deliberately separate from the staff dashboard */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center font-black text-white text-sm shadow-lg">
-            360
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-extrabold text-white leading-tight">GoMina 360 · Order Tracking</div>
-            <div className="text-[10px] text-emerald-300/90 leading-tight">Official customer page — no sign-in needed</div>
-          </div>
-          <a href="/order" className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200 underline decoration-cyan-500/40" data-testid="track-order-link">
-            Order online →
-          </a>
-        </div>
-      </header>
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      {/* Same customer header as the storefront — the two customer pages must
+          read as one product (audit §6). */}
+      <CustomerHeader
+        title="GoMina 360 · Order Tracking"
+        subtitle="Official customer page — no sign-in needed"
+      >
+        <div className="min-w-0 flex-1" />
+        <a
+          href="/order"
+          className="px-2 py-2 text-[11px] font-bold text-cyan-700 hover:text-cyan-600"
+          data-testid="track-order-link"
+        >
+          Order online →
+        </a>
+      </CustomerHeader>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+      <main className="max-w-2xl lg:max-w-5xl mx-auto px-4 py-6">
         {/* Lookup card */}
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
-          <h1 className="text-lg font-black text-white flex items-center gap-2">
-            <PackageSearch className="w-5 h-5 text-cyan-300" /> Track your order
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+          <h1 className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <PackageSearch className="w-5 h-5 text-cyan-700" /> Track your order
           </h1>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Enter the tracking code the staff gave you (it is on your receipt, e.g. <span className="font-mono text-cyan-300">GM-POULTRY-4K7XQ2</span>).
+          <p className="text-[11px] text-slate-500 mt-1">
+            Enter the tracking code the staff gave you (it is on your receipt, e.g. <span className="font-mono text-cyan-700">GM-POULTRY-4K7XQ2</span>).
             You will only ever see information linked to your own code.
           </p>
           <form
@@ -219,43 +228,47 @@ function TrackInner() {
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="GM-…"
                 autoCapitalize="characters"
-                className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 focus:border-cyan-500/60 rounded-xl text-sm text-white font-mono uppercase outline-none transition"
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-100 border border-slate-700 focus:border-cyan-500/60 rounded-xl text-sm text-slate-900 font-mono uppercase outline-none transition"
                 data-testid="track-input"
               />
             </div>
             <button
               type="submit"
               disabled={loading || !code.trim()}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white text-sm font-bold shadow-lg disabled:opacity-40"
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-slate-900 text-sm font-bold shadow-lg disabled:opacity-40"
               data-testid="track-submit"
             >
               {loading ? "…" : "Track"}
             </button>
           </form>
           {error && (
-            <div className="mt-3 px-3 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2" data-testid="track-error">
+            <div className="mt-3 px-3 py-2.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-600 text-xs flex items-center gap-2" data-testid="track-error">
               <XCircle className="w-4 h-4 shrink-0" /> {error}
             </div>
           )}
         </section>
 
         {t && (
-          <section className="space-y-4" data-testid="track-result">
+          <section
+            className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0"
+            data-testid="track-result"
+          >
             {/* Current status card */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" role="status" aria-live="polite" aria-atomic="false">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tracking code</div>
-                  <div className="font-mono text-base font-black text-cyan-300" data-testid="track-code">{t.code}</div>
+                  <div className="font-mono text-base font-black text-cyan-700" data-testid="track-code">{t.code}</div>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={toggleNotify}
                     className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition ${
                       notifyOn
-                        ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
-                        : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"
+                        ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-700"
+                        : "bg-slate-100 border-slate-700 text-slate-600 hover:bg-slate-700"
                     }`}
+                    aria-pressed={notifyOn}
                     data-testid="track-notify-toggle"
                     title="Get a notification on this device when the status changes"
                   >
@@ -264,8 +277,9 @@ function TrackInner() {
                   </button>
                   <button
                     onClick={() => fetchTracking(t.code, { announce: false })}
-                    className="p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700"
+                    className="p-2 rounded-lg bg-slate-100 border border-slate-700 text-slate-600 hover:bg-slate-700"
                     title="Refresh now"
+                    aria-label="Refresh this order now"
                     data-testid="track-refresh"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -274,11 +288,23 @@ function TrackInner() {
               </div>
 
               {isCancelled ? (
-                <div className="mt-4 px-3 py-3 rounded-xl bg-rose-500/10 border border-rose-500/40" data-testid="track-cancelled">
-                  <div className="text-sm font-black text-rose-300 flex items-center gap-2">
+                <div className="mt-4 px-3 py-3 rounded-xl bg-rose-50 border border-rose-300" data-testid="track-cancelled">
+                  <div className="text-sm font-black text-rose-600 flex items-center gap-2">
                     <XCircle className="w-4 h-4" /> This order was cancelled
                   </div>
-                  <p className="text-[11px] text-rose-200/70 mt-1">Please contact the business for details.</p>
+                  <p className="text-[11px] text-rose-600/90 mt-1">
+                    Please contact the shop for details
+                    {t.seller && shopPhone(t.seller) ? (
+                      <>
+                        {" — "}
+                        <a href={telHref(shopPhone(t.seller))} className="font-black underline" data-testid="track-cancelled-call">
+                          call {shopPhone(t.seller)}
+                        </a>
+                      </>
+                    ) : (
+                      "."
+                    )}
+                  </p>
                 </div>
               ) : (
                 <>
@@ -301,13 +327,13 @@ function TrackInner() {
                                   reached
                                     ? s.preorderOnly
                                       ? PREORDER_GLOW
-                                      : "bg-emerald-500/20 border-emerald-400 text-emerald-300"
-                                    : "bg-slate-800 border-slate-700 text-slate-500"
+                                      : "bg-emerald-100 border-emerald-400 text-emerald-700"
+                                    : "bg-slate-100 border-slate-300 text-slate-500"
                                 } ${current ? (s.preorderOnly ? "ring-2 ring-indigo-400/50 animate-pulse" : "ring-2 ring-emerald-400/50 animate-pulse") : ""}`}
                               >
                                 <Icon className="w-4 h-4" />
                               </span>
-                              <span className={`mt-1.5 text-[9px] sm:text-[10px] font-bold leading-tight ${reached ? (s.preorderOnly ? "text-indigo-300" : "text-emerald-300") : "text-slate-500"}`}>
+                              <span className={`mt-1.5 text-[9px] sm:text-[10px] font-bold leading-tight ${reached ? (s.preorderOnly ? "text-indigo-700" : "text-emerald-700") : "text-slate-500"}`}>
                                 {s.label}
                               </span>
                             </div>
@@ -317,7 +343,7 @@ function TrackInner() {
                     </ol>
                   </div>
                   <div className="mt-4 text-center">
-                    <span className="inline-block text-xs font-black px-3 py-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300" data-testid="track-status">
+                    <span className="inline-block text-xs font-black px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-300 text-emerald-700" data-testid="track-status">
                       {t.statusLabel}
                     </span>
                     <div className="text-[10px] text-slate-500 mt-1.5">
@@ -330,12 +356,12 @@ function TrackInner() {
 
             {/* Live dispatch map (Google Maps) — only while the order is on the road */}
             {t.live && (
-              <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-map">
+              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-map">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <h2 className="text-sm font-extrabold text-white flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-cyan-300" /> Your order is on its way — live location
+                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-cyan-700" /> Your order is on its way — live location
                   </h2>
-                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-cyan-300">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-cyan-700">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" /> LIVE · updated {ago(t.live.at)}
                   </span>
                 </div>
@@ -350,7 +376,7 @@ function TrackInner() {
                     data-testid="track-map-frame"
                   />
                 </div>
-                <div className="mt-2 text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+                <div className="mt-2 text-[11px] text-slate-500 flex flex-wrap gap-x-4 gap-y-1">
                   {t.live.driverName && (
                     <span className="flex items-center gap-1"><UserIcon className="w-3 h-3" /> Courier: {t.live.driverName}</span>
                   )}
@@ -363,7 +389,7 @@ function TrackInner() {
                       href={googleMapsRouteLink(t.live.lat, t.live.lng, t.deliveryLocation.lat, t.deliveryLocation.lng)}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center gap-1 font-bold text-emerald-300 hover:text-emerald-200 underline decoration-emerald-500/40"
+                      className="flex items-center gap-1 font-bold text-emerald-700 hover:text-emerald-600 underline decoration-emerald-500/40"
                       data-testid="track-route-link"
                     >
                       <Navigation className="w-3 h-3" /> Follow the courier's route to your pinned point
@@ -375,9 +401,9 @@ function TrackInner() {
 
             {/* Delivery destination — the customer's own Google-Maps pin */}
             {t.fulfillmentType === "DELIVERY" && t.deliveryLocation && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-delivery-map">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <MapPin className="w-4 h-4 text-cyan-300" /> Your delivery point
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-delivery-map">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <MapPin className="w-4 h-4 text-cyan-700" /> Your delivery point
                 </h2>
                 <div className="rounded-xl overflow-hidden border border-slate-700">
                   <iframe
@@ -390,9 +416,9 @@ function TrackInner() {
                     data-testid="track-delivery-map-frame"
                   />
                 </div>
-                <div className="mt-2 text-[11px] text-slate-400 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <div className="mt-2 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1">
                   {t.destinationAddress && <span className="flex items-center gap-1"><PackageCheck className="w-3 h-3" /> {t.destinationAddress}</span>}
-                  <span className="font-mono text-[10px] text-cyan-300/90" data-testid="track-delivery-coords">
+                  <span className="font-mono text-[10px] text-cyan-700" data-testid="track-delivery-coords">
                     {Number(t.deliveryLocation.lat).toFixed(6)}, {Number(t.deliveryLocation.lng).toFixed(6)}
                     {t.deliveryLocation.accuracyM ? ` · GPS ±${Math.round(t.deliveryLocation.accuracyM)} m` : ""}
                   </span>
@@ -400,7 +426,7 @@ function TrackInner() {
                     href={t.deliveryLocation.mapLink || googleMapsLink(t.deliveryLocation.lat, t.deliveryLocation.lng)}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1 font-bold text-cyan-300 hover:text-cyan-200 underline decoration-cyan-500/40"
+                    className="flex items-center gap-1 font-bold text-cyan-700 hover:text-cyan-600 underline decoration-cyan-500/40"
                     data-testid="track-delivery-open"
                   >
                     <Navigation className="w-3 h-3" /> Open in Google Maps
@@ -414,12 +440,12 @@ function TrackInner() {
 
             {/* Pickup point — the chosen pickup location (or the branch itself) */}
             {t.fulfillmentType === "PICKUP" && t.pickupLocation && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-pickup-map">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <Store className="w-4 h-4 text-emerald-300" /> Where to pick up
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-pickup-map">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <Store className="w-4 h-4 text-emerald-700" /> Where to pick up
                 </h2>
                 {t.pickupLocation.name && (
-                  <p className="text-[12px] font-bold text-emerald-300 mb-2" data-testid="track-pickpoint-name">
+                  <p className="text-[12px] font-bold text-emerald-700 mb-2" data-testid="track-pickpoint-name">
                     {t.pickupLocation.name}
                   </p>
                 )}
@@ -436,14 +462,14 @@ function TrackInner() {
                     />
                   </div>
                 )}
-                <div className="mt-2 text-[11px] text-slate-400 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <div className="mt-2 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1">
                   {t.pickupLocation.address && <span>{t.pickupLocation.address}</span>}
                   {t.pickupLocation.lat != null && t.pickupLocation.lng != null && (
                     <a
                       href={t.pickupLocation.mapLink || googleMapsLink(t.pickupLocation.lat, t.pickupLocation.lng)}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center gap-1 font-bold text-emerald-300 hover:text-emerald-200 underline decoration-emerald-500/40"
+                      className="flex items-center gap-1 font-bold text-emerald-700 hover:text-emerald-600 underline decoration-emerald-500/40"
                       data-testid="track-pickup-directions"
                     >
                       <Navigation className="w-3 h-3" /> Get directions
@@ -451,32 +477,32 @@ function TrackInner() {
                   )}
                 </div>
                 <p className="mt-1.5 text-[10px] text-slate-500">
-                  Come in when your order shows “Ready for Pickup” above — this is the branch's public location.
+                  Come in when your order shows “Ready for Pickup” above — this is the shop's public location.
                 </p>
               </div>
             )}
 
-            {/* Order & business card */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
-              <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-3">
-                <Store className="w-4 h-4 text-emerald-300" /> Order details
+            {/* Order details + the ordered lines (full width — it is the receipt) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2">
+              <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <Store className="w-4 h-4 text-emerald-700" /> Order details
               </h2>
               <div className="grid grid-cols-2 gap-2 text-[11px] mb-3">
-                <div className="bg-slate-800/60 rounded-lg p-2.5">
-                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Business</div>
-                  <div className="text-slate-200 font-bold mt-0.5">{t.businessName}</div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Shop</div>
+                  <div className="text-slate-700 font-bold mt-0.5">{t.businessName}</div>
                 </div>
-                <div className="bg-slate-800/60 rounded-lg p-2.5">
-                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Branch</div>
-                  <div className="text-slate-200 font-bold mt-0.5">{t.branchName || "Main branch"}</div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Location</div>
+                  <div className="text-slate-700 font-bold mt-0.5">{t.branchName || "Main location"}</div>
                 </div>
-                <div className="bg-slate-800/60 rounded-lg p-2.5">
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
                   <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Customer</div>
-                  <div className="text-slate-200 font-bold mt-0.5">{t.customerName}</div>
+                  <div className="text-slate-700 font-bold mt-0.5">{t.customerName}</div>
                 </div>
-                <div className="bg-slate-800/60 rounded-lg p-2.5">
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
                   <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Fulfilment</div>
-                  <div className="text-slate-200 font-bold mt-0.5">
+                  <div className="text-slate-700 font-bold mt-0.5">
                     {t.fulfillmentType === "DELIVERY" ? "Delivery" : "Pickup"}
                     {t.fulfillmentType === "DELIVERY" && t.destinationAddress ? ` → ${t.destinationAddress}` : ""}
                   </div>
@@ -486,7 +512,7 @@ function TrackInner() {
               {scopeItems.length > 0 && (
                 <table className="w-full text-left text-xs" data-testid="track-items">
                   <thead>
-                    <tr className="text-[9px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
+                    <tr className="text-[9px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
                       <th className="py-1.5">Product</th>
                       <th className="py-1.5 text-center">Qty</th>
                       <th className="py-1.5 text-right">Amount</th>
@@ -494,10 +520,31 @@ function TrackInner() {
                   </thead>
                   <tbody>
                     {scopeItems.map((li: any, i: number) => (
-                      <tr key={i} className="border-b border-slate-800/60">
-                        <td className="py-2 text-slate-200">{li.description}</td>
-                        <td className="py-2 text-center text-slate-400">{li.quantity}{li.unit ? ` ${li.unit}` : ""}</td>
-                        <td className="py-2 text-right text-slate-300 font-semibold">{fmtMoney(li.total, t.currency)}</td>
+                      <tr key={i} className="border-b border-slate-100 last:border-0" data-testid={`track-item-${i + 1}`}>
+                        <td className="py-2 text-slate-700">
+                          {/* Every line links back to the product it was bought
+                              from, so the customer can re-order or ask about
+                              exactly that item. */}
+                          {li.productId && t.businessId ? (
+                            <a
+                              href={`/order?biz=${t.businessId}&p=${li.productId}`}
+                              className="font-semibold text-cyan-700 hover:text-cyan-600 underline decoration-cyan-300"
+                              data-testid={`track-item-link-${i + 1}`}
+                              title="Open this product in the storefront"
+                            >
+                              {li.description}
+                            </a>
+                          ) : (
+                            li.description
+                          )}
+                          {li.sku && (
+                            <span className="block font-mono text-[9px] text-slate-400" data-testid={`track-item-sku-${i + 1}`}>
+                              {li.sku}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 text-center text-slate-500">{li.quantity}{li.unit ? ` ${li.unit}` : ""}</td>
+                        <td className="py-2 text-right text-slate-600 font-semibold">{fmtMoney(li.total, t.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -506,21 +553,21 @@ function TrackInner() {
                       <>
                         <tr>
                           <td colSpan={2} className="pt-2 text-right font-bold text-slate-500">Subtotal</td>
-                          <td className="pt-2 text-right font-semibold text-slate-300" data-testid="track-subtotal">{fmtMoney(t.subtotalGhs, t.currency)}</td>
+                          <td className="pt-2 text-right font-semibold text-slate-600" data-testid="track-subtotal">{fmtMoney(t.subtotalGhs, t.currency)}</td>
                         </tr>
                         <tr>
                           <td colSpan={2} className="text-right font-bold text-slate-500">
                             Discount{Number(t.discountPercent) > 0 ? ` (${Number(t.discountPercent)}%)` : ""}
                           </td>
-                          <td className="text-right font-semibold text-amber-300" data-testid="track-discount">
+                          <td className="text-right font-semibold text-amber-700" data-testid="track-discount">
                             − {fmtMoney(t.discountGhs, t.currency)}
                           </td>
                         </tr>
                       </>
                     )}
                     <tr data-testid="track-total-row">
-                      <td colSpan={2} className="py-2 text-right font-bold text-slate-400">Total</td>
-                      <td className="py-2 text-right font-black text-emerald-300">{fmtMoney(t.totalGhs, t.currency)}</td>
+                      <td colSpan={2} className="py-2 text-right font-bold text-slate-500">Total</td>
+                      <td className="py-2 text-right font-black text-emerald-700">{fmtMoney(t.totalGhs, t.currency)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -530,11 +577,78 @@ function TrackInner() {
               </div>
             </div>
 
+            {/* The selling shop — the SAME contact options as the storefront
+                product card (call · WhatsApp · directions), using the shop's
+                own number (customerHelpPhone → contactPhone), never the
+                tenant helpdesk. The enquiry quotes this order's tracking code. */}
+            {t.seller && (shopPhone(t.seller) || shopDirectionsUrl(t.seller)) && (() => {
+              const phone = shopPhone(t.seller);
+              const dir = shopDirectionsUrl(t.seller);
+              const orderLink = origin && t.code ? `${origin}/track?code=${encodeURIComponent(t.code)}` : "";
+              const ask = waHref(
+                phone,
+                `Hello ${t.seller.businessName}, I would like to ask about my order ${t.code} on GoMina 360.${orderLink ? ` ${orderLink}` : ""}`,
+              );
+              return (
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-seller">
+                  <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-1">
+                    <Store className="w-4 h-4 text-emerald-700" /> From {t.seller.businessName}
+                  </h2>
+                  <p className="text-[10px] text-slate-500 mb-2">
+                    {t.seller.branchName ? `${t.seller.branchName} · ` : ""}
+                    This order is sold and fulfilled by this shop — contact them directly about it.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {phone && (
+                      <a
+                        href={telHref(phone)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+                        data-testid="track-seller-call"
+                      >
+                        <Phone className="w-3.5 h-3.5" /> {phone}
+                      </a>
+                    )}
+                    {ask && (
+                      <a
+                        href={ask}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-green-50 border border-green-200 text-[11px] font-bold text-green-700 hover:bg-green-100"
+                        data-testid="track-seller-wa"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" /> WhatsApp about this order
+                      </a>
+                    )}
+                    {dir && (
+                      <a
+                        href={dir}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-[11px] font-bold text-sky-700 hover:bg-sky-100"
+                        data-testid="track-seller-dir"
+                      >
+                        <Navigation className="w-3.5 h-3.5" /> Directions
+                      </a>
+                    )}
+                    {t.businessId && (
+                      <a
+                        href={`/order?biz=${t.businessId}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800 hover:bg-amber-100"
+                        data-testid="track-seller-order"
+                      >
+                        <PackageCheck className="w-3.5 h-3.5" /> Shop this store again
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Pre-order facts card: ETA window, deposit/balance ledger position. */}
             {t.orderKind && t.orderKind !== "STOCK" && (
-              <div className="bg-gradient-to-br from-indigo-950/80 to-indigo-900/40 border border-indigo-500/40 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-preorder">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <CalendarClock className="w-4 h-4 text-indigo-300" /> Pre-order booked
+              <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/60 border border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-preorder">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <CalendarClock className="w-4 h-4 text-indigo-700" /> Pre-order booked
                 </h2>
                 <div className="text-[11px] text-indigo-100/80 space-y-1">
                   {t.preorderSnapshot?.etaStart && (
@@ -548,8 +662,8 @@ function TrackInner() {
                       Fulfilment: <b>{(t.preorderSnapshot.methods as string[]).join(" + ")}</b>
                     </p>
                   )}
-                  <p className="text-indigo-200/70">
-                    Deposit confirmed at booking — your goods are sourced from our supplier and become yours the moment they land in branch stock.
+                  <p className="text-indigo-700/70">
+                    Deposit confirmed at booking — your goods are sourced from our supplier and become yours the moment they land in the shop's stock.
                   </p>
                 </div>
               </div>
@@ -557,27 +671,27 @@ function TrackInner() {
 
             {/* Payment status & delivery progress for the customer */}
             {t.payment && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-payment">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <Banknote className="w-4 h-4 text-emerald-300" /> Payment
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-payment">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <Banknote className="w-4 h-4 text-emerald-700" /> Payment
                 </h2>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
                     className={`text-[11px] font-black px-2.5 py-1 rounded-full border ${
                       t.payment.status === "PAID"
-                        ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                        ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-700"
                         : t.payment.status === "PENDING_CONFIRMATION"
                         ? "bg-yellow-500/15 border-yellow-500/40 text-yellow-300"
-                        : "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                        : "bg-amber-500/15 border-amber-500/40 text-amber-700"
                     }`}
                     data-testid="track-payment-status"
                   >
                     {t.payment.label}
                   </span>
-                  <span className="text-[11px] text-slate-400">{t.payment.explainer}</span>
+                  <span className="text-[11px] text-slate-500">{t.payment.explainer}</span>
                 </div>
                 {t.status === "DISPATCHED" && t.fulfillmentType === "DELIVERY" && (
-                  <div className="mt-2 text-[11px] text-cyan-300 flex items-center gap-1.5" data-testid="track-delivery-progress">
+                  <div className="mt-2 text-[11px] text-cyan-700 flex items-center gap-1.5" data-testid="track-delivery-progress">
                     <Truck className="w-3.5 h-3.5" /> Delivery in progress — watch the live map above.
                   </div>
                 )}
@@ -587,7 +701,7 @@ function TrackInner() {
                 {t.help?.phone && (
                   <a
                     href={`tel:${String(t.help.phone).replace(/[^+\d]/g, "")}`}
-                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1.5 text-[12px] font-bold text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/15 transition"
+                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 text-[12px] font-bold text-emerald-700 hover:text-emerald-600 hover:bg-emerald-500/15 transition"
                     data-testid="track-payment-call"
                   >
                     <Phone className="w-3.5 h-3.5 shrink-0" />
@@ -602,31 +716,31 @@ function TrackInner() {
 
             {/* Credit sale — installment plan, dated history & outstanding balance */}
             {t.credit && (
-              <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-credit-card">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <HandCoins className="w-4 h-4 text-cyan-300" /> Credit sale — {t.credit.statusLabel}
+              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-credit-card">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <HandCoins className="w-4 h-4 text-cyan-700" /> Credit sale — {t.credit.statusLabel}
                 </h2>
                 <div className="grid grid-cols-3 gap-2 text-center mb-2">
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
                     <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Total</p>
-                    <p className="text-[13px] font-black text-white" data-testid="track-credit-total">
+                    <p className="text-[13px] font-black text-slate-900" data-testid="track-credit-total">
                       GH₵{Number(t.credit.totalGhs).toFixed(2)}
                     </p>
                   </div>
-                  <div className="bg-slate-950/60 border border-emerald-500/25 rounded-xl p-2.5">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
                     <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-400">Paid so far</p>
-                    <p className="text-[13px] font-black text-emerald-300" data-testid="track-credit-paid">
+                    <p className="text-[13px] font-black text-emerald-700" data-testid="track-credit-paid">
                       GH₵{Number(t.credit.amountPaidGhs).toFixed(2)}
                     </p>
                   </div>
-                  <div className="bg-slate-950/60 border border-amber-500/25 rounded-xl p-2.5">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5">
                     <p className="text-[9px] font-bold uppercase tracking-wider text-amber-400">Outstanding</p>
-                    <p className="text-[13px] font-black text-amber-300" data-testid="track-credit-balance">
+                    <p className="text-[13px] font-black text-amber-700" data-testid="track-credit-balance">
                       GH₵{Number(t.credit.balanceGhs).toFixed(2)}
                     </p>
                   </div>
                 </div>
-                <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden border border-slate-700 mb-1" data-testid="track-credit-progress">
+                <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden border border-slate-300 mb-1" data-testid="track-credit-progress">
                   <div className="h-full bg-emerald-500 transition-all" style={{ width: `${t.credit.progressPercent}%` }} />
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-slate-500 mb-2">
@@ -634,12 +748,12 @@ function TrackInner() {
                   {t.credit.dueDate && <span data-testid="track-credit-due">Agreed settlement: {t.credit.dueDate}</span>}
                 </div>
                 {t.credit.status === "ACTIVE" ? (
-                  <p className="text-[11px] text-cyan-200/90 mb-2" data-testid="track-credit-how">
+                  <p className="text-[11px] text-cyan-700 mb-2" data-testid="track-credit-how">
                     To pay an installment, send MoMo to the business payment number below (quote your tracking code
-                    as reference), call the business, or pay at the branch — every payment shows up here instantly.
+                    as reference), call the shop, or pay at the shop — every payment shows up here instantly.
                   </p>
                 ) : (
-                  <p className="text-[11px] text-emerald-300 font-bold mb-2" data-testid="track-credit-settled">
+                  <p className="text-[11px] text-emerald-700 font-bold mb-2" data-testid="track-credit-settled">
                     Fully paid{t.credit.paidAt ? ` on ${new Date(t.credit.paidAt).toLocaleDateString()}` : ""} — thank you!
                   </p>
                 )}
@@ -648,10 +762,10 @@ function TrackInner() {
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Your payments</p>
                     <div className="space-y-1">
                       {t.credit.payments.map((p: any, i: number) => (
-                        <div key={i} className="flex items-center justify-between text-[11px] bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1.5">
-                          <span className="text-slate-400">{p.at ? new Date(p.at).toLocaleString() : "—"}</span>
-                          <span className="font-bold text-emerald-300">GH₵{Number(p.amountGhs).toFixed(2)}</span>
-                          <span className="text-slate-400">{p.method === "MTN_MOMO" ? "MTN MoMo" : p.method === "CASH" ? "Cash" : p.method === "TELECEL_CASH" ? "Telecel Cash" : p.method === "BANK_TRANSFER" ? "Bank" : p.method === "POS_CARD" ? "POS" : p.method}</span>
+                        <div key={i} className="flex items-center justify-between text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+                          <span className="text-slate-500">{p.at ? new Date(p.at).toLocaleString() : "—"}</span>
+                          <span className="font-bold text-emerald-700">GH₵{Number(p.amountGhs).toFixed(2)}</span>
+                          <span className="text-slate-500">{p.method === "MTN_MOMO" ? "MTN MoMo" : p.method === "CASH" ? "Cash" : p.method === "TELECEL_CASH" ? "Telecel Cash" : p.method === "BANK_TRANSFER" ? "Bank" : p.method === "POS_CARD" ? "POS" : p.method}</span>
                         </div>
                       ))}
                     </div>
@@ -662,18 +776,18 @@ function TrackInner() {
 
             {/* Customer help & MoMo payment — set per branch by the owner */}
             {(t.help || t.momo) && (
-              <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4 sm:p-5 shadow-xl" data-testid="track-contacts">
-                <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-2">
-                  <Smartphone className="w-4 h-4 text-amber-300" /> Help & payment for this order
+              <div className="bg-white border border-amber-300 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-contacts">
+                <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
+                  <Smartphone className="w-4 h-4 text-amber-700" /> Help & payment for this order
                 </h2>
                 {t.momo && (
-                  <p className="text-[12px] text-amber-200 mb-1" data-testid="track-momo">
+                  <p className="text-[12px] text-amber-700 mb-1" data-testid="track-momo">
                     Pay MoMo to <span className="font-black">{t.momo.number}</span>
                     {t.momo.name ? ` — ${t.momo.name}` : ""}. Quote your tracking code as reference.
                   </p>
                 )}
                 {t.help && (
-                  <p className="text-[12px] text-amber-100/90" data-testid="track-help">
+                  <p className="text-[12px] text-amber-700" data-testid="track-help">
                     Questions about your order? Call / WhatsApp <span className="font-black">{t.help.phone}</span>
                   </p>
                 )}
@@ -681,20 +795,20 @@ function TrackInner() {
             )}
 
             {/* Timeline = the customer's status-update feed */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl">
-              <h2 className="text-sm font-extrabold text-white flex items-center gap-2 mb-3">
-                <Clock3 className="w-4 h-4 text-emerald-300" /> Status updates
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+              <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <Clock3 className="w-4 h-4 text-emerald-700" /> Status updates
               </h2>
               <ol className="space-y-3" data-testid="track-timeline">
                 {[...(t.history || [])].reverse().map((h: any, i: number) => (
                   <li key={i} className="flex items-start gap-3">
-                    <span className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${i === 0 ? "bg-emerald-500/20 border-emerald-400 text-emerald-300" : "bg-slate-800 border-slate-700 text-slate-500"}`}>
+                    <span className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${i === 0 ? "bg-emerald-100 border-emerald-400 text-emerald-700" : "bg-slate-100 border-slate-300 text-slate-500"}`}>
                       <CheckCircle2 className="w-3.5 h-3.5" />
                     </span>
                     <div className="min-w-0">
-                      <div className={`text-xs font-bold ${i === 0 ? "text-white" : "text-slate-300"}`}>{h.label}</div>
+                      <div className={`text-xs font-bold ${i === 0 ? "text-slate-900" : "text-slate-600"}`}>{h.label}</div>
                       <div className="text-[10px] text-slate-500">{h.at ? new Date(h.at).toLocaleString() : ""} · {h.by}</div>
-                      {h.note && <div className="text-[11px] text-slate-400 italic mt-0.5">“{h.note}”</div>}
+                      {h.note && <div className="text-[11px] text-slate-500 italic mt-0.5">“{h.note}”</div>}
                     </div>
                   </li>
                 ))}
@@ -711,8 +825,9 @@ function TrackInner() {
                     setTimeout(() => setCopied(false), 1500);
                   } catch {}
                 }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-bold"
-                data-testid="track-copy"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-700 border border-slate-700 text-slate-600 text-[11px] font-bold"
+                aria-label="Copy your tracking code"
+                    data-testid="track-copy"
               >
                 <Copy className="w-3.5 h-3.5" /> {copied ? "Link copied!" : "Copy tracking link"}
               </button>
@@ -748,7 +863,7 @@ export default function PublicTrackPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center text-sm">
+        <div className="min-h-screen bg-slate-100 text-slate-500 flex items-center justify-center text-sm">
           Loading order tracking…
         </div>
       }

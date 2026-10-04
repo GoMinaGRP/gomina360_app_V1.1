@@ -41,7 +41,7 @@ export default function PreordersHubView({
             supplier pipeline — customer tracking follows every step automatically.
           </p>
         </div>
-        <div className="flex items-center gap-1 bg-slate-900/70 border border-slate-700 rounded-xl p-1 w-fit" data-testid="ph-tabs">
+        <div className="flex flex-wrap items-center gap-1 bg-slate-900/70 border border-slate-700 rounded-xl p-1 w-fit max-w-full" data-testid="ph-tabs">
           <button
             onClick={() => setHub("SETUP")}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition ${hub === "SETUP" ? "bg-indigo-600 text-white shadow" : "text-slate-300 hover:text-white"}`}

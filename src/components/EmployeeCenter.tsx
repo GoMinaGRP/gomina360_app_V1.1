@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { MAX_SOURCE_IMAGE_BYTES, optimizeCanvas, optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   UserCheck,
   X,
@@ -58,29 +59,11 @@ const DOC_TYPES: [string, string][] = [
 
 const DAY_OPTIONS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
-/** Downscale an image file / data URL to a manageable base64 (max 480px). */
-async function imageToDataUrl(file: File | Blob, max = 480): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale) || 1;
-      const h = Math.round(img.height * scale) || 1;
-      const c = document.createElement("canvas");
-      c.width = w;
-      c.height = h;
-      c.getContext("2d")!.drawImage(img, 0, 0, w, h);
-      resolve(c.toDataURL("image/jpeg", 0.85));
-    };
-    img.onerror = () => resolve(dataUrl); // keep original if undecodable
-    img.src = dataUrl;
-  });
+/** Employee photos go through the shared optimizer (≤480px, q0.82) — the
+ *  same pipeline every other upload uses, with EXIF rotation applied and the
+ *  original kept whenever it is already small enough. */
+async function imageToDataUrl(file: File | Blob, purpose: "employeePhoto" | "document" = "employeePhoto"): Promise<string> {
+  return optimizedDataUrl(file, purpose);
 }
 
 /** Live camera capture modal (getUserMedia → canvas snapshot). */
@@ -107,14 +90,15 @@ function CameraCapture({ onShot, onClose }: { onShot: (dataUrl: string) => void;
     };
   }, []);
 
-  const shoot = () => {
+  const shoot = async () => {
     const v = videoRef.current;
     if (!v) return;
     const c = document.createElement("canvas");
     c.width = v.videoWidth || 640;
     c.height = v.videoHeight || 480;
     c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
-    onShot(c.toDataURL("image/jpeg", 0.85));
+    // Same preset as the file picker: the capture is stored at ≤480px.
+    onShot((await optimizeCanvas(c, "employeePhoto")).dataUrl);
   };
 
   useEffect(() => {
@@ -195,6 +179,11 @@ export function EmployeeRegistration({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [camOpen, setCamOpen] = useState(false);
+  /** TRUE only once a NEW photo was picked/captured in this session. Rows
+   *  stored before the current byte budgets must not be re-validated (and a
+   *  re-sent legacy photo would be refused) — so an untouched photo is simply
+   *  not part of the save payload. */
+  const [photoDirty, setPhotoDirty] = useState(false);
   const editing = !!initial?.id;
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -207,7 +196,14 @@ export function EmployeeRegistration({
     if (!file) return;
     if (!file.type.startsWith("image/")) return setErr("Please choose an image file.");
     setErr("");
-    set("photo", await imageToDataUrl(file));
+    try {
+      set("photo", await imageToDataUrl(file));
+      setPhotoDirty(true);
+    } catch (err: any) {
+      // Shared pipeline refused it (over the source ceiling, or a format this
+      // browser cannot decode) — surface the reason.
+      setErr(err?.message || "That photo could not be processed — try another image.");
+    }
   };
 
   const bizPicked = (id: string) => {
@@ -230,7 +226,10 @@ export function EmployeeRegistration({
         idType: form.idType || undefined, idNumber: form.idNumber || undefined,
         workPermitNo: form.workPermitNo || undefined, notes: form.notes || undefined,
       };
-      if (form.photo) payload.photo = form.photo;
+      // Send the photo ONLY when it was added/changed/captured here; an
+      // unchanged stored photo stays untouched on the server.
+      if (form.photo && (photoDirty || !editing)) payload.photo = form.photo;
+      if (!form.photo && photoDirty) payload.photo = null; // explicit removal
       if (form.employeeNo) payload.employeeNo = form.employeeNo;
       const r = await fetch("/api/employees", {
         method: editing ? "PATCH" : "POST",
@@ -447,7 +446,7 @@ export function EmployeeRegistration({
           </button>
         </div>
       </div>
-      {camOpen && <CameraCapture onShot={(d) => { set("photo", d); setCamOpen(false); }} onClose={() => setCamOpen(false)} />}
+      {camOpen && <CameraCapture onShot={(d) => { set("photo", d); setPhotoDirty(true); setCamOpen(false); }} onClose={() => setCamOpen(false)} />}
     </div>
   );
 }
@@ -494,10 +493,24 @@ export function EmployeeProfile({
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
     setDocErr("");
-    if (f.type.startsWith("image/")) setDocFile({ name: f.name, data: await imageToDataUrl(f, 1400) });
-    else if (f.type === "application/pdf") {
+    // Images are optimized before upload (≤2800px q0.85 — scans stay readable),
+    // so they may arrive up to 20MB. PDFs are never re-encoded and keep the
+    // 2.5MB rule; the server enforces the final stored-size cap.
+    if (f.type.startsWith("image/")) {
+      if (f.size > MAX_SOURCE_IMAGE_BYTES) {
+        return setDocErr(`That image is ${(f.size / 1024 / 1024).toFixed(1)} MB — up to 20 MB images are accepted (they are compressed automatically).`);
+      }
+      try {
+        const data = await imageToDataUrl(f, "document");
+        if (data.length > 2_500_000) return setDocErr("That image could not be compressed small enough — try a smaller photo or a PDF.");
+        return setDocFile({ name: f.name, data });
+      } catch (err: any) {
+        return setDocErr(err?.message || "That image could not be processed — try another file.");
+      }
+    }
+    if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
+    if (f.type === "application/pdf") {
       const r = new FileReader();
       r.onload = () => setDocFile({ name: f.name, data: String(r.result) });
       r.readAsDataURL(f);

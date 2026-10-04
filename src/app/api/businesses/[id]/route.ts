@@ -12,6 +12,7 @@ import {
   assets,
   assetAuditLogs,
   inventoryItems,
+  stockMovements,
   universalExports,
   transactions,
   expenseCategories,
@@ -34,7 +35,6 @@ import {
   poultryWaterLogs,
   poultryHealthRecords,
   poultryProduction,
-  poultryChecklists,
   poultryProducts,
   poultryWeightLogs,
   poultryBenchmarkProfiles,
@@ -46,7 +46,6 @@ import {
   blockFactoryLogs,
   blockFactoryOrders,
   blockFactoryDeliveries,
-  blockFactoryChecklists,
   blockTypes,
   blockQcChecks,
   blockMixFormulations,
@@ -61,7 +60,6 @@ import {
   aquacultureHarvests,
   aquacultureWeightLogs,
   aquacultureBenchmarkProfiles,
-  aquacultureChecklists,
   fishFeedFormulations,
   fishFeedFormulationItems,
   fishFeedBatches,
@@ -219,6 +217,7 @@ async function relatedCounts(businessId: number) {
 
   const groups: Record<string, number> = {
     inventoryItems: await count(inventoryItems, inventoryItems.businessId),
+    stockMovements: await count(stockMovements, stockMovements.businessId),
     employees: await count(employees, employees.businessId),
     customers: await count(customers, customers.businessId),
     assets: await count(assets, assets.businessId),
@@ -265,13 +264,11 @@ async function relatedCounts(businessId: number) {
       (await count(poultryHealthRecords, poultryHealthRecords.businessId)) +
       (await count(poultryProduction, poultryProduction.businessId)) +
       (await count(poultryWeightLogs, poultryWeightLogs.businessId)) +
-      (await count(poultryChecklists, poultryChecklists.businessId)) +
       (await count(poultryProducts, poultryProducts.businessId)) +
       (await count(poultryFeedFormulations, poultryFeedFormulations.businessId)) +
       (await count(poultryFeedBatches, poultryFeedBatches.businessId)) +
       (await count(poultryFeedQcChecks, poultryFeedQcChecks.businessId)) +
       (await count(blockFactoryLogs, blockFactoryLogs.businessId)) +
-      (await count(blockFactoryChecklists, blockFactoryChecklists.businessId)) +
       (await count(blockTypes, blockTypes.businessId)) +
       (await count(blockMixFormulations, blockMixFormulations.businessId)) +
       (await count(blockMixBatches, blockMixBatches.businessId)) +
@@ -283,7 +280,6 @@ async function relatedCounts(businessId: number) {
       (await count(aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId)) +
       (await count(aquacultureHarvests, aquacultureHarvests.businessId)) +
       (await count(aquacultureWeightLogs, aquacultureWeightLogs.businessId)) +
-      (await count(aquacultureChecklists, aquacultureChecklists.businessId)) +
       (await count(fishFeedFormulations, fishFeedFormulations.businessId)) +
       (await count(fishFeedBatches, fishFeedBatches.businessId)) +
       (await count(fishFeedQcChecks, fishFeedQcChecks.businessId)) +
@@ -459,6 +455,7 @@ async function purgeBusinessAllRecords(
     [budgets, budgets.businessId],
     [universalExports, universalExports.businessId],
     [inventoryItems, inventoryItems.businessId],
+    [stockMovements, stockMovements.businessId],
     [customers, customers.businessId],
     [employees, employees.businessId],
     [assets, assets.businessId],
@@ -511,7 +508,6 @@ async function purgeBusinessAllRecords(
     [blockFactoryLogs, blockFactoryLogs.businessId],
     [blockFactoryOrders, blockFactoryOrders.businessId],
     [blockFactoryDeliveries, blockFactoryDeliveries.businessId],
-    [blockFactoryChecklists, blockFactoryChecklists.businessId],
 
     // 2i. Poultry operations
     [poultryLogs, poultryLogs.businessId],
@@ -521,7 +517,6 @@ async function purgeBusinessAllRecords(
     [poultryHealthRecords, poultryHealthRecords.businessId],
     [poultryProduction, poultryProduction.businessId],
     [poultryWeightLogs, poultryWeightLogs.businessId],
-    [poultryChecklists, poultryChecklists.businessId],
 
     // 2j. Aquaculture operations
     [aquacultureLogs, aquacultureLogs.businessId],
@@ -531,7 +526,6 @@ async function purgeBusinessAllRecords(
     [aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId],
     [aquacultureHarvests, aquacultureHarvests.businessId],
     [aquacultureWeightLogs, aquacultureWeightLogs.businessId],
-    [aquacultureChecklists, aquacultureChecklists.businessId],
 
     // 2k. Livestock operations
     [livestockLogs, livestockLogs.businessId],
@@ -799,20 +793,54 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.pickupEnabled !== undefined) updates.pickupEnabled = Boolean(body.pickupEnabled);
     if (body.deliveryEnabled !== undefined) updates.deliveryEnabled = Boolean(body.deliveryEnabled);
     if (body.serviceRadiusKm !== undefined) {
-      const num = Number(body.serviceRadiusKm);
-      if (Number.isFinite(num) && num >= 0) updates.serviceRadiusKm = num;
+      if (body.serviceRadiusKm === null || body.serviceRadiusKm === "") {
+        updates.serviceRadiusKm = null; // empty = no limit (matches the editor)
+      } else {
+        const num = Number(body.serviceRadiusKm);
+        // The editor's own contract is 0–1000 km. Enforce it on the server too,
+        // otherwise a crafted PATCH could widen the delivery area to the whole
+        // map and defeat the service-area refusal at checkout.
+        if (!Number.isFinite(num) || num < 0 || num > 1000) {
+          return NextResponse.json(
+            { success: false, error: "Service radius must be a number of kilometres between 0 and 1000 (leave empty for no limit)." },
+            { status: 400 },
+          );
+        }
+        updates.serviceRadiusKm = num;
+      }
     }
     if (body.serviceNote !== undefined) updates.serviceNote = body.serviceNote ? String(body.serviceNote).trim() : null;
     if (body.customerHelpPhone !== undefined) updates.customerHelpPhone = body.customerHelpPhone ? String(body.customerHelpPhone).trim() : null;
     if (body.momoNumber !== undefined) updates.momoNumber = body.momoNumber ? String(body.momoNumber).trim() : null;
     if (body.momoName !== undefined) updates.momoName = body.momoName ? String(body.momoName).trim() : null;
+    // `null`/"" clears the pin. (Number(null) is 0, so the old code silently
+    // relocated a cleared unit to 0°,0° — the Gulf of Guinea.)
     if (body.gpsLat !== undefined) {
       const num = Number(body.gpsLat);
-      updates.gpsLat = Number.isFinite(num) ? num : null;
+      updates.gpsLat = body.gpsLat === null || body.gpsLat === "" ? null : Number.isFinite(num) ? num : null;
     }
     if (body.gpsLng !== undefined) {
       const num = Number(body.gpsLng);
-      updates.gpsLng = Number.isFinite(num) ? num : null;
+      updates.gpsLng = body.gpsLng === null || body.gpsLng === "" ? null : Number.isFinite(num) ? num : null;
+    }
+    // A branch pin is a lat/lng PAIR. Half a request (or half a stored pin)
+    // makes every distance — service areas, courier maps, customer proximity —
+    // meaningless, so refuse both shapes instead of silently moving the pin.
+    if (body.gpsLat !== undefined || body.gpsLng !== undefined) {
+      if ((body.gpsLat !== undefined) !== (body.gpsLng !== undefined)) {
+        return NextResponse.json(
+          { success: false, error: "A branch pin needs BOTH latitude and longitude — send the pair, or clear both." },
+          { status: 400 },
+        );
+      }
+      const latSet = updates.gpsLat !== null && updates.gpsLat !== undefined;
+      const lngSet = updates.gpsLng !== null && updates.gpsLng !== undefined;
+      if (latSet !== lngSet) {
+        return NextResponse.json(
+          { success: false, error: "A branch pin needs BOTH a latitude and a longitude — send the pair, or clear both." },
+          { status: 400 },
+        );
+      }
     }
     if (body.watermarkEnabled !== undefined) updates.watermarkEnabled = Boolean(body.watermarkEnabled);
     if (body.watermarkMode !== undefined && ["LIGHT", "BOLD", "SUBTLE"].includes(body.watermarkMode)) {
@@ -845,6 +873,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       business: updatedBiz,
       categoryChanged,
       reprovisioned,
+      // The editor shows the "type changed — starter kit/checklists
+      // provisioned" notice from `typeChange`; the provisioning result was
+      // only ever exposed under `reprovisioned`, so that notice never showed.
+      typeChange: categoryChanged ? reprovisioned : null,
     });
   } catch (error: any) {
     return apiError(error);

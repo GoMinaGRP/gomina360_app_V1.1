@@ -12,6 +12,8 @@ import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
+import { validateImageArray, validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 export async function GET(request: Request) {
   try {
@@ -35,7 +37,12 @@ export async function GET(request: Request) {
           .from(transactions)
           .where(eq(transactions.businessId, bId))
           .orderBy(desc(transactions.id));
-        return NextResponse.json({ success: true, transactions: results });
+        // Receipt photos are evidence, not list decoration: no screen renders
+        // them from this endpoint (the Records drawer fetches one full record
+        // on demand). Shipping them made the ledger payload grow without bound
+        // — a 300-receipt workspace paid ~80-100 MB per open. `receiptCount`
+        // keeps "📎 N" indicators working.
+        return NextResponse.json({ success: true, transactions: stripReceipts(results) });
       }
     }
 
@@ -44,13 +51,13 @@ export async function GET(request: Request) {
       .from(transactions)
       .orderBy(desc(transactions.id));
     if (session.user.isSuperAdmin) {
-      return NextResponse.json({ success: true, transactions: allTrx });
+      return NextResponse.json({ success: true, transactions: stripReceipts(allTrx) });
     }
     const { accessibleBusinessIds } = await import("@/lib/auth");
     const allowed = await accessibleBusinessIds(session.user);
     const scoped =
       allowed === null ? allTrx : allTrx.filter((t) => allowed.includes(t.businessId));
-    return NextResponse.json({ success: true, transactions: scoped });
+    return NextResponse.json({ success: true, transactions: stripReceipts(scoped) });
   } catch (error: any) {
     return apiError(error);
   }
@@ -98,6 +105,14 @@ export async function POST(request: Request) {
         "You do not have permission to record expenses. Ask the OWNER to enable 'can record expenses' for your account."
       );
     }
+
+    // Receipt photos: shared validation (shape + stored-byte budget + cap).
+    // The client already optimises to ≤700 KB / 3 photos; this stops anything
+    // else from writing an unbounded blob into the ledger.
+    const receiptOne = validateOptionalImage(body?.receiptImage, "receipt", { label: "Receipt photo" });
+    if (!receiptOne.ok) return NextResponse.json({ success: false, error: receiptOne.error }, { status: 400 });
+    const receiptMany = validateImageArray(body?.receiptImages, "receipt", { label: "Receipt photos" });
+    if (!receiptMany.ok) return NextResponse.json({ success: false, error: receiptMany.error }, { status: 400 });
 
     // Route all EXPENSE transactions through centralized postOrGateExpenseTransaction
     if (String(type).toUpperCase() === "EXPENSE") {

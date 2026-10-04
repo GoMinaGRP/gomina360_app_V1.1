@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { db } from "@/db";
-import { businesses, inventoryItems, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
+import { businesses, inventoryItems, inventoryVariants, serviceAreas, pickupLocations, organizations, fulfillmentMethods, fulfillmentOptions } from "@/db/schema";
 import { asc, eq, inArray, and } from "drizzle-orm";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { compressJsonBody } from "@/lib/httpGzip";
+import { storefrontVariants } from "@/lib/boutique";
+import { normalizeInventoryItem } from "@/lib/inventoryCategories";
 
 /**
  * PUBLIC online-ordering menu — NO login required.
@@ -24,7 +26,7 @@ import { compressJsonBody } from "@/lib/httpGzip";
 // service-areas, pickup points, businesses…) also flushes this snapshot.
 // A standalone "menu:*" key would stay stale for up to MENU_TTL_MS after
 // any write.
-const MENU_CACHE_KEY = "init:menu:v1";
+const MENU_CACHE_KEY = "init:menu:v2";
 const MENU_TTL_MS = 10_000;
 /** Browser/CDN freshness — the server TTL cache (10 s, invalidated on every
  *  inventory/business write) is the source of truth; browsers may serve the
@@ -115,7 +117,7 @@ export async function GET(request: Request) {
       return menuResponse(request, snap, "miss", ifNoneMatch);
     }
 
-    const [itemRows, areaRows, pickupRows, optsRows, methodsRows] = await Promise.all([
+    const [itemRows, variantRows, areaRows, pickupRows, optsRows, methodsRows] = await Promise.all([
       db
         .select({
           id: inventoryItems.id,
@@ -123,12 +125,15 @@ export async function GET(request: Request) {
           businessId: inventoryItems.businessId,
           name: inventoryItems.name,
           category: inventoryItems.category,
+          subcategory: inventoryItems.subcategory,
           quantity: inventoryItems.quantity,
           unit: inventoryItems.unit,
           sellingPriceGhs: inventoryItems.sellingPriceGhs,
           status: inventoryItems.status,
           photo: inventoryItems.photo,
           photos: inventoryItems.photos,
+          photoThumb: inventoryItems.photoThumb,
+          photosThumb: inventoryItems.photosThumb,
           description: inventoryItems.description,
           brand: inventoryItems.brand,
           model: inventoryItems.model,
@@ -138,6 +143,23 @@ export async function GET(request: Request) {
         .from(inventoryItems)
         .where(inArray(inventoryItems.businessId, publicBizIds))
         .orderBy(asc(inventoryItems.name)),
+      db
+        .select({
+          id: inventoryVariants.id,
+          inventoryId: inventoryVariants.inventoryId,
+          size: inventoryVariants.size,
+          color: inventoryVariants.color,
+          sizeSystem: inventoryVariants.sizeSystem,
+          sku: inventoryVariants.sku,
+          quantity: inventoryVariants.quantity,
+          minStockThreshold: inventoryVariants.minStockThreshold,
+          status: inventoryVariants.status,
+          isActive: inventoryVariants.isActive,
+          sortOrder: inventoryVariants.sortOrder,
+        })
+        .from(inventoryVariants)
+        .where(and(eq(inventoryVariants.isActive, true), inArray(inventoryVariants.businessId, publicBizIds)))
+        .orderBy(asc(inventoryVariants.sortOrder), asc(inventoryVariants.id)),
       db
         .select({
           id: serviceAreas.id,
@@ -223,6 +245,14 @@ export async function GET(request: Request) {
       list.push(point);
       pickupsByBiz.set(bid, list);
     }
+    // Boutique / apparel variant layer: active SIZE × COLOUR rows grouped per
+    // item. Items without rows keep their legacy shape exactly (no new keys).
+    const variantsByItem = new Map<number, any[]>();
+    for (const v of variantRows as any[]) {
+      const list = variantsByItem.get(Number(v.inventoryId)) || [];
+      list.push(v);
+      variantsByItem.set(Number(v.inventoryId), list);
+    }
     for (const o of activeOpts) {
       const m = methodById.get(o.methodId);
       if (!m) continue;
@@ -244,6 +274,10 @@ export async function GET(request: Request) {
       const org = b.ownerId != null ? orgById.get(Number(b.ownerId)) : undefined;
       const products = (itemsByBiz.get(Number(b.id)) || [])
         .map((i) => {
+          // Per-variant availability for Boutique items — the storefront
+          // renders these sizes/colours and disables the out-of-stock combos.
+          const itemVariantRows = variantsByItem.get(Number(i.id)) || [];
+          const vProjection = itemVariantRows.length > 0 ? storefrontVariants(itemVariantRows as any) : null;
           // Every registered product image remains available to the storefront,
           // but large uploaded data URLs are exposed as cacheable image URLs
           // instead of being inlined into the JSON catalogue.  This keeps
@@ -252,30 +286,97 @@ export async function GET(request: Request) {
             ? i.photos.filter((p: any) => typeof p === "string" && p.length > 0)
             : [];
           const allPhotos: string[] = [];
-          if (typeof i.photo === "string" && i.photo.length > 0) allPhotos.push(i.photo);
-          for (const p of gallery) if (!allPhotos.includes(p)) allPhotos.push(p);
+          const allThumbs: string[] = [];
+          // Raw array kept intact: `photosThumb` is POSITIONALLY parallel to
+          // `photos[]` (missing entries are null/""), so filtering empties out
+          // would move every later thumbnail onto the wrong photo.
+          const thumbsRaw = Array.isArray(i.photosThumb) ? i.photosThumb : [];
+          // `photosThumb` is parallel to `photos[]`, `photoThumb` to `photo`.
+          const thumbAt = (gi: number) =>
+            typeof thumbsRaw[gi] === "string" && thumbsRaw[gi].length > 0 ? thumbsRaw[gi] : "";
+          if (typeof i.photo === "string" && i.photo.length > 0) {
+            allPhotos.push(i.photo);
+            allThumbs.push((typeof i.photoThumb === "string" && i.photoThumb) || thumbAt(0));
+          }
+          for (let gi = 0; gi < gallery.length; gi++) {
+            const p = gallery[gi];
+            const at = allPhotos.indexOf(p);
+            if (at >= 0) {
+              // Same bytes already listed (primary === photos[0]) — adopt the
+              // gallery thumbnail when the earlier slot has none.
+              if (!allThumbs[at]) allThumbs[at] = thumbAt(gi);
+              continue;
+            }
+            allPhotos.push(p);
+            allThumbs.push(thumbAt(gi));
+          }
           const photoUrls = allPhotos.map((_photo, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}`);
+          // Parallel thumbnail URLs (same index) — grids and galleries paint
+          // these; the lightbox keeps the full-resolution URLs above. The
+          // photo route falls back to the full image when a row has no thumb.
+          const thumbUrls = allThumbs.map((_t, index) => `/api/menu/photo?item=${encodeURIComponent(String(i.id))}&index=${index}&size=thumb`);
           const opts = optsByInventory.get(i.id) || [];
-          const sellable = invHasStock(i) || opts.length > 0;
+          const variantAvailable = vProjection ? vProjection.totalAvailable : null;
+          const sellable = (variantAvailable != null ? variantAvailable > 0 : invHasStock(i)) || opts.length > 0;
           if (!sellable) return null;
+          // Marketplace grouping uses the SHARED taxonomy: every product is
+          // reported under its standard umbrella category (with the branch's
+          // own wording kept as `subcategory`), so similar products from
+          // different businesses land under one category chip.
+          const taxonomy = normalizeInventoryItem({ category: i.category, subcategory: i.subcategory });
           return {
             id: i.id,
             sku: i.sku,
             name: i.name,
-            category: i.category,
+            category: taxonomy.category,
+            subcategory: taxonomy.subcategory,
             unit: i.unit,
             price: i.sellingPriceGhs,
-            available: Math.max(0, Math.floor(i.quantity)),
-            inStock: invHasStock(i),
+            available: Math.max(0, Math.floor(variantAvailable != null ? variantAvailable : i.quantity)),
+            inStock: variantAvailable != null ? variantAvailable > 0 : invHasStock(i),
+            // Boutique variant projection (only present for variant items):
+            //   hasVariants + variantOptions.{sizes,colors,variants,totalAvailable}
+            // The order page requires a size/colour choice for these products
+            // and the server re-validates the chosen variant at checkout.
+            ...(vProjection
+              ? {
+                  hasVariants: true,
+                  // What the axes mean for this product (defaults are the
+                  // generic Size/Colour the picker has always shown).
+                  optionAxisLabels: {
+                    axis1: i.optionAxis1Label || null,
+                    axis2: i.optionAxis2Label || null,
+                  },
+                  variantOptions: {
+                    sizes: vProjection.sizes,
+                    colors: vProjection.colors,
+                    variants: vProjection.variants,
+                    totalAvailable: vProjection.totalAvailable,
+                  },
+                }
+              : {}),
             photo: photoUrls[0] || null,
             photos: photoUrls,
+            // Same index order as `photos`; entries may be empty strings when
+            // the row predates thumbnails (the URL still serves the full image).
+            thumbs: thumbUrls,
             // Product catalogue details registered at stock-in — shown on the
             // storefront product view verbatim (no duplicate entry anywhere).
             description: i.description || null,
             brand: i.brand || null,
             model: i.model || null,
             specifications: Array.isArray(i.specifications) ? i.specifications : [],
-            variants: Array.isArray(i.variants) ? i.variants : [],
+            // Legacy display chips: for variant items the registered matrix
+            // becomes the chip list (with live stock notes) so the lightbox
+            // shows real availability instead of a stale display-only list.
+            variants: vProjection
+              ? vProjection.variants.slice(0, 60).map((v) => ({
+                  name: [v.size ? `Size ${v.size}` : null, v.color || null].filter(Boolean).join(" · ") || "Standard",
+                  note: v.inStock ? `${v.available} left` : "out of stock",
+                }))
+              : Array.isArray(i.variants)
+                ? i.variants
+                : [],
             // Seller-configured pre-order fulfilment options (price / ETA /
             // deposit shown next to the product on the storefront). Empty for
             // stock-only products — the UI then renders nothing extra.

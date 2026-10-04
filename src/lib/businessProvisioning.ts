@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import { nextTrxNumber } from "@/lib/idNumbers";
 import {
   businessMetrics,
   carWashServices,
@@ -8,8 +9,9 @@ import {
   inventoryItems,
   transactions,
 } from "@/db/schema";
+import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
 import { eq } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { tasksForBusiness } from "@/lib/checklistDefaults";
 
 /**
@@ -38,6 +40,7 @@ export const CATEGORY_PREFIX: Record<string, string> = {
   "Hardware Store": "HARDWARE",
   "Telecom & Digital Services": "TELECOM",
   Transportation: "TRANSPORT",
+  Boutique: "BOUTIQUE",
 };
 
 export const CATEGORY_ICON: Record<string, string> = {
@@ -51,12 +54,14 @@ export const CATEGORY_ICON: Record<string, string> = {
   "Hardware Store": "HardHat",
   "Telecom & Digital Services": "Wifi",
   Transportation: "Truck",
+  Boutique: "Shirt",
 };
 
 export interface StarterItem {
   name: string;
   skuSuffix: string;
   category: string;
+  subcategory?: string;
   quantity: number;
   unit: string;
   costPriceGhs: number;
@@ -373,15 +378,29 @@ export async function provisionBusiness(
           name: item.name,
           sku: `${biz.code}-${item.skuSuffix}`,
           businessId,
-          category: item.category,
-          quantity: qty,
+          // Starter kits land in the shared standard taxonomy like any other
+          // stock-in, so a brand-new unit's products group correctly on the
+          // customer marketplace from day one.
+          category: normalizeInventoryCategory(item.category),
+          subcategory: deriveInventorySubcategory(item.category, item.subcategory),
+          // Registered EMPTY, then stocked through the ONE writer so the
+          // opening kit appears in the movement trail like any other stock-in.
+          quantity: 0,
           unit: item.unit,
           costPriceGhs: item.costPriceGhs,
           sellingPriceGhs: item.sellingPriceGhs,
           minStockThreshold: item.minStockThreshold,
-          status: computeStockStatus(qty, item.minStockThreshold),
+          status: "OUT_OF_STOCK",
         })
         .returning();
+      await applyStockChange({
+        businessId,
+        inventoryId: row.id,
+        delta: qty,
+        reason: "OPENING",
+        refType: "STARTER_KIT",
+        note: `Opening stock — ${row.name}`,
+      });
       kitCost += qty * (Number(item.costPriceGhs) || 0);
       createdItems.push(row);
     }
@@ -390,7 +409,7 @@ export async function provisionBusiness(
       const now = new Date();
       // One real, manageable expense record for the whole opening kit.
       await db.insert(transactions).values({
-        transactionNumber: `TRX-${now.getFullYear()}-${now.getTime().toString().slice(-6)}`,
+        transactionNumber: nextTrxNumber(now),
         businessId,
         branchCode: biz.code,
         type: "EXPENSE",

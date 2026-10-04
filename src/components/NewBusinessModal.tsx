@@ -18,6 +18,7 @@ const ALL_CATEGORY_OPTIONS: { value: string; text: string; key: string }[] = [
   { value: "Hardware Store", text: "Hardware Store (Construction & Building Materials)", key: "HARDWARE_STORE" },
   { value: "Telecom & Digital Services", text: "Telecom & Digital Services (MoMo, Airtime, Data, Wi-Fi)", key: "TELECOM_DIGITAL" },
   { value: "Transportation", text: "Transportation / Fleet & Logistics", key: "TRANSPORTATION" },
+  { value: "Boutique", text: "Boutique (Fashion, Clothing & Apparel)", key: "BOUTIQUE" },
 ];
 
 interface NewBusinessModalProps {

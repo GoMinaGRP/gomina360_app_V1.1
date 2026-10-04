@@ -71,11 +71,11 @@ async function api(method, path, token, body) {
 
 // Every business-scoped table in src/db/schema.ts (businessId present).
 const BUSINESS_SCOPED = [
-  "ai_insights", "aquaculture_batches", "aquaculture_checklists",
+  "ai_insights", "aquaculture_batches",
   "aquaculture_feed_logs", "aquaculture_harvests", "aquaculture_logs",
   "aquaculture_ponds", "aquaculture_water_quality_logs", "aquaculture_weight_logs",
   "assets", "attendance_logs", "audit_assignments", "audit_reviews", "audit_trail",
-  "block_factory_checklists", "block_factory_deliveries", "block_factory_logs",
+  "block_factory_deliveries", "block_factory_logs",
   "block_factory_orders", "block_qc_checks", "block_types", "business_insights",
   "business_metrics", "car_wash_activities", "car_wash_bookings", "car_wash_logs",
   "car_wash_services", "car_wash_washes", "cctv_cameras", "checklist_entries",
@@ -85,7 +85,8 @@ const BUSINESS_SCOPED = [
   "employee_documents", "employee_history", "employees", "expense_categories",
   "hardware_deliveries", "hardware_logs", "hardware_orders", "hardware_purchases",
   "inventory_items", "livestock_logs", "notifications", "payroll_attendance",
-  "payroll_entries", "payroll_runs", "pickup_locations", "poultry_checklists",
+  "stock_movements",
+  "payroll_entries", "payroll_runs", "pickup_locations",
   "poultry_feed_logs", "poultry_flocks", "poultry_health_records", "poultry_logs",
   "poultry_production", "poultry_products", "poultry_water_logs", "poultry_weight_logs",
   "restaurant_logs", "restaurant_menu_items", "restaurant_orders",
@@ -98,7 +99,17 @@ const BUSINESS_SCOPED = [
 // row and the type's daily-checklist template scaffold (operational config,
 // not sample/test data). user_business_access stays empty for OWNER-created
 // units (the OWNER always sees everything).
-const SCAFFOLD = new Set(["business_metrics", "checklist_templates", "user_business_access"]);
+//
+// checklist_entries is the same class of operational scaffold: the server's
+// daily pipeline (`/api/init` → ensureTodayFor) mints *today's* task rows from
+// the templates the moment the owner's dashboard is loaded, so a brand-new
+// unit can legitimately hold a handful of unticked rows. Those rows are not
+// sample/test data — but real progress through them is, so they are not
+// blindly skipped: assertChecklistEntries() below asserts every row is
+// today-dated, unticked, unassigned, unannotated and owned by this unit's own
+// template. That keeps the check deterministic when a browser session is
+// hitting /api/init while the suite runs.
+const SCAFFOLD = new Set(["business_metrics", "checklist_templates", "checklist_entries", "user_business_access"]);
 
 /** Assert a business's business-scoped tables are clean. Returns list of dirty tables. */
 async function assertClean(businessId, label) {
@@ -131,6 +142,34 @@ async function assertZeroMetrics(businessId, label) {
 async function assertChecklistTemplates(businessId, label) {
   const r = await q(`SELECT count(*)::int AS n FROM checklist_templates WHERE business_id = $1`, [businessId]);
   ok(`${label}: daily-checklist template scaffold present (>0)`, r.rows[0].n > 0, `n=${r.rows[0].n}`);
+}
+
+/**
+ * Today's checklist rows are operational scaffold, but only in zero state:
+ * dated today (server-local, same rule the app uses), unticked, unassigned,
+ * unannotated and generated from this unit's own template. Anything else is
+ * real user data and must not be present on a fresh/reset unit.
+ */
+async function assertChecklistEntries(businessId, label) {
+  const today = new Date().toLocaleDateString("en-CA");
+  const r = await q(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE checklist_date::text <> $2)::int AS off_date,
+            count(*) FILTER (WHERE is_completed OR completed_by_name IS NOT NULL
+                               OR completed_by_role IS NOT NULL OR completed_at IS NOT NULL
+                               OR (notes IS NOT NULL AND btrim(notes) <> ''))::int AS touched,
+            count(*) FILTER (WHERE template_id IS NULL OR NOT EXISTS
+                               (SELECT 1 FROM checklist_templates t
+                                 WHERE t.id = checklist_entries.template_id
+                                   AND t.business_id = $1))::int AS foreign_tpl
+       FROM checklist_entries WHERE business_id = $1`,
+    [businessId, today],
+  );
+  const { total, off_date: offDate, touched, foreign_tpl: foreignTpl } = r.rows[0];
+  ok(`${label}: checklist entries are today-only zero-state scaffold`,
+    offDate === 0 && touched === 0 && foreignTpl === 0,
+    total === 0 ? "none minted yet"
+      : `${total} rows · off-date=${offDate} touched=${touched} foreign-template=${foreignTpl}`);
 }
 
 const BUSINESS_TYPES = [
@@ -192,6 +231,7 @@ async function main() {
     await assertClean(biz.id, `S1 [${type}]`);
     await assertZeroMetrics(biz.id, `S1 [${type}]`);
     await assertChecklistTemplates(biz.id, `S1 [${type}]`);
+    await assertChecklistEntries(biz.id, `S1 [${type}]`);
   }
 
   // ── S2. Module GET routes serve EMPTY master lists for new units ─────
@@ -268,6 +308,7 @@ async function main() {
     await assertClean(b.id, `S3 [${sc.label}] after reset`);
     await assertZeroMetrics(b.id, `S3 [${sc.label}] after reset`);
     await assertChecklistTemplates(b.id, `S3 [${sc.label}] after reset`);
+    await assertChecklistEntries(b.id, `S3 [${sc.label}] after reset`);
 
     // Master lists specifically wiped.
     const masterChecks = {

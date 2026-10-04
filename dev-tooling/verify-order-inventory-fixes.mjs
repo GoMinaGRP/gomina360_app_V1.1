@@ -249,6 +249,11 @@ async function sectionC(ownerCookie) {
   await page.waitForSelector(`[data-testid="oo-add-${MAIN_ITEM.id}"]`, { timeout: 30000 });
   await page.click(`[data-testid="oo-add-${MAIN_ITEM.id}"]`);
   await page.waitForSelector(`[data-testid="oo-qty-${MAIN_ITEM.id}"]`, { timeout: 10000 });
+  // The expanding sticky cart bar sits over the bottom of the viewport on a
+  // phone; centre the fulfilment chip before the mouse click so the tap lands
+  // on the chip and not on the bar covering it.
+  await page.evaluate(() => document.querySelector('[data-testid="oo-delivery"]')?.scrollIntoView({ block: "center" }));
+  await sleep(500);
   await page.click('[data-testid="oo-delivery"]');
   await page.waitForSelector('[data-testid="oo-dest-input"]', { timeout: 10000 });
   await page.type('[data-testid="oo-dest-input"]', "TEST Coconut Avenue, House 12");

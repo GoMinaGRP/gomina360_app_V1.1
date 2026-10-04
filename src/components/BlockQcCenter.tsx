@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 import {
   ShieldCheck, AlertTriangle, Camera, RotateCcw, X, Save, Scale, Ruler,
   Gauge, Layers, TrendingUp, CheckCircle2, XCircle, Activity, Boxes, Truck,
@@ -90,24 +91,14 @@ const fmtWhen = (d: Date) => {
 const dayOf = (t: any) => (t ? new Date(t).toISOString().slice(0, 10) : "-");
 const timeOf = (t: any) => (t ? new Date(t).toISOString().slice(11, 16) : "");
 
-/** Compress a picked image to a small JPEG data URL (photo evidence). */
+/**
+ * QC photo evidence — shared optimizer preset `evidence` (≤1400px, q0.78).
+ * The previous local helper capped at 640px/0.72, which blurred the surface
+ * detail QC evidence exists to prove; 1400px keeps defects legible and still
+ * lands around 120 KB.
+ */
 function readPhoto(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const max = 640;
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.72));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
+  return optimizedDataUrl(file, "evidence");
 }
 
 /**
@@ -225,6 +216,8 @@ export default function BlockQcCenter({
   const [mWhen, setMWhen] = useState(() => fmtWhen(new Date()));
   const [mTester, setMTester] = useState(currentUserName || "");
   const [mPhoto, setMPhoto] = useState<string>("");
+  /** Reason a picked QC photo was refused (size / undecodable format). */
+  const [photoErr, setPhotoErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const photoInput = useRef<HTMLInputElement | null>(null);
@@ -617,7 +610,9 @@ export default function BlockQcCenter({
                       </span>
                     </td>
                     <td className="py-2 pr-3">{c.testerName || "—"}</td>
-                    <td className="py-2">{c.photo ? <Camera className="w-3.5 h-3.5 text-amber-400" /> : <span className="text-slate-700">—</span>}</td>
+                    {/* The API publishes `hasPhoto` instead of shipping the
+                        evidence blob to a screen that only paints an icon. */}
+                    <td className="py-2">{c.hasPhoto || c.photo ? <Camera className="w-3.5 h-3.5 text-amber-400" /> : <span className="text-slate-700">—</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -803,8 +798,22 @@ export default function BlockQcCenter({
             {/* Photo evidence */}
             <div>
               <MFLab>Photo Evidence</MFLab>
-              <input ref={photoInput} data-testid="bqcm-photo" type="file" accept="image/*" className="hidden"
-                onChange={async (e) => { const f = e.target.files?.[0]; if (f) setMPhoto(await readPhoto(f)); }} />
+              <input ref={photoInput} data-testid="bqcm-photo" type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  setPhotoErr("");
+                  try {
+                    setMPhoto(await readPhoto(f));
+                  } catch (err: any) {
+                    // Refused centrally (too large, or a format this browser
+                    // cannot decode) — show the reason instead of failing silently.
+                    setPhotoErr(err?.message || "That photo could not be processed — try another image.");
+                  } finally {
+                    e.target.value = "";
+                  }
+                }} />
+              {photoErr && <p className="text-[10px] text-rose-400 mt-1" data-testid="bqcm-photo-error">{photoErr}</p>}
               {mPhoto ? (
                 <div className="flex items-center gap-3">
                   <img data-testid="bqcm-photo-preview" src={mPhoto} alt="QC evidence" className="w-16 h-16 rounded-lg object-cover border border-amber-600/50" />

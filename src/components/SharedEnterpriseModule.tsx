@@ -22,14 +22,32 @@ import {
 } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { businessManageIdsOf } from "@/lib/permissions";
+import {
+  describeRejection,
+  optimizationSummary,
+  PHOTO_LIMITS,
+  prepareImages,
+} from "@/lib/imageOptimize";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
 import AssetRegistrationModal from "./AssetRegistrationModal";
 import Customer360Drawer from "./Customer360Drawer";
 import ConfirmActionModal from "./ConfirmActionModal";
+import InventoryCategoryFields from "./InventoryCategoryFields";
+import { DEFAULT_INVENTORY_CATEGORY, inventoryCategoryFields, normalizeInventoryCategory } from "@/lib/inventoryCategories";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import QrScanModal from "./QrScanModal";
+import VariantStockEditor, {
+  axisLabelsFor,
+  draftCombinationCount,
+  draftFromMatrix,
+  draftToMatrix,
+  draftTotal,
+  emptyDraft,
+  presetAxesFor,
+  type VariantDraft,
+} from "./VariantStockEditor";
 import QrRecordModal from "./QrRecordModal";
 import PayrollCenter from "./PayrollCenter";
 import { EmployeeRegistration, EmployeeProfile } from "./EmployeeCenter";
@@ -127,6 +145,9 @@ export default function SharedEnterpriseModule({
   const [invPrice, setInvPrice] = useState<number>(35);
   const [invMin, setInvMin] = useState<number>(10);
   const [invPhotos, setInvPhotos] = useState<string[]>([]);
+  /** Display thumbnails (≤400px) generated with each photo — same index. */
+  const [invPhotoThumbs, setInvPhotoThumbs] = useState<string[]>([]);
+  const [invPhotoNotice, setInvPhotoNotice] = useState("");
   // Starter / draft state for the product-detail fields. On INVENTORY the
   // owner additionally captures: description, brand, model, specs (with
   // dedicated Size + Weight rows), variants. The editor (editingRecord
@@ -138,10 +159,96 @@ export default function SharedEnterpriseModule({
   const [invWeightUI, setInvWeightUI] = useState("");
   const [invSpecsUI, setInvSpecsUI] = useState<{ key: string; value: string }[]>([]);
   const [invVariantsUI, setInvVariantsUI] = useState<{ name: string; note: string }[]>([]);
+  /**
+   * Optional size/colour (or capacity/style/…) matrix. `null` = the product is
+   * a plain item and the form stays exactly as it was — no extra fields.
+   */
+  const [invOptions, setInvOptions] = useState<VariantDraft | null>(null);
+  const [invOptionsError, setInvOptionsError] = useState("");
+  /**
+   * "Manage options & stock" from a stock item's record view: loads the live
+   * matrix, edits it with the SAME editor the Add form uses, and saves it back
+   * as the product's stock truth (only for items that may manage inventory).
+   */
+  const [invVariantEditor, setInvVariantEditor] = useState<{
+    inventoryId: number;
+    businessId: number;
+    name: string;
+    draft: VariantDraft;
+    loading?: boolean;
+    saving?: boolean;
+    error?: string;
+  } | null>(null);
+
+  const openVariantEditor = async (record: any, opts?: { startEmpty?: boolean }) => {
+    const businessId = Number(record.businessId);
+    const biz = businesses.find((b: any) => Number(b.id) === businessId);
+    const preset = presetAxesFor(biz?.category);
+    setInvVariantEditor({
+      inventoryId: Number(record.id),
+      businessId,
+      name: record.name || "Stock item",
+      draft: emptyDraft(preset),
+      loading: !opts?.startEmpty,
+    });
+    if (opts?.startEmpty) return;
+    try {
+      const res = await fetch(`/api/boutique?businessId=${businessId}&variantsOnly=1`);
+      const body = await res.json().catch(() => null);
+      const rows = (body?.variants?.[String(record.id)] || []) as any[];
+      const labels = axisLabelsFor(biz?.category, rows);
+      setInvVariantEditor((cur) =>
+        cur && cur.inventoryId === Number(record.id)
+          ? { ...cur, loading: false, draft: draftFromMatrix(rows, labels) }
+          : cur,
+      );
+    } catch (e: any) {
+      setInvVariantEditor((cur) => (cur ? { ...cur, loading: false, error: e?.message || "Could not load the options." } : cur));
+    }
+  };
+
+  const saveVariantEditor = async () => {
+    if (!invVariantEditor) return;
+    const matrix = draftToMatrix(invVariantEditor.draft);
+    if (invVariantEditor.draft.axis1Values.length + invVariantEditor.draft.axis2Values.length === 0) {
+      setInvVariantEditor((cur) => (cur ? { ...cur, error: "Add at least one size, colour or option value." } : cur));
+      return;
+    }
+    setInvVariantEditor((cur) => (cur ? { ...cur, saving: true, error: "" } : cur));
+    try {
+      const res = await fetch("/api/boutique", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "SET_VARIANTS",
+          businessId: invVariantEditor.businessId,
+          inventoryId: invVariantEditor.inventoryId,
+          variants: matrix,
+          axis1Label: invVariantEditor.draft.axis1Label,
+          axis2Label: invVariantEditor.draft.axis2Label,
+          replace: true,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.success === false) {
+        setInvVariantEditor((cur) => (cur ? { ...cur, saving: false, error: body?.error || "Could not save the options." } : cur));
+        return;
+      }
+      setInvVariantEditor(null);
+      setEditingRecord(null);
+      flashSaved("✓ Options & stock saved — the storefront and every sale now use these combinations.");
+      onRefreshData();
+    } catch (e: any) {
+      setInvVariantEditor((cur) => (cur ? { ...cur, saving: false, error: e?.message || "Could not save the options." } : cur));
+    }
+  };
   // details JSONB the form composes at submit — owned by the INVENTORY
   // registration path only (POST) and mirrored by the PATCH editor.
   const [detailsKeyState] = [{ key: "Size", value: "" }, { key: "Weight", value: "" }];
   const [invPhotoErr, setInvPhotoErr] = useState("");
+  // Standardized taxonomy: umbrella category (always standard) + free subcategory.
+  const [invCategory, setInvCategory] = useState<string>(DEFAULT_INVENTORY_CATEGORY);
+  const [invSubcategory, setInvSubcategory] = useState<string | null>(null);
 
   // ─── QR registry: camera scan → open existing record / guided registration ───
   const [invQr, setInvQr] = useState("");
@@ -171,6 +278,8 @@ export default function SharedEnterpriseModule({
     setInvPrice(35);
     setInvMin(10);
     setInvPhotos([]);
+    setInvPhotoThumbs([]);
+    setInvPhotoNotice("");
     setInvDescUI("");
     setInvBrandUI("");
     setInvModelUI("");
@@ -178,7 +287,11 @@ export default function SharedEnterpriseModule({
     setInvWeightUI("");
     setInvSpecsUI([]);
     setInvVariantsUI([]);
+    setInvOptions(null);
+    setInvOptionsError("");
     setInvPhotoErr("");
+    setInvCategory(DEFAULT_INVENTORY_CATEGORY);
+    setInvSubcategory(null);
     setInvQr("");
     setQrError("");
     setLocation({ region: "", district: "", town: "" });
@@ -229,25 +342,42 @@ export default function SharedEnterpriseModule({
     }
   };
 
-  /** Accepts uploaded images or camera captures (data URLs), 5MB max each. */
-  const handleInvPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Product photos — uploaded files or camera captures. Every image is
+   * optimized in the browser BEFORE it is stored (src/lib/imageOptimize):
+   * longest edge ≤1600px JPEG q0.82 for the lightbox/detail view plus a
+   * ≤400px WebP display thumbnail used by grids and the public storefront.
+   * A typical 4 MB phone capture becomes ~200 KB + ~18 KB, which is what
+   * makes the upload fast, the row small and the marketplace light.
+   */
+  const handleInvPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file) => {
-      if (file.size > 5 * 1024 * 1024) {
-        setInvPhotoErr("Each photo must be under 5MB.");
-        return;
+    setInvPhotoErr("");
+    setInvPhotoNotice("");
+    try {
+      // One policy for every upload surface (src/lib/imageOptimize):
+      // 20 MB source guard, pass-through ceilings, the 6-photo record cap and
+      // a plain reason per refused file.
+      const result = await prepareImages(files, "product", { max: PHOTO_LIMITS.product, existing: invPhotos.length });
+      if (result.images.length > 0) {
+        setInvPhotos((prev) => [...prev, ...result.images.map((r) => r.dataUrl)]);
+        setInvPhotoThumbs((prev) => [...prev, ...result.images.map((r) => r.thumb || "")]);
+        const summary = optimizationSummary(result.images);
+        if (summary) setInvPhotoNotice(`Optimized for the storefront — ${summary}`);
       }
-      setInvPhotoErr("");
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) setInvPhotos((prev) => [...prev, ev.target!.result as string]);
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
+      if (result.rejected.length > 0) setInvPhotoErr(describeRejection(result));
+      else if (result.notes.length > 0) setInvPhotoNotice((n) => n || result.notes[0]);
+    } catch {
+      setInvPhotoErr("One or more photos could not be processed. Try a different image.");
+    } finally {
+      e.target.value = "";
+    }
   };
-  const removeInvPhoto = (idx: number) => setInvPhotos((prev) => prev.filter((_, i) => i !== idx));
+  const removeInvPhoto = (idx: number) => {
+    setInvPhotos((prev) => prev.filter((_, i) => i !== idx));
+    setInvPhotoThumbs((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const isExecutiveUser =
     currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
@@ -297,7 +427,8 @@ export default function SharedEnterpriseModule({
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (showAccessModal) setShowAccessModal(false);
+        if (invVariantEditor) setInvVariantEditor(null);
+        else if (showAccessModal) setShowAccessModal(false);
         else if (deletingRecord) { setDeletingRecord(null); setDeleteReason(""); }
         else if (editingRecord) setEditingRecord(null);
         else if (showModal) setShowModal(false);
@@ -305,7 +436,7 @@ export default function SharedEnterpriseModule({
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [showAccessModal, deletingRecord, editingRecord, showModal]);
+  }, [showAccessModal, deletingRecord, editingRecord, showModal, invVariantEditor]);
 
   const refreshDeletionLogs = useCallback(async () => {
     if (!MANAGEABLE) return;
@@ -1063,6 +1194,22 @@ export default function SharedEnterpriseModule({
         location: "Main Branch",
       };
     } else if (moduleType === "INVENTORY") {
+      // Options are optional — but if they are switched on, at least one real
+      // value must be chosen so no half-configured product can be saved.
+      if (invOptions) {
+        const matrix = draftToMatrix(invOptions);
+        const noValues = invOptions.axis1Values.length + invOptions.axis2Values.length === 0;
+        if (noValues || matrix.length === 0) {
+          setInvOptionsError("Add at least one size, colour or option value — or switch options off for a simple product.");
+          setIsSubmitting(false);
+          return;
+        }
+        if (draftCombinationCount(invOptions) > 120) {
+          setInvOptionsError("A product can have at most 120 combinations.");
+          setIsSubmitting(false);
+          return;
+        }
+      }
       entityType = "inventory";
       const invBiz = businesses.find((b: any) => String(b.id) === String(businessId));
       // Every stock row carries a globally-unique QR identity: the scanned
@@ -1079,14 +1226,27 @@ export default function SharedEnterpriseModule({
         businessId: Number(businessId),
         branchCode: invBranch.trim() || invBiz?.code || null,
         branchName: invBiz?.name || null,
-        category: typeOrCategory,
-        quantity: Number(invQty) || 0,
+        category: normalizeInventoryCategory(invCategory),
+        subcategory: (invSubcategory || "").trim() || null,
+        // Variant products: the matrix is the stock truth (quantities live per
+        // combination) and the item total is their sum — the server derives it.
+        quantity: invOptions ? draftTotal(invOptions) : Number(invQty) || 0,
+        tracksVariants: invOptions ? true : undefined,
+        boutiqueVariants: invOptions ? draftToMatrix(invOptions) : undefined,
+        optionAxis1Label: invOptions ? invOptions.axis1Label : undefined,
+        optionAxis2Label: invOptions ? invOptions.axis2Label : undefined,
         unit: invUnit || "Units",
         costPriceGhs: Number(invCost) || 0,
         sellingPriceGhs: Number(invPrice) || 0,
         minStockThreshold: Number(invMin) || 10,
         photo: invPhotos[0] || null,
         photos: invPhotos,
+        // Display thumbnails (same index order) — the storefront and
+        // in-app grids render these instead of the full photos. The array is
+        // sent POSITIONALLY (null where a photo has no thumbnail) so a missing
+        // entry can never shift a later thumbnail onto the wrong photo.
+        photoThumb: invPhotoThumbs[0] || null,
+        photosThumb: invPhotoThumbs.map((t) => t || null),
         description: invDescUI.trim() || null,
         brand: invBrandUI.trim() || null,
         model: invModelUI.trim() || null,
@@ -1108,6 +1268,7 @@ export default function SharedEnterpriseModule({
     };
 
     try {
+      const hasVariantMatrix = entityType === "inventory" && !!invOptions && draftCombinationCount(invOptions) > 0;
       const res = await fetch("/api/enterprise", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1124,7 +1285,9 @@ export default function SharedEnterpriseModule({
         }
         flashSaved(
           entityType === "inventory"
-            ? "✓ Stock item saved — form closed. Scan its QR label to restock fast."
+            ? hasVariantMatrix
+              ? "✓ Stock item saved with its sizes/colours — the storefront only sells combinations that are in stock."
+              : "✓ Stock item saved — form closed. Scan its QR label to restock fast."
             : entityType === "asset"
             ? "✓ Asset saved — form closed."
             : entityType === "supplier"
@@ -1389,16 +1552,16 @@ export default function SharedEnterpriseModule({
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100">
       {/* Header banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 rounded-2xl border border-slate-700/80 shadow-2xl flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex items-start space-x-4">
-          <div className="w-14 h-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center shadow-lg shrink-0">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 sm:p-6 rounded-2xl border border-slate-700/80 shadow-2xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex items-start gap-3 sm:gap-4 min-w-0">
+          <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center shadow-lg shrink-0">
             {config.icon}
           </div>
-          <div>
+          <div className="min-w-0">
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
               CENTRALIZED ENTERPRISE SYSTEM
             </span>
-            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white">
+            <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white break-words">
               {config.title}
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
@@ -1407,7 +1570,7 @@ export default function SharedEnterpriseModule({
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {(moduleType === "INVENTORY" || moduleType === "ASSETS") && (
             <button
               onClick={() => { setQrScanTarget("lookup"); setQrError(""); setQrScanOpen(true); }}
@@ -1700,8 +1863,8 @@ export default function SharedEnterpriseModule({
       )}
 
       {/* Search & Filter Bar */}
-      <div className="flex items-center justify-between gap-4 bg-slate-800/90 border border-slate-700/80 p-3.5 rounded-xl">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-800/90 border border-slate-700/80 p-3.5 rounded-xl">
+        <div className="relative flex-1 min-w-[160px] max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -1955,7 +2118,7 @@ export default function SharedEnterpriseModule({
                   <div className="mt-1 text-sm font-extrabold text-emerald-400">
                     {formatMoney(s.value, currentCurrency, true)}
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">
+                  <div className="text-[10px] text-slate-500 leading-snug break-words" title={parentBiz?.name || "Unassigned"}>
                     {parentBiz?.name || "Unassigned"}
                   </div>
                 </div>
@@ -2389,13 +2552,30 @@ export default function SharedEnterpriseModule({
                       <div className="text-[11px] font-mono text-emerald-400">
                         {inv.sku}
                       </div>
-                      {inv.qrCode && (
-                        <div className="text-[9px] font-mono text-cyan-500/80 flex items-center gap-1 mt-0.5">
-                          <QrCode className="w-2.5 h-2.5" /> QR
-                        </div>
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        {inv.tracksVariants && (
+                          <span
+                            className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                            data-testid={`inv-variant-badge-${inv.id}`}
+                            title="Stock is tracked per size/colour/option combination"
+                          >
+                            {inv.optionAxis1Label || "Size"}
+                            {inv.optionAxis2Label ? ` × ${inv.optionAxis2Label}` : ""}
+                          </span>
+                        )}
+                        {inv.qrCode && (
+                          <span className="text-[9px] font-mono text-cyan-500/80 flex items-center gap-1">
+                            <QrCode className="w-2.5 h-2.5" /> QR
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 text-slate-300">
+                      <div>{inv.category}</div>
+                      {inv.subcategory && inv.subcategory !== inv.category && (
+                        <div className="text-[10px] text-slate-500" data-testid={`inv-subcategory-${inv.id}`}>{inv.subcategory}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3.5 text-slate-300">{inv.category}</td>
                     <td className="px-4 py-3.5 text-slate-300">
                       <div>{inv.branchName || getBusinessName(inv.businessId)}</div>
                       <div className="text-[10px] font-mono text-cyan-400">
@@ -2802,28 +2982,30 @@ export default function SharedEnterpriseModule({
                     {qrError && <p className="text-[10px] text-rose-400 font-semibold" data-testid="inv-qr-error">{qrError}</p>}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">
-                      Category / Type
-                    </label>
-                    <input
-                      type="text"
-                      value={typeOrCategory}
-                      onChange={(e) => setTypeOrCategory(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
-                    />
-                  </div>
+                  <InventoryCategoryFields
+                    category={invCategory}
+                    subcategory={invSubcategory}
+                    onChange={({ category, subcategory }) => {
+                      setInvCategory(category);
+                      setInvSubcategory(subcategory);
+                    }}
+                  />
 
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Quantity</label>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">
+                        {invOptions ? "Quantity (sum of options)" : "Quantity"}
+                      </label>
                       <input
                         type="number"
                         min={0}
-                        value={invQty}
+                        readOnly={!!invOptions}
+                        value={invOptions ? draftTotal(invOptions) : invQty}
                         onChange={(e) => setInvQty(Number(e.target.value))}
                         data-testid="inv-qty"
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
+                        className={`w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm ${
+                          invOptions ? "text-amber-300 font-bold cursor-default" : "text-white"
+                        }`}
                       />
                     </div>
                     <div>
@@ -2848,6 +3030,67 @@ export default function SharedEnterpriseModule({
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm"
                       />
                     </div>
+                  </div>
+
+                  {/* ── Options step (optional): sizes / colours / capacity /
+                       style / model. OFF by default — a product that does not
+                       come in options keeps the plain quantity flow and sees
+                       no extra fields. ── */}
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-800/40 p-3" data-testid="inv-options">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-300">
+                          Does this product come in sizes, colours or other options?
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {invOptions
+                            ? "Stock is tracked per combination (Black / S, Black / M, 128GB, …) and the storefront only sells what is in stock."
+                            : "No — keep the single quantity above. Turn this on for sizes, shoe sizes, colours, capacity, style or model."}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!invOptions}
+                        aria-label="Product comes in options"
+                        onClick={() => {
+                          setInvOptionsError("");
+                          if (invOptions) {
+                            setInvOptions(null);
+                            return;
+                          }
+                          const biz = businesses.find((b: any) => String(b.id) === String(businessId));
+                          setInvOptions(emptyDraft(presetAxesFor(biz?.category)));
+                        }}
+                        data-testid="inv-options-toggle"
+                        className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-black border transition ${
+                          invOptions
+                            ? "bg-amber-400 border-amber-400 text-slate-900"
+                            : "bg-slate-950 border-slate-600 text-slate-300 hover:border-slate-400"
+                        }`}
+                      >
+                        {invOptions ? "YES — set options" : "NO"}
+                      </button>
+                    </div>
+
+                    {invOptions && (
+                      <div className="mt-3 pt-3 border-t border-slate-700/70">
+                        <VariantStockEditor
+                          draft={invOptions}
+                          onChange={(d) => {
+                            setInvOptionsError("");
+                            setInvOptions(d);
+                          }}
+                          testidPrefix="inv"
+                          hint="Quantities here replace the single quantity above — the item total is their sum."
+                        />
+                      </div>
+                    )}
+                    {invOptionsError && (
+                      <p className="text-[10px] text-rose-400 font-semibold mt-2" data-testid="inv-options-error">
+                        {invOptionsError}
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -2981,7 +3224,7 @@ export default function SharedEnterpriseModule({
                         </div>
                       )}
                     </div>
-                    <div>
+                    <div className="hidden">
                       <div className="flex items-center justify-between mb-1">
                         <label className="text-xs font-semibold text-slate-400">Variants / Options (optional)</label>
                         <button
@@ -3069,6 +3312,9 @@ export default function SharedEnterpriseModule({
                       </label>
                     </div>
                     {invPhotoErr && <p className="text-[10px] text-rose-400 mt-1">{invPhotoErr}</p>}
+                    {invPhotoNotice && !invPhotoErr && (
+                      <p className="text-[10px] text-emerald-400 mt-1" data-testid="inv-photo-optimized">{invPhotoNotice}</p>
+                    )}
                   </div>
 
                   <div className="pt-2 border-t border-slate-800">
@@ -3381,27 +3627,69 @@ export default function SharedEnterpriseModule({
                         onChange={(e) => setEditingRecord({ ...editingRecord, sku: e.target.value })}
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm font-mono" />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
-                      <input type="text" value={editingRecord.category || ""}
-                        onChange={(e) => setEditingRecord({ ...editingRecord, category: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                    <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <InventoryCategoryFields
+                        key={`inv-cat-${editingRecord.id}`}
+                        testidPrefix="edit-inv"
+                        hint={false}
+                        category={inventoryCategoryFields(editingRecord.category, editingRecord.subcategory).category}
+                        subcategory={inventoryCategoryFields(editingRecord.category, editingRecord.subcategory).subcategory}
+                        onChange={({ category, subcategory }) =>
+                          setEditingRecord({ ...editingRecord, category, subcategory })
+                        }
+                      />
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Quantity on Hand</label>
-                      <input type="number" step="0.01" min="0" data-testid="edit-inventory-qty" value={editingRecord.quantity}
-                        onChange={(e) => setEditingRecord({ ...editingRecord, quantity: Number(e.target.value) })}
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                  {editingRecord.tracksVariants ? (
+                    /* Variant product: stock lives on the combinations, so the
+                       item total is read-only and editing happens per option. */
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2" data-testid="edit-variant-summary">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-[11px] font-bold text-amber-200">
+                            Stocked by {(editingRecord.optionAxis1Label || "Size").toLowerCase()}
+                            {editingRecord.optionAxis2Label ? ` & ${editingRecord.optionAxis2Label.toLowerCase()}` : ""}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            Total on hand: <b className="text-white">{editingRecord.quantity}</b> {editingRecord.unit || "units"} — the sum of the combinations.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openVariantEditor(editingRecord)}
+                          data-testid="edit-manage-variants"
+                          className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-900 text-[11px] font-black"
+                        >
+                          Manage options & stock
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Unit</label>
-                      <input type="text" value={editingRecord.unit || ""}
-                        onChange={(e) => setEditingRecord({ ...editingRecord, unit: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Quantity on Hand</label>
+                        <input type="number" step="0.01" min="0" data-testid="edit-inventory-qty" value={editingRecord.quantity}
+                          onChange={(e) => setEditingRecord({ ...editingRecord, quantity: Number(e.target.value) })}
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Unit</label>
+                        <input type="text" value={editingRecord.unit || ""}
+                          onChange={(e) => setEditingRecord({ ...editingRecord, unit: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm" />
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {!editingRecord.tracksVariants && (
+                    <button
+                      type="button"
+                      onClick={() => openVariantEditor(editingRecord, { startEmpty: true })}
+                      data-testid="edit-add-options"
+                      className="w-full px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-slate-300"
+                    >
+                      ＋ This product also comes in sizes / colours / options
+                    </button>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-400 mb-1">Cost Price (GH₵)</label>
@@ -3773,6 +4061,80 @@ export default function SharedEnterpriseModule({
         error={qrError}
         title={moduleType === "ASSETS" ? "Scan Asset QR" : "Scan Item QR"}
       />
+      {/* Manage options & stock — the SAME editor the Add form uses, loaded
+          with the product's live matrix. Saving replaces the stock truth and
+          immediately re-derives the item total. */}
+      {invVariantEditor && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4"
+          onClick={(e) => { if (e.target === e.currentTarget && !invVariantEditor.saving) setInvVariantEditor(null); }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 w-full max-w-2xl shadow-2xl space-y-3 max-h-[calc(100dvh-2rem)] overflow-y-auto"
+            data-testid="inv-variant-editor-modal"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Options & stock — <span className="text-amber-300">{invVariantEditor.name}</span>
+                </h3>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Each combination is stocked, sold and alerted on its own. Set a quantity to 0 to sell it out;
+                  remove a value to stop selling that combination (its stock leaves the sellable total).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !invVariantEditor.saving && setInvVariantEditor(null)}
+                data-testid="inv-variant-editor-close"
+                className="text-slate-400 hover:text-white text-lg leading-none px-1"
+              >
+                ×
+              </button>
+            </div>
+
+            {invVariantEditor.error && (
+              <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-2 rounded-lg text-xs" data-testid="inv-variant-editor-error">
+                {invVariantEditor.error}
+              </div>
+            )}
+
+            {invVariantEditor.loading ? (
+              <p className="text-xs text-slate-400 py-6 text-center" data-testid="inv-variant-editor-loading">
+                Loading the current sizes/colours…
+              </p>
+            ) : (
+              <VariantStockEditor
+                draft={invVariantEditor.draft}
+                onChange={(d) => setInvVariantEditor((cur) => (cur ? { ...cur, draft: d, error: "" } : cur))}
+                testidPrefix="inv-manage"
+                disabled={!!invVariantEditor.saving}
+              />
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setInvVariantEditor(null)}
+                disabled={!!invVariantEditor.saving}
+                className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveVariantEditor}
+                disabled={!!invVariantEditor.saving || invVariantEditor.loading}
+                data-testid="inv-variant-editor-save"
+                className="px-4 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-900 text-xs font-black disabled:opacity-50"
+              >
+                {invVariantEditor.saving ? "Saving…" : "Save options & stock"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {qrRecord && (
         <QrRecordModal
           open

@@ -460,7 +460,9 @@ export default function TransportModule(props: Props) {
   };
 
   /* ═══════════════════ RENDER ═══════════════════ */
-  const rowCls = "rounded-xl border border-slate-700/60 bg-slate-800/60 p-3";
+  // min-w-0: grid items default to min-width:auto, so a long route/violation
+  // string would otherwise push the card past a phone viewport.
+  const rowCls = "min-w-0 rounded-xl border border-slate-700/60 bg-slate-800/60 p-3";
 
   return (
     <div className="min-h-screen bg-slate-900 px-3 pb-24 pt-4 text-slate-100 sm:px-6" data-testid="transport-module">
@@ -574,12 +576,14 @@ export default function TransportModule(props: Props) {
               <h3 className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300"><Clock className="h-4 w-4 text-sky-400" /> Active trips</h3>
               {trips.filter((t) => t.status === "EN_ROUTE").length === 0 && <p className="text-xs text-slate-500">No vehicle on the road right now.</p>}
               {trips.filter((t) => t.status === "EN_ROUTE").slice(0, 4).map((t) => (
-                <div key={t.id} className="mb-2 flex items-center justify-between rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2">
-                  <div>
-                    <p className="text-sm font-bold text-white">{vehById(t.vehicleId)?.licensePlate || "—"} · {t.source || "?"} → {t.destination || "?"}</p>
-                    <p className="text-[10px] text-slate-400">driver {t.driverName || "—"} · GPS {Number(t.gpsDistanceKm || 0).toFixed(1)} km</p>
+                <div key={t.id} className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2">
+                  {/* min-w-0 + truncate: long routes must wrap inside the card
+                      instead of pushing it past a phone's viewport. */}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-white" title={`${vehById(t.vehicleId)?.licensePlate || "—"} · ${t.source || "?"} → ${t.destination || "?"}`}>{vehById(t.vehicleId)?.licensePlate || "—"} · {t.source || "?"} → {t.destination || "?"}</p>
+                    <p className="truncate text-[10px] text-slate-400">driver {t.driverName || "—"} · GPS {Number(t.gpsDistanceKm || 0).toFixed(1)} km</p>
                   </div>
-                  {canEdit && <button onClick={() => tripAct(t.id, "COMPLETE", { endOdometerKm: (vehById(t.vehicleId)?.odometerKm || 0) + Math.round(Number(t.gpsDistanceKm || 0)) })} className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/20" data-testid={`transport-complete-trip-${t.id}`}><StopCircle className="mr-1 inline h-3 w-3" />Complete</button>}
+                  {canEdit && <button onClick={() => tripAct(t.id, "COMPLETE", { endOdometerKm: (vehById(t.vehicleId)?.odometerKm || 0) + Math.round(Number(t.gpsDistanceKm || 0)) })} className="shrink-0 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/20" data-testid={`transport-complete-trip-${t.id}`}><StopCircle className="mr-1 inline h-3 w-3" />Complete</button>}
                 </div>
               ))}
             </div>

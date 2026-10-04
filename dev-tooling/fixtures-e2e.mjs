@@ -39,6 +39,26 @@ for (const it of items) {
 }
 console.log(`✓ photos: ${items.length} catalog items × 3 photos`);
 
+// ── 1b. Vaccination health record on the poultry flagship ──────────────────
+// verify-documents generates a VET_REPORT from a VACCINATION health record of
+// business 1; without one on a fresh seed its 4 vet-report checks fail. Kept
+// idempotent (insert only when the unit has no vaccination record).
+const flock = (await c.query(`select id from poultry_flocks where business_id = 1 order by id limit 1`)).rows[0]?.id ?? null;
+const haveVax = await c.query(
+  `select 1 from poultry_health_records where business_id = 1 and record_type = 'VACCINATION' limit 1`,
+);
+if (!haveVax.rowCount) {
+  await c.query(
+    `insert into poultry_health_records
+       (business_id, branch_code, flock_id, batch_number, record_type, vaccine_or_drug, dosage,
+        administered_by, birds_affected, mortality_count, cost_ghs, recorded_date, recorded_by_name)
+     values (1, 'POULTRY-01', $1, 'POUL-2026-L01', 'VACCINATION', 'Newcastle (NDV) live', '1 dose / bird',
+             'Dr. Selorm Gbeho', 480, 0, 320, current_date - 12, 'Kwame Mina')`,
+    [flock],
+  );
+}
+console.log("✓ vaccination health record present for the vet-report flow");
+
 // ── 2. Rich details on the poultry flagship (item 1) ───────────────────────
 await c.query(
   `update inventory_items set

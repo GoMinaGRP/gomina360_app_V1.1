@@ -106,6 +106,123 @@ html {
   }
 }
 
+/* ── Global responsive fit layer (desktop / tablet / mobile) ──────────────
+   Every screen of GoMina 360 must fit the device it is opened on. These rules
+   are the platform-wide safety net under the per-module responsive work:   */
+
+/* The content column may always shrink; grids/flex children that hold wide
+   content (tables, charts, long product names) must never force the page
+   wider than the viewport. */
+main,
+main > div,
+.gm-fit {
+  min-width: 0;
+}
+
+/* Media and canvases never spill: charts (recharts), photos, QR images. */
+main img,
+main svg,
+main canvas,
+main video {
+  max-width: 100%;
+}
+
+/* Chart wrappers: recharts measures its parent, so the parent must be able to
+   shrink and keep a real height. */
+.recharts-responsive-container,
+.recharts-wrapper {
+  min-width: 0 !important;
+  max-width: 100%;
+}
+
+/* Action/toolbar rows: any flex row inside a page that carries two or more
+   buttons (page headers, card toolbars, filter bars) WRAPS instead of pushing
+   its trailing buttons off the screen. Rows are otherwise untouched, so
+   icon+label pairs and tight control groups keep their layout. */
+@media (max-width: 1279px) {
+  main .flex:has(> button + button),
+  main .flex:has(> a + a),
+  main .flex:has(> button + a),
+  main .flex:has(> a + button) {
+    flex-wrap: wrap;
+  }
+}
+
+/* Form controls: a native <select> sizes itself to its longest option, and a
+   date/text input has a UA minimum — both happily push a whole filter row (and
+   the buttons after it) past the screen edge. Cap them and let them shrink. */
+@media (max-width: 1279px) {
+  main select,
+  main input,
+  main textarea {
+    max-width: 100%;
+    min-width: 0;
+  }
+  main label:has(> select),
+  main label:has(> input),
+  main .flex:has(> select),
+  main .flex:has(> input) {
+    min-width: 0;
+    max-width: 100%;
+  }
+  main label:has(> select) > select,
+  main .flex:has(> select) > select {
+    flex: 1 1 0;
+  }
+}
+
+/* Customer storefront: the shop strip and the category strip are deliberately
+   ONE horizontal line each (they scroll sideways), even where the generic
+   toolbar rule above would wrap them — a wall of shop cards above the catalogue
+   is exactly what the product-first layout removes. Higher specificity than
+   `main .flex:has(> button + button)` on purpose. */
+main [data-testid="oo-bizrow"],
+[data-testid="oo-catbar"] {
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+main [data-testid="oo-bizrow"] > *,
+[data-testid="oo-catbar"] > * {
+  flex: 0 0 auto;
+}
+
+/* Wide content that is genuinely tabular scrolls INSIDE its own box — the page
+   itself never scrolls sideways. */
+.gm-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* Long unbroken strings (SKUs, receipt codes, variant labels) wrap instead of
+   stretching their card. */
+.gm-wrap-anywhere {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Switch-style tab bars (rounded container holding tab buttons) scroll
+   horizontally instead of clipping the last tab. Deliberately narrow: only
+   flex rows that are themselves inside a bordered box with no wrap, which is
+   the tab-bar pattern; ordinary toolbars are wrapped by the rule above. */
+@media (max-width: 1023px) {
+  main [data-testid$="-tabs"],
+  main [data-testid$="-tabbar"],
+  main [data-tabbar="1"] {
+    flex-wrap: wrap !important;
+    overflow-x: visible;
+  }
+}
+
+/* Comfortable reading on small screens: page padding steps down. */
+@media (max-width: 640px) {
+  main {
+    font-size: 13px;
+  }
+}
+
 /* ── L1: global print hygiene ─────────────────────────────────────────
    Only previously-hotel PayrollCenter had print rules; every other surface
    printed with full nav/bell/sidebar chrome. Now any element marked

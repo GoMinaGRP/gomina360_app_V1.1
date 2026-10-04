@@ -168,8 +168,21 @@ await page.evaluate(() => {
   b?.click();
 });
 await sleep(2500);
+// The records table renders category labels title-cased ("Feed Purchase"),
+// and the freshly recorded row can land a moment after the tab switch — wait
+// for either the marker or the label before asserting.
+await page
+  .waitForFunction(
+    (mark) => {
+      const t = document.querySelector("main")?.innerText || "";
+      return t.includes(mark) || /feed purchase/i.test(t);
+    },
+    { timeout: 15000 },
+    MARK,
+  )
+  .catch(() => {});
 const finText = await page.evaluate(() => document.querySelector("main")?.innerText || "");
-ql(finText.includes(MARK) || finText.includes("FEED_PURCHASE"), "FINANCE records table shows the new expense");
+ql(finText.includes(MARK) || /feed purchase/i.test(finText), "FINANCE records table shows the new expense");
 const finTableHasBtn = await page.evaluate(async () => {
   const main = document.querySelector("main");
   const btns = [...main.querySelectorAll("button")];

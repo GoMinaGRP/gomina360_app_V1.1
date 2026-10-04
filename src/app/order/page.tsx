@@ -35,10 +35,19 @@ import {
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import ProductLightbox from "@/components/ProductLightbox";
+import CustomerHeader from "@/components/CustomerHeader";
+import {
+  shopPhone,
+  telHref,
+  waHref,
+  shopDirectionsUrl,
+  shopAskText,
+} from "@/lib/shopContact";
 import ProductShareMenu from "@/components/ProductShareMenu";
 import WatermarkOverlay from "@/components/WatermarkOverlay";
 import MiniLeafletMap from "@/components/MiniLeafletMap";
 import { businessServesLocation, haversineM } from "@/lib/tracking";
+import ProductVariantPicker, { defaultPick, hasVariants, isPickComplete, variantFor, type VariantSelection } from "@/components/ProductVariantPicker";
 import { validatePhone, PHONE_EXACT_DIGITS_STOREFRONT } from "@/lib/phone";
 
 function fmtMoney(amount: number | null | undefined, _currency = "GHS") {
@@ -61,6 +70,16 @@ function productPhotos(p: any): string[] {
   return arr;
 }
 
+/** Display thumbnails parallel to productPhotos(): `/api/menu/photo?…&size=thumb`
+ *  URLs served from the ≤400px image generated at upload time. Empty strings
+ *  (rows that predate thumbnail generation) fall back to the full photo, so
+ *  every image that existed before still renders exactly as it did. */
+function productThumbs(p: any): string[] {
+  const full = productPhotos(p);
+  const t = Array.isArray(p.thumbs) ? p.thumbs.filter((x: any) => typeof x === "string") : [];
+  return full.map((_ph, i) => (typeof t[i] === "string" ? t[i] : ""));
+}
+
 /** Watermark spec for a menu business row — the faint overlay composites at
  *  display time; the stored product photo bytes are never modified. */
 function wmSpecOf(b: any) {
@@ -74,6 +93,47 @@ function wmSpecOf(b: any) {
     : null;
 }
 
+/**
+ * Storefront search — ONE matcher for the whole catalogue.
+ *
+ * The customer types what they know: a product name, a category ("blocks"),
+ * a brand, a SKU off a receipt, a description word, or the shop they bought
+ * from last time. All of those are searchable here; the previous matcher only
+ * looked at the product name, so "hardware" or "POULTRY-01" found nothing.
+ */
+function productHaystack(p: any, b: any): string {
+  return [
+    p?.name,
+    p?.category,
+    p?.subcategory,
+    p?.brand,
+    p?.model,
+    p?.sku,
+    p?.description,
+    p?.unit,
+    b?.businessName,
+    b?.businessCode,
+    b?.branchName,
+    b?.category,
+  ]
+    .filter((x) => typeof x === "string" && x.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+/** Every whitespace-separated term must appear (AND) — "block 6" narrows. */
+function matchesProductQuery(p: any, b: any, query: string): boolean {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return true;
+  const hay = productHaystack(p, b);
+  // WORD-PREFIX match: every term must start a word somewhere in the haystack,
+  // so "cement" finds "Portland Cement 50kg" (and even the partial "ceme")
+  // without dragging in "Steel & Reinfor-cement" by accident.
+  return q
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => new RegExp(`(^|[^a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(hay));
+}
 
 interface CartLine {
   biz: any;
@@ -81,6 +141,10 @@ interface CartLine {
   qty: number;
   /** Chosen fulfilment option (pre-order) for this line, if any. */
   option?: any | null;
+  /** Boutique: the chosen SIZE/COLOUR variant for this line (null for
+   *  products without a variant matrix). The variant id is what the server
+   *  validates and deducts stock from. */
+  variant?: { id: number; size: string | null; color: string | null } | null;
 }
 
 /**
@@ -167,16 +231,22 @@ function QtyInput({
  * asserts both the step count and that these phrases match the live DOM.
  */
 const HOWTO_STEPS: [string, React.ReactNode][] = [
-  ["Browse shops & categories", <>Every product from <span className="font-bold text-emerald-700">all our businesses</span> sits on this ONE page — grouped by business, then category. Tap a store card (or a group's <span className="font-bold">Focus →</span>) to zoom into one shop, tap a <span className="font-bold text-cyan-700">category chip</span> in the bar under the header, or type in the search box to search everywhere. <span className="font-bold text-emerald-700">Use my location</span> sorts branches by who delivers to you.</>],
+  ["Browse shops & categories", <>Every product from <span className="font-bold text-emerald-700">all our shops</span> sits on this ONE page — grouped by <span className="font-bold text-cyan-700">category</span>, with every shop that sells it side by side. Tap a <span className="font-bold">shop chip</span> in the shop row to zoom into one shop, tap a <span className="font-bold text-cyan-700">category chip</span> in the bar under the header, or type in the search box to search everywhere. <span className="font-bold text-emerald-700">Use my location</span> sorts shops by who delivers to you.</>],
   ["See details & zoom photos", <>Tap a product photo, a thumbnail, or its <span className="font-bold text-emerald-700">ⓘ details</span> chip for the full details page — big photos of every angle, price, description & specs. Zoom with the <span className="font-bold">+/−</span> buttons, the mouse wheel, or pinch on touchscreens, then drag to look around.</>],
   ["Pick stock or Pre-order", <>Items <span className="font-bold text-emerald-700">In stock</span> take <span className="font-bold">Add to Cart</span>. Cards showing <span className="font-bold text-indigo-700">Pre-order only</span> (or “pre-order also available”) list indigo option cards — each with its supply method (e.g. Air/Sea), lead days, price and deposit terms. Tap <span className="font-bold text-indigo-700">Pre-order</span> on the option you want.</>],
   ["Set quantities", <>Use <span className="font-bold">+ / −</span> on any card, or tap the number and type an exact quantity. The cart bar at the bottom keeps the running count and total.</>],
-  ["Proceed to Checkout", <>Tap <span className="font-bold">Proceed to Checkout ▼</span> on the cart bar — it guides you down to the one checkout form for the shop you're buying from (each order goes to one branch).</>],
+  ["Proceed to Checkout", <>Tap <span className="font-bold">Proceed to Checkout ▼</span> on the cart bar — it guides you down to the one checkout form for the shop you're buying from (each order goes to one shop).</>],
   ["Your name & phone", <>Your name, and a phone number we can reach you on: <span className="font-bold text-cyan-700">exactly 10 digits</span>, like 0551234567 — no +233 country code. The page tells you instantly if the number is wrong.</>],
   ["Pickup or Delivery", <><span className="font-bold">Pickup</span>: choose a pickup point — you'll see it on the map. <span className="font-bold">Delivery</span>: describe your address, then <span className="font-bold text-rose-600">drag the map</span> until the red centre-pin sits exactly on your doorstep. Zoom with +/−, nudge with the arrow pad, or tap <span className="font-bold text-cyan-700">Use my location</span> for GPS.</>],
   ["Choose payment", <><span className="font-bold">Pay on delivery/pickup</span> (cash or MoMo when the order reaches you), or <span className="font-bold">Pay now with MTN MoMo</span> — the pay-to number is shown — and paste your transaction reference. Pre-orders pay the deposit by MoMo now, the balance on the stated terms. Add a note for the staff if you like.</>],
   ["Place order & track it", <>Tap <span className="font-bold text-emerald-700">Place order</span> — you instantly get a <span className="font-mono text-cyan-700">GM-…</span> code (<span className="font-bold">Copy code</span> to keep it safe). <span className="font-bold text-cyan-700">Track my order live →</span> opens an auto-refreshing page: Received → Confirmed → Processing → Ready/Dispatched → Delivered — pre-orders add Pre-order → Procurement → Shipped → In transit → Arrived → Stock received — plus payment status and a live courier map.</>],
 ];
+
+/** Pickup-point address → branch label, for card tooltips and the shop strip. */
+function shopAddressLine(b: any): string {
+  const pt = (b?.pickupLocations || []).find((x: any) => x && (x.address || "").trim());
+  return String(pt?.address || b?.branchName || "").trim();
+}
 
 type ProductCardProps = {
   p: any;
@@ -186,14 +256,21 @@ type ProductCardProps = {
   stockQty: number;
   /** Quantities of each pre-order option line, keyed by option id string. */
   optionQtys: Record<string, number>;
-  add: (p: any, delta: number, fromBiz?: any, option?: any) => void;
-  setQty: (p: any, qty: number, fromBiz?: any, option?: any) => void;
+  /** Boutique: quantities in the cart per SIZE/COLOUR variant id (string key). */
+  variantQtys: Record<string, number>;
+  add: (p: any, delta: number, fromBiz?: any, option?: any, variant?: VariantSelection) => void;
+  setQty: (p: any, qty: number, fromBiz?: any, option?: any, variant?: VariantSelection) => void;
   onOpenLightbox: (p: any, fromBiz: any, idx: number) => void;
   /** The product's own business row — drives the stable per-product share
    *  link (/order?biz=…&p=…). Same object as fromBiz where provided. */
   shareBiz?: any;
   /** Deep-link focus ring: a shared-product link highlights its card. */
   highlight?: boolean;
+  /** All-shops view: name the selling shop on the card (product-first grids
+   *  must never leave the customer guessing who they are buying from). */
+  showShop?: boolean;
+  /** Focus that shop's catalogue (from the card's shop name). */
+  onFocusShop?: (biz: any) => void;
 };
 
 function optionQtysEqual(a: Record<string, number>, b: Record<string, number>) {
@@ -214,7 +291,10 @@ function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
     prev.onOpenLightbox === next.onOpenLightbox &&
     prev.shareBiz === next.shareBiz &&
     prev.highlight === next.highlight &&
-    optionQtysEqual(prev.optionQtys, next.optionQtys)
+    prev.showShop === next.showShop &&
+    prev.onFocusShop === next.onFocusShop &&
+    optionQtysEqual(prev.optionQtys, next.optionQtys) &&
+    optionQtysEqual(prev.variantQtys, next.variantQtys)
   );
 }
 
@@ -222,15 +302,40 @@ const ProductCard = React.memo(function ProductCard({
   p,
   fromBiz,
   wmBiz,
-  stockQty: q,
+  stockQty: qStock,
   optionQtys,
+  variantQtys,
   add,
   setQty,
   onOpenLightbox,
   shareBiz,
   highlight = false,
+  showShop = false,
+  onFocusShop,
 }: ProductCardProps) {
   const photos = productPhotos(p);
+  // Grid tiles + the gallery strip paint the small thumbnails (~18 KB); the
+  // lightbox still opens the full-resolution photos for zoom/detail.
+  const thumbs = productThumbs(p);
+  // ── Boutique variant selection (sizes/colours) ───────────────────────
+  // The card owns the choice; adding to cart only becomes possible once the
+  // customer picked an IN-STOCK size/colour combination. Products without a
+  // variant matrix behave exactly as before.
+  const isVariantProduct = hasVariants(p);
+  const [sel, setSel] = useState<VariantSelection>(null);
+  useEffect(() => {
+    if (!isVariantProduct) return;
+    if (!sel) {
+      const d = defaultPick(p);
+      if (d) setSel(d);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVariantProduct, p?.id]);
+  const chosen = variantFor(p, sel);
+  const pickOk = !isVariantProduct || isPickComplete(p, sel);
+  const shopBiz = fromBiz || wmBiz || null;
+  const q = isVariantProduct ? (chosen ? variantQtys[String(chosen.id)] || 0 : 0) : qStock;
+  const maxQty = isVariantProduct ? (chosen ? Math.max(0, chosen.available) : 0) : p.available;
   return (
       <div
         key={p.id}
@@ -250,7 +355,7 @@ const ProductCard = React.memo(function ProductCard({
               title="Tap for details & photos"
               data-testid={`oo-photo-${p.id}`}
             >
-              <img src={photos[0]} alt={p.name} className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
+              <img src={thumbs[0] || photos[0]} alt={p.name} loading="lazy" decoding="async" className="w-full h-32 sm:h-36 object-contain rounded-lg transition group-hover:scale-[1.03]" />
               {/* Faint storefront watermark (Owner-toggleable) — overlay only,
                   never baked into the stored image; keeps zoom-in affordance. */}
               <span className="absolute inset-0 rounded-lg overflow-hidden">
@@ -277,7 +382,7 @@ const ProductCard = React.memo(function ProductCard({
                     data-testid={`oo-thumb-${p.id}-${i}`}
                     aria-label={`View photo ${i + 1} of ${photos.length}`}
                   >
-                    <img src={ph} alt={`${p.name} ${i + 1}`} className="w-full h-full object-cover" />
+                    <img src={thumbs[i] || ph} alt={`${p.name} ${i + 1}`} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     <WatermarkOverlay spec={wmSpecOf(wmBiz)} compact />
                   </button>
                 ))}
@@ -290,8 +395,72 @@ const ProductCard = React.memo(function ProductCard({
           </div>
         )}
         <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
+        {/* Sold by — every product stays linked to its selling shop, and one
+            tap focuses that shop's own catalogue. */}
+        {showShop && shopBiz && (
+          <div className="mt-0.5 flex items-center gap-1 min-w-0" data-testid={`oo-sold-by-${p.id}`}>
+            <Store className="w-3 h-3 text-emerald-600 shrink-0" />
+            <button
+              type="button"
+              onClick={() => onFocusShop?.(shopBiz)}
+              className="text-[10px] font-bold text-slate-600 hover:text-cyan-700 truncate text-left"
+              title={`See everything ${shopBiz.businessName} sells`}
+              data-testid={`oo-sold-by-shop-${p.id}`}
+            >
+              {shopBiz.businessName}
+            </button>
+          </div>
+        )}
+        {/* The selling shop stays reachable from the card itself: call it,
+            WhatsApp it, or get directions — the number is the SHOP's own
+            (customerHelpPhone → contactPhone), never the platform helpdesk. */}
+        {shopBiz && (shopPhone(shopBiz) || shopDirectionsUrl(shopBiz)) && (
+          <div className="mt-1 flex items-center gap-1" data-testid={`oo-contact-${p.id}`}>
+            {shopPhone(shopBiz) && (
+              <a
+                href={telHref(shopPhone(shopBiz))}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
+                title={`Call ${shopBiz.businessName} — ${shopPhone(shopBiz)}`}
+                aria-label={`Call ${shopBiz.businessName} on ${shopPhone(shopBiz)}`}
+                data-testid={`oo-call-${p.id}`}
+              >
+                <Phone className="w-3 h-3" /> Call
+              </a>
+            )}
+            {shopPhone(shopBiz) && (
+              <a
+                href={waHref(shopPhone(shopBiz), shopAskText(shopBiz, p))}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-green-50 border border-green-200 text-[10px] font-bold text-green-700 hover:bg-green-100"
+                title={`WhatsApp ${shopBiz.businessName}`}
+                aria-label={`Ask ${shopBiz.businessName} about ${p.name} on WhatsApp`}
+                data-testid={`oo-wa-${p.id}`}
+              >
+                <MessageCircle className="w-3 h-3" /> Ask
+              </a>
+            )}
+            {shopDirectionsUrl(shopBiz) && (
+              <a
+                href={shopDirectionsUrl(shopBiz)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
+                title={`Directions to ${shopBiz.businessName}${shopAddressLine(shopBiz) ? ` — ${shopAddressLine(shopBiz)}` : ""}`}
+                aria-label={`Get directions to ${shopBiz.businessName}`}
+                data-testid={`oo-dir-${p.id}`}
+              >
+                <Navigation className="w-3 h-3" /> Directions
+              </a>
+            )}
+          </div>
+        )}
         <div className="text-[10px] text-slate-500 mt-1">
-          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600">{p.category}</span>
+          <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600" data-testid={`oo-category-${p.id}`}>{p.category}</span>
+          {/* Subcategory registered in Inventory — keeps the branch's own wording. */}
+          {p.subcategory && p.subcategory !== p.category && (
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-violet-50 border border-violet-200 font-bold text-violet-700" data-testid={`oo-subcategory-${p.id}`}>{p.subcategory}</span>
+          )}
           <span className="ml-1">per {p.unit}</span>
           {/* Brand registered in Inventory → auto-shown here (no duplicate entry). */}
           {p.brand && (
@@ -313,11 +482,14 @@ const ProductCard = React.memo(function ProductCard({
               email / copy (see ProductShareMenu). */}
           <ProductShareMenu product={{ id: p.id, sku: p.sku, name: p.name }} biz={shareBiz || fromBiz || wmBiz} priceLabel={fmtMoney(p.price)} />
         </div>
+        {isVariantProduct && (
+          <ProductVariantPicker product={p} value={sel} onChange={setSel} testidPrefix="oo" compact />
+        )}
         <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`oo-avail-${p.id}`}>
-          {p.available >= 10 ? (
+          {maxQty >= 10 ? (
             <span className="text-[11px] font-bold text-emerald-600">In stock</span>
-          ) : p.available > 0 ? (
-            <span className="text-[11px] font-bold text-amber-600">Only {p.available} {p.unit} left</span>
+          ) : maxQty > 0 ? (
+            <span className="text-[11px] font-bold text-amber-600">Only {maxQty} {p.unit} left</span>
           ) : (p.preorderOptions || []).length > 0 ? (
             <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">Pre-order only</span>
           ) : (
@@ -329,20 +501,20 @@ const ProductCard = React.memo(function ProductCard({
         </div>
         {q === 0 ? (
           <button
-            onClick={() => add(p, 1, fromBiz)}
-            disabled={p.available <= 0}
+            onClick={() => add(p, 1, fromBiz, undefined, sel)}
+            disabled={maxQty <= 0 || !pickOk}
             className="mt-2.5 w-full py-2 rounded-full bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1 shadow-sm transition"
             data-testid={`oo-add-${p.id}`}
           >
-            <Plus className="w-3.5 h-3.5" /> Add to Cart
+            <Plus className="w-3.5 h-3.5" /> {isVariantProduct && !pickOk ? "Choose size & colour" : "Add to Cart"}
           </button>
         ) : (
           <div className="mt-2.5 flex items-center justify-between rounded-full border-2 border-amber-400 bg-amber-50 px-1.5 py-1">
-            <button onClick={() => add(p, -1, fromBiz)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
+            <button onClick={() => add(p, -1, fromBiz, undefined, sel)} className="p-1 rounded-full hover:bg-amber-100 text-slate-700" data-testid={`oo-minus-${p.id}`}>
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <QtyInput value={q} max={p.available} onCommit={(v) => setQty(p, v, fromBiz)} testid={`oo-qty-${p.id}`} />
-            <button onClick={() => add(p, 1, fromBiz)} disabled={q >= p.available} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
+            <QtyInput value={q} max={maxQty} onCommit={(v) => setQty(p, v, fromBiz, undefined, sel)} testid={`oo-qty-${p.id}`} />
+            <button onClick={() => add(p, 1, fromBiz, undefined, sel)} disabled={q >= maxQty} className="p-1 rounded-full hover:bg-amber-100 text-slate-700 disabled:opacity-30" data-testid={`oo-plus-${p.id}`}>
               <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -369,19 +541,20 @@ const ProductCard = React.memo(function ProductCard({
               </p>
               {optQty === 0 ? (
                 <button
-                  onClick={() => add(p, 1, fromBiz, opt)}
-                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition"
+                  onClick={() => add(p, 1, fromBiz, opt, sel)}
+                  disabled={isVariantProduct && !pickOk}
+                  className="mt-1.5 w-full py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition disabled:opacity-40"
                   data-testid={`oo-preadd-${p.id}-${opt.id}`}
                 >
                   <CalendarClock className="w-3 h-3" /> Pre-order{Number(opt.priceGhs) !== Number(p.price) ? ` · ${fmtMoney(opt.priceGhs)}` : ""}
                 </button>
               ) : (
                 <div className="mt-1.5 flex items-center justify-between rounded-full border-2 border-indigo-500 bg-white px-1.5 py-1">
-                  <button onClick={() => add(p, -1, fromBiz, opt)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
+                  <button onClick={() => add(p, -1, fromBiz, opt, sel)} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700" data-testid={`oo-preminus-${p.id}-${opt.id}`}>
                     <Minus className="w-3.5 h-3.5" />
                   </button>
-                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt)} testid={`oo-preqty-${p.id}-${opt.id}`} />
-                  <button onClick={() => add(p, 1, fromBiz, opt)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
+                  <QtyInput value={optQty} max={cap} onCommit={(v) => setQty(p, v, fromBiz, opt, sel)} testid={`oo-preqty-${p.id}-${opt.id}`} />
+                  <button onClick={() => add(p, 1, fromBiz, opt, sel)} disabled={optQty >= cap} className="p-1 rounded-full hover:bg-indigo-50 text-slate-700 disabled:opacity-30" data-testid={`oo-preplus-${p.id}-${opt.id}`}>
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -473,6 +646,9 @@ function OrderInner() {
   // survive re-deploys. Resolution happens against the SAME org-scoped menu
   // payload the storefront renders (no extra surface, no cross-tenant read).
   const [shareKey, setShareKey] = useState<string | null>(null);
+  // Shop-strip search — only rendered once a catalogue has more shops than one
+  // row can carry; it narrows the STRIP, never the products.
+  const [shopSearch, setShopSearch] = useState("");
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const shareFocusDone = useRef(false);
 
@@ -601,9 +777,8 @@ function OrderInner() {
   );
 
   const products = useMemo(() => {
-    const q = search.trim().toLowerCase();
     return (biz?.products || []).filter(
-      (p: any) => (cat === "ALL" || p.category === cat) && (!q || p.name.toLowerCase().includes(q)),
+      (p: any) => (cat === "ALL" || p.category === cat) && matchesProductQuery(p, biz, search),
     );
   }, [biz, cat, search]);
 
@@ -623,6 +798,8 @@ function OrderInner() {
   const lineUnitPrice = (l: CartLine) => (l.option ? Number(l.option.priceGhs ?? l.product.price) : Number(l.product.price));
   const cartTotal = cart.reduce((acc, l) => acc + lineUnitPrice(l) * l.qty, 0);
   const cartCount = cart.reduce((acc, l) => acc + l.qty, 0);
+  /** The one shop this order belongs to — a single-shop cart must SAY its shop. */
+  const cartShop = cart[0]?.biz?.businessName || (cart.length ? biz?.businessName : "") || "";
   // Pre-order quick facts for the checkout strip.
   const preorderLines = cart.filter((l) => l.option);
   const hasPreorder = preorderLines.length > 0;
@@ -706,29 +883,57 @@ function OrderInner() {
     return ["ALL", ...Array.from(s)];
   }, [visibleBiz]);
 
-  const allGroups = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return visibleBiz
-      .map(({ b, serves, distanceM, areaName }) => {
-        const its = (b.products || []).filter(
-          (p: any) => (cat === "ALL" || p.category === cat) && (!q || p.name.toLowerCase().includes(q)),
-        );
-        const secs: { name: string; items: any[] }[] = [];
-        for (const pr of its) {
-          const name = String(pr.category || "Other");
-          let s = secs.find((g) => g.name === name);
-          if (!s) { s = { name, items: [] }; secs.push(s); }
-          s.items.push(pr);
-        }
-        return { b, serves, distanceM, areaName, secs, count: its.length };
-      })
-      // Zero-product businesses never clutter the one-page grid.
-      .filter((g) => g.count > 0);
+  /**
+   * ALL-SHOPS catalogue — the DEFAULT view (product-first).
+   *
+   * Products are grouped by CATEGORY, not by shop: "Building Materials" shows
+   * every shop's blocks side by side so the customer can compare, and each card
+   * names its selling shop ("Sold by …"). The shop dimension is a filter
+   * (`oo-bizrow` strip below), not the page's spine.
+   */
+  const catGroups = useMemo(() => {
+    const byCat = new Map<string, { name: string; items: { p: any; b: any; distanceM: number | null }[] }>();
+    for (const d of visibleBiz) {
+      for (const pr of d.b.products || []) {
+        if (cat !== "ALL" && pr.category !== cat) continue;
+        if (!matchesProductQuery(pr, d.b, search)) continue;
+        const name = String(pr.category || "Other");
+        let g = byCat.get(name);
+        if (!g) { g = { name, items: [] }; byCat.set(name, g); }
+        g.items.push({ p: pr, b: d.b, distanceM: d.distanceM ?? null });
+      }
+    }
+    // Richest shelves first, then alphabetical — a shopper sees the categories
+    // with the most to offer before the one-product corners.
+    return [...byCat.values()].sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name));
   }, [visibleBiz, search, cat]);
-  const allProductsCount = useMemo(
-    () => allGroups.reduce((a, g) => a + g.count, 0),
-    [allGroups],
+
+  /** Shop-strip rows after the strip's own search box (serving shops first). */
+  const stripBiz = useMemo(() => {
+    const q = shopSearch.trim().toLowerCase();
+    const rows = q
+      ? visibleBiz.filter((d) => `${d.b.businessName} ${d.b.branchName || ""} ${d.b.businessCode || ""}`.toLowerCase().includes(q))
+      : visibleBiz;
+    return [...rows].sort((a, b) => (a.serves !== b.serves ? (a.serves ? -1 : 1) : (a.distanceM ?? 0) - (b.distanceM ?? 0)));
+  }, [visibleBiz, shopSearch]);
+
+  /** Search feedback: how many products match and from how many shops. */
+  const resultCount = useMemo(() => catGroups.reduce((a, g) => a + g.items.length, 0), [catGroups]);
+  const resultShops = useMemo(
+    () => new Set(catGroups.flatMap((g) => g.items.map((i) => i.b.businessId))).size,
+    [catGroups],
   );
+  /** Shelf count for the "All shops" row — the whole in-scope catalogue. */
+  const allProductsCount = useMemo(
+    () => visibleBiz.reduce((a, d) => a + (d.b.products || []).length, 0),
+    [visibleBiz],
+  );
+  /** Categories offered as suggestions when a search comes back empty. */
+  const suggestCategories = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of visibleBiz) for (const p of d.b.products || []) s.add(String(p.category || "Other"));
+    return [...s].slice(0, 6);
+  }, [visibleBiz]);
 
 
   // A branch's own pickup points: preselect when there is only one; any
@@ -819,12 +1024,16 @@ function OrderInner() {
   // Identity-stable cart mutations for the memoized ProductCards: the guard
   // dialogs below must read LIVE state (refs), never stale useCallback
   // closures. setCart/setBizId are already referentially stable.
-  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any) => {
+  const add = useCallback((p: any, delta: number, fromBiz?: any, option?: any, variant?: VariantSelection) => {
     const cartNow = cartRef.current;
     const pBiz = fromBiz || bizRef.current;
-    // Cart lines differ per fulfilment option: product × option is the launch key.
-    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
-    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    // Cart lines differ per fulfilment option AND per size/colour variant:
+    // product × option × variant is the launch key.
+    const picked = variant ? variantFor(p, variant) : null;
+    const variantMeta = picked ? { id: picked.id, size: picked.size, color: picked.color } : null;
+    const vKey = variantMeta ? variantMeta.id : 0;
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}:${vKey}`;
     const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
     // Cross-shop guard: adding a NEW line from a different business follows
     // the same confirm-then-switch rule as the branch chips (cart is
@@ -832,7 +1041,7 @@ function OrderInner() {
     if (delta > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null }]);
+      setCart([{ biz: pBiz, product: p, qty: 1, option: option ?? null, variant: variantMeta }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
@@ -843,11 +1052,20 @@ function OrderInner() {
     }
     setCart((c) => {
       const existing = c.find((l) => lineKey(l) === myKey);
-      if (!existing && delta > 0) return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null }];
+      if (!existing && delta > 0)
+        return [...c, { biz: pBiz, product: p, qty: 1, option: option ?? null, variant: variantMeta }];
       if (!existing) return c;
-      // Stock lines clamp to branch availability; pre-order lines are
-      // open-ended, just capped by the seller's per-period capacity (if any).
-      const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+      // Stock lines clamp to branch availability (the selected variant's own
+      // stock for Boutique items); pre-order lines are open-ended, just capped
+      // by the seller's per-period capacity (if any).
+      const cap =
+        option?.capacityPerPeriod != null
+          ? Number(option.capacityPerPeriod)
+          : option
+            ? 9999
+            : picked
+              ? Math.max(0, picked.available)
+              : p.available;
       const qty = Math.max(0, Math.min(cap, existing.qty + delta));
       if (qty === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty } : l));
@@ -855,17 +1073,27 @@ function OrderInner() {
   }, []);
 
   // Direct (typed) quantity entry — same clamping rules as the −/+ stepper.
-  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any) => {
+  const setQty = useCallback((p: any, qty: number, fromBiz?: any, option?: any, variant?: VariantSelection) => {
     const cartNow = cartRef.current;
     const pBiz = fromBiz || bizRef.current;
-    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}`;
-    const myKey = `${p.id}:${option?.id ?? "stock"}`;
+    const picked = variant ? variantFor(p, variant) : null;
+    const variantMeta = picked ? { id: picked.id, size: picked.size, color: picked.color } : null;
+    const vKey = variantMeta ? variantMeta.id : 0;
+    const lineKey = (l: CartLine) => `${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`;
+    const myKey = `${p.id}:${option?.id ?? "stock"}:${vKey}`;
     const inCartKey = () => cartNow.some((l) => lineKey(l) === myKey);
-    const cap = option?.capacityPerPeriod != null ? Number(option.capacityPerPeriod) : option ? 9999 : p.available;
+    const cap =
+      option?.capacityPerPeriod != null
+        ? Number(option.capacityPerPeriod)
+        : option
+          ? 9999
+          : picked
+            ? Math.max(0, picked.available)
+            : p.available;
     if (qty > 0 && !inCartKey() && cartNow.length > 0 && cartNow[0]?.biz?.businessId !== pBiz?.businessId) {
       const msg = `Your cart has items from ${cartNow[0]?.biz?.businessName || "another shop"}. Ordering from ${pBiz?.businessName || "this shop"} will clear it. Continue?`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
-      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }]);
+      setCart([{ biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null, variant: variantMeta }]);
       if (pBiz) setBizId(pBiz.businessId);
       return;
     }
@@ -874,7 +1102,8 @@ function OrderInner() {
     }
     setCart((c) => {
       const existing = c.find((l) => lineKey(l) === myKey);
-      if (!existing) return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null }] : c;
+      if (!existing)
+        return qty > 0 ? [...c, { biz: pBiz, product: p, qty: Math.min(cap, qty), option: option ?? null, variant: variantMeta }] : c;
       const q = Math.max(0, Math.min(cap, qty));
       if (q === 0) return c.filter((l) => lineKey(l) !== myKey);
       return c.map((l) => (lineKey(l) === myKey ? { ...l, qty: q } : l));
@@ -884,7 +1113,7 @@ function OrderInner() {
   const pickBiz = (id: number) => {
     if (id === bizId) { setAllMode(false); return; }
     if (cart.length > 0 && typeof window !== "undefined" &&
-        !window.confirm("Switching business will clear your cart. Continue?")) return;
+        !window.confirm("Switching shops will clear your cart. Continue?")) return;
     setCart([]);
     setBizId(id);
     setAllMode(false);
@@ -898,9 +1127,26 @@ function OrderInner() {
   // is never touched by simply switching views).
   const pickAll = () => setAllMode(true);
 
+  /** Stable (memo-safe) "show me this shop's catalogue" — used by the card's
+   *  "Sold by <Shop>" chip, which must not invalidate the memoised grid. */
+  const focusShop = useCallback((b: any) => {
+    const id = b?.businessId;
+    if (!id) return;
+    if (id === bizIdRef.current) { setAllMode(false); return; }
+    if (cartRef.current.length > 0 && typeof window !== "undefined" &&
+        !window.confirm(`Switching to ${b.businessName} will clear your cart. Continue?`)) return;
+    setCart([]);
+    setBizId(id);
+    setAllMode(false);
+    setCat("ALL");
+    setSearch("");
+    setPickPointId(null);
+    setDeliveryPin(null);
+  }, []);
+
   const placeOrder = async () => {
     setOrderError("");
-    if (!biz) return setOrderError("Choose a business first.");
+    if (!biz) return setOrderError("Choose a shop first.");
     if (cart.length === 0) return setOrderError("Your cart is empty.");
     if (name.trim().length < 2) return setOrderError("Please enter your name.");
     // Customer numbers are Ghana-local: EXACTLY 10 digits (no country code).
@@ -957,7 +1203,12 @@ function OrderInner() {
           paymentChoice: payChoice,
           momoRef: momoRef.trim(),
           note: note.trim(),
-          items: cart.map((l) => ({ inventoryId: l.product.id, quantity: l.qty })),
+          items: cart.map((l) => ({
+            inventoryId: l.product.id,
+            quantity: l.qty,
+            // Boutique: the exact size/colour variant the customer chose.
+            ...(l.variant ? { variantId: l.variant.id } : {}),
+          })),
           // Chosen fulfilment options — the server validates every entry.
           fulfillmentPicker: Object.fromEntries(
             cart.filter((l) => l.option).map((l) => [l.product.id, l.option.id]),
@@ -998,9 +1249,15 @@ function OrderInner() {
   // memoized module-level <ProductCard/>; this wrapper only computes the
   // per-card bits that depend on live cart state, so typing in the form or
   // toggling UI chrome no longer re-renders the whole catalog.
-  const renderProduct = (p: any, fromBiz?: any) => {
+  const renderProduct = (p: any, fromBiz?: any, showShop = false) => {
     const qtys: Record<string, number> = {};
     for (const opt of p.preorderOptions || []) qtys[String(opt.id)] = cartQty(`${p.id}:${opt.id}`);
+    // Boutique: quantity already in the cart for each chosen variant id.
+    const vQtys: Record<string, number> = {};
+    for (const l of cart) {
+      if (l.product.id !== p.id || l.option || !l.variant) continue;
+      vQtys[String(l.variant.id)] = (vQtys[String(l.variant.id)] || 0) + l.qty;
+    }
     return (
       <ProductCard
         key={p.id}
@@ -1009,11 +1266,14 @@ function OrderInner() {
         wmBiz={fromBiz || bizOfProduct(p)}
         stockQty={inCart(p.id)}
         optionQtys={qtys}
+        variantQtys={vQtys}
         add={add}
         setQty={setQty}
         onOpenLightbox={openLightbox}
         shareBiz={fromBiz || biz}
         highlight={highlightId === p.id}
+        showShop={showShop}
+        onFocusShop={focusShop}
       />
     );
   };
@@ -1023,97 +1283,81 @@ function OrderInner() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      {/* ══ Amazon-style header: logo · search · HELP · track · cart ══ */}
-      <header className="bg-[#131921] text-white sticky top-0 z-40 shadow-lg" data-testid="oo-header">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2.5 pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-          {/* GoMina 360 logo — one click straight to the app's Login page
-              (the storefront's parent brand home). Anonymous customers land
-              on the sign-in screen; signed-in staff land on their dashboard. */}
-          <Link
-            href="/"
-            className="flex items-center gap-2 shrink-0"
-            data-testid="oo-logo"
-            aria-label="GoMina 360 — go to the Login page"
-            title="Go to the GoMina 360 Login page"
-          >
-            <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center font-black text-white text-sm shadow">
-              360
-            </span>
-            <span className="leading-tight hidden xs:block sm:block">
-              <span className="block text-sm font-black">GoMina 360</span>
-              <span className="block text-[9px] text-emerald-300">Official store · live stock</span>
-            </span>
-          </Link>
-          <div className="order-3 sm:order-2 basis-full sm:basis-auto sm:flex-1 min-w-0">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={allMode ? "Search all products across every shop…" : `Search ${biz?.businessName || "this shop"}…`}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-slate-900 bg-white outline-none border-2 border-transparent focus:border-amber-400 shadow-inner"
-                data-testid="oo-search"
-                aria-label="Search products"
-              />
+      {/* ══ Shared customer header (same band as /track): search · HELP ·
+             track link · cart, with the departments strip underneath ══ */}
+      <CustomerHeader
+        strip={
+          biz ? (
+            <div className="bg-[#232f3e] border-t border-slate-700/50">
+              <div className="max-w-7xl mx-auto px-3 sm:px-4 py-1.5 flex gap-1.5 overflow-x-auto" data-testid="oo-catbar">
+                {(allMode ? categoriesAllMode : categories).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setCat(c)}
+                    className={`shrink-0 px-3 py-1.5 rounded-md text-[11px] font-bold transition whitespace-nowrap ${
+                      cat === c
+                        ? "bg-amber-400 text-slate-950"
+                        : "text-slate-200 hover:bg-slate-700/70 hover:text-white"
+                    }`}
+                    data-testid={`oo-cat-${c}`}
+                    aria-pressed={cat === c}
+                  >
+                    {c === "ALL" ? "All departments" : c}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="order-2 sm:order-3 ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setHelpOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-[12px] font-black shadow transition"
-              data-testid="oo-help"
-              aria-label="Open help and customer support"
-            >
-              <LifeBuoy className="w-4 h-4" /> HELP
-            </button>
-            <a href="/track" className="px-2 py-2 text-[11px] font-bold text-cyan-300 hover:text-cyan-200" data-testid="oo-track-link">
-              Track order →
-            </a>
-            <button
-              type="button"
-              onClick={() => {
-                if (cart.length === 0) return;
-                setCartOpen(true);
-                window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-              }}
-              className="relative flex items-center gap-1.5 px-2.5 py-2 rounded-lg hover:bg-slate-800 text-white transition"
-              data-testid="oo-header-cart"
-              aria-label={`Cart with ${cartCount} items`}
-            >
-              <ShoppingCart className="w-5 h-5 text-amber-400" />
-              <span className="text-[11px] font-black hidden sm:inline">Cart</span>
-              <span
-                className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${cartCount ? "bg-amber-400 text-slate-950" : "bg-slate-700 text-slate-300"}`}
-                data-testid="oo-header-cart-count"
-              >
-                {cartCount}
-              </span>
-            </button>
+          ) : null
+        }
+      >
+        <div className="order-3 sm:order-2 basis-full sm:basis-auto sm:flex-1 min-w-0">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={allMode ? "Search all products across every shop…" : `Search ${biz?.businessName || "this shop"}…`}
+              className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-slate-900 bg-white outline-none border-2 border-transparent focus:border-amber-400 shadow-inner"
+              data-testid="oo-search"
+              aria-label="Search products"
+            />
           </div>
         </div>
-        {/* Category nav bar (Amazon-style departments strip) */}
-        {biz && (
-          <div className="bg-[#232f3e] border-t border-slate-700/50">
-            <div className="max-w-7xl mx-auto px-3 sm:px-4 py-1.5 flex gap-1.5 overflow-x-auto" data-testid="oo-catbar">
-              {(allMode ? categoriesAllMode : categories).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setCat(c)}
-                  className={`shrink-0 px-3 py-1.5 rounded-md text-[11px] font-bold transition whitespace-nowrap ${
-                    cat === c
-                      ? "bg-amber-400 text-slate-950"
-                      : "text-slate-200 hover:bg-slate-700/70 hover:text-white"
-                  }`}
-                  data-testid={`oo-cat-${c}`}
-                >
-                  {c === "ALL" ? "All departments" : c}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </header>
+        <div className="order-2 sm:order-3 ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-[12px] font-black shadow transition"
+            data-testid="oo-help"
+            aria-label="Open help and customer support"
+          >
+            <LifeBuoy className="w-4 h-4" /> HELP
+          </button>
+          <a href="/track" className="px-2 py-2 text-[11px] font-bold text-cyan-300 hover:text-cyan-200" data-testid="oo-track-link">
+            Track order →
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              if (cart.length === 0) return;
+              setCartOpen(true);
+              window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+            }}
+            className="relative flex items-center gap-1.5 px-2.5 py-2 rounded-lg hover:bg-slate-800 text-white transition"
+            data-testid="oo-header-cart"
+            aria-label={`Cart with ${cartCount} items`}
+          >
+            <ShoppingCart className="w-5 h-5 text-amber-400" />
+            <span className="text-[11px] font-black hidden sm:inline">Cart</span>
+            <span
+              className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${cartCount ? "bg-amber-400 text-slate-950" : "bg-slate-700 text-slate-300"}`}
+              data-testid="oo-header-cart-count"
+            >
+              {cartCount}
+            </span>
+          </button>
+        </div>
+      </CustomerHeader>
 
       <main
         className={`max-w-7xl mx-auto px-3 sm:px-4 py-4 space-y-4 ${cart.length ? "pb-[26rem]" : "pb-24"}`}
@@ -1128,26 +1372,24 @@ function OrderInner() {
 
         {menu && !placed && (
           <>
-            {/* Welcome strip — where everything lives & how the flow works */}
-            <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-              <h1 className="text-base font-black text-slate-900 flex items-center gap-2">
-                <Store className="w-4 h-4 text-emerald-600" /> Everything from all our businesses — live stock, one page
-              </h1>
-              <p className="text-[11px] text-slate-600 mt-1">
-                Pick products, place your order, and get a <span className="font-mono font-bold text-cyan-700">GM-*</span> tracking
-                code instantly. Follow every step — confirmation, preparation, dispatch with a live map, delivery —
-                on the <a href="/track" className="text-cyan-700 font-bold underline">tracking page</a>. No account, ever.
-                New here? Tap the <span className="font-black text-amber-700">HELP</span> button above for the {HOWTO_STEPS.length}-step guide,
-                support contacts and opening hours.
-              </p>
-            </section>
+            {/* One-line intro — the how-to guide lives in HELP; products are the page. */}
+            <p className="px-1 text-[11px] text-slate-600" data-testid="oo-intro">
+              <span className="font-black text-slate-800">{allProductsCount}</span> product{allProductsCount === 1 ? "" : "s"} from{" "}
+              <span className="font-black text-slate-800">{visibleBiz.length}</span> shop{visibleBiz.length === 1 ? "" : "s"} — live stock, one page.
+              Place your order and get a <span className="font-mono font-bold text-cyan-700">GM-*</span> tracking code instantly
+              (<a href="/track" className="text-cyan-700 font-bold underline">track it here</a>). New? Tap{" "}
+              <span className="font-black text-amber-700">HELP</span> for the {HOWTO_STEPS.length}-step guide.
+            </p>
 
-            {/* Branches serving my location (Google Maps) */}
-            <section className="bg-white border border-slate-200 rounded-2xl p-3.5 space-y-2 shadow-sm" data-testid="oo-serve-card">
+            {/* ── Filter bar: delivery area + the ONE-LINE shop strip ─────────
+                The shop list used to be a wall of cards above the catalogue
+                (472 px on a phone). It is now a single scrollable row — the
+                shop dimension is a filter here, not the page's spine. */}
+            <section className="bg-white border border-slate-200 rounded-2xl px-3 py-2 space-y-1.5 shadow-sm" data-testid="oo-serve-card">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[12px] font-extrabold text-slate-900 flex items-center gap-1.5 flex-1 min-w-[140px]">
-                  <Globe className="w-4 h-4 text-emerald-600" /> Branches serving your location
-                </h2>
+                <span className="text-[11px] font-extrabold text-slate-900 flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-emerald-600" /> Delivery
+                </span>
                 {!custLoc ? (
                   <>
                     <button
@@ -1178,7 +1420,7 @@ function OrderInner() {
                       }`}
                       data-testid="oo-locate-nearonly"
                     >
-                      Serving me ({servingCount})
+                      Delivering to me ({servingCount})
                     </button>
                     <button
                       onClick={() => setNearOnly(false)}
@@ -1189,7 +1431,7 @@ function OrderInner() {
                       }`}
                       data-testid="oo-locate-showall"
                     >
-                      All ({decorated.length})
+                      All shops ({decorated.length})
                     </button>
                     <button
                       onClick={clearLoc}
@@ -1200,6 +1442,23 @@ function OrderInner() {
                     </button>
                   </>
                 )}
+                {/* Search feedback — how many products match, and from how many
+                    shops. Typing in the header must answer "did anything match?". */}
+                {search.trim() !== "" && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] font-bold text-slate-700" data-testid="oo-search-summary">
+                    <Search className="w-3 h-3 text-slate-400" />
+                    {resultCount} product{resultCount === 1 ? "" : "s"} · {resultShops} shop{resultShops === 1 ? "" : "s"} match “{search.trim()}”
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-600 hover:text-rose-600"
+                      data-testid="oo-search-clear"
+                      aria-label="Clear search"
+                    >
+                      ✕ clear
+                    </button>
+                  </span>
+                )}
               </div>
               {locErr && (
                 <p className="text-[10px] font-bold text-amber-700" data-testid="oo-locate-error">{locErr}</p>
@@ -1209,7 +1468,7 @@ function OrderInner() {
                   <span className="text-emerald-700 font-bold">{custLoc.source === "GPS" ? "GPS fix" : "Pinned"}</span>{" "}
                   <span className="font-mono">{custLoc.lat.toFixed(5)}, {custLoc.lng.toFixed(5)}</span>
                   {custLoc.accuracyM ? ` · ±${Math.round(custLoc.accuracyM)} m` : ""} — showing{" "}
-                  <span className="font-bold text-slate-900">{servingCount}</span> of {decorated.length} branches whose
+                  <span className="font-bold text-slate-900">{servingCount}</span> of {decorated.length} shops whose
                   delivery area covers you, with the distance to each.
                 </p>
               )}
@@ -1228,60 +1487,80 @@ function OrderInner() {
                   prefix="oo-loc-pin"
                   tileStyle={mapStyle}
                   onTileStyleChange={setMapStyle}
-                  hint="Drop the pin where you are — we show only the branches that deliver to that point. Switch to Satellite for an aerial view."
+                  hint="Drop the pin where you are — we show only the shops that deliver to that point. Switch to Satellite for an aerial view."
                 />
               )}
             </section>
 
-            {/* Shop by store — business picker */}
+            {/* Shop filter — ONE row, horizontally scrollable. Choosing a shop
+                focuses its catalogue (same as the old store card). */}
             {visibleBiz.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-2xl p-5 text-center space-y-2 shadow-sm" data-testid="oo-no-biz">
-                <p className="text-sm text-slate-700 font-bold">No branch currently delivers to this location.</p>
+                <p className="text-sm text-slate-700 font-bold">No shop currently delivers to this location.</p>
                 <p className="text-[11px] text-slate-500">
-                  You can still browse every branch and choose pickup — or try a different spot.
+                  You can still browse every shop and choose pickup — or try a different spot.
                 </p>
                 <button
                   onClick={() => setNearOnly(false)}
                   className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold"
                   data-testid="oo-no-biz-showall"
                 >
-                  Show all branches
+                  Show all shops
                 </button>
               </div>
             ) : (
-              <div className="flex gap-2 overflow-x-auto pb-1" data-testid="oo-bizrow">
+              <div className="flex items-stretch gap-2 overflow-x-auto pb-1" data-testid="oo-bizrow">
                 <button
                   onClick={pickAll}
-                  className={`shrink-0 px-3 py-2 rounded-xl border text-left transition shadow-sm ${
+                  className={`shrink-0 px-3 py-1.5 rounded-xl border text-left transition shadow-sm ${
                     allMode
                       ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400"
                       : "bg-white border-slate-200 hover:border-slate-400"
                   }`}
                   data-testid="oo-biz-all"
+                  aria-pressed={allMode}
                 >
-                  <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">🛍️ All businesses</div>
+                  <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">🛍️ All shops</div>
                   <div className="text-[9px] text-slate-500 whitespace-nowrap">
                     {allProductsCount} product{allProductsCount === 1 ? "" : "s"} · one page
                   </div>
                 </button>
-                {visibleBiz.map(({ b, serves, distanceM, areaName }) => (
+                {visibleBiz.length > 8 && (
+                  <div className="shrink-0 self-center">
+                    <input
+                      value={shopSearch}
+                      onChange={(e) => setShopSearch(e.target.value)}
+                      placeholder="Find a shop…"
+                      className="w-32 px-2 py-1.5 rounded-lg border border-slate-300 text-[11px] outline-none focus:border-cyan-500"
+                      data-testid="oo-shop-search"
+                      aria-label="Find a shop"
+                    />
+                  </div>
+                )}
+                {stripBiz.map(({ b, serves, distanceM, areaName }) => (
                   <button
                     key={b.businessId}
                     onClick={() => pickBiz(b.businessId)}
-                    className={`shrink-0 px-3 py-2 rounded-xl border text-left transition shadow-sm ${
+                    className={`shrink-0 px-3 py-1.5 rounded-xl border text-left transition shadow-sm ${
                       bizId === b.businessId && !allMode
                         ? "bg-cyan-50 border-cyan-500 ring-1 ring-cyan-400"
                         : "bg-white border-slate-200 hover:border-slate-400"
                     }`}
                     data-testid={`oo-biz-${b.businessId}`}
+                    aria-pressed={bizId === b.businessId && !allMode}
                   >
-                    <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">{b.businessName}</div>
-                    <div className="text-[9px] text-slate-500 whitespace-nowrap">
-                      {b.branchName} · {b.products.length} product{b.products.length === 1 ? "" : "s"}
-                    </div>
-                    <div className="flex items-center gap-1 mt-0.5">
+                    <span
+                      className="block text-[12px] font-extrabold whitespace-nowrap text-slate-900"
+                      data-testid={`oo-focus-${b.businessId}`}
+                    >
+                      {b.businessName}
+                    </span>
+                    <div className="flex items-center gap-1 whitespace-nowrap">
+                      <span className="text-[9px] text-slate-500">
+                        {b.products.length} product{b.products.length === 1 ? "" : "s"}
+                      </span>
                       {serves && (b.serviceAreas || []).length > 0 && (
-                        <span className="text-[9px] font-bold text-cyan-700 truncate max-w-[140px]" data-testid={`oo-biz-area-${b.businessId}`}>
+                        <span className="text-[9px] font-bold text-cyan-700 max-w-[110px] truncate" data-testid={`oo-biz-area-${b.businessId}`}>
                           {areaName || `${(b.serviceAreas || []).length} area${(b.serviceAreas || []).length === 1 ? "" : "s"}`}
                         </span>
                       )}
@@ -1300,10 +1579,76 @@ function OrderInner() {
                 ))}
               </div>
             )}
-            {biz?.serviceNote && (
-              <p className="text-[10px] font-bold text-sky-700 px-1" data-testid="oo-biz-note">
-                {biz.serviceNote}
-              </p>
+
+            {/* Focused shop: one slim strip naming the seller and its own
+                contact options — the page must never leave the customer
+                wondering who they are buying from or how to reach them. */}
+            {biz && !allMode && (
+              <div
+                className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-white border border-slate-200 rounded-2xl px-3 py-2 shadow-sm"
+                data-testid="oo-shop-strip"
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <Store className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="text-[12px] font-extrabold text-slate-900 truncate" data-testid="oo-shop-strip-name">
+                    {biz.businessName}
+                  </span>
+                  {biz.branchName && (
+                    <span className="text-[10px] text-slate-500 truncate hidden sm:inline" data-testid="oo-shop-strip-branch">
+                      · {biz.branchName}
+                    </span>
+                  )}
+                </span>
+                {shopPhone(biz) && (
+                  <a
+                    href={telHref(shopPhone(biz))}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
+                    data-testid="oo-shop-call"
+                  >
+                    <Phone className="w-3 h-3" /> {shopPhone(biz)}
+                  </a>
+                )}
+                {shopPhone(biz) && (
+                  <a
+                    href={waHref(shopPhone(biz), `Hello ${biz.businessName}, I would like to ask about an item on GoMina 360 before I order.`)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-green-50 border border-green-200 text-[10px] font-bold text-green-700 hover:bg-green-100"
+                    data-testid="oo-shop-wa"
+                  >
+                    <MessageCircle className="w-3 h-3" /> WhatsApp
+                  </a>
+                )}
+                {shopDirectionsUrl(biz) && (
+                  <a
+                    href={shopDirectionsUrl(biz)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
+                    data-testid="oo-shop-dir"
+                  >
+                    <Navigation className="w-3 h-3" /> Directions
+                  </a>
+                )}
+                {shopAddressLine(biz) && (
+                  <span className="text-[10px] text-slate-500 truncate" data-testid="oo-shop-address">
+                    {shopAddressLine(biz)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={pickAll}
+                  className="ml-auto text-[10px] font-bold text-cyan-700 hover:text-cyan-600 whitespace-nowrap"
+                  data-testid="oo-shop-strip-all"
+                >
+                  Browse all shops ›
+                </button>
+                {biz.serviceNote && (
+                  <p className="w-full text-[10px] font-bold text-sky-700" data-testid="oo-biz-note">
+                    {biz.serviceNote}
+                  </p>
+                )}
+              </div>
             )}
             {biz?.preOrderEnabled === true && (biz?.products || []).some((p: any) => (p.preorderOptions || []).length > 0) && (
               <p className="text-[9px] font-extrabold text-indigo-700 px-1 flex items-center gap-1" data-testid="oo-biz-preorder-badge">
@@ -1324,60 +1669,61 @@ function OrderInner() {
 
             {biz && (
               <>
-                {/* Products — ALL businesses on one page (default), or the
-                    focused business grouped by Product Category */}
+                {/* Catalogue — category-first (default) or the focused shop's
+                    own shelves. The same products, grouped by what they ARE. */}
                 {allMode ? (
-                  allGroups.length === 0 || allGroups.every((g) => g.count === 0) ? (
-                    <p className="text-center text-slate-500 text-xs py-8" data-testid="oo-empty">No products match.</p>
+                  resultCount === 0 ? (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-2 shadow-sm" data-testid="oo-empty">
+                      <p className="text-sm font-bold text-slate-800">No products match “{search.trim()}”.</p>
+                      <p className="text-[11px] text-slate-500">Try a different word, or browse one of these categories:</p>
+                      <div className="flex flex-wrap justify-center gap-1.5 pt-1">
+                        {suggestCategories.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => { setSearch(""); setCat(c); }}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold hover:border-cyan-400 hover:text-cyan-700"
+                            data-testid={`oo-suggest-${c}`}
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ) : (
                     <div className="space-y-5" data-testid="oo-catalog">
-                      {allGroups.map((g) => (
-                        <section key={g.b.businessId} className="space-y-2.5" data-testid={`oo-bizsec-${g.b.businessId}`}>
-                          <div className="flex items-center gap-2 flex-wrap rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
-                            <Store className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <div className="min-w-0 flex-1">
-                              <h3 className="text-[13px] font-black text-slate-900 leading-tight truncate">{g.b.businessName}</h3>
-                              <p className="text-[10px] text-slate-500 leading-tight">
-                                {g.b.branchName} · {g.count} product{g.count === 1 ? "" : "s"}
-                              </p>
-                            </div>
-                            {g.distanceM != null && (
-                              <span className="text-[9px] font-bold text-slate-500">
-                                {g.distanceM < 1000 ? `${Math.round(g.distanceM)} m` : `${(g.distanceM / 1000).toFixed(1)} km`}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => pickBiz(g.b.businessId)}
-                              className="shrink-0 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold hover:text-cyan-700 hover:border-cyan-400"
-                              data-testid={`oo-focus-${g.b.businessId}`}
-                            >
-                              Focus →
-                            </button>
+                      {catGroups.map((g) => (
+                        <section key={g.name} className="space-y-2.5" data-testid={`oo-catsec-${g.name}`}>
+                          <div className="flex items-center gap-2 px-0.5">
+                            <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-emerald-500 to-cyan-500" />
+                            <h3 className="text-[13px] font-black uppercase tracking-wider text-slate-800">{g.name}</h3>
+                            <span className="text-[10px] font-bold text-slate-500" data-testid={`oo-catsec-count-${g.name}`}>
+                              {g.items.length} item{g.items.length === 1 ? "" : "s"}
+                            </span>
+                            <span className="ml-auto text-[9px] font-bold text-slate-400 whitespace-nowrap">
+                              {new Set(g.items.map((i) => i.b.businessId)).size} shop{new Set(g.items.map((i) => i.b.businessId)).size === 1 ? "" : "s"}
+                            </span>
                           </div>
-                          {g.secs.map((sec) => (
-                            <section key={sec.name} className="space-y-2" data-testid={`oo-catsec-${g.b.businessId}-${sec.name}`}>
-                              <div className="flex items-center gap-2 px-0.5">
-                                <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-emerald-500 to-cyan-500" />
-                                <h3 className="text-[12px] font-black uppercase tracking-wider text-slate-800">{sec.name}</h3>
-                                <span
-                                  className="text-[10px] font-bold text-slate-500"
-                                  data-testid={`oo-catsec-count-${g.b.businessId}-${sec.name}`}
-                                >
-                                  {sec.items.length} item{sec.items.length === 1 ? "" : "s"}
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                                {sec.items.map((pr) => renderProduct(pr, g.b))}
-                              </div>
-                            </section>
-                          ))}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                            {g.items.map((it) => renderProduct(it.p, it.b, true))}
+                          </div>
                         </section>
                       ))}
                     </div>
                   )
                 ) : products.length === 0 ? (
-                  <p className="text-center text-slate-500 text-xs py-8" data-testid="oo-empty">No products match.</p>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-2 shadow-sm" data-testid="oo-empty">
+                    <p className="text-sm font-bold text-slate-800">No products match “{search.trim()}”.</p>
+                    <p className="text-[11px] text-slate-500">Clear the search to see everything {biz?.businessName} sells.</p>
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-[11px] font-bold text-slate-700 hover:text-cyan-700"
+                      data-testid="oo-search-clear-empty"
+                    >
+                      Clear search
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-4" data-testid="oo-catalog">
                     {sections.map((sec) => (
@@ -1457,7 +1803,7 @@ function OrderInner() {
                       <PackageCheck className={`w-4 h-4 ${fulfillment === "PICKUP" ? "text-emerald-600" : "text-slate-400"}`} />
                       <div className="text-[12px] font-extrabold mt-1 text-slate-900">Pickup</div>
                       <div className="text-[9px] text-slate-500">
-                        {biz.pickupEnabled === false ? "Not offered by this branch" : `Collect at ${biz.branchName}`}
+                        {biz.pickupEnabled === false ? "Not offered by this shop" : `Collect at ${biz.branchName}`}
                       </div>
                     </button>
                     <button
@@ -1470,7 +1816,7 @@ function OrderInner() {
                       <div className="text-[12px] font-extrabold mt-1 text-slate-900">Delivery</div>
                       <div className="text-[9px] text-slate-500">
                         {biz.deliveryEnabled === false
-                          ? "Not offered by this branch"
+                          ? "Not offered by this shop"
                           : biz.serviceRadiusKm != null
                           ? `Within ${biz.serviceRadiusKm} km · live courier map`
                           : "Track the courier live on the map"}
@@ -1536,7 +1882,7 @@ function OrderInner() {
                         prefix="oo-pin"
                         tileStyle={mapStyle}
                         onTileStyleChange={setMapStyle}
-                        hint="The courier navigates to this exact pin — only the branch team and the courier delivering your order can see it. Switch to Satellite for an aerial view."
+                        hint="The courier navigates to this exact pin — only the shop's team and the courier delivering your order can see it. Switch to Satellite for an aerial view."
                       />
                       {deliveryPin && pinAtShopM != null && pinAtShopM < 75 && (
                         <p className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1.5" data-testid="oo-pin-shop-warn">
@@ -1637,7 +1983,7 @@ function OrderInner() {
                         <span className="block text-[9px] text-slate-500">
                           {depositDueTotal > 0
                             ? `Pre-order deposit ${fmtMoney(depositDueTotal)} is confirmed here first — the branch shares the MoMo number on your tracking page.`
-                            : "The branch shares the MoMo number and confirms your payment on your tracking page."}
+                            : "The shop shares the MoMo number and confirms your payment on your tracking page."}
                         </span>
                         {biz.momoNumber && (
                           <span className="block text-[10px] font-bold text-amber-700 mt-0.5" data-testid="oo-momo-dest">
@@ -1925,7 +2271,7 @@ function OrderInner() {
                           <MapPin className="w-3.5 h-3.5 text-rose-500" />
                         </span>
                         <span className="pt-1"><span className="font-bold text-slate-900 whitespace-pre-line">{support.address}</span><br />
-                        <span className="text-[10px] text-slate-500">Our business location</span></span>
+                        <span className="text-[10px] text-slate-500">Our shop location</span></span>
                       </div>
                     )}
                     {support.openingHours && (
@@ -1999,13 +2345,13 @@ function OrderInner() {
             idx={idx}
             product={lightbox.p}
             wmSpec={wmSpecOf(lightbox.fromBiz || bizOfProduct(lightbox.p))}
-            fromBiz={lightbox.fromBiz}
+            fromBiz={lightbox.fromBiz || bizOfProduct(lightbox.p) || biz}
             canAdd={lightbox.p.available > 0}
             fmtMoney={fmtMoney}
             onClose={() => setLightbox(null)}
             onNavigate={(i) => setLightbox({ ...lightbox, idx: i })}
-            onAdd={() => {
-              add(lightbox.p, 1, lightbox.fromBiz);
+            onAdd={(lbSel) => {
+              add(lightbox.p, 1, lightbox.fromBiz, undefined, lbSel ?? null);
               setLightbox(null);
             }}
           />
@@ -2019,9 +2365,14 @@ function OrderInner() {
             {cartOpen && (
               <div className="max-h-56 overflow-y-auto mb-2 divide-y divide-slate-100" data-testid="oo-cart-lines">
                 {cart.map((l) => (
-                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
+                  <div key={`${l.product.id}:${l.option?.id ?? "stock"}:${l.variant?.id ?? 0}`} className="py-1.5 flex items-center gap-2 text-[12px]" data-testid={`oo-cart-line-${l.product.id}`}>
                     <span className="flex-1 min-w-0 truncate text-slate-700">
                       {l.qty}× {l.product.name}
+                      {l.variant && (
+                        <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-200 text-[9px] font-bold text-amber-800" data-testid={`oo-cart-line-variant-${l.product.id}`}>
+                          {[l.variant.size ? `Size ${l.variant.size}` : null, l.variant.color || null].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
                       {l.option && (
                         <span className="ml-1.5 inline-flex items-center px-1 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-[9px] font-bold text-indigo-700" data-testid={`oo-cart-line-pre-${l.product.id}`}>
                           PRE-ORDER · {l.option.methodLabel}
@@ -2029,7 +2380,20 @@ function OrderInner() {
                       )}
                     </span>
                     <span className="text-slate-500">{fmtMoney(lineUnitPrice(l) * l.qty)}</span>
-                    <button onClick={() => add(l.product, -l.qty, undefined, l.option ?? undefined)} className="p-1 text-slate-400 hover:text-rose-600" data-testid={`oo-cart-rm-${l.product.id}`}>
+                    <button
+                      onClick={() =>
+                        add(
+                          l.product,
+                          -l.qty,
+                          undefined,
+                          l.option ?? undefined,
+                          l.variant ? { size: l.variant.size, color: l.variant.color } : undefined,
+                        )
+                      }
+                      className="p-1 text-slate-400 hover:text-rose-600"
+                      data-testid={`oo-cart-rm-${l.product.id}`}
+                      aria-label={`Remove ${l.product.name} from the cart`}
+                    >
                       <Trash className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -2046,6 +2410,16 @@ function OrderInner() {
                 <ShoppingCart className="w-4 h-4 text-amber-500" />
                 {cartCount} item{cartCount === 1 ? "" : "s"} {cartOpen ? "▾" : "▴"}
               </button>
+              {cartShop && (
+                <span
+                  className="inline-flex items-center gap-1 min-w-0 max-w-[110px] sm:max-w-[240px] text-[10px] font-bold text-emerald-700"
+                  data-testid="oo-cart-shop"
+                  title={`This order is from ${cartShop}`}
+                >
+                  <Store className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{cartShop}</span>
+                </span>
+              )}
               <button onClick={() => { setCart([]); }} className="text-[10px] text-slate-400 hover:text-rose-600 font-bold" data-testid="oo-clear">Clear</button>
               <span className="flex-1" />
               <span className="text-sm font-black text-slate-900" data-testid="oo-cart-total">{fmtMoney(cartTotal)}</span>

@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import {
   PackageCheck,
   Plus,
@@ -318,10 +320,7 @@ export default function PreorderSetupView({
         </div>
         <div className="flex items-center gap-2">
           <select value={bizId} onChange={(e) => setBizId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200" data-testid="po-biz">
-            <option value="">All units</option>
-            {scopedBusinesses.map((b: any) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <UnitScopeOptions units={scopedBusinesses} myOrgId={myOrgIdOf(currentUser)} />
           </select>
           <button onClick={loadCatalogue} className="p-2 rounded-lg hover:bg-slate-700/70 text-slate-300" title="Refresh" data-testid="po-refresh">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
@@ -422,7 +421,7 @@ export default function PreorderSetupView({
           {options.map((o) => (
             <div key={o.id} className={`px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 ${o.active ? "" : "opacity-50"}`} data-testid={`po-option-${o.id}`}>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-slate-200 truncate">{o.inventoryName || `Product #${o.inventoryId}`} {o.inventorySku ? <span className="text-slate-500 font-mono text-[10px]">({o.inventorySku})</span> : null}</p>
+                <p className="text-xs font-bold text-slate-200 break-words">{o.inventoryName || `Product #${o.inventoryId}`} {o.inventorySku ? <span className="text-slate-500 font-mono text-[10px]">({o.inventorySku})</span> : null}</p>
                 <p className="text-[10px] text-slate-500 mt-0.5">
                   {methods.find((m) => m.id === o.methodId)?.label || `Method #${o.methodId}`} · {o.leadMinDays}–{o.leadMaxDays}d lead
                   {(o as any).supplierId ? ` · supplier: ${suppliers.find((sp) => sp.id === (o as any).supplierId)?.name || "?"}` : ""}

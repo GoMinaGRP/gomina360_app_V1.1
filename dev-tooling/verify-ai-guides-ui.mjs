@@ -9,6 +9,7 @@
  * Run: LD_LIBRARY_PATH=/tmp/al2023/lib BASE_URL=http://127.0.0.1:3001 node dev-tooling/verify-ai-guides-ui.mjs
  */
 import { createRequire } from "node:module";
+import { revealAllUnits } from "./rail-util.mjs";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
 const fs = req("fs");
@@ -46,6 +47,8 @@ async function login(page) {
   await new Promise((r) => setTimeout(r, 3000));
 }
 async function openBusiness(page, nameRe) {
+  // N5: reveal units beyond the rail's 5-unit preview before looking for one.
+  await revealAllUnits(page);
   for (let a = 0; a < 3; a++) {
     const ok = await page.evaluate((reSrc) => {
       const re = new RegExp(reSrc, "i");

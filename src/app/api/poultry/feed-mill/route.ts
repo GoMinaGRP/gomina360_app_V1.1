@@ -49,9 +49,15 @@ import { nextTrxNumber } from "@/lib/idNumbers";
  */
 
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 const RAW_CATEGORY = "Feed Raw Materials";
+/** The shared taxonomy may store the umbrella category with this wording in
+ *  `subcategory` — match either, and keep the legacy literal working. */
+const isRawCategory = (i: any) => i?.category === RAW_CATEGORY || i?.subcategory === RAW_CATEGORY;
 const MILL_CATEGORY = "Animal Feed (Milled)";
+const isMillCategory = (i: any) => i?.category === MILL_CATEGORY || i?.subcategory === MILL_CATEGORY;
 const EXP_CAT_INTAKE = "POULTRY_FEED_RAW_MATERIAL";
 const EXP_CAT_OPS = "POULTRY_FEED_MILL_OPS";
 
@@ -140,7 +146,7 @@ async function ensureRawMaterial(businessId: number, name: string) {
   const existing = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
   const hit =
     existing.find((i) => (i.sku || "").toUpperCase() === sku.toUpperCase()) ||
-    existing.find((i) => (i.name || "").toLowerCase() === name.toLowerCase() && i.category === RAW_CATEGORY);
+    existing.find((i) => (i.name || "").toLowerCase() === name.toLowerCase() && (isRawCategory(i)));
   if (hit) return hit;
   await ensureInventoryItem({
     businessId, sku, name, category: RAW_CATEGORY, unit: "Kg",
@@ -178,8 +184,12 @@ export async function GET(request: NextRequest) {
     const millInputs = inputs.filter((i) => batchIds.has(i.batchId));
     const formIds = new Set(forms.map((f) => f.id));
     const millFormItems = formItems.filter((i) => formIds.has(i.formulationId));
-    const rawMaterials = invRows.filter((i) => i.category === RAW_CATEGORY);
-    const finishedFeeds = invRows.filter((i) => i.category === MILL_CATEGORY);
+    // Wire policy (src/lib/imagePayload): no mill screen paints QC evidence or
+    // a stock image — rows carry `photoCount` / `hasPhoto` only. Uploads stay
+    // untouched in the database.
+    const slimInv = slimInventoryRows(invRows, { keepImage: false });
+    const rawMaterials = slimInv.filter((i) => isRawCategory(i));
+    const finishedFeeds = slimInv.filter((i) => isMillCategory(i));
     const consumption = feedRows.filter((f) => f.sourceType === "OWN_MILL");
 
     // Self-heal mill checklist templates once the mill is in use (no seed data).
@@ -191,7 +201,7 @@ export async function GET(request: NextRequest) {
       formulationItems: millFormItems,
       batches,
       batchInputs: millInputs,
-      qcChecks: qc,
+      qcChecks: stripPhotos(qc, ["photo"]),
       rawMaterials,
       finishedFeeds,
       consumption,
@@ -545,6 +555,10 @@ export async function POST(request: NextRequest) {
       const testName = String(data.testName || "").trim().slice(0, 120);
       if (!testName) return NextResponse.json({ success: false, error: "Test name is required." }, { status: 400 });
       const passFail = String(data.passFail || "PASS").toUpperCase();
+      const qcCheck = validateOptionalImage(data.photo, "evidence", { label: "QC photo" });
+      if (!qcCheck.ok) return NextResponse.json({ success: false, error: qcCheck.error }, { status: 400 });
+      const qcPhoto = typeof data.photo === "string" && data.photo ? data.photo : null;
+
       const [row] = await db.insert(poultryFeedQcChecks).values({
         businessId, branchCode,
         batchId: batch?.id ?? null,
@@ -561,7 +575,7 @@ export async function POST(request: NextRequest) {
         textureGrade: data.textureGrade || null,
         contaminantsNote: data.contaminantsNote || null,
         notes: data.notes || null,
-        photo: data.photo || null,
+        photo: qcPhoto,
         testerName: data.testerName || me.name || null,
         testerRole: data.testerRole || me.role || null,
         recordedByName: me.name || null,

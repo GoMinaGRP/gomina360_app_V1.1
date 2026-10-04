@@ -16,7 +16,6 @@ import {
   poultryWaterLogs,
   poultryHealthRecords,
   poultryProduction,
-  poultryChecklists,
   poultryProducts,
   blockTypes,
   blockFactoryLogs,
@@ -46,6 +45,7 @@ import {
 } from "./schema";
 import { and, sql, eq } from "drizzle-orm";
 import { provisionBusiness, ensureCarWashServiceCatalogue } from "@/lib/businessProvisioning";
+import { setVariantsForItem } from "@/lib/boutique";
 import { ensureStagePlanTemplates } from "@/lib/checklistGen";
 import { getSystemMarker, setSystemMarker, isDeletedBusiness } from "@/lib/systemMarkers";
 
@@ -60,6 +60,172 @@ async function ensureWashFlagshipCatalogue() {
     category: wash.category,
   });
   if (created > 0) console.log(`WASH-01 service catalogue provisioned (${created} default services).`);
+}
+
+/**
+ * Boutique flagship (DEMO/RECOVERY ONLY) — BOUTIQUE-01.
+ *
+ * A Boutique unit is an ordinary GoMina business: same Inventory, Sales,
+ * Expenses, Finance, Customers, Suppliers, Reports, Audit and Customer Order
+ * systems. Its only addition is the size × colour layer on inventory items
+ * (`inventory_variants`). This one-time, tombstone-aware, marker-guarded pass
+ * creates the showcase unit with a small apparel catalogue whose stock lives
+ * on those variant rows, so the demo opens straight into real work.
+ *
+ * Existing units and rows are never touched; the pass runs once per database.
+ */
+async function ensureBoutiqueFlagship() {
+  if (await isDeletedBusiness("BOUTIQUE-01")) return;
+  if ((await getSystemMarker("boutique_flagship")) !== null) return;
+
+  const existing = await db.select().from(businesses).where(and(eq(businesses.code, "BOUTIQUE-01"), eq(businesses.ownerId, 1)));
+  let biz = existing[0];
+  if (!biz) {
+    const [row] = await db
+      .insert(businesses)
+      .values({
+        name: "Mina Fashion Boutique",
+        code: "BOUTIQUE-01",
+        category: "Boutique",
+        branchLocation: "Osu Oxford Street, Accra",
+        region: "Greater Accra",
+        managerName: "Adjoa Frimpong",
+        contactPhone: "+233 24 330 7788",
+        status: "ACTIVE",
+        initialCapitalGhs: 120000,
+        monthlyTargetRevenueGhs: 65000,
+        iconName: "Shirt",
+        ownerId: 1,
+      })
+      .returning();
+    biz = row;
+    await provisionBusiness(
+      { id: biz.id, code: biz.code, name: biz.name, category: biz.category, initialCapitalGhs: biz.initialCapitalGhs },
+      { starterKit: false },
+    );
+    // General Manager visibility sweep — mirrors the core-branch grants.
+    await db.execute(sql`
+      INSERT INTO user_business_access (user_id, business_id, created_by_user_id)
+      SELECT 2, ${biz.id}, 1
+      WHERE EXISTS (SELECT 1 FROM users WHERE id = 2 AND role = 'GENERAL_MANAGER')
+        AND NOT EXISTS (
+          SELECT 1 FROM user_business_access g
+          WHERE g.user_id = 2 AND g.business_id = ${biz.id}
+        )
+    `);
+    console.log("Boutique flagship unit provisioned: BOUTIQUE-01");
+  }
+
+  // ── Showcase apparel catalogue with real size × colour stock ──────────
+  const existingInv = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, biz.id));
+  if (existingInv.length === 0) {
+    const catalogue: {
+      name: string;
+      sku: string;
+      category: string;
+      subcategory: string;
+      unit: string;
+      cost: number;
+      price: number;
+      sizeSystem: string;
+      colors: { name: string; sizes: { size: string; qty: number }[] }[];
+    }[] = [
+      {
+        name: "Kente Print Shirt (Men)",
+        sku: "BOUTIQUE-01-KENTE-SHIRT",
+        category: "Fashion & Clothing",
+        subcategory: "Men's Clothing",
+        unit: "Pieces",
+        cost: 95,
+        price: 180,
+        sizeSystem: "LETTER",
+        colors: [
+          { name: "Black", sizes: [{ size: "S", qty: 3 }, { size: "M", qty: 6 }, { size: "L", qty: 5 }, { size: "XL", qty: 3 }, { size: "XXL", qty: 2 }] },
+          { name: "Navy", sizes: [{ size: "S", qty: 2 }, { size: "M", qty: 4 }, { size: "L", qty: 4 }, { size: "XL", qty: 2 }] },
+          { name: "White", sizes: [{ size: "M", qty: 3 }, { size: "L", qty: 2 }] },
+        ],
+      },
+      {
+        name: "Ankara Print Dress (Ladies)",
+        sku: "BOUTIQUE-01-ANKARA-DRESS",
+        category: "Fashion & Clothing",
+        subcategory: "Women's Clothing",
+        unit: "Pieces",
+        cost: 120,
+        price: 250,
+        sizeSystem: "LETTER",
+        colors: [
+          { name: "Multi", sizes: [{ size: "S", qty: 4 }, { size: "M", qty: 5 }, { size: "L", qty: 4 }, { size: "XL", qty: 2 }] },
+          { name: "Blue", sizes: [{ size: "S", qty: 2 }, { size: "M", qty: 3 }, { size: "L", qty: 2 }] },
+          { name: "Red", sizes: [{ size: "M", qty: 3 }, { size: "L", qty: 2 }, { size: "XL", qty: 1 }] },
+        ],
+      },
+      {
+        name: "Slim-Fit Denim Jeans",
+        sku: "BOUTIQUE-01-DENIM-JEANS",
+        category: "Fashion & Clothing",
+        subcategory: "Men's Clothing",
+        unit: "Pieces",
+        cost: 130,
+        price: 240,
+        sizeSystem: "NUMERIC",
+        colors: [
+          { name: "Blue", sizes: [{ size: "30", qty: 3 }, { size: "32", qty: 5 }, { size: "34", qty: 4 }, { size: "36", qty: 3 }, { size: "38", qty: 1 }] },
+          { name: "Black", sizes: [{ size: "30", qty: 2 }, { size: "32", qty: 3 }, { size: "34", qty: 3 }, { size: "36", qty: 2 }] },
+        ],
+      },
+      {
+        name: "Leather Sneakers",
+        sku: "BOUTIQUE-01-SNEAKERS",
+        category: "Fashion & Clothing",
+        subcategory: "Footwear",
+        unit: "Pairs",
+        cost: 180,
+        price: 320,
+        sizeSystem: "SHOE_UK",
+        colors: [
+          { name: "White", sizes: [{ size: "UK 6", qty: 2 }, { size: "UK 7", qty: 3 }, { size: "UK 8", qty: 4 }, { size: "UK 9", qty: 3 }, { size: "UK 10", qty: 2 }] },
+          { name: "Black", sizes: [{ size: "UK 7", qty: 2 }, { size: "UK 8", qty: 3 }, { size: "UK 9", qty: 2 }, { size: "UK 10", qty: 1 }] },
+        ],
+      },
+    ];
+
+    for (const p of catalogue) {
+      const totalQty = p.colors.reduce((s, c) => s + c.sizes.reduce((t, x) => t + x.qty, 0), 0);
+      const [item] = await db
+        .insert(inventoryItems)
+        .values({
+          name: p.name,
+          sku: p.sku,
+          category: p.category,
+          subcategory: p.subcategory,
+          unit: p.unit,
+          quantity: totalQty,
+          costPriceGhs: p.cost,
+          sellingPriceGhs: p.price,
+          minStockThreshold: 5,
+          status: "IN_STOCK",
+          businessId: biz.id,
+          branchCode: biz.code,
+          tracksVariants: true,
+          registeredByName: "System (opening stock)",
+        })
+        .returning();
+      const matrix = p.colors.flatMap((c) =>
+        c.sizes.map((x) => ({
+          size: x.size,
+          color: c.name,
+          sizeSystem: p.sizeSystem,
+          quantity: x.qty,
+          minStockThreshold: 1,
+        })),
+      );
+      await setVariantsForItem({ businessId: biz.id, inventoryId: item.id, variants: matrix, replace: true, actorName: "System (opening stock)" });
+    }
+    console.log("BOUTIQUE-01 apparel catalogue seeded with size × colour stock (4 products).");
+  }
+
+  await setSystemMarker("boutique_flagship", new Date().toISOString());
 }
 
 /**
@@ -301,6 +467,7 @@ async function seedDatabaseInner() {
     console.log("Database already seeded with GoMina 360 data.");
     await ensureHardwareFlagship();
     await ensureWashFlagshipCatalogue();
+    await ensureBoutiqueFlagship();
     await ensureFlagshipMasterLists();
     return;
   }
@@ -1022,7 +1189,8 @@ async function seedDatabaseInner() {
       name: "Grade A Large Egg Trays (30 Eggs/Tray)",
       sku: "POUL-EGG-L01",
       businessId: businessMap["POULTRY-01"],
-      category: "Poultry Products",
+      category: "Poultry & Eggs",
+      subcategory: "Eggs",
       quantity: 850,
       unit: "Trays",
       costPriceGhs: 38.0,
@@ -1034,7 +1202,8 @@ async function seedDatabaseInner() {
       name: "6-Inch Solid Construction Blocks (Grade A)",
       sku: "BLK-SOLID-6IN",
       businessId: businessMap["BLOCK-01"],
-      category: "Concrete Blocks",
+      category: "Building Materials",
+      subcategory: "Concrete Blocks",
       quantity: 4500,
       unit: "Units",
       costPriceGhs: 9.5,
@@ -1046,7 +1215,8 @@ async function seedDatabaseInner() {
       name: "Fresh Harvested Volta Tilapia (Average 800g)",
       sku: "AQUA-TILAP-800G",
       businessId: businessMap["AQUA-01"],
-      category: "Fresh Aquaculture",
+      category: "Fish & Seafood",
+      subcategory: "Fresh Fish",
       quantity: 1200,
       unit: "Kg",
       costPriceGhs: 38.0,
@@ -1058,7 +1228,8 @@ async function seedDatabaseInner() {
       name: "5kVA Hybrid Solar Inverter + Lithium Battery Combo",
       sku: "TECH-SOL-5KVA",
       businessId: businessMap["TECH-01"],
-      category: "Solar & Energy",
+      category: "Computers & Electronics",
+      subcategory: "Solar & Power",
       quantity: 14,
       unit: "Units",
       costPriceGhs: 9200,
@@ -1070,7 +1241,8 @@ async function seedDatabaseInner() {
       name: "Premium Auto Foam Shampoo & High-Gloss Wax Drum (50L)",
       sku: "WASH-CHEM-50L",
       businessId: businessMap["WASH-01"],
-      category: "Cleaning Chemicals",
+      category: "Household & Home Appliances",
+      subcategory: "Car Wash Supplies",
       quantity: 8,
       unit: "Drums",
       costPriceGhs: 750,
@@ -1941,6 +2113,7 @@ async function seedDatabaseInner() {
 
   await ensureHardwareFlagship();
   await ensureWashFlagshipCatalogue();
+  await ensureBoutiqueFlagship();
   await ensureFlagshipMasterLists();
 
   // ── Organization #1 + memberships ────────────────────────────────────────

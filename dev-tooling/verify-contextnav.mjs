@@ -60,11 +60,28 @@ const setVal = async (sel, val) => {
   }, sel, val);
 };
 const clickTid = async (tid) => { await waitSel(`[data-testid="${tid}"]`); await page.$eval(`[data-testid="${tid}"]`, (e) => e.click()); };
-const clickBizButton = async (nameFrag) => page.evaluate((t) => {
-  const el = [...document.querySelectorAll("aside button")].find((b) => (b.textContent || "").includes(t));
-  if (!el) throw new Error("biz button not found: " + t);
-  el.click();
-}, nameFrag);
+/**
+ * The rail previews 5 units and reveals the rest with "Show all N units"
+ * (N5: one scroll container, no nested scrollbar). A freshly created fixture
+ * unit can therefore sit behind the cap — open it the way a user would, then
+ * look again, and only then fail.
+ */
+const clickBizButton = async (nameFrag) => {
+  const find = async () =>
+    page.evaluate((t) => {
+      const el = [...document.querySelectorAll("aside button")].find((b) => (b.textContent || "").includes(t));
+      if (el) { el.click(); return true; }
+      return false;
+    }, nameFrag);
+  if (await find()) return;
+  const showAll = await page.$('[data-testid="nav-biz-show-all"]');
+  if (showAll) {
+    await page.evaluate(() => document.querySelector('[data-testid="nav-biz-show-all"]')?.click());
+    await new Promise((r) => setTimeout(r, 500));
+    if (await find()) return;
+  }
+  throw new Error("biz button not found: " + nameFrag);
+};
 async function login(cred) {
   await page.goto(BASE, { waitUntil: "networkidle0", timeout: 45000 });
   await waitSel('[data-testid="login-email"]');

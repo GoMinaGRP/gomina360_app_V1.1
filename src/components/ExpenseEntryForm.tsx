@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { addToOfflineQueue } from "@/lib/offlineSync";
+import { describeRejection, PHOTO_LIMITS, prepareImages } from "@/lib/imageOptimize";
 
 export interface ExpenseCategoryOption {
   value: string;
@@ -143,23 +144,23 @@ export default function ExpenseEntryForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Expense receipts (upload or camera) — optimized in the browser with the
+   *  `receipt` preset: long edge ≤2400px (≈205 DPI on A4) keeps printed digits
+   *  readable — a 4 MB capture lands around 275 KB. */
+  const handleReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file) => {
-      if (file.size > 5 * 1024 * 1024) {
-        setError("Image must be under 5MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setReceiptImages((prev) => [...prev, ev.target!.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
+    try {
+      // Shared upload policy: ≤700 KB stored per receipt (2400px — printed
+      // digits stay readable), at most 3 receipts per expense.
+      const result = await prepareImages(files, "receipt", { max: PHOTO_LIMITS.receipt, existing: receiptImages.length });
+      if (result.images.length > 0) setReceiptImages((prev) => [...prev, ...result.images.map((r) => r.dataUrl)]);
+      if (result.rejected.length > 0) setError(describeRejection(result));
+    } catch {
+      setError("That image could not be processed — try another one.");
+    } finally {
+      e.target.value = "";
+    }
   };
 
   const removeReceiptImage = (index: number) =>

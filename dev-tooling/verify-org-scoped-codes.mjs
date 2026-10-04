@@ -85,11 +85,11 @@ const hashPassword = (password) => {
 
 // Business-scoped tables (subset covering what provisioning/creation writes).
 const BUSINESS_SCOPED = [
-  "ai_insights", "aquaculture_batches", "aquaculture_checklists",
+  "ai_insights", "aquaculture_batches",
   "aquaculture_feed_logs", "aquaculture_harvests", "aquaculture_logs",
   "aquaculture_ponds", "aquaculture_water_quality_logs", "aquaculture_weight_logs",
   "assets", "attendance_logs", "audit_assignments", "audit_reviews", "audit_trail",
-  "block_factory_checklists", "block_factory_deliveries", "block_factory_logs",
+  "block_factory_deliveries", "block_factory_logs",
   "block_factory_orders", "block_qc_checks", "block_types", "business_insights",
   "business_metrics", "car_wash_activities", "car_wash_bookings", "car_wash_logs",
   "checklist_templates", "customer_trackings", "daily_checklists", "daily_notes",
@@ -101,6 +101,18 @@ const BUSINESS_SCOPED = [
 
 async function purgeBusinesses(ids) {
   if (!ids.length) return;
+  // Employee children have no business_id of their own — the product's delete
+  // cascade removes them via employee_id, so a raw purge must too, otherwise
+  // orphaned history rows survive and later suites inherit them when Postgres
+  // reuses a purged employee id (fixture TRUNCATE … RESTART IDENTITY).
+  const empIds = (await q(`select id from employees where business_id = ANY($1::int[])`, [ids])).rows.map((r) => r.id);
+  if (empIds.length) {
+    for (const t of ["employee_history", "employee_documents", "payroll_attendance"]) {
+      try {
+        await q(`delete from ${t} where employee_id = ANY($1::int[])`, [empIds]);
+      } catch { /* table may not exist in this build */ }
+    }
+  }
   for (const t of BUSINESS_SCOPED) {
     try {
       await q(`delete from ${t} where business_id = ANY($1::int[])`, [ids]);

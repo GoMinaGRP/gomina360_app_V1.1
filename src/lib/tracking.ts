@@ -397,6 +397,7 @@ export function publicTrackingPayload(row: any, biz: any, credit?: any) {
   const gpsLng = typeof biz === "object" && biz ? biz.gpsLng : null;
   const branchAddress = typeof biz === "object" && biz ? biz.branchLocation : null;
   const helpPhone = typeof biz === "object" && biz ? biz.customerHelpPhone || null : null;
+  const contactPhone = typeof biz === "object" && biz ? biz.contactPhone || null : null;
   const momoNumber = typeof biz === "object" && biz ? biz.momoNumber || null : null;
   const momoName = typeof biz === "object" && biz ? biz.momoName || null : null;
   const live =
@@ -411,11 +412,19 @@ export function publicTrackingPayload(row: any, biz: any, credit?: any) {
       : null;
   return {
     code: row.trackingCode,
+    /** Public business id (same one /api/menu exposes) — item rows deep-link
+     *  back to the storefront with it. */
+    businessId: row.businessId ?? null,
     businessName,
     businessCode: row.branchCode || null,
     branchName: row.branchName || null,
     customerName: row.customerName,
     items: (row.items || []).map((li: any) => ({
+      // The stored line snapshot already carries the product identity — the
+      // tracking page links each line back to its storefront product, so the
+      // customer can re-order or ask about exactly what was bought.
+      productId: li.inventoryId ?? null,
+      sku: li.sku || null,
       description: li.description,
       quantity: li.quantity,
       unit: li.unit || null,
@@ -469,6 +478,30 @@ export function publicTrackingPayload(row: any, biz: any, credit?: any) {
     // Businesses → Online) — shown after checkout and here on /track.
     help: helpPhone ? { phone: helpPhone } : null,
     momo: momoNumber ? { number: momoNumber, name: momoName } : null,
+    // ── The selling shop, shaped exactly like a public /api/menu business row
+    //    so the customer page can reuse the shared shopContact helpers
+    //    (Call / WhatsApp / Directions) with the SAME fallback chain as the
+    //    storefront: customerHelpPhone → contactPhone. Only THIS order's own
+    //    shop is ever included.
+    seller: {
+      businessId: row.businessId ?? null,
+      businessName,
+      branchName: row.branchName || null,
+      businessCode: row.branchCode || null,
+      contactPhone,
+      customerHelpPhone: helpPhone,
+      // Directions target: the shop's own pin (business GPS, else the shop's
+      // pickup point the order was placed against) — never the customer's
+      // delivery pin, which the customer's own maps card already shows.
+      gpsLat: row.pickupLat ?? gpsLat ?? null,
+      gpsLng: row.pickupLng ?? gpsLng ?? null,
+      pickupLocations: row.pickupLocationName
+        ? [{ name: row.pickupLocationName, address: row.pickupLocationAddress || null, lat: row.pickupLat ?? null, lng: row.pickupLng ?? null }]
+        : [],
+      address: branchAddress || row.pickupLocationAddress || null,
+      momoNumber,
+      momoName,
+    },
     status: row.status,
     statusLabel: TRACK_STATUS_LABELS[row.status as TrackStatus] || row.status,
     isTerminal: TERMINAL_STATUSES.includes(row.status),

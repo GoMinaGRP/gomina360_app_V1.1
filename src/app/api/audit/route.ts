@@ -62,6 +62,7 @@ import {
   auditTrail,
   notifications,
   organizationMembers,
+  organizations,
   AUDIT_MODULES,
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, sharesOrganization, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
@@ -69,6 +70,7 @@ import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 import { apiError } from "@/lib/apiError";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const MODULES = [...AUDIT_MODULES] as string[];
 
@@ -720,6 +722,14 @@ export async function GET(request: Request) {
     }
 
     const fBusiness = Number(url.searchParams.get("businessId") || 0) || null;
+    // Owner/Organization and multi-unit narrowing (Super Admin views). BOTH are
+    // NARROWING ONLY: they intersect with `scope.businessIds`, so a client can
+    // never widen what the server already decided this caller may see.
+    const fOwnerId = Number(url.searchParams.get("ownerId") || 0) || null;
+    const fBusinessIds = (url.searchParams.get("businessIds") || "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v > 0);
     const fModule = (url.searchParams.get("module") || "").toUpperCase();
     const fType = (url.searchParams.get("recordType") || "").toUpperCase();
     const fBranch = (url.searchParams.get("branchCode") || "").toLowerCase();
@@ -732,6 +742,29 @@ export async function GET(request: Request) {
     let records = await collectRecords(scope);
     let reviews = (await scopedReviews(scope)).map((r) => ({ ...r, status: normStatus(r.status) }));
     let log = await scopedTrail(scope);
+
+    // Owner / unit-set narrowing. `ownerId` groups by businesses.owner_id; the
+    // two filters intersect with each other and with the caller's own scope.
+    const scopedIds = (id: number) => scope.businessIds === null || scope.businessIds.includes(id);
+    let narrowed: Set<number> | null = null;
+    if (fOwnerId !== null || fBusinessIds.length > 0) {
+      const ownerBiz = await db.select({ id: businesses.id, ownerId: businesses.ownerId }).from(businesses);
+      const byOwner = fOwnerId !== null ? ownerBiz.filter((b) => Number(b.ownerId ?? 1) === fOwnerId) : ownerBiz;
+      const chosen = fBusinessIds.length > 0 ? byOwner.filter((b) => fBusinessIds.includes(Number(b.id))) : byOwner;
+      narrowed = new Set(chosen.map((b) => Number(b.id)).filter(scopedIds));
+      if (narrowed.size === 0) {
+        // Nothing in scope — an empty result is the honest answer (never fall
+        // back to "everything", which would silently widen the view).
+        records = [];
+        reviews = [];
+        log = [];
+      }
+    }
+    if (narrowed) {
+      records = records.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      reviews = reviews.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      log = log.filter((t) => t.businessId == null || narrowed!.has(Number(t.businessId)));
+    }
 
     if (fBusiness) {
       records = records.filter((r) => r.businessId === fBusiness);
@@ -791,8 +824,31 @@ export async function GET(request: Request) {
 
     // Businesses the caller may see (auditors can be granted businesses that
     // are NOT in their day-job scope, so send the names too).
-    const bizAll = await db.select({ id: businesses.id, name: businesses.name, code: businesses.code }).from(businesses);
-    const bizList = scope.businessIds === null ? bizAll : bizAll.filter((b) => scope.businessIds!.includes(b.id));
+    // `ownerId` travels with every row so the client can group units by Owner
+    // without guessing; the owner's NAME is only published to a Super Admin
+    // (a normal owner's units are all their own organization).
+    const orgNames = new Map(
+      (await db.select({ id: organizations.id, name: organizations.name }).from(organizations)).map((o) => [Number(o.id), o.name]),
+    );
+    const bizAll = await db
+      .select({ id: businesses.id, name: businesses.name, code: businesses.code, ownerId: businesses.ownerId })
+      .from(businesses);
+    let bizList = scope.businessIds === null ? bizAll : bizAll.filter((b) => scope.businessIds!.includes(b.id));
+    if (narrowed) bizList = bizList.filter((b) => narrowed!.has(Number(b.id)));
+    const publishOwnerNames = !!user.isSuperAdmin;
+    const bizOut = bizList.map((b) => {
+      const ownerId = Number(b.ownerId ?? 1);
+      return {
+        id: b.id,
+        name: b.name,
+        code: b.code,
+        ownerId,
+        // Owner names go ONLY to the platform Super Admin: a normal owner's
+        // units all belong to their own organization, and an auditor granted a
+        // unit elsewhere must not learn the other owner's name.
+        ...(publishOwnerNames ? { ownerName: orgNames.get(ownerId) || `Owner #${ownerId}` } : {}),
+      };
+    });
 
     // Per-issue conversation threads for the issues in view (chronological).
     const issueIds = new Set(reviews.filter(isIssue).map((r) => r.id));
@@ -807,7 +863,7 @@ export async function GET(request: Request) {
     }
 
     const report = buildReport(records, reviews);
-    return NextResponse.json({ success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
+    return NextResponse.json({ success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList: bizOut, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
   } catch (error: any) {
     return apiError(error);
   }
@@ -1376,10 +1432,9 @@ export async function POST(request: Request) {
     }
     const status = action === "VERIFIED" ? "VERIFIED" : action === "COMMENT" ? "INFO" : action === "CORRECTION_REQUESTED" ? "CORRECTION_REQUIRED" : "FLAGGED";
     const issueTitle = String(body.issueTitle || "").trim().slice(0, 160) || (reason || comment).slice(0, 80) || null;
+    const photoCheck = validateOptionalImage(body.evidencePhoto, "evidence", { label: "Evidence photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
     const photo = String(body.evidencePhoto || "");
-    if (photo && !photo.startsWith("data:image/")) {
-      return NextResponse.json({ success: false, error: "Evidence photo must be an image file." }, { status: 400 });
-    }
     // Route the issue to the user responsible for the record (their dashboard).
     const assignee = ISSUE_ACTIONS.includes(action) ? await resolveAssignee(rec, Number(body.assignedUserId) || null) : null;
     const priority = normPriority(body.priority);
@@ -1510,10 +1565,9 @@ export async function PATCH(request: Request) {
       }
       const note = String(body.resolution || body.note || "").trim();
       if (!note) return NextResponse.json({ success: false, error: "Describe the correction you need from the assigned user." }, { status: 400 });
+      const photoCheck = validateOptionalImage(body.evidencePhoto, "evidence", { label: "Photo" });
+      if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
       const photo = String(body.evidencePhoto || "");
-      if (photo && !photo.startsWith("data:image/")) {
-        return NextResponse.json({ success: false, error: "Photo must be an image file." }, { status: 400 });
-      }
       const [updated] = await db.update(auditReviews)
         .set({ status: "CORRECTION_REQUIRED" })
         .where(eq(auditReviews.id, row.id)).returning();

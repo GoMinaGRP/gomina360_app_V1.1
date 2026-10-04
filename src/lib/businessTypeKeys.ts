@@ -25,6 +25,7 @@ export const BUSINESS_TYPES: BusinessTypeDef[] = [
   { key: "HARDWARE_STORE", label: "Hardware Store", aliases: ["hardwarestore", "hardware", "hardwarebuildingmaterials"] },
   { key: "TELECOM_DIGITAL", label: "Telecom & Digital Services", aliases: ["telecomdigitalservices", "telecom", "telecomdigital", "momoairtimedata"] },
   { key: "TRANSPORTATION", label: "Transportation", aliases: ["transportation", "transport", "logistics", "fleet", "haulage", "trucking"] },
+  { key: "BOUTIQUE", label: "Boutique", aliases: ["boutique", "fashion", "fashionshop", "clothing", "clothingshop", "apparel", "garments", "wear", "boutiqueandfashion"] },
 ];
 
 const byKey = new Map(BUSINESS_TYPES.map((t) => [t.key, t]));

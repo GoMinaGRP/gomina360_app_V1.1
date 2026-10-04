@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { postServiceSale } from "@/lib/servicePosting";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -12,8 +13,9 @@ import {
   customers,
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { computeStockStatus } from "@/lib/stock";
+import { applyStockChange, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
@@ -81,23 +83,22 @@ async function bookTransaction(
   actorRole?: string | null,
   actorUserId?: number | null
 ) {
-  const now = new Date();
-  await db.insert(transactions).values({
-    transactionNumber: nextTrxNumber(now),
+  // P5: ONE service-sale writer for module revenue (shared with transport and
+  // telecom).
+  await postServiceSale({
     businessId: biz.id,
     branchCode: biz.code,
     branchName: biz.name,
-    type,
     category,
-    amountGhs: amount,
-    paymentMethod: paymentMethod || "CASH",
     description,
-    date: now.toISOString().split("T")[0],
-    createdAt: now,
-    status: "COMPLETED",
-    recordedBy: actorName || "Auto Wash",
-    recordedByRole: actorRole || null,
-    recordedByUserId: actorUserId ? Number(actorUserId) : null,
+    amountGhs: amount,
+    paymentMethod,
+    actor: {
+      id: actorUserId ? Number(actorUserId) : null,
+      name: actorName || "Auto Wash",
+      role: actorRole || null,
+    },
+    recordedByFallback: "Auto Wash",
   });
 }
 
@@ -112,11 +113,19 @@ async function stockOutLiters(inventoryId: number, liters: number) {
   const m = /\((\d+(?:\.\d+)?)\s*L\)/i.exec(inv.name || "");
   const litersPerUnit = m ? Number(m[1]) : 50;
   const qty = liters / litersPerUnit;
-  const newQty = Math.max(0, Number(((inv.quantity || 0) - qty).toFixed(4)));
-  await db
-    .update(inventoryItems)
-    .set({ quantity: newQty, status: computeStockStatus(newQty, inv.minStockThreshold || 0) })
-    .where(eq(inventoryItems.id, inv.id));
+  // P5: ONE stock writer — chemical draw is a CONSUMPTION movement.
+  const applied = await applyStockChange({
+    businessId: inv.businessId,
+    inventoryId: inv.id,
+    delta: -qty,
+    reason: "CONSUMPTION",
+    refType: "CARWASH_CHEMICAL",
+    note: `${liters} L drawn (${litersPerUnit} L per ${inv.unit || "unit"})`,
+  });
+  const refusal = stockRefusal(applied);
+  // A chemical that tracks sizes/colours is a misconfiguration, not a sale: the
+  // wash completes and the operator is told exactly why nothing was drawn.
+  if (refusal) console.warn(`[carwash] chemical draw skipped: ${refusal}`);
 }
 
 /** Find-or-create a branch customer and accrue spend + loyalty from a job. */
@@ -126,33 +135,17 @@ async function upsertWashCustomer(
   phone: string | null,
   amount: number
 ) {
-  const existing = await db.select().from(customers).where(eq(customers.businessId, biz.id));
-  const match =
-    existing.find((c) => phone && c.phone === phone) ||
-    existing.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (match) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: Math.round(((match.totalSpentGhs || 0) + amount) * 100) / 100,
-        loyaltyPoints: (match.loyaltyPoints || 0) + 1,
-        phone: match.phone || phone || "—",
-      })
-      .where(eq(customers.id, match.id));
-    return match.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name,
-      type: "RETAIL",
-      phone: phone || "—",
-      totalSpentGhs: Math.max(0, Math.round(amount * 100) / 100),
-      loyaltyPoints: 1,
-      businessId: biz.id,
-    })
-    .returning();
-  return created?.id ?? null;
+  // Shared CRM rule (src/lib/customerLink) — business-isolated find-or-create
+  // with the service modules' loyalty award (1 point per job) preserved.
+  const linked = await linkOrCreateCustomer({
+    businessId: biz.id,
+    name,
+    phone,
+    amount,
+    loyaltyPoints: 1,
+    phoneFallback: "—",
+  });
+  return linked?.id ?? null;
 }
 
 export async function GET(request: NextRequest) {

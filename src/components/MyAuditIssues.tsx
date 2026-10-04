@@ -11,6 +11,7 @@ import {
   ShieldCheck, Flag, X, Loader2, Send, CheckCircle2, AlertTriangle,
   MessageSquare, ImagePlus, History, Link2, CalendarClock,
 } from "lucide-react";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 
 const STEPS = ["FLAGGED", "UNDER_REVIEW", "CORRECTION_REQUIRED", "RESOLVED", "VERIFIED"] as const;
 const STEP_LABEL: Record<string, string> = {
@@ -80,12 +81,15 @@ export default function MyAuditIssues({ currentUser, focusIssueId, onClose }: { 
   const setForm = (id: number, patch: Partial<{ note: string; evidence: string; photo: string }>) =>
     setForms((f) => ({ ...f, [id]: { note: f[id]?.note ?? "", evidence: f[id]?.evidence ?? "", photo: f[id]?.photo ?? "", ...patch } }));
 
-  const onPhoto = (id: number, file: File | null) => {
+  /** Evidence photo — optimized in the browser (≤1400px, q0.78). */
+  const onPhoto = async (id: number, file: File | null) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) { setError("Evidence photo must be an image file."); return; }
-    const r = new FileReader();
-    r.onload = () => setForm(id, { photo: String(r.result) });
-    r.readAsDataURL(file);
+    try {
+      setForm(id, { photo: await optimizedDataUrl(file, "evidence") });
+    } catch {
+      setError("That photo could not be processed — try another image.");
+    }
   };
 
   const submit = async (id: number, action: "RESPOND" | "MARK_RESOLVED") => {

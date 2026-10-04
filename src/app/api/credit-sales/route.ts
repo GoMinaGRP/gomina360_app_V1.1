@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyStockChange } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -28,7 +29,12 @@ import {
   SETTLED_EPSILON,
 } from "@/lib/credit";
 import { uniqueTrackingCode } from "@/lib/trackingServer";
+import { linkOrCreateCustomer } from "@/lib/customerLink";
+import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
+import { variantSuffix } from "@/lib/boutiqueSizes";
 import { apiError } from "@/lib/apiError";
+import { nextSalesDocumentNumber } from "@/lib/documentNumbers";
+import { nextTrxNumber } from "@/lib/idNumbers";
 
 /**
  * /api/credit-sales — Credit Sale lifecycle.
@@ -66,16 +72,22 @@ interface CartLine {
   quantity: number;
   sellingPrice?: number;
   customPriceReason?: string;
+  /** Boutique: the exact size/colour variant being sold (required for items
+   *  that carry a variant matrix, validated against live per-variant stock). */
+  variantId?: number | null;
 }
 
 /** Validate + reserve a cart against inventory (identical rules to /api/sales). */
 async function validateCart(businessId: number, cartItems: CartLine[]) {
   const validationErrors: string[] = [];
-  const inventoryUpdates: { id: number; newQty: number; newStatus: string }[] = [];
+  const inventoryUpdates: { id: number; newQty: number; newStatus: string; qty: number }[] = [];
   const lineItems: any[] = [];
+  // Boutique: variant deductions ride alongside their aggregate item update.
+  const variantUpdates: { variantId: number; inventoryId: number; qty: number; label: string }[] = [];
+  const variantItemIds = new Set<number>();
 
   for (const item of cartItems || []) {
-    const { inventoryId, quantity, sellingPrice } = item;
+    const { inventoryId, quantity, sellingPrice, variantId } = item;
     if (!inventoryId || !quantity || quantity <= 0) {
       validationErrors.push("Invalid cart item: missing inventoryId or quantity.");
       continue;
@@ -92,13 +104,27 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
       validationErrors.push(`Product "${inv.name}" does not belong to this branch.`);
       continue;
     }
-    if (inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
+    const variantVerdict = await resolveVariantForLine({
+      businessId: Number(businessId),
+      inventoryId: inv.id,
+      variantId: variantId != null && Number(variantId) > 0 ? Number(variantId) : null,
+      quantity: Number(quantity),
+    });
+    if (variantVerdict.error) {
+      validationErrors.push(`"${inv.name}": ${variantVerdict.error}`);
+      continue;
+    }
+    const variantRow = variantVerdict.variant;
+    const availableUnits = variantRow ? Number(variantRow.quantity) || 0 : inv.quantity;
+    if (variantRow ? availableUnits <= 0 : inv.status === "OUT_OF_STOCK" || inv.quantity <= 0) {
       validationErrors.push(`"${inv.name}" is OUT OF STOCK and cannot be sold on credit.`);
       continue;
     }
-    if (Number(quantity) > inv.quantity) {
+    if (Number(quantity) > availableUnits) {
       validationErrors.push(
-        `Insufficient stock for "${inv.name}": requested ${quantity}, available ${inv.quantity} ${inv.unit}.`
+        variantRow
+          ? `Insufficient stock for "${inv.name}" (${[variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · ")}): requested ${quantity}, available ${availableUnits} ${inv.unit}.`
+          : `Insufficient stock for "${inv.name}": requested ${quantity}, available ${availableUnits} ${inv.unit}.`
       );
       continue;
     }
@@ -107,11 +133,29 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
     const newQty = inv.quantity - Number(quantity);
     const newStatus =
       newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK";
-    inventoryUpdates.push({ id: inv.id, newQty, newStatus });
+    inventoryUpdates.push({ id: inv.id, newQty, newStatus, qty: Number(quantity) });
+    if (variantRow) {
+      variantUpdates.push({
+        variantId: Number(variantRow.id),
+        inventoryId: inv.id,
+        qty: Number(quantity),
+        label: [variantRow.size ? `Size ${variantRow.size}` : null, variantRow.color || null].filter(Boolean).join(" · "),
+      });
+      variantItemIds.add(inv.id);
+    }
+    const vSuffix = variantRow ? variantSuffix(variantRow.size, variantRow.color) : "";
     lineItems.push({
       inventoryId: inv.id,
       sku: inv.sku,
-      description: `${inv.name} (${inv.sku})`,
+      description: `${inv.name} (${inv.sku})${vSuffix}`,
+      ...(variantRow
+        ? {
+            variantId: Number(variantRow.id),
+            variantSku: variantRow.sku || null,
+            size: variantRow.size || null,
+            color: variantRow.color || null,
+          }
+        : {}),
       category: inv.category,
       quantity: Number(quantity),
       unit: inv.unit,
@@ -123,48 +167,25 @@ async function validateCart(businessId: number, cartItems: CartLine[]) {
       lineProfit: itemTotal - (inv.costPriceGhs || 0) * Number(quantity),
     });
   }
-  return { validationErrors, inventoryUpdates, lineItems };
+  return { validationErrors, inventoryUpdates, lineItems, variantUpdates, variantItemIds };
 }
 
-/** Find-or-create the CRM customer and accrue their spend (business-isolated). */
+/** Find-or-create the CRM customer and accrue their spend (shared rule). */
 async function linkCustomer(
   businessId: number,
   customerName: string,
   customerPhone: string | null,
   total: number
 ): Promise<number | null> {
-  const allCustomers = await db.select().from(customers);
-  const norm = (s: any) => String(s || "").trim().toLowerCase();
-  const belongs = (c: any) => c.businessId === Number(businessId);
-  const shared = (c: any) => c.businessId === null;
-  const cust =
-    (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && belongs(c))) ||
-    (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && belongs(c))) ||
-    (customerPhone && allCustomers.find((c) => norm(c.phone) === norm(customerPhone) && shared(c))) ||
-    (customerName && allCustomers.find((c) => norm(c.name) === norm(customerName) && shared(c))) ||
-    null;
-  if (cust) {
-    await db
-      .update(customers)
-      .set({
-        totalSpentGhs: (cust.totalSpentGhs || 0) + total,
-        loyaltyPoints: (cust.loyaltyPoints || 0) + Math.floor(total / 100),
-      })
-      .where(eq(customers.id, cust.id));
-    return cust.id;
-  }
-  const [created] = await db
-    .insert(customers)
-    .values({
-      name: customerName.trim(),
-      type: "RETAIL",
-      phone: customerPhone || "",
-      totalSpentGhs: total,
-      loyaltyPoints: Math.floor(total / 100),
-      businessId: Number(businessId),
-    })
-    .returning();
-  return created?.id ?? null;
+  const linked = await linkOrCreateCustomer({
+    businessId,
+    name: customerName,
+    phone: customerPhone,
+    amount: total,
+    phoneFallback: "",
+    includeLegacyShared: true,
+  });
+  return linked?.id ?? null;
 }
 
 /**
@@ -198,9 +219,7 @@ async function postInstallment({
   const payNum = buildCreditPaymentNumber();
 
   // 1. Finance — INCOME transaction (feeds Payments, Reports, dashboards).
-  const trxNum = `TRX-${now.getFullYear()}-${Date.now().toString().slice(-6)}${Math.floor(
-    Math.random() * 90 + 10
-  )}`;
+  const trxNum = nextTrxNumber(now);
   const [trx] = await db
     .insert(transactions)
     .values({
@@ -226,9 +245,8 @@ async function postInstallment({
     .returning();
 
   // 2. Receipts — installment RECEIPT sales document.
-  const docNum = `RCP-${now.getFullYear()}-${Date.now().toString().slice(-6)}${Math.floor(
-    Math.random() * 90 + 10
-  )}`;
+  // ONE numbering source (src/lib/documentNumbers).
+  const docNum = await nextSalesDocumentNumber("RECEIPT", now);
   const [receipt] = await db
     .insert(salesDocuments)
     .values({
@@ -541,7 +559,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Cart validation (same rules as a cash sale).
-    const { validationErrors, inventoryUpdates, lineItems } = await validateCart(
+    const { validationErrors, inventoryUpdates, lineItems, variantUpdates, variantItemIds } = await validateCart(
       Number(businessId),
       cartItems
     );
@@ -593,11 +611,38 @@ export async function POST(request: NextRequest) {
     const grossProfit = round2(total - cogs);
 
     // 3. Deduct stock — goods leave the shelf at sale time, like a paid sale.
+    // Boutique variants are decremented atomically first; their item's
+    // aggregate is then recomputed from the variant rows.
+    for (const vu of variantUpdates) {
+      const ok = await deductVariantQty(vu.variantId, vu.qty, {
+        businessId: Number(businessId),
+        inventoryId: vu.inventoryId,
+        reason: "SALE",
+        refType: "CREDIT_SALE",
+        note: vu.label,
+      });
+      if (!ok) {
+        return NextResponse.json(
+          { success: false, error: `"${vu.label || "variant"}" just sold out — refresh and try again.` },
+          { status: 409 },
+        );
+      }
+    }
     for (const update of inventoryUpdates) {
-      await db
-        .update(inventoryItems)
-        .set({ quantity: update.newQty, status: update.newStatus })
-        .where(eq(inventoryItems.id, update.id));
+      if (variantItemIds.has(update.id)) {
+        // Derived write: the aggregate is recomputed FROM the variant rows.
+        await syncItemAggregate(update.id);
+        continue;
+      }
+      // P5: ONE stock writer for real movements.
+      await applyStockChange({
+        businessId: Number(businessId),
+        inventoryId: update.id,
+        delta: -update.qty,
+        reason: "SALE",
+        refType: "CREDIT_SALE",
+        actor: me,
+      });
     }
 
     // 4. CRM customer (business-isolated) + accrue spend.
@@ -624,7 +669,7 @@ export async function POST(request: NextRequest) {
     let depositBundle: any = null;
 
     // 7. CREDIT invoice (flips to PAID when the balance is settled).
-    const docNum = `INV-${now.getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const docNum = await nextSalesDocumentNumber("INVOICE", now);
     const [invoice] = await db
       .insert(salesDocuments)
       .values({

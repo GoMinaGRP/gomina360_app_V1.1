@@ -152,7 +152,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   }
 
   const bizName = (id: number | null | undefined) =>
-    id == null ? "All businesses" : businesses.find((b) => b.id === id)?.name || `#${id}`;
+    id == null ? "All units" : businesses.find((b) => b.id === id)?.name || `#${id}`;
 
   const openCreate = () => {
     setEditing(null);
@@ -379,7 +379,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
             data-testid="user-form-business"
             className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm"
           >
-            {isOwner && <option value="">— All businesses (executive) —</option>}
+            {isOwner && <option value="">— All units (executive) —</option>}
             {visibleBiz.map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
           </select>
         </div>

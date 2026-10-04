@@ -1,14 +1,17 @@
 import { db } from "@/db";
+import { postServiceSale } from "@/lib/servicePosting";
+import { applyStockChange } from "@/lib/stock";
 import {
   customerTrackings,
   inventoryItems,
-  transactions,
   customers,
   notifications,
 } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
+import { deductVariantQty, restoreVariantQty, syncItemAggregate, variantsForItem } from "@/lib/boutique";
 import { buildTrackingCode, googleMapsLink } from "@/lib/tracking";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
+import { linkOrCreateCustomer, isAnonymousBuyer } from "@/lib/customerLink";
 import { pushAfterBell } from "@/lib/push";
 
 /** Server-side helpers for Customer Ordering & Tracking (used by the public
@@ -65,12 +68,20 @@ export async function uniqueTrackingCode(bizCode: string | null | undefined): Pr
  * Deduct stock for an ONLINE order's items (items carry inventoryId).
  * First validates availability; if any line is short, NOTHING is deducted
  * and problems are returned for the staff member / customer to see.
+ *
+ * Boutique rule: a line for a product that carries a SIZE/COLOUR matrix must
+ * name its variant (`li.variantId`). The deduction then hits that exact
+ * variant and the item's aggregate quantity is recomputed from its variant
+ * rows, so the register, dashboards and reports can never drift.
  */
 export async function deductOrderStock(
   items: any[],
 ): Promise<{ ok: boolean; problems: string[] }> {
   const problems: string[] = [];
-  const plan: { id: number; newQty: number; newStatus: string }[] = [];
+  const plan: (
+    | { kind: "plain"; id: number; businessId: number; qty: number }
+    | { kind: "variant"; variantId: number; inventoryId: number; qty: number; label: string; businessId: number }
+  )[] = [];
   for (const li of items || []) {
     if (!li?.inventoryId) continue;
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(li.inventoryId)));
@@ -80,21 +91,66 @@ export async function deductOrderStock(
     }
     const qty = Number(li.quantity) || 0;
     if (qty <= 0) continue;
+    const activeVariants = (await variantsForItem(inv.businessId, inv.id)).filter((v) => v.isActive !== false);
+    if (activeVariants.length > 0) {
+      const variantId = Number(li.variantId) || 0;
+      const variant = activeVariants.find((v) => Number(v.id) === variantId);
+      if (!variant) {
+        problems.push(`"${inv.name}" needs a size/colour before its stock can be committed.`);
+        continue;
+      }
+      const label = [variant.size ? `Size ${variant.size}` : null, variant.color || null].filter(Boolean).join(" · ");
+      if ((Number(variant.quantity) || 0) < qty) {
+        problems.push(
+          `Not enough stock for "${inv.name}"${label ? ` (${label})` : ""}: ${qty} requested, ${variant.quantity} available.`,
+        );
+        continue;
+      }
+      plan.push({
+        kind: "variant",
+        variantId: Number(variant.id),
+        inventoryId: inv.id,
+        qty,
+        label,
+        businessId: Number(inv.businessId),
+      });
+      continue;
+    }
     if (inv.quantity < qty) {
       problems.push(`Not enough stock for "${inv.name}": ${qty} ${inv.unit} requested, ${inv.quantity} ${inv.unit} available.`);
       continue;
     }
-    const newQty = inv.quantity - qty;
-    plan.push({
-      id: inv.id,
-      newQty,
-      newStatus: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-    });
+    plan.push({ kind: "plain", id: inv.id, businessId: Number(inv.businessId), qty });
   }
   if (problems.length > 0) return { ok: false, problems };
   for (const p of plan) {
-    await db.update(inventoryItems).set({ quantity: p.newQty, status: p.newStatus }).where(eq(inventoryItems.id, p.id));
+    if (p.kind === "variant") {
+      // Atomic conditional decrement — a concurrent sale that emptied the
+      // variant between validation and now is reported, never oversold.
+      const ok = await deductVariantQty(p.variantId, p.qty, {
+        businessId: p.businessId,
+        inventoryId: p.inventoryId,
+        reason: "SALE",
+        refType: "ORDER_COMMIT",
+        note: p.label,
+      });
+      if (!ok) {
+        problems.push(`"${p.label || "That variant"}" just sold out — refresh and choose another size/colour.`);
+        continue;
+      }
+      await syncItemAggregate(p.inventoryId);
+    } else {
+      // P5: ONE stock writer (the pre-validated deduction is applied as a delta).
+      await applyStockChange({
+        businessId: Number(p.businessId),
+        inventoryId: p.id,
+        delta: -(Number(p.qty) || 0),
+        reason: "SALE",
+        refType: "ORDER_COMMIT",
+      });
+    }
   }
+  if (problems.length > 0) return { ok: false, problems };
   return { ok: true, problems: [] };
 }
 
@@ -105,21 +161,47 @@ export async function restoreOrderStock(items: any[]): Promise<void> {
     try {
       const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(li.inventoryId)));
       if (!inv) continue;
-      const newQty = inv.quantity + (Number(li.quantity) || 0);
-      await db
-        .update(inventoryItems)
-        .set({
-          quantity: newQty,
-          status: newQty <= 0 ? "OUT_OF_STOCK" : newQty <= inv.minStockThreshold ? "LOW_STOCK" : "IN_STOCK",
-        })
-        .where(eq(inventoryItems.id, inv.id));
+      const qty = Number(li.quantity) || 0;
+      const variantId = Number(li.variantId) || 0;
+      if (variantId) {
+        await restoreVariantQty(variantId, qty, {
+          businessId: Number(inv.businessId),
+          inventoryId: inv.id,
+          reason: "RESTORE",
+          refType: "ORDER_CANCEL",
+          note: `Order cancelled — ${[li.variantSize ? `Size ${li.variantSize}` : null, li.variantColor || null].filter(Boolean).join(" · ") || "variant"}`,
+        });
+        await syncItemAggregate(inv.id);
+        continue;
+      }
+      // P5: ONE stock writer — a cancelled order gives stock back (RESTORE).
+      await applyStockChange({
+        businessId: Number(inv.businessId),
+        inventoryId: inv.id,
+        delta: qty,
+        reason: "RESTORE",
+        refType: "ORDER_CANCELLED",
+      });
     } catch (e) {
       console.error("restoreOrderStock warning:", e);
     }
   }
 }
 
-/** Match / accumulate the shared CRM customer (same rules as the till). Never throws. */
+/**
+ * Match / accumulate the shared CRM customer for storefront & tracked orders.
+ *
+ * This used to be a SECOND find-or-create implementation (its own org check,
+ * its own loyalty rate, and an unfiltered `select() from customers` scan per
+ * order) living beside `src/lib/customerLink`. It now delegates to that single
+ * matcher, so the till, credit sales, module sales and online orders all agree
+ * on who a buyer is and how spend accrues.
+ *
+ * Behaviour preserved exactly: anonymous buyers ("walk-in", blank names) are
+ * never CREATED here (matchOnly), the historical group-shared rows with a null
+ * businessId stay matchable inside the same organization, and the owning
+ * organization is stamped on new rows.
+ */
 export async function linkCrmCustomer({
   name,
   phone,
@@ -132,54 +214,23 @@ export async function linkCrmCustomer({
   spendGhs: number;
 }): Promise<number | null> {
   try {
-    const all = await db.select().from(customers);
-    // The selling unit's organization — EVERY new customer row is stamped to
-    // it, and org-scoped matching never crosses organization boundaries.
     const ownerOrg = businessId != null ? await ownerOrgOfBusiness(Number(businessId)) : null;
-    const sameOrg = (c: any) => (c.ownerId == null && ownerOrg == null) || Number(c.ownerId) === Number(ownerOrg);
-    const norm = (s: any) => String(s || "").trim().toLowerCase();
-    // Business isolation: the selling business's OWN customer wins first; a
-    // legacy group-shared (NULL business) row matches only inside the SAME
-    // organization, so history flows to it, but new rows are always stamped
-    // to the seller's unit and organization.
-    const match =
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === businessId && sameOrg(c))) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === businessId && sameOrg(c))) ||
-      (phone && all.find((c) => norm(c.phone) === norm(phone) && c.businessId === null && sameOrg(c))) ||
-      (name && all.find((c) => norm(c.name) === norm(name) && c.businessId === null && sameOrg(c))) ||
-      null;
-    if (match) {
-      await db
-        .update(customers)
-        .set({
-          totalSpentGhs: (match.totalSpentGhs || 0) + spendGhs,
-          loyaltyPoints: (match.loyaltyPoints || 0) + Math.floor(spendGhs / 100),
-        })
-        .where(eq(customers.id, match.id));
-      return match.id;
-    }
-    if (name && norm(name) !== "walk-in" && norm(name) !== "walk-in customer") {
-      const [created] = await db
-        .insert(customers)
-        .values({
-          name: String(name).trim(),
-          type: "RETAIL",
-          phone: phone || "",
-          totalSpentGhs: spendGhs,
-          loyaltyPoints: Math.floor(spendGhs / 100),
-          // Isolation: storefront & staff-tracked orders stamp the SELLING
-          // business so the buyer appears in that unit's CRM scope, and the
-          // OWNING organization so per-owner directories stay private.
-          businessId: businessId || null,
-          ownerId: ownerOrg,
-        })
-        .returning();
-      return created?.id ?? null;
-    }
+    const linked = await linkOrCreateCustomer({
+      businessId: Number(businessId),
+      name,
+      phone,
+      amount: spendGhs,
+      ownerId: ownerOrg,
+      includeLegacyShared: true,
+      // Orders only ever adopt an existing buyer; a real name is required to
+      // open a new CRM record (exactly the pre-refactor rule).
+      matchOnly: isAnonymousBuyer(name),
+    });
+    return linked?.id ?? null;
   } catch (e) {
     console.error("linkCrmCustomer warning:", e);
+    return null;
   }
-  return null;
 }
 
 /** Book revenue when staff confirm payment for an order. Returns transaction id. */
@@ -194,33 +245,23 @@ export async function bookOrderPayment({
   staff: { name?: string; role?: string; id?: number };
   business: any;
 }): Promise<number> {
-  const trxNum = `TRX-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-  const dateStr = new Date().toISOString().split("T")[0];
   const itemsDesc = (tracking.items || [])
     .map((li: any) => `${li.quantity}× ${li.description}`)
     .join(", ");
-  const [trx] = await db
-    .insert(transactions)
-    .values({
-      transactionNumber: trxNum,
-      businessId: tracking.businessId,
-      branchCode: tracking.branchCode || business?.code || null,
-      branchName: tracking.branchName || business?.name || null,
-      type: "INCOME",
-      category: "Online Order Sale",
-      amountGhs: tracking.totalGhs || 0,
-      paymentMethod: method,
-      customerId: tracking.customerId || null,
-      description: `[ORDER:${tracking.trackingCode}] ${itemsDesc || "Online order"} — ${tracking.customerName}`,
-      date: dateStr,
-      createdAt: new Date(),
-      status: "COMPLETED",
-      recordedBy: staff.name || "Staff",
-      recordedByRole: staff.role || null,
-      recordedByUserId: staff.id ?? null,
-    })
-    .returning();
-  return trx.id;
+  // P5: ONE service-sale writer (shared with car-wash / telecom / transport).
+  const posted = await postServiceSale({
+    businessId: Number(tracking.businessId),
+    branchCode: tracking.branchCode || business?.code || null,
+    branchName: tracking.branchName || business?.name || null,
+    category: "Online Order Sale",
+    description: `${itemsDesc || "Online order"} — ${tracking.customerName}`,
+    amountGhs: Number(tracking.totalGhs) || 0,
+    paymentMethod: method,
+    customerId: tracking.customerId || null,
+    actor: { id: staff.id ?? null, name: staff.name || "Staff", role: staff.role || null },
+    tag: `ORDER:${tracking.trackingCode}`,
+  });
+  return posted.transaction?.id ?? 0;
 }
 
 /** Bell-notify the branch team + owner that an online order arrived. */

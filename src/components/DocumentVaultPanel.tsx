@@ -1,6 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_SOURCE_IMAGE_BYTES, optimizeImage } from "@/lib/imageOptimize";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import {
   AlertTriangle,
   Download,
@@ -111,9 +114,36 @@ export default function DocumentVaultPanel({
 
   const pickFile = () => fileRef.current?.click();
 
-  const onFile = (f: File | null) => {
+  /**
+   * Vault upload. Images are optimized in the browser first (≤2800px q0.85 —
+   * scans/attachments keep their text detail, ≈240 DPI on A4, while a 6 MB
+   * capture lands around 335 KB), so the vault's 2.5 MB stored-file rule
+   * never rejects an ordinary phone photo. PDFs are never touched: the server-side
+   * `validateDocUpload` still enforces the real format + size limits.
+   */
+  const onFile = async (f: File | null) => {
     setFileErr("");
     if (!f) return;
+    if (f.type.startsWith("image/") && f.type !== "image/svg+xml") {
+      if (f.size > MAX_SOURCE_IMAGE_BYTES) {
+        setFileErr(`That image is ${(f.size / 1024 / 1024).toFixed(1)} MB — the vault accepts up to 20 MB per image (it is optimized after upload).`);
+        return;
+      }
+      try {
+        const optimized = await optimizeImage(f, "document");
+        // The vault stores ≤2.5 MB rows. An optimized scan is ~400 KB, but an
+        // image the browser cannot re-encode falls back to its original bytes
+        // — refuse those here instead of letting the server reject the save.
+        if (optimized.bytes > 2.5 * 1024 * 1024) {
+          setFileErr("That image could not be compressed enough for the vault (2.5 MB stored limit) — try a photo instead of a raw scan, or attach a PDF.");
+          return;
+        }
+        setUploadDraft((d: any) => ({ ...d, fileData: optimized.dataUrl, fileName: f.name }));
+      } catch {
+        setFileErr("That image could not be processed — try another file.");
+      }
+      return;
+    }
     if (f.size > 2.5 * 1024 * 1024) {
       setFileErr(`That file is ${(f.size / 1024 / 1024).toFixed(1)} MB — the vault accepts up to 2.5 MB.`);
       return;
@@ -182,14 +212,13 @@ export default function DocumentVaultPanel({
             <FolderLock className="w-4 h-4 text-teal-400" /> Document Vault
           </h3>
           <p className="text-[11px] text-slate-400 mt-0.5 max-w-2xl">
-            One registry for every unit document — licences, permits, contracts, insurance (image/PDF ≤ 2.5 MB) plus
+            One registry for every unit document — licences, permits, contracts, insurance (images up to 20 MB, compressed automatically; PDF ≤ 2.5 MB) plus
             generated vet reports and delivery notes. Expiring documents warn the team at 30 / 7 / 0 days.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select value={bizId} onChange={(e) => setBizId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200" data-testid="vault-biz">
-            <option value="">All units</option>
-            {businesses.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} />
           </select>
           <button onClick={load} className="p-2 rounded-lg hover:bg-slate-700/70 text-slate-300" data-testid="vault-refresh"><RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /></button>
           <button onClick={() => setGenOpen("VET")} disabled={!bizId} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold disabled:opacity-50" data-testid="vault-gen-vet">
@@ -288,7 +317,7 @@ export default function DocumentVaultPanel({
               </div>
             </div>
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">File (image or PDF, ≤ 2.5 MB)</label>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">File (image up to 20 MB — optimized automatically — or PDF ≤ 2.5 MB)</label>
               <div className="flex items-center gap-2">
                 <button onClick={pickFile} className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold flex items-center gap-1.5" data-testid="vault-up-pick">
                   <Plus className="w-3 h-3" /> Choose file

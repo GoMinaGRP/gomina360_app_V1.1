@@ -25,6 +25,15 @@
 import { createRequire } from "node:module";
 const req = createRequire("/home/user/pgtooling/package.json");
 const puppeteer = req("puppeteer-core");
+// Shared photo fixture: other suites write it, but a freshly-wiped sandbox does
+// not have it — create it here so this suite never depends on run order.
+{
+  const { writeFileSync, existsSync } = await import("node:fs");
+  const P = "/home/user/pgtooling/test-photo.png";
+  if (!existsSync(P)) {
+    writeFileSync(P, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  }
+}
 const pg = req("pg");
 
 const BASE = process.env.BASE_URL || "http://localhost:3000";

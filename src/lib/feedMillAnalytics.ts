@@ -76,8 +76,13 @@ interface Input {
 const RAW_CAT = /feed raw materials/i; // "Poultry Feed Raw Materials" + "Fish Feed Raw Materials"
 const MILL_CAT = /feed \(milled\)/i; // "Animal Feed (Milled)" + "Fish Feed (Milled)"
 
-export const isRawMaterialItem = (i: any) => RAW_CAT.test(`${i.category}`);
-export const isMilledFeedItem = (i: any) => MILL_CAT.test(`${i.category}`);
+/**
+ * The shared inventory taxonomy stores the umbrella category with the module
+ * wording in `subcategory` (e.g. category "Agriculture & Farm Supplies",
+ * subcategory "Poultry Feed Raw Materials"), so both fields are tested.
+ */
+export const isRawMaterialItem = (i: any) => RAW_CAT.test(`${i.category}`) || RAW_CAT.test(`${i.subcategory}`);
+export const isMilledFeedItem = (i: any) => MILL_CAT.test(`${i.category}`) || MILL_CAT.test(`${i.subcategory}`);
 
 /** Average kg/day consumed over the last 14 recorded days (any source). */
 function recentDailyBurn(feedLogs: any[]): number {

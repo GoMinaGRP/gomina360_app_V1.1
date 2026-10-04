@@ -12,12 +12,15 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { INVENTORY_CATEGORY_SUGGESTIONS } from "@/lib/inventoryCategories";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import SaleFields, { stockDetailOptions } from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
+import InventoryItemFields from "@/components/shared/InventoryItemFields";
 
 interface Props {
   currentUser: any;
@@ -768,26 +771,9 @@ function Row({ k, v }: any) {
 // Stable field components (defined at module scope so they are never recreated
 // during renders — otherwise React remounts the input after every keystroke
 // and drops the cursor/focus).
-function FormField({ f, set, label, k, t = "text", ...rest }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-}
-function FormSelect({ f, set, label, k, opts }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-}
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField numberMode="empty" {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect {...p} />; }
 
 function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubmit }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -884,18 +870,14 @@ function UnitForm({ type, busy, cfg, inventory, preselectItemId, onClose, onSubm
             </>
           )}
           {type === "ITEM" && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2"><FormField f={f} set={set} label="Item Name" k="name" required /></div>
-                <FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" />
-                <FormField f={f} set={set} label="Category" k="category" placeholder="e.g. Finished Goods" />
-                <FormField f={f} set={set} label="Opening Quantity" k="quantity" t="number" min={0} />
-                <FormSelect f={f} set={set} label="Unit" k="unit" opts={["Units", "Kg", "Plates", "Bags", "Litres", "Crates", "Jobs", "Drums", "m³"]} />
-                <FormField f={f} set={set} label="Cost Price (GH₵)" k="costPriceGhs" t="number" step="0.01" />
-                <FormField f={f} set={set} label="Selling Price (GH₵)" k="sellingPriceGhs" t="number" step="0.01" />
-                <FormField f={f} set={set} label="Low-Stock Threshold" k="minStockThreshold" t="number" min={0} />
-              </div>
-            </>
+            <InventoryItemFields
+              f={f} set={set}
+              nameLabel="Item Name"
+              categoryPlaceholder="Pick or type — e.g. Building Materials" categoryListId="bd-item-cats" categoryOptions={INVENTORY_CATEGORY_SUGGESTIONS}
+              quantityLabel="Opening Quantity" minLabel="Low-Stock Threshold"
+              numberMode="empty"
+              unit={{ mode: "select", options: ["Units", "Kg", "Plates", "Bags", "Litres", "Crates", "Jobs", "Drums", "m³"] }}
+            />
           )}
           {type === "OPS" && (
             <>

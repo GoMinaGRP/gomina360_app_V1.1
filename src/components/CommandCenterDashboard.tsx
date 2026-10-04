@@ -11,9 +11,7 @@ import {
   ArrowDownRight,
   Building2,
   Sliders,
-  Sparkles,
   AlertTriangle,
-  LifeBuoy,
   ExternalLink,
   Zap,
   CheckCircle,
@@ -44,6 +42,7 @@ import { rollupsByOrg } from "@/lib/orgGrouping";
 import { ActiveTab } from "./Sidebar";
 import FinancialReportSection from "./FinancialReportSection";
 import { businessTypeKeyOf, businessTypeLabelOf } from "@/lib/businessTypeKeys";
+import { scopeUnits } from "@/lib/businessScope";
 import {
   averageRiskScore,
   commandCenterRiskBand,
@@ -157,6 +156,29 @@ export default function CommandCenterDashboard({
         : activeBusinesses.filter((b) => businessTypeKeyOf(b?.category || "Other") === businessTypeFilter),
     [activeBusinesses, businessTypeFilter]
   );
+
+  // Owner grouping for the unit grid: when the current scope spans more than
+  // one Owner (Super Admin on "All owners" / one other owner), the cards are
+  // grouped under their owner with a count — the same grouping the shared
+  // BusinessScopeBar uses everywhere else. Single-owner callers see no headers.
+  const unitOwnerRows = useMemo(() => {
+    const catalogue = scopeUnits(typeScopedBusinesses, organizations);
+    const byId = new Map(catalogue.map((u) => [u.id, u]));
+    const buckets: { ownerId: number; ownerName: string; isMine: boolean; rows: any[] }[] = [];
+    for (const b of typeScopedBusinesses) {
+      const unit = byId.get(Number(b.id));
+      const ownerId = unit?.ownerId ?? 1;
+      let bucket = buckets.find((x) => x.ownerId === ownerId);
+      if (!bucket) {
+        bucket = { ownerId, ownerName: unit?.ownerName || `Owner #${ownerId}`, isMine: !!unit?.isMine, rows: [] };
+        buckets.push(bucket);
+      }
+      bucket.rows.push(b);
+    }
+    buckets.sort((a, b) => (a.isMine !== b.isMine ? (a.isMine ? -1 : 1) : a.ownerName.localeCompare(b.ownerName)));
+    return buckets;
+  }, [typeScopedBusinesses, organizations]);
+  const showOwnerGroups = unitOwnerRows.length > 1;
 
   const allBizIds = useMemo(() => typeScopedBusinesses.map((b) => Number(b.id)).filter(Number.isFinite), [typeScopedBusinesses]);
   const allBizIdsKey = allBizIds.join("|");
@@ -393,9 +415,9 @@ export default function CommandCenterDashboard({
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto text-slate-100" data-testid="command-center-root">
       {/* Top Welcome & Quick Actions */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 rounded-2xl border border-slate-700/80 shadow-2xl">
-        <div>
-          <div className="flex items-center space-x-2">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 sm:p-6 rounded-2xl border border-slate-700/80 shadow-2xl">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30">
               EXECUTIVE COMMAND CENTER • 360° VIEW
             </span>
@@ -404,7 +426,7 @@ export default function CommandCenterDashboard({
               Live Consolidated Operating Report • Q1 2026 + real-time activity
             </span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white">
+          <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight mt-1 text-white break-words">
             Enterprise Performance Overview
           </h2>
           {isSuperAdminUser && (
@@ -422,27 +444,15 @@ export default function CommandCenterDashboard({
             </div>
           )}
           <p className="text-sm text-slate-300 mt-1 max-w-2xl">
-            Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across all 7 Ghanaian operating units.
+            Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across your entire business portfolio.
           </p>
         </div>
 
+        {/* Hero = executive MANAGEMENT actions only (create / manage / access).
+            It used to also repeat AI Advisor, Scenario Planner and Storefront
+            HELP — three destinations that already have a rail row and a ⌘K
+            entry. Removed in the navigation cleanup (reassessment audit §3). */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            onClick={() => onSelectTab("AI_ADVISOR")}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>AI Strategic Advisor</span>
-          </button>
-
-          <button
-            onClick={() => onSelectTab("SCENARIO_PLANNER")}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/40 font-semibold text-xs sm:text-sm transition"
-          >
-            <Sliders className="w-4 h-4" />
-            <span>Scenario Planner</span>
-          </button>
-
           <AiSectionGuide moduleKey="COMMAND_CENTER" section="COMMAND_CENTER" variant="header" />
           {(canManageBusinesses || canOpenManageUnits || canManageOnline) && onOpenManageBusinesses && (
             <button
@@ -474,18 +484,7 @@ export default function CommandCenterDashboard({
               <span>Users &amp; Access</span>
             </button>
           )}
-          {canManageSupportInfo && onOpenSupportInfo && (
-            <button
-              onClick={onOpenSupportInfo}
-              data-testid="open-support-info"
-              title="Edit the customer support information shown in the storefront HELP panel"
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg transition"
-            >
-              <LifeBuoy className="w-4 h-4" />
-              <span>Storefront HELP</span>
-            </button>
-          )}
-        </div>
+                  </div>
       </div>
 
       {/* SUPER ADMIN — Organization Lens "ALL": per-Owner/Org rollups. Each
@@ -815,7 +814,18 @@ export default function CommandCenterDashboard({
               No active businesses match this business type filter. Click Clear to reset.
             </div>
           )}
-          {typeScopedBusinesses.map((biz) => {
+          {unitOwnerRows.map((group) => (
+            <React.Fragment key={group.ownerId}>
+              {showOwnerGroups && (
+                <div className="col-span-full flex items-center gap-2 pt-1" data-testid={`cc-owner-group-${group.ownerId}`}>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    {group.isMine ? "My Workspace" : group.ownerName}
+                  </span>
+                  <span className="text-[10px] text-slate-500">· {group.rows.length} unit{group.rows.length === 1 ? "" : "s"}</span>
+                  <span className="flex-1 h-px bg-slate-700/70" />
+                </div>
+              )}
+              {group.rows.map((biz) => {
             const active = selectedSet.has(Number(biz.id));
             return (
               <button
@@ -842,7 +852,9 @@ export default function CommandCenterDashboard({
                 )}
               </button>
             );
-          })}
+              })}
+            </React.Fragment>
+          ))}
         </div>
       </div>
 

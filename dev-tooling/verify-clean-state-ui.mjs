@@ -81,6 +81,11 @@ async function uiLogin() {
 
 /** Click a business in the sidebar by its display name, wait for its module. */
 async function openBusiness(name) {
+  // The sidebar previews only the first few units and this suite ADDS units, so
+  // a freshly created one can sit behind the "Show all" cap. Expand first so the
+  // lookup never depends on how many units already exist.
+  await page.evaluate(() => document.querySelector('[data-testid="nav-biz-show-all"]')?.click());
+  await sleep(600);
   const clicked = await page.evaluate((n) => {
     const btns = [...document.querySelectorAll("aside button")];
     const b = btns.find((x) => (x.textContent || "").trim().includes(n));

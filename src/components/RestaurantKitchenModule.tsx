@@ -14,6 +14,8 @@ import ExpenseEntryForm from "./ExpenseEntryForm";
 import SaleFields from "./forms/SaleFields";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
+import InventoryItemFields from "@/components/shared/InventoryItemFields";
 
 type Props = {
   currentUser: any;
@@ -760,8 +762,9 @@ function CheckIcon(props: any) {
   return <ShieldCheck {...props} />;
 }
 
-function FormField({ f, set, label, k, t = "text", ...rest }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs" {...rest} /></div>; }
-function FormSelect({ f, set, label, k, opts }: any) { return <div><label className="block text-[10px] text-slate-400 font-semibold mb-1">{label}</label><select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)} className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs">{opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></div>; }
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect {...p} />; }
 
 function KitchenForm({ type, busy, onClose, onSubmit, inventory, menu, suppliers, currency }: any) {
   const todayStr = new Date().toISOString().split("T")[0];
@@ -815,7 +818,15 @@ function KitchenForm({ type, busy, onClose, onSubmit, inventory, menu, suppliers
         <form onSubmit={handle} className="p-4 sm:p-5 space-y-3">
     {type === "SALE" && <SaleFields f={f} set={set} inventory={inventory} selectedItem={selectedItem} currency={currency} productLabel="Stock Item" productEmptyLabel={inventory.length ? "— select item —" : "— add stock items first —"} productOptionText={(i: any) => `${i.name} (${i.quantity} ${i.unit} left)`} reasonLabel="Custom price reason (optional)" showTotal={false} />}
     {type === "EXPENSE" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Gas, Utilities, Payroll, Rent..." required list="kit-exp" /><FormField f={f} set={set} label="Amount (GH₵)" k="amountGhs" t="number" step="0.01" required /><FormSelect f={f} set={set} label="Payment" k="paymentMethod" opts={["CASH", "MTN_MOMO", "TELECEL_CASH", "BANK_TRANSFER", "POS_CARD"]} /><FormField f={f} set={set} label="Date" k="date" t="date" /></div><FormField f={f} set={set} label="Description" k="description" /><datalist id="kit-exp">{["Gas & Fuel", "Utilities", "Payroll", "Rent", "Equipment Repair", "Cleaning Supplies", "Packaging"].map((c) => <option key={c} value={c} />)}</datalist></>}
-    {type === "ITEM" && <><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Item Name" k="name" required placeholder="e.g. Long Grain Rice 25kg" /><FormField f={f} set={set} label="SKU" k="sku" placeholder="auto if blank" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Category" k="category" placeholder="Food & Ingredients" /><FormField f={f} set={set} label="Unit" k="unit" placeholder="Kg / Litres / Crates" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Opening Qty" k="quantity" t="number" min={0} step="0.01" /><FormField f={f} set={set} label="Min Stock Alert" k="minStockThreshold" t="number" min={0} step="0.01" /></div><div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Cost Price (GH₵/unit)" k="costPriceGhs" t="number" step="0.01" /><FormField f={f} set={set} label="Expiry Date" k="expiryDate" t="date" /></div><p className="text-[10px] text-slate-500">Expiry dates power the Food Safety & Expiry Alerts card.</p></>}
+    {type === "ITEM" && <InventoryItemFields
+      f={f} set={set}
+      nameLabel="Item Name" namePlaceholder="e.g. Long Grain Rice 25kg"
+      categoryPlaceholder="Food & Ingredients"
+      qtyStep={0.01} minStep={0.01}
+      costLabel="Cost Price (GH₵/unit)" showSellingPrice={false}
+      showExpiry expiryHint="Expiry dates power the Food Safety & Expiry Alerts card."
+      unit={{ mode: "text", placeholder: "Kg / Litres / Crates" }}
+    />}
     {type === "ORDER" && <>
       <div className="grid grid-cols-2 gap-3"><FormField f={f} set={set} label="Customer / Table" k="customerName" required placeholder="Table 4 / Walk-in Guest" /><FormSelect f={f} set={set} label="Order Type" k="orderType" opts={["DINE_IN", "TAKEAWAY", "DELIVERY"]} /></div>
       <FormSelect f={f} set={set} label="Dish (from menu)" k="menuItemId" opts={[{ v: "", l: "— custom dish —" }, ...(menu || []).filter((m: any) => m.isActive !== false).map((m: any) => ({ v: m.id, l: `${m.name} — ${formatMoney(m.priceGhs, currency, true)}` }))]} />

@@ -185,7 +185,21 @@ try {
 
     // History: collapsed by default, holds the >7-day records
     ok("G11 History collapsed by default", await page.$eval('[data-testid="aud-history-toggle"]', (b) => b.getAttribute("aria-expanded") === "false") && !(await page.$('[data-testid="aud-history-body"]')));
-    ok("G12 history count reports older records loaded so far", parseInt(await H.textOf("aud-history-count"), 10) >= 150, await H.textOf("aud-history-count"));
+    // The label must report the true size of the loaded History set. The tenant's
+    // absolute volume varies with seeding age, so the assertion verifies the
+    // count is a positive integer AND matches the rows the section renders below.
+    const historyCountTxt = await H.textOf("aud-history-count");
+    const historyCount = parseInt(historyCountTxt, 10);
+    await H.clickTid("aud-history-toggle");
+    await H.waitSel('[data-testid="aud-history-body"]');
+    await sleep(700);
+    const historyRows = await page.evaluate(() =>
+      document.querySelectorAll('[data-testid="aud-history-body"] [data-testid^="aud-rec-row-"]').length);
+    ok("G12 history count reports older records loaded so far",
+      Number.isInteger(historyCount) && historyCount >= 1 && historyCount === historyRows,
+      `${historyCountTxt} vs ${historyRows} rendered rows`);
+    await H.clickTid("aud-history-toggle"); // collapse again — G14 re-opens it
+    await sleep(400);
     ok("G13 8-day fixture NOT in the 7-day groups", !(await page.$(`[data-testid="aud-day-${DAYS.d8}"] [data-testid="aud-rec-row-TRANSACTION:transactions:${tx8.id}"], [data-testid="aud-rec-row-TRANSACTION:transactions:${tx8.id}"]`)));
 
     await H.clickTid("aud-history-toggle");

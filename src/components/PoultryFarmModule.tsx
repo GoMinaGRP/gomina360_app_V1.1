@@ -28,6 +28,7 @@ import ConfirmActionModal from "./ConfirmActionModal";
 import AdvisorNotesPanel from "./AdvisorNotesPanel";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
 import { canViewSection } from "@/lib/advisorSections";
+import { FormField as SharedFormField, FormSelect as SharedFormSelect } from "@/components/shared/ModuleFormFields";
 
 interface Props {
   currentUser: any;
@@ -110,6 +111,25 @@ export default function PoultryFarmModule({
   const [busy, setBusy] = useState(false);
   const [confirmEntry, setConfirmEntry] = useState<{ entity: string; data: any } | null>(null);
   const [err, setErr] = useState("");
+
+  // Pie-chart labels cannot wrap: on a phone-width card the outside labels of
+  // "Flock Composition" would be drawn past the SVG edge and cut off, so they
+  // are only shown when the card is wide enough and the legend carries the
+  // names on small screens.
+  const [pieWrapW, setPieWrapW] = useState(0);
+  const pieWrapRef = React.useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = pieWrapRef.current;
+    if (!el) return;
+    setPieWrapW(Math.round(el.clientWidth));
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setPieWrapW(Math.round(e.contentRect.width));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const pieLabel = pieWrapW >= 520 ? (e: any) => `${e.name}: ${e.value}` : undefined;
 
   // Poultry datasets
   const [flocks, setFlocks] = useState<any[]>([]);
@@ -429,23 +449,6 @@ export default function PoultryFarmModule({
   };
 
 
-  const toggleTask = async (id: number) => {
-    await fetch("/api/poultry", {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        entity: "CHECKLIST", id,
-        data: { completedByName: currentUser?.name, completedByRole: currentUser?.role },
-      }),
-    });
-    refresh();
-  };
-
-  const generateChecklist = async () => {
-    setBusy(true);
-    await submit("CHECKLIST", { checklistDate: today, tasks: DEFAULT_TASKS });
-    setBusy(false);
-  };
-
   const COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#a855f7", "#ec4899", "#06b6d4"];
 
   if (loading) {
@@ -737,15 +740,16 @@ export default function PoultryFarmModule({
             </Card>
 
             <Card title="Flock Composition" icon={Bird}>
-              <div className="p-4">
+              <div className="p-4" ref={pieWrapRef}>
                 {flockComposition.length > 0 ? (
                   <ResponsiveContainer width="100%" height={220}>
                     <PieChart>
                       <Pie data={flockComposition} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={75}
-                        label={(e: any) => `${e.name}: ${e.value}`}>
+                        label={pieLabel}>
                         {flockComposition.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                       </Pie>
                       <Tooltip contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155" }} />
+                      <Legend wrapperStyle={{ fontSize: 10, lineHeight: "14px" }} />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : <p className="text-xs text-slate-400 text-center py-8">No active flocks.</p>}
@@ -1563,26 +1567,9 @@ export default function PoultryFarmModule({
 }
 
 // ─────────────────────────── FORM MODAL ───────────────────────────
-function FormField({ f, set, label, k, t = "text", ...rest }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <input type={t} value={f[k] ?? ""} onChange={(e) => set(k, t === "number" ? Number(e.target.value) : e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs" {...rest} />
-    </div>
-  );
-}
-function FormSelect({ f, set, label, k, opts }: any) {
-  return (
-    <div>
-      <label className="block text-[10px] font-semibold text-slate-400 mb-1">{label}</label>
-      <select value={f[k] ?? ""} onChange={(e) => set(k, e.target.value)}
-        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs">
-        {opts.map((o: any) => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}
-      </select>
-    </div>
-  );
-}
+// Shared dark-form field pair — see src/components/shared/ModuleFormFields.tsx
+function FormField(p: any) { return <SharedFormField tone="slate900" {...p} />; }
+function FormSelect(p: any) { return <SharedFormSelect tone="slate900" {...p} />; }
 
 function BatchSelect({ flocks, f, set }: any) {
   return (

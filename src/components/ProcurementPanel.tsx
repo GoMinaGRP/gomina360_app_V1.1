@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
 import {
   ArrowRight,
   Factory,
@@ -371,10 +372,7 @@ export default function ProcurementPanel({
         </div>
         <div className="flex items-center gap-2">
           <select value={bizId} onChange={(e) => setBizId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200" data-testid="proc-biz">
-            <option value="">All units</option>
-            {scopedBusinesses.map((b: any) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <UnitScopeOptions units={scopedBusinesses} />
           </select>
           <button onClick={load} className="p-2 rounded-lg hover:bg-slate-700/70 text-slate-300" data-testid="proc-refresh"><RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /></button>
           <button onClick={() => { setRaiseDraft({ lines: [], supplierId: "", trackingIds: [] }); setShowRaise(true); }} disabled={!bizId || !suppliers.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50" data-testid="proc-raise">

@@ -38,6 +38,7 @@ import {
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import AiSectionGuide from "./AiSectionGuide";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
 import {
   FinanceGranularity,
   computeFinancialReport,
@@ -76,6 +77,8 @@ interface Props {
   businesses?: any[];
   /** enterprise mode: live metric rows (same provenance as businessMetric). */
   metrics?: any[];
+  /** the caller's own organization — groups the unit picker "My Workspace first". */
+  myOrgId?: number;
   transactions: any[];
   inventory?: any[];
   customers?: any[];
@@ -175,6 +178,7 @@ async function fetchSalesDocuments(businessId?: number | null): Promise<any[]> {
 
 export default function FinancialReportSection({
   mode,
+  myOrgId,
   businessInfo,
   businessMetric,
   businesses = [],
@@ -364,14 +368,18 @@ export default function FinancialReportSection({
   const Stat = ({ label, value, sub, icon: Icon, tone = "text-emerald-400", tid }: any) => (
     <div
       data-testid={tid}
-      className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-3.5 min-w-0"
+      className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-3 sm:p-3.5 min-w-0"
     >
       <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400 tracking-wide">
         <span className="truncate pr-1">{label}</span>
         {Icon && <Icon className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
       </div>
-      <div className={`text-lg font-black mt-1 truncate ${tone}`}>{value}</div>
-      {sub != null && <div className="text-[10px] text-slate-500 mt-0.5 truncate">{sub}</div>}
+      <div className={`text-[15px] sm:text-lg font-black mt-1 tabular-nums truncate ${tone}`}>{value}</div>
+      {sub != null && (
+        <div className="text-[10px] text-slate-500 mt-0.5 leading-snug line-clamp-2 break-words" title={typeof sub === "string" ? sub : undefined}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 
@@ -414,7 +422,7 @@ export default function FinancialReportSection({
   const hdrTitle =
     title ||
     (isEnterprise
-      ? "Enterprise Financial Report — All Businesses & Branches"
+      ? "Enterprise Financial Report — All Units"
       : `Financial Report — ${activeBiz?.name || "This Business"}`);
   const hdrSub =
     subtitle ||
@@ -565,12 +573,7 @@ export default function FinancialReportSection({
                 }}
                 className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-[11px] font-semibold"
               >
-                <option value="ALL">All Businesses (Consolidated)</option>
-                {businesses.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} — {b.code}
-                  </option>
-                ))}
+                <UnitScopeOptions units={businesses} myOrgId={myOrgId} allValue="ALL" allLabel="All units (consolidated)" showCode />
               </select>
             </label>
           ) : (
@@ -628,7 +631,7 @@ export default function FinancialReportSection({
       )}
 
       {/* ── KPI cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-1 min-[360px]:grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
         <Stat
           tid={`${testid}-kpi-revenue`}
           label="Revenue"

@@ -10,6 +10,7 @@ import {
   Shield,
   Bell,
   ChevronDown,
+  Menu,
   Briefcase,
   CheckCircle2,
   KeyRound,
@@ -47,6 +48,8 @@ interface NavbarProps {
   onOpenManageUnits?: () => void;
   /** Notification bell element (rendered before the account menu). */
   bellSlot?: React.ReactNode;
+  /** Opens the off-canvas navigation drawer (phones & tablets only). */
+  onOpenMobileNav?: () => void;
 }
 
 export default function Navbar({
@@ -65,6 +68,7 @@ export default function Navbar({
   onOpenOnlineOrdering,
   onOpenManageUnits,
   bellSlot,
+  onOpenMobileNav,
 }: NavbarProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCurrencyDropdown, setShowCurrencyDropdown] = useState(false);
@@ -122,6 +126,16 @@ export default function Navbar({
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-2 sm:px-6 py-2.5">
         {/* Left Branding — shrink-0 so the brand chip can never be squashed by the controls */}
         <div className="flex items-center space-x-2 sm:space-x-3 min-w-0 shrink-0">
+          {/* Navigation drawer (phones & tablets). Desktop keeps the pinned rail. */}
+          <button
+            onClick={() => onOpenMobileNav?.()}
+            data-testid="nav-mobile-menu-btn"
+            aria-label="Open navigation menu"
+            aria-haspopup="dialog"
+            className="lg:hidden p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition shrink-0"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
           <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white font-black text-[10px] sm:text-lg shadow-md border border-emerald-400/30 shrink-0 tracking-tight">
             360
           </div>

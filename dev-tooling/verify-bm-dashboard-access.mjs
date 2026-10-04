@@ -90,7 +90,10 @@ const clickExact = async (page, label) => {
 const readChips = (page) =>
   page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="nav-sidebar"] aside, [data-testid="nav-sidebar"]')].length
-      ? [...document.querySelectorAll('[data-testid="nav-sidebar"] button')]
+      // Unit chips are exactly the rows carrying data-biz-code (stable since
+      // before the navigation redesign) — other rail buttons (search trigger,
+      // collapsible section headers, quick access) are not unit chips.
+      ? [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-biz-code]')]
           .filter((b) => {
             const badge = b.querySelector('[data-testid^="sidebar-chip-granted-"]');
             const icon = b.querySelector("svg");
@@ -98,6 +101,7 @@ const readChips = (page) =>
           })
           .map((b) => ({
             text: (b.textContent || "").replace(/\s+/g, " ").trim(),
+            code: b.getAttribute("data-biz-code"),
             enabled: !b.disabled,
             granted: !!b.querySelector('[data-testid^="sidebar-chip-granted-"]'),
             active: (b.className || "").includes("border-l-2"),
@@ -185,8 +189,8 @@ async function sectionC(browser, cookies) {
 
   const chips1 = await readChips(page);
   const header1 = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('[data-testid="nav-sidebar"] div')].find((d) => /My Branch/.test(d.textContent || "") && d.children.length === 0);
-    return el ? el.textContent.trim() : "";
+    const el = document.querySelector('[data-testid="nav-section-MY_BUSINESSES"]');
+    return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
   });
   ok("C1 BM with one grant sees BOTH branch chips (primary + hardware), hardware badged GRANTED",
     chips1.length === 2 && chips1.every((c) => c.enabled) && chips1.some((c) => c.granted && /Hardware/i.test(c.text)) && chips1.some((c) => !c.granted && /Poultry/i.test(c.text)),
@@ -215,8 +219,8 @@ async function sectionC(browser, cookies) {
   await sleep(900);
   const chips2 = await readChips(page);
   const header2 = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('[data-testid="nav-sidebar"] div')].find((d) => /My Branch/.test(d.textContent || "") && d.children.length === 0);
-    return el ? el.textContent.trim() : "";
+    const el = document.querySelector('[data-testid="nav-section-MY_BUSINESSES"]');
+    return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
   });
   ok("C3 a second granted branch adds a third chip, label “My Branches (3)”",
     chips2.length === 3 && header2 === "My Branches (3)" && chips2.filter((c) => c.granted).length === 2,
@@ -238,8 +242,8 @@ async function sectionC(browser, cookies) {
   await sleep(900);
   const chips3 = await readChips(page);
   const header3 = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('[data-testid="nav-sidebar"] div')].find((d) => /My Branch/.test(d.textContent || "") && d.children.length === 0);
-    return el ? el.textContent.trim() : "";
+    const el = document.querySelector('[data-testid="nav-section-MY_BUSINESSES"]');
+    return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
   });
   ok("C5 revoking all grants collapses the sidebar to “My Branch” (primary only)",
     chips3.length === 1 && !chips3[0].granted && header3 === "My Branch",
