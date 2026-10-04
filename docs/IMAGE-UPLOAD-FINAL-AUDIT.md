@@ -19,7 +19,7 @@ Professional judgment applied to fix what the audit found — nothing else was t
 | `29cf5c2` | Image implementation (`bed2c29` = the implementation report) |
 
 **Verdict: sound.** Nine real issues were found and fixed; everything else re-verified clean. Final state:
-`tsc --noEmit` clean, production build clean, 26 suites green (see §8).
+`tsc --noEmit` clean, production build clean, 28 suites green (see §8).
 
 ---
 
