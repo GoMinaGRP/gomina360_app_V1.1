@@ -180,3 +180,17 @@ Benchmark crops from the audit remain the visual evidence of the resolution chan
 * **Employee HR documents**: PDFs keep the 2.5 MB rule; images use the shared 2 MB document budget.
 * **Legacy rows** (photos stored before these budgets) are untouched — readers keep falling back to the
   full image where no thumbnail exists.
+
+## 5. Final verification audit (2026-10-04)
+
+The implementation above was re-audited end-to-end against the live stack — security/validation,
+WebP+JPEG compatibility across every consumer, backup→restore, legacy rows, remaining oversized
+image loads, thumbnail restore fidelity and regressions. Nine issues were found and fixed in
+`a47df44` (unused thumbnails on four list endpoints, an ineffective serving-lockdown CSP that the
+app-wide CSP was overwriting, unhardened `/api/branding` 200 responses, legacy-edit bricking on
+employees/assets, whitespace/empty base64 acceptance, receipts on list payloads, evidence photos on
+screens that never paint them, silent pass-through, and one inconsistent test assertion).
+
+Full results, measurements and the per-suite evidence table: **`docs/IMAGE-UPLOAD-FINAL-AUDIT.md`**.
+Verdict: sound — `tsc` clean, production build clean, 26 suites green, existing image rows
+byte-identical, no schema or data changes.
