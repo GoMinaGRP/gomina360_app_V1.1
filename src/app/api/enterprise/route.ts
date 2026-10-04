@@ -32,6 +32,7 @@ import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 import { approvalRequests } from "@/db/schema";
+import { validateImageArray, validateOptionalImage, THUMB_BUDGET_BYTES } from "@/lib/mediaValidation";
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
@@ -834,6 +835,28 @@ export async function POST(request: Request) {
       }
 
       const assetQrValue = assetQr || null;
+      // Asset photos + display thumbnails, validated centrally: shape, budget
+      // (≤400 KB per image, ≤60 KB per thumbnail) and the per-record cap (6).
+      const assetImgCheck = validateImageArray(data.assetImages, "asset", { label: "Asset photo" });
+      if (!assetImgCheck.ok) return NextResponse.json({ success: false, error: assetImgCheck.error }, { status: 400 });
+      const assetThumbCheck = validateImageArray(data.assetImagesThumb, "asset", {
+        label: "Asset thumbnail",
+        max: 6,
+        maxBytes: THUMB_BUDGET_BYTES,
+        allowNulls: true,
+      });
+      if (!assetThumbCheck.ok) return NextResponse.json({ success: false, error: assetThumbCheck.error }, { status: 400 });
+      const assetImagesArr: string[] = Array.isArray(data.assetImages)
+        ? data.assetImages.filter((p: any) => typeof p === "string" && p.length > 0)
+        : [];
+      // POSITIONAL, like inventory: entry i is the thumbnail of images[i]; a
+      // missing thumbnail stays null so indices never shift.
+      const assetThumbsRaw = Array.isArray(data.assetImagesThumb) ? data.assetImagesThumb : [];
+      const assetThumbs = assetImagesArr.map((_p: any, i: number) =>
+        typeof assetThumbsRaw[i] === "string" && /^data:image\//.test(assetThumbsRaw[i]) ? assetThumbsRaw[i] : null,
+      );
+      const assetThumbsArr = assetThumbs.some((t: string | null) => !!t) ? assetThumbs : null;
+
       const [inserted] = await db
         .insert(assets)
         .values({
@@ -865,7 +888,8 @@ export async function POST(request: Request) {
             : null,
           recorderName: data.recorderName || data.requestedByName || "Unknown Recorder",
           recordedAt: new Date(),
-          assetImages: Array.isArray(data.assetImages) ? data.assetImages : [],
+          assetImages: assetImagesArr,
+          assetImagesThumb: assetThumbsArr,
         })
         .returning();
 
@@ -885,7 +909,7 @@ export async function POST(request: Request) {
           businessId: inserted.businessId,
           branchCode: inserted.branchCode,
           currentValueGhs: inserted.currentValueGhs,
-          imageCount: Array.isArray(data.assetImages) ? data.assetImages.length : 0,
+          imageCount: assetImagesArr.length,
         },
       });
 
@@ -925,6 +949,26 @@ export async function POST(request: Request) {
           if (!branchName) branchName = biz.name;
         }
       }
+      // Photos + thumbnails are validated centrally (src/lib/mediaValidation):
+      // shape, stored-byte budget and the per-record photo cap (6). The browser
+      // already sizes them; this is the enforcement point.
+      const photosCheck = validateImageArray(data.photos, "product", { label: "Product photo" });
+      if (!photosCheck.ok) return NextResponse.json({ success: false, error: photosCheck.error }, { status: 400 });
+      const thumbsCheck = validateImageArray(data.photosThumb, "product", {
+        label: "Product thumbnail",
+        max: 6,
+        maxBytes: THUMB_BUDGET_BYTES,
+        allowNulls: true,
+      });
+      if (!thumbsCheck.ok) return NextResponse.json({ success: false, error: thumbsCheck.error }, { status: 400 });
+      const primaryPhotoCheck = validateOptionalImage(data.photo, "product", { label: "Product photo" });
+      if (!primaryPhotoCheck.ok) return NextResponse.json({ success: false, error: primaryPhotoCheck.error }, { status: 400 });
+      const primaryThumbCheck = validateOptionalImage(data.photoThumb, "product", {
+        label: "Product thumbnail",
+        maxBytes: THUMB_BUDGET_BYTES,
+      });
+      if (!primaryThumbCheck.ok) return NextResponse.json({ success: false, error: primaryThumbCheck.error }, { status: 400 });
+
       const photosArr = Array.isArray(data.photos)
         ? data.photos.filter((p: any) => typeof p === "string" && p.length > 0)
         : [];

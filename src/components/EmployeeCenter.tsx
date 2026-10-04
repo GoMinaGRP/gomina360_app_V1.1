@@ -191,7 +191,13 @@ export function EmployeeRegistration({
     if (!file) return;
     if (!file.type.startsWith("image/")) return setErr("Please choose an image file.");
     setErr("");
-    set("photo", await imageToDataUrl(file));
+    try {
+      set("photo", await imageToDataUrl(file));
+    } catch (err: any) {
+      // Shared pipeline refused it (over the source ceiling, or a format this
+      // browser cannot decode) — surface the reason.
+      setErr(err?.message || "That photo could not be processed — try another image.");
+    }
   };
 
   const bizPicked = (id: string) => {
@@ -479,16 +485,20 @@ export function EmployeeProfile({
     e.target.value = "";
     if (!f) return;
     setDocErr("");
-    // Images are optimized before upload (≤2000px q0.88 — scans stay
-    // readable), so they may arrive up to 20MB. PDFs are never re-encoded and
-    // keep the 2.5MB rule; the server enforces the final stored-size cap.
+    // Images are optimized before upload (≤2800px q0.85 — scans stay readable),
+    // so they may arrive up to 20MB. PDFs are never re-encoded and keep the
+    // 2.5MB rule; the server enforces the final stored-size cap.
     if (f.type.startsWith("image/")) {
       if (f.size > MAX_SOURCE_IMAGE_BYTES) {
         return setDocErr(`That image is ${(f.size / 1024 / 1024).toFixed(1)} MB — up to 20 MB images are accepted (they are compressed automatically).`);
       }
-      const data = await imageToDataUrl(f, "document");
-      if (data.length > 3_500_000) return setDocErr("That image could not be compressed small enough — try a smaller photo or a PDF.");
-      return setDocFile({ name: f.name, data });
+      try {
+        const data = await imageToDataUrl(f, "document");
+        if (data.length > 2_500_000) return setDocErr("That image could not be compressed small enough — try a smaller photo or a PDF.");
+        return setDocFile({ name: f.name, data });
+      } catch (err: any) {
+        return setDocErr(err?.message || "That image could not be processed — try another file.");
+      }
     }
     if (f.size > 2_500_000) return setDocErr("File too large — keep it under 2.5MB.");
     if (f.type === "application/pdf") {

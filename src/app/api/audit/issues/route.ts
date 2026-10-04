@@ -14,6 +14,7 @@ import { pushAfterBell } from "@/lib/push";
 import { getSessionInfo, resolveUserOrgIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];
 const normStatus = (s: string | null | undefined) => (s === "OPEN" ? "FLAGGED" : s || "INFO");
@@ -108,10 +109,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Write a response note so the auditor can review it." }, { status: 400 });
     }
     const evidence = String(body.evidence || "").trim();
+    const photoCheck = validateOptionalImage(body.photo, "evidence", { label: "Photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
     const photo = String(body.photo || "");
-    if (photo && !photo.startsWith("data:image/")) {
-      return NextResponse.json({ success: false, error: "Photo must be an image file." }, { status: 400 });
-    }
     // RESPOND: provide an answer & evidence and send it back for review.
     // MARK_RESOLVED: correction completed — ready for verification.
     const to = action === "RESPOND" ? "UNDER_REVIEW" : "RESOLVED";

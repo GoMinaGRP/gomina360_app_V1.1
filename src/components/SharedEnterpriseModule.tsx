@@ -23,9 +23,10 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import { businessManageIdsOf } from "@/lib/permissions";
 import {
-  MAX_SOURCE_IMAGE_BYTES,
+  describeRejection,
   optimizationSummary,
-  optimizeImages,
+  PHOTO_LIMITS,
+  prepareImages,
 } from "@/lib/imageOptimize";
 import { addToOfflineQueue } from "@/lib/offlineSync";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
@@ -259,19 +260,19 @@ export default function SharedEnterpriseModule({
     if (!files || files.length === 0) return;
     setInvPhotoErr("");
     setInvPhotoNotice("");
-    const picked = Array.from(files);
-    const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
-    if (tooBig.length > 0) {
-      setInvPhotoErr(`${tooBig.length === 1 ? "That photo is" : "Some photos are"} too large to process (max 20MB each).`);
-      e.target.value = ""; // let the user re-pick the same file after fixing it
-      return;
-    }
     try {
-      const results = await optimizeImages(picked, "product");
-      setInvPhotos((prev) => [...prev, ...results.map((r) => r.dataUrl)]);
-      setInvPhotoThumbs((prev) => [...prev, ...results.map((r) => r.thumb || "")]);
-      const summary = optimizationSummary(results);
-      if (summary) setInvPhotoNotice(`Optimized for the storefront — ${summary}`);
+      // One policy for every upload surface (src/lib/imageOptimize):
+      // 20 MB source guard, pass-through ceilings, the 6-photo record cap and
+      // a plain reason per refused file.
+      const result = await prepareImages(files, "product", { max: PHOTO_LIMITS.product, existing: invPhotos.length });
+      if (result.images.length > 0) {
+        setInvPhotos((prev) => [...prev, ...result.images.map((r) => r.dataUrl)]);
+        setInvPhotoThumbs((prev) => [...prev, ...result.images.map((r) => r.thumb || "")]);
+        const summary = optimizationSummary(result.images);
+        if (summary) setInvPhotoNotice(`Optimized for the storefront — ${summary}`);
+      }
+      if (result.rejected.length > 0) setInvPhotoErr(describeRejection(result));
+      else if (result.notes.length > 0) setInvPhotoNotice((n) => n || result.notes[0]);
     } catch {
       setInvPhotoErr("One or more photos could not be processed. Try a different image.");
     } finally {

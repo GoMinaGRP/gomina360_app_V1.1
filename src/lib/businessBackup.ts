@@ -960,6 +960,7 @@ async function importBusinessBackupTx(
     recorderName: r.recorderName,
     recordedAt: r.recordedAt ? new Date(r.recordedAt) : undefined,
     assetImages: r.assetImages,
+    assetImagesThumb: r.assetImagesThumb,
     qrCode: null, // regenerate fresh to avoid collisions
   }));
 

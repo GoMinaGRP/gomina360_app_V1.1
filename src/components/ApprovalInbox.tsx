@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, XCircle, ShieldCheck, Clock, Trash2, Plus, ChevronDown, ChevronRight, Receipt, X } from "lucide-react";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
-import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrls } from "@/lib/imageOptimize";
+import { describeRejection, PHOTO_LIMITS, prepareImages } from "@/lib/imageOptimize";
 
 const ACTION_LABEL: Record<string, string> = {
   EXPENSE: "Expense",
@@ -68,6 +68,8 @@ export default function ApprovalInbox({
   const [postPaymentMethod, setPostPaymentMethod] = useState("CASH");
   const [postDate, setPostDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [postReceipts, setPostReceipts] = useState<string[]>([]);
+  /** Refused-file reasons for the disburse attachment (shown under the picker). */
+  const [receiptErr, setReceiptErr] = useState("");
   const [postBusy, setPostBusy] = useState(false);
   const [postSuccessNotice, setPostSuccessNotice] = useState<string | null>(null);
 
@@ -130,17 +132,12 @@ export default function ApprovalInbox({
   const handlePostReceiptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    const picked = Array.from(files).filter((f) => f.size <= MAX_SOURCE_IMAGE_BYTES);
-    if (picked.length !== files.length) alert("Some files were too large to process (max 20MB each).");
-    if (picked.length === 0) {
-      e.target.value = "";
-      return;
-    }
     try {
-      const urls = await optimizedDataUrls(picked, "receipt");
-      setPostReceipts((prev) => [...prev, ...urls]);
+      const result = await prepareImages(files, "receipt", { max: PHOTO_LIMITS.receipt, existing: postReceipts.length });
+      if (result.images.length > 0) setPostReceipts((prev) => [...prev, ...result.images.map((r) => r.dataUrl)]);
+      if (result.rejected.length > 0) setReceiptErr(describeRejection(result));
     } catch {
-      alert("One or more receipts could not be processed — try another image.");
+      setReceiptErr("One or more receipts could not be processed — try another image.");
     } finally {
       e.target.value = "";
     }
@@ -709,6 +706,9 @@ export default function ApprovalInbox({
                     data-testid="disburse-file-input"
                   />
                 </label>
+                {receiptErr && (
+                  <p className="text-[10px] text-rose-400 mt-1" data-testid="disburse-file-error">{receiptErr}</p>
+                )}
               </div>
 
               <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-2.5 text-[11px] text-slate-300">

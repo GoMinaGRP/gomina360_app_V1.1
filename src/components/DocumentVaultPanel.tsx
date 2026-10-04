@@ -113,10 +113,10 @@ export default function DocumentVaultPanel({
   const pickFile = () => fileRef.current?.click();
 
   /**
-   * Vault upload. Images are optimized in the browser first (≤2000px q0.88 —
-   * scans/attachments keep their text detail while a 6 MB capture lands
-   * around 400 KB), so the vault's 2.5 MB stored-file rule no longer rejects
-   * ordinary phone photos. PDFs are never touched: the server-side
+   * Vault upload. Images are optimized in the browser first (≤2800px q0.85 —
+   * scans/attachments keep their text detail, ≈240 DPI on A4, while a 6 MB
+   * capture lands around 335 KB), so the vault's 2.5 MB stored-file rule
+   * never rejects an ordinary phone photo. PDFs are never touched: the server-side
    * `validateDocUpload` still enforces the real format + size limits.
    */
   const onFile = async (f: File | null) => {

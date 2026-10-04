@@ -7,7 +7,7 @@ import QrScanModal from "./QrScanModal";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { buildAssetQr } from "@/lib/qrRegistry";
 import { displayCategory } from "@/lib/businessTypeKeys";
-import { MAX_SOURCE_IMAGE_BYTES, optimizedDataUrls } from "@/lib/imageOptimize";
+import { describeRejection, PHOTO_LIMITS, prepareImages } from "@/lib/imageOptimize";
 
 interface AssetRegistrationModalProps {
   isOpen: boolean;
@@ -91,6 +91,9 @@ export default function AssetRegistrationModal({
   const [assetType, setAssetType] = useState("MACHINERY");
   const [customAssetType, setCustomAssetType] = useState("");
   const [assetImages, setAssetImages] = useState<string[]>([]);
+  /** Display thumbnails (≤400px, POSITIONAL to `assetImages`) — the asset
+   *  register paints these instead of the full inspection photos. */
+  const [assetImageThumbs, setAssetImageThumbs] = useState<string[]>([]);
   const [recordedAtPreview, setRecordedAtPreview] = useState(new Date());
   const [purchasePrice, setPurchasePrice] = useState<string>("25000");
   const [currentValue, setCurrentValue] = useState<string>("22500");
@@ -119,6 +122,7 @@ export default function AssetRegistrationModal({
       setAssetType("MACHINERY");
       setCustomAssetType("");
       setAssetImages([]);
+      setAssetImageThumbs([]);
       setRecordedAtPreview(new Date());
       setPurchasePrice("25000");
       setCurrentValue("22500");
@@ -238,15 +242,15 @@ export default function AssetRegistrationModal({
    *  no visible difference at any size the asset register renders. */
   const handleImageFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const picked = Array.from(files);
-    const tooBig = picked.filter((f) => f.size > MAX_SOURCE_IMAGE_BYTES);
-    if (tooBig.length > 0) {
-      setErrorMsg("One or more images are too large to process (max 20MB each).");
-      return;
-    }
     try {
-      const images = await optimizedDataUrls(picked, "asset");
-      setAssetImages((prev) => [...prev, ...images]);
+      // Shared upload policy: source guard, ≤400 KB per stored image, the
+      // 6-photo record cap, and a per-file reason for anything refused.
+      const result = await prepareImages(files, "asset", { max: PHOTO_LIMITS.asset, existing: assetImages.length });
+      if (result.images.length > 0) {
+        setAssetImages((prev) => [...prev, ...result.images.map((r) => r.dataUrl)]);
+        setAssetImageThumbs((prev) => [...prev, ...result.images.map((r) => r.thumb || "")]);
+      }
+      if (result.rejected.length > 0) setErrorMsg(describeRejection(result));
     } catch {
       setErrorMsg("One or more asset images could not be read.");
     }
@@ -313,6 +317,9 @@ export default function AssetRegistrationModal({
             recorderName: currentUser?.name || "Unknown Recorder",
             requestedByName: currentUser?.name || "Unknown Recorder",
             assetImages,
+            // POSITIONAL parallel array: index i is the thumbnail of image i
+            // (null where missing) so indices can never shift.
+            assetImagesThumb: assetImages.map((_img, i) => assetImageThumbs[i] || null),
             assetType: finalAssetType,
             purchasePriceGhs: Number(purchasePrice),
             currentValueGhs: Number(currentValue),
@@ -713,11 +720,25 @@ export default function AssetRegistrationModal({
               type="file"
               accept="image/*"
               multiple
+              data-testid="asset-photo-file"
               onChange={(e) => {
                 handleImageFiles(e.target.files);
                 e.target.value = ""; // allow re-picking the same file
               }}
               className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-purple-600 file:px-3 file:py-2 file:text-xs file:font-bold file:text-white hover:file:bg-purple-500"
+            />
+            {/* Phone-first flow: capture straight from the camera (the file
+                picker above stays for gallery/desktop uploads). */}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              data-testid="asset-photo-camera"
+              onChange={(e) => {
+                handleImageFiles(e.target.files);
+                e.target.value = "";
+              }}
+              className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-purple-700 file:px-3 file:py-2 file:text-white file:font-bold hover:file:bg-purple-600 cursor-pointer"
             />
             {assetImages.length > 0 && (
               <div className="grid grid-cols-4 gap-2">

@@ -69,6 +69,7 @@ import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 import { apiError } from "@/lib/apiError";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const MODULES = [...AUDIT_MODULES] as string[];
 
@@ -1376,10 +1377,9 @@ export async function POST(request: Request) {
     }
     const status = action === "VERIFIED" ? "VERIFIED" : action === "COMMENT" ? "INFO" : action === "CORRECTION_REQUESTED" ? "CORRECTION_REQUIRED" : "FLAGGED";
     const issueTitle = String(body.issueTitle || "").trim().slice(0, 160) || (reason || comment).slice(0, 80) || null;
+    const photoCheck = validateOptionalImage(body.evidencePhoto, "evidence", { label: "Evidence photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
     const photo = String(body.evidencePhoto || "");
-    if (photo && !photo.startsWith("data:image/")) {
-      return NextResponse.json({ success: false, error: "Evidence photo must be an image file." }, { status: 400 });
-    }
     // Route the issue to the user responsible for the record (their dashboard).
     const assignee = ISSUE_ACTIONS.includes(action) ? await resolveAssignee(rec, Number(body.assignedUserId) || null) : null;
     const priority = normPriority(body.priority);
@@ -1510,10 +1510,9 @@ export async function PATCH(request: Request) {
       }
       const note = String(body.resolution || body.note || "").trim();
       if (!note) return NextResponse.json({ success: false, error: "Describe the correction you need from the assigned user." }, { status: 400 });
+      const photoCheck = validateOptionalImage(body.evidencePhoto, "evidence", { label: "Photo" });
+      if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
       const photo = String(body.evidencePhoto || "");
-      if (photo && !photo.startsWith("data:image/")) {
-        return NextResponse.json({ success: false, error: "Photo must be an image file." }, { status: 400 });
-      }
       const [updated] = await db.update(auditReviews)
         .set({ status: "CORRECTION_REQUIRED" })
         .where(eq(auditReviews.id, row.id)).returning();

@@ -224,11 +224,53 @@ const receipt = preset("receipt");
 const evidence = preset("evidence");
 const avatar = preset("avatar");
 ok(!!product && product.edge === 1600 && product.quality === 0.82, "product photos: 1600px @ q0.82 (zoomable detail)", JSON.stringify(product));
-ok(!!document_ && document_.edge === 2000 && document_.quality >= 0.86, "documents keep extra detail: 2000px @ q0.88", JSON.stringify(document_));
-ok(!!receipt && receipt.edge >= 1600 && receipt.quality >= 0.8, "receipts stay legible: ≥1600px @ q≥0.8", JSON.stringify(receipt));
+ok(!!document_ && document_.edge === 2800 && document_.quality >= 0.85, "documents: 2800px @ q0.85 (≈240 DPI on A4 — accountant/OCR scans)", JSON.stringify(document_));
+ok(!!receipt && receipt.edge === 2400 && receipt.quality >= 0.85, "receipts: 2400px @ q0.85 (≈205 DPI — printed digits stay readable)", JSON.stringify(receipt));
 ok(!!evidence && !!avatar && evidence.edge > avatar.edge, "evidence (>avatar) sized by purpose", `${evidence?.edge} vs ${avatar?.edge}`);
 ok(/thumb:\s*\{\s*edge:\s*400/.test(optimizerSrc), "product photos generate a ≤400px display thumbnail");
 ok(/image\/gif|svg\+xml/.test(optimizerSrc), "vector/animated inputs are excluded from rasterizing");
+
+// ── 2026-10 image-upload audit: the new enforcement layers ──
+// (a) source ceiling + pass-through ceilings
+ok(/MAX_SOURCE_IMAGE_BYTES = 20 \* 1024 \* 1024/.test(optimizerSrc), "20 MB source guard (memory ceiling, not a rejection rule)");
+ok(/MAX_PASS_THROUGH_BYTES = 1\.5 \* 1024 \* 1024/.test(optimizerSrc), "SVG/animated GIF pass through only under 1.5 MB (bounded rows)");
+ok(/MAX_UNDECODABLE_BYTES = 3\.2 \* 1024 \* 1024/.test(optimizerSrc), "un-decodable formats capped at 3.2 MB (inside the 4.5 MB request ceiling)");
+ok(/UNDISPLAYABLE_MIME = new Set\(\["image\/heic", "image\/heif"\]\)/.test(optimizerSrc), "HEIC/HEIF the browser cannot decode is refused (would never display)");
+// (b) budgets + caps exported and mirrored server-side
+ok(/export const IMAGE_BYTE_BUDGETS: Record<ImagePurpose, number>/.test(optimizerSrc), "stored-byte budgets exported per purpose");
+ok(/export const PHOTO_LIMITS: Record<ImagePurpose, number>/.test(optimizerSrc), "per-record photo caps exported");
+ok(/product: 6,/.test(optimizerSrc) && /receipt: 3,/.test(optimizerSrc) && /asset: 6,/.test(optimizerSrc), "caps: 6 products, 6 assets, 3 receipts");
+// (c) WebP policy is limited to screens-only presets
+ok(/receipt: \{ maxEdge: 2400, quality: 0\.85, keepUnder: 180_000, preferWebp: true \}/.test(optimizerSrc), "receipts prefer WebP (JPEG fallback where unavailable)");
+ok(/logo: \{[^}]*preferWebp/.test(optimizerSrc) === false, "logos never use WebP (PDF/Excel embed them)");
+ok(/rasterizeVector: true/.test(optimizerSrc), "logos rasterise SVG/GIF so the crest reaches PDFs");
+// (d) server-side validator wired into every image write path
+const mediaSrc = readFileSync("src/lib/mediaValidation.ts", "utf8");
+ok(/export function validateImageDataUrl/.test(mediaSrc) && /export function validateImageArray/.test(mediaSrc), "shared server validator exists (shape + budget + cap)");
+ok(/IMAGE_BYTE_BUDGETS\[purpose\]/.test(mediaSrc), "server validator enforces the same budgets as the client");
+const guardedRoutes = [
+  "src/app/api/enterprise/route.ts",
+  "src/app/api/transactions/route.ts",
+  "src/app/api/audit/route.ts",
+  "src/app/api/audit/issues/route.ts",
+  "src/app/api/advisor-notes/route.ts",
+  "src/app/api/block-factory/route.ts",
+  "src/app/api/transport/route.ts",
+  "src/app/api/poultry/feed-mill/route.ts",
+  "src/app/api/aquaculture/feed-mill/route.ts",
+  "src/app/api/employees/route.ts",
+  "src/app/api/profile/route.ts",
+  "src/app/api/logos/route.ts",
+  "src/app/api/users/route.ts",
+  "src/app/api/assets/route.ts",
+];
+const unguarded = guardedRoutes.filter((f) => !/mediaValidation/.test(readFileSync(f, "utf8")));
+ok(unguarded.length === 0, `every image write route validates server-side (${guardedRoutes.length} routes)`, unguarded.join(", ") || "0 unguarded");
+// (e) asset thumbnails (parallel array)
+ok(/assetImagesThumb/.test(readFileSync("src/db/schema.ts", "utf8")), "assets carry a parallel thumbnail column");
+ok(/assetImagesThumb: assetThumbsArr/.test(readFileSync("src/app/api/enterprise/route.ts", "utf8")), "asset create stores the validated thumbnail array");
+ok(/assetImagesThumb: assetImages\.map\(/.test(readFileSync("src/components/AssetRegistrationModal.tsx", "utf8")), "asset form sends thumbnails positionally");
+ok(/assetImagesThumb/.test(readFileSync("src/lib/businessBackup.ts", "utf8")), "business export/restore carries asset thumbnails");
 
 // Thumbnails are POSITIONALLY aligned with photos[]: entry i belongs to
 // photos[i]. A filter() that drops empty entries shifts every later
@@ -649,8 +691,11 @@ try {
       return img || "";
     });
     const receiptInfo = await inspectDataUrl(page, receiptSrc);
-    ok(!!receiptInfo && receiptInfo.bytes < 450 * 1024, "receipt photo is compressed before upload", receiptInfo ? `${Math.round(receiptInfo.bytes / 1024)} KB` : "no preview");
-    ok(!!receiptInfo && receiptInfo.width >= 1200, "receipt keeps enough resolution to read small print", receiptInfo ? `${receiptInfo.width}×${receiptInfo.height}` : "-");
+    // The receipt budget is 700 KB (2400px ≈ 205 DPI on A4 — the resolution is
+    // what makes small print readable; WebP lands ~275 KB, the JPEG fallback
+    // ~500 KB, so the ceiling tracks the server budget).
+    ok(!!receiptInfo && receiptInfo.bytes <= 700 * 1024, "receipt photo is compressed before upload", receiptInfo ? `${Math.round(receiptInfo.bytes / 1024)} KB` : "no preview");
+    ok(!!receiptInfo && receiptInfo.width >= 2000, "receipt keeps enough resolution to read small print (≥2000px ≈ 170 DPI)", receiptInfo ? `${receiptInfo.width}×${receiptInfo.height}` : "-");
   } else {
     ok(false, "expense form opens in the Block Factory module", "bf-open-expense missing");
   }
@@ -792,6 +837,111 @@ try {
   const restoredLogo = (await q1(`select logo from businesses where id = 1`))?.logo || null;
   ok(restoredAvatar === (restore.find((r) => r.column === "avatar_url")?.value ?? null), "the mutated avatar was restored to its original value");
   ok(restoredLogo === (restore.find((r) => r.column === "logo")?.value ?? null), "the mutated logo was restored to its original value");
+/* ══════════════════════════════════════════════════════════════════════════
+   C. SERVER-SIDE ENFORCEMENT (the 2026-10 audit's G1/G4/G5 fixes)
+   The browser pipeline keeps images small, but a browser is not an enforcement
+   point. Each check below posts a payload the UI would never produce and
+   asserts the API refuses it with a plain reason instead of storing it.
+   ══════════════════════════════════════════════════════════════════════════ */
+console.log("\n── C. server-side enforcement ──");
+{
+  const post = (url, body) =>
+    page.evaluate(
+      async (u, b) => {
+        const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+        let json = null;
+        try { json = await r.json(); } catch { /* non-JSON */ }
+        return { status: r.status, json };
+      },
+      url,
+      body,
+    );
+  const bigRecipe = (kb) => "data:image/jpeg;base64," + "A".repeat(Math.ceil((kb * 1024 * 4) / 3));
+  const tinyRecipe = "data:image/jpeg;base64," + Buffer.from(makePng(24, 24)).toString("base64");
+
+  // C1 — an oversized receipt (900 KB > the 700 KB receipt budget)
+  const c1 = await post("/api/transactions", {
+    businessId: created.businessId,
+    type: "EXPENSE",
+    category: "Supplies",
+    amountGhs: 5,
+    description: `${TAG} oversize receipt probe`,
+    receiptImage: bigRecipe(900),
+  });
+  ok(c1.status === 400 && /limit after optimisation/i.test(JSON.stringify(c1.json)),
+    "an oversized receipt is refused with the stored-byte limit (not stored)",
+    `${c1.status} ${JSON.stringify(c1.json)?.slice(0, 90)}`);
+
+  // C2 — more receipts than the 3-photo cap
+  const c2 = await post("/api/transactions", {
+    businessId: created.businessId,
+    type: "EXPENSE",
+    category: "Supplies",
+    amountGhs: 5,
+    description: `${TAG} receipt-cap probe`,
+    receiptImages: [tinyRecipe, tinyRecipe, tinyRecipe, tinyRecipe],
+  });
+  ok(c2.status === 400 && /at most 3 image/i.test(JSON.stringify(c2.json)),
+    "a 4th receipt photo is refused by the per-record cap",
+    `${c2.status} ${JSON.stringify(c2.json)?.slice(0, 90)}`);
+
+  // C3 — a non-image payload in an image field
+  const c3 = await post("/api/transactions", {
+    businessId: created.businessId,
+    type: "EXPENSE",
+    category: "Supplies",
+    amountGhs: 5,
+    description: `${TAG} non-image probe`,
+    receiptImage: "data:text/plain;base64,aGVsbG8=",
+  });
+  ok(c3.status === 400, "a non-image data URL is refused in a receipt field", `${c3.status}`);
+
+  // C4 — more product photos than the 6-photo cap (validated before any write)
+  const c4 = await post("/api/enterprise", {
+    entityType: "inventory",
+    data: {
+      name: `${TAG} photo-cap probe`,
+      businessId: created.businessId,
+      quantity: 1,
+      photos: [tinyRecipe, tinyRecipe, tinyRecipe, tinyRecipe, tinyRecipe, tinyRecipe, tinyRecipe],
+    },
+  });
+  ok(c4.status === 400 && /at most 6 image/i.test(JSON.stringify(c4.json)),
+    "a 7th product photo is refused by the per-record cap",
+    `${c4.status} ${JSON.stringify(c4.json)?.slice(0, 90)}`);
+
+  // C5 — a product photo over the 500 KB budget
+  const c5 = await post("/api/enterprise", {
+    entityType: "inventory",
+    data: { name: `${TAG} oversize photo probe`, businessId: created.businessId, quantity: 1, photos: [bigRecipe(600)] },
+  });
+  ok(c5.status === 400, "an oversized product photo is refused", `${c5.status}`);
+
+  // C6 — nothing above was persisted (the probes never reached the DB)
+  const probeRows = await q(`select id from transactions where description like '${TAG}%probe%'`);
+  const probeItems = await q(`select id from inventory_items where name like '${TAG}%probe%'`);
+  ok(probeRows.length === 0 && probeItems.length === 0,
+    "no refused payload reached the database",
+    `${probeRows.length} txns, ${probeItems.length} items`);
+
+  /* ── D. bootstrap slimming (/api/init) ── */
+  const initJson = await page.evaluate(async () => {
+    const r = await fetch("/api/init");
+    try { return await r.json(); } catch { return null; }
+  });
+  const data = initJson?.data || initJson || {};
+  const txns = Array.isArray(data.transactions) ? data.transactions : [];
+  const assets = Array.isArray(data.assets) ? data.assets : [];
+  const txnImages = txns.filter((t) => t.receiptImage || (Array.isArray(t.receiptImages) && t.receiptImages.length));
+  ok(txns.length > 0, "bootstrap carries the ledger", `${txns.length} rows`);
+  ok(txnImages.length === 0, "no receipt photo ships on bootstrap (counts only)", `${txnImages.length} rows with images`);
+  ok(txns.every((t) => t.receiptCount === undefined || typeof t.receiptCount === "number"), "receipt counts are published instead");
+  const assetImgs = assets.filter((a) => Array.isArray(a.assetImages) && a.assetImages.length > 1);
+  ok(assetImgs.length === 0, "assets ship at most one (thumbnail-sized) image on bootstrap", `${assetImgs.length} multi-image rows`);
+  const bootstrapBytes = JSON.stringify(data.transactions || []).length + JSON.stringify(data.assets || []).length;
+  ok(bootstrapBytes < 4 * 1024 * 1024, "ledger + assets bootstrap stays small", `${Math.round(bootstrapBytes / 1024)} KB`);
+}
+
 } catch (err) {
   fail++;
   console.error("💥 suite error:", err?.message || err);

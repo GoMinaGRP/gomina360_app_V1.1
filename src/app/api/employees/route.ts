@@ -20,6 +20,7 @@ import {
 import { canManageSharedRecords } from "@/lib/recordPermissions";
 import { apiError } from "@/lib/apiError";
 import { createEmployeeRecord, nextEmployeeNo, recordEmployeeHistory } from "@/lib/employeeCreate";
+import { validateOptionalImage, validateImageDataUrl } from "@/lib/mediaValidation";
 
 /**
  * Employee Registration — complete HR records:
@@ -226,11 +227,16 @@ export async function POST(request: Request) {
       const title = String(d.title || "").trim();
       if (!title) return NextResponse.json({ success: false, error: "Document title is required" }, { status: 400 });
       const fileData = d.fileData ? String(d.fileData) : null;
-      if (fileData && !/^(data:image\/|data:application\/pdf)/.test(fileData)) {
+      if (fileData && /^data:image\//.test(fileData)) {
+        // Images: shared validator (≤2 MB stored after the 2800px preset).
+        const imgCheck = validateImageDataUrl(fileData, "document", { label: "Document image" });
+        if (!imgCheck.ok) return NextResponse.json({ success: false, error: imgCheck.error }, { status: 400 });
+      } else if (fileData && /^data:application\/pdf/.test(fileData)) {
+        if (fileData.length > 3_500_000) {
+          return NextResponse.json({ success: false, error: "File too large — keep it under about 2.5MB." }, { status: 400 });
+        }
+      } else if (fileData) {
         return NextResponse.json({ success: false, error: "Only images or PDF files are accepted." }, { status: 400 });
-      }
-      if (fileData && fileData.length > 3_500_000) {
-        return NextResponse.json({ success: false, error: "File too large — keep it under about 2.5MB." }, { status: 400 });
       }
       const [row] = await db
         .insert(employeeDocuments)
@@ -270,10 +276,11 @@ export async function POST(request: Request) {
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId));
     if (!biz) return NextResponse.json({ success: false, error: "Business not found" }, { status: 404 });
 
+    // Employee photo: shared validation (shape + ≤120 KB stored budget — the
+    // browser re-encodes to ≤480px / ~45 KB).
+    const photoCheck = validateOptionalImage(d.photo, "employeePhoto", { label: "Photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
     const photo = d.photo ? String(d.photo) : null;
-    if (photo && (!photo.startsWith("data:image/") || photo.length > 1_800_000)) {
-      return NextResponse.json({ success: false, error: "Photo must be an image under about 1.5MB." }, { status: 400 });
-    }
 
     // Employee number: use the given one if free, else auto-generate.
     let employeeNo = String(d.employeeNo || "").trim().toUpperCase();
@@ -377,10 +384,9 @@ export async function PATCH(request: Request) {
     // Photo update (upload or camera capture)
     let photoChanged = false;
     if (d.photo !== undefined) {
+      const photoCheck = validateOptionalImage(d.photo, "employeePhoto", { label: "Photo" });
+      if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
       const photo = d.photo ? String(d.photo) : null;
-      if (photo && (!photo.startsWith("data:image/") || photo.length > 1_800_000)) {
-        return NextResponse.json({ success: false, error: "Photo must be an image under about 1.5MB." }, { status: 400 });
-      }
       updates.photo = photo;
       photoChanged = true;
     }

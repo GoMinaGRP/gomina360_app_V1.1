@@ -21,6 +21,7 @@ import {
 import { backfillUserNotifications, businessIdsForUser } from "@/lib/notify";
 import crypto from "crypto";
 import { apiError } from "@/lib/apiError";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const stripSecret = (u: any) => {
   const {
@@ -119,6 +120,14 @@ export async function POST(request: Request) {
       extraAccessIds,
       businessManageIds,
     } = body;
+
+    // A data-URL avatar (Users & Access upload) is validated centrally; the
+    // default remote Unsplash URL passes through untouched.
+    if (typeof avatarUrl === "string" && avatarUrl.startsWith("data:")) {
+      const avatarCheck = validateOptionalImage(avatarUrl, "avatar", { label: "Avatar" });
+      if (!avatarCheck.ok) return NextResponse.json({ success: false, error: avatarCheck.error }, { status: 400 });
+    }
+    const avatarValue = typeof avatarUrl === "string" && avatarUrl.startsWith("data:") ? avatarUrl : (avatarUrl || null);
 
     if (!name || !email || !role) {
       return NextResponse.json(
@@ -279,7 +288,7 @@ export async function POST(request: Request) {
         assignedBusinessId: assignedBusinessId ? Number(assignedBusinessId) : null,
         phone: phone || "+233 24 000 0000",
         avatarUrl:
-          avatarUrl ||
+          avatarValue ||
           "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop",
         region: region || null,
         district: district || null,

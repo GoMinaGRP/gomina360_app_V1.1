@@ -12,6 +12,7 @@ import { getSessionInfo, canAccessBusiness, FORBIDDEN, UNAUTHENTICATED } from "@
 import { apiError } from "@/lib/apiError";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
+import { validateImageArray, validateOptionalImage } from "@/lib/mediaValidation";
 
 export async function GET(request: Request) {
   try {
@@ -98,6 +99,14 @@ export async function POST(request: Request) {
         "You do not have permission to record expenses. Ask the OWNER to enable 'can record expenses' for your account."
       );
     }
+
+    // Receipt photos: shared validation (shape + stored-byte budget + cap).
+    // The client already optimises to ≤700 KB / 3 photos; this stops anything
+    // else from writing an unbounded blob into the ledger.
+    const receiptOne = validateOptionalImage(body?.receiptImage, "receipt", { label: "Receipt photo" });
+    if (!receiptOne.ok) return NextResponse.json({ success: false, error: receiptOne.error }, { status: 400 });
+    const receiptMany = validateImageArray(body?.receiptImages, "receipt", { label: "Receipt photos" });
+    if (!receiptMany.ok) return NextResponse.json({ success: false, error: receiptMany.error }, { status: 400 });
 
     // Route all EXPENSE transactions through centralized postOrGateExpenseTransaction
     if (String(type).toUpperCase() === "EXPENSE") {

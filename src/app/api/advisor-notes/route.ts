@@ -60,6 +60,7 @@ import {
   type NoteAnalysis,
 } from "@/lib/dailyNotesAi";
 import { aquacultureFeedLogs, aquacultureHarvests, aquacultureWaterQualityLogs, poultryFeedLogs, poultryWeightLogs } from "@/db/schema";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const STAFF_NOTE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -444,7 +445,11 @@ export async function POST(request: Request) {
     if (followUpDueDate && !DATE_RE.test(followUpDueDate)) {
       return NextResponse.json({ success: false, error: "followUpDueDate must be YYYY-MM-DD." }, { status: 400 });
     }
-    const photo = typeof body?.photo === "string" && body.photo.startsWith("data:image/") ? body.photo.slice(0, 1_500_000) : null;
+    const photoCheck = validateOptionalImage(body?.photo, "evidence", { label: "Note photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
+    // No silent truncation: an oversized photo is refused with a reason, never
+    // cut in half (which used to store an unreadable data URL).
+    const photo = typeof body?.photo === "string" && body.photo.startsWith("data:image/") ? body.photo : null;
 
     // Optional flock / batch / record links — validated against the unit.
     const flockId = body?.flockId ? Number(body.flockId) : null;
@@ -626,7 +631,11 @@ export async function PATCH(request: Request) {
       if (text.length < 2) {
         return NextResponse.json({ success: false, error: "Write a short response first." }, { status: 400 });
       }
-      const photo = typeof body?.photo === "string" && body.photo.startsWith("data:image/") ? body.photo.slice(0, 1_500_000) : null;
+      const photoCheck = validateOptionalImage(body?.photo, "evidence", { label: "Note photo" });
+    if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
+    // No silent truncation: an oversized photo is refused with a reason, never
+    // cut in half (which used to store an unreadable data URL).
+    const photo = typeof body?.photo === "string" && body.photo.startsWith("data:image/") ? body.photo : null;
       await db.insert(advisorNoteUpdates).values({
         noteId: id,
         actorUserId: actor.id,

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 /**
  * My Profile — self-service profile data for the SIGNED-IN user.
@@ -17,11 +18,11 @@ import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
  *   change THEIR OWN photo: the session decides whose row is updated.
  */
 
-const MAX_PHOTO_CHARS = 700_000; // ~500KB base64 — far above the ~60KB client target
 // Accept ANY common image format (JPEG, PNG, WebP, GIF, BMP, AVIF, HEIC,
-// SVG, TIFF, ICO, …) — no needless format allow-list; we only verify the
-// payload really is a base64 data-URL image.
-const PHOTO_RE = /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i;
+// SVG, TIFF, ICO, …) — no needless format allow-list. The shared validator
+// enforces the data-URL shape plus the avatar stored-byte budget (300 KB,
+// far above the ~24 KB the browser produces for a 320px crop; alpha avatars
+// re-encode to PNG, which is why the budget has PNG headroom).
 
 export async function PUT(request: NextRequest) {
   ttlInvalidate("init");
@@ -32,19 +33,9 @@ export async function PUT(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const photo = body.photo;
 
-    if (photo !== null && photo !== undefined) {
-      if (typeof photo !== "string" || !PHOTO_RE.test(photo)) {
-        return NextResponse.json(
-          { success: false, error: "Photo must be an image file." },
-          { status: 400 },
-        );
-      }
-      if (photo.length > MAX_PHOTO_CHARS) {
-        return NextResponse.json(
-          { success: false, error: "Photo is too large — please use an image under ~500 KB." },
-          { status: 413 },
-        );
-      }
+    const photoCheck = validateOptionalImage(photo, "avatar", { label: "Photo" });
+    if (!photoCheck.ok) {
+      return NextResponse.json({ success: false, error: photoCheck.error }, { status: 413 });
     }
 
     const value = photo ?? null;

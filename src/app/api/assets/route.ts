@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { validateImageArray, THUMB_BUDGET_BYTES } from "@/lib/mediaValidation";
 
 async function hasApprovedPermission(
   assetId: number,
@@ -85,6 +86,21 @@ export async function PATCH(request: Request) {
         town: updates.town || biz.town,
       };
     }
+    // Image updates are validated centrally when supplied (shape + budget +
+    // cap); an omitted field keeps the stored value untouched.
+    const imgCheck = validateImageArray(updates?.assetImages, "asset", { label: "Asset photo" });
+    if (!imgCheck.ok) return NextResponse.json({ success: false, error: imgCheck.error }, { status: 400 });
+    const thumbCheck = validateImageArray(updates?.assetImagesThumb, "asset", {
+      label: "Asset thumbnail",
+      max: 6,
+      maxBytes: THUMB_BUDGET_BYTES,
+      allowNulls: true,
+    });
+    if (!thumbCheck.ok) return NextResponse.json({ success: false, error: thumbCheck.error }, { status: 400 });
+    const assetImagesValue = Array.isArray(updates?.assetImages)
+      ? updates.assetImages.filter((p: any) => typeof p === "string" && p.length > 0)
+      : asset.assetImages;
+    const assetThumbsValue = Array.isArray(updates?.assetImagesThumb) ? updates.assetImagesThumb : null;
 
     const [updated] = await db
       .update(assets)
@@ -96,7 +112,9 @@ export async function PATCH(request: Request) {
         condition: updates?.condition ?? asset.condition,
         location: updates?.location ?? asset.location,
         nextMaintenanceDate: updates?.nextMaintenanceDate ?? asset.nextMaintenanceDate,
-        assetImages: Array.isArray(updates?.assetImages) ? updates.assetImages : asset.assetImages,
+        assetImages: assetImagesValue,
+        assetImagesThumb:
+          updates?.assetImagesThumb !== undefined ? assetThumbsValue : asset.assetImagesThumb,
         ...businessPatch,
       })
       .where(eq(assets.id, Number(assetId)))

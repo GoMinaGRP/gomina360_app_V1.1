@@ -604,6 +604,12 @@ export const assets = pgTable("assets", {
   recorderName: text("recorder_name"), // name of the user who recorded the asset
   recordedAt: timestamp("recorded_at").defaultNow(), // automatic date/time stamp
   assetImages: jsonb("asset_images"), // array of uploaded image data URLs / URLs
+  /** Display thumbnails (≤400px) parallel to `assetImages` — grids/modals paint
+   *  these (~20 KB) instead of the full inspection photos (~260 KB). POSITIONAL
+   *  like the inventory thumbnails: null where a thumbnail is missing, so an
+   *  index never shifts onto the wrong image. NULL for legacy rows (readers
+   *  fall back to `assetImages`). */
+  assetImagesThumb: jsonb("asset_images_thumb"),
   /** QR identity tag — globally unique when set; scanned or auto-generated at
    *  registration and printed on the asset tag. */
   qrCode: text("qr_code"),

@@ -45,21 +45,22 @@ import { businessManageIdsOf } from "@/lib/permissions";
 import { businessTypeKeyOf, businessTypeLabelOf, displayCategory } from "@/lib/businessTypeKeys";
 
 import WatermarkOverlay from "@/components/WatermarkOverlay";
-import { optimizeImage } from "@/lib/imageOptimize";
+import { optimizedDataUrl } from "@/lib/imageOptimize";
 
 /**
  * Branding logos (≤512px, shared optimizer preset `logo`).
  *
- * Two improvements over the previous local helper: transparency is PRESERVED
- * (the old JPEG-only path flattened transparent logos onto black, which looked
- * broken on the dark sidebar and in document headers), and the size/quality
- * now come from the same preset every other upload uses, so letterhead logos
- * stay crisp while staying small.
+ * Three properties of the shared pipeline matter here:
+ *   • transparency is PRESERVED (PNG) — the old JPEG-only path flattened
+ *     transparent logos onto black on the dark sidebar and in letterheads;
+ *   • SVG/GIF are RASTERIZED for this purpose: the PDF/Excel exporters embed
+ *     the logo, and jsPDF cannot embed SVG — an SVG crest used to upload fine
+ *     and then silently vanish from every invoice;
+ *   • a refused file (over the pass-through ceiling) throws with the reason,
+ *     which the caller shows instead of saving an empty logo.
  */
 async function logoFileToDataUrl(file: File | Blob): Promise<string> {
-  // Vector (SVG) and animated GIF logos are returned untouched by the
-  // pipeline — rasterizing them would only make them worse.
-  return (await optimizeImage(file, "logo")).dataUrl;
+  return optimizedDataUrl(file, "logo");
 }
 
 const CATEGORIES = [
@@ -707,14 +708,26 @@ export default function ManageBusinessesModal({
   };
 
   const uploadCompanyLogo = async (file: File) => {
-    const logo = await logoFileToDataUrl(file);
+    let logo = "";
+    try {
+      logo = await logoFileToDataUrl(file);
+    } catch (err: any) {
+      setError(err?.message || "That image could not be processed — try another file.");
+      return;
+    }
     if (await postLogo({ action: "SET_COMPANY_LOGO", logo })) {
       setNotice("GoMina company logo saved — it now appears on every document whose business/branch has no own logo.");
     }
   };
 
   const uploadBusinessLogo = async (bizId: number, bizName: string, file: File) => {
-    const logo = await logoFileToDataUrl(file);
+    let logo = "";
+    try {
+      logo = await logoFileToDataUrl(file);
+    } catch (err: any) {
+      setError(err?.message || "That image could not be processed — try another file.");
+      return;
+    }
     if (await postLogo({ action: "SET_BUSINESS_LOGO", businessId: bizId, logo })) {
       setNotice(`"${bizName}" logo saved — it now heads this business's invoices, receipts, quotations, payslips and reports.`);
     }
@@ -2027,7 +2040,13 @@ export default function ManageBusinessesModal({
                         onChange={async (e) => {
                           const f = e.target.files?.[0];
                           e.target.value = "";
-                          if (f) setBranchLogoFile(await logoFileToDataUrl(f));
+                          if (!f) return;
+                          try {
+                            setError("");
+                            setBranchLogoFile(await logoFileToDataUrl(f));
+                          } catch (err: any) {
+                            setError(err?.message || "That image could not be processed — try another file.");
+                          }
                         }}
                       />
                     </label>

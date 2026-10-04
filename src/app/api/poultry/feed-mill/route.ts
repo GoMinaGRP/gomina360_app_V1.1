@@ -49,6 +49,7 @@ import { nextTrxNumber } from "@/lib/idNumbers";
  */
 
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 const RAW_CATEGORY = "Feed Raw Materials";
 /** The shared taxonomy may store the umbrella category with this wording in
@@ -549,6 +550,10 @@ export async function POST(request: NextRequest) {
       const testName = String(data.testName || "").trim().slice(0, 120);
       if (!testName) return NextResponse.json({ success: false, error: "Test name is required." }, { status: 400 });
       const passFail = String(data.passFail || "PASS").toUpperCase();
+      const qcCheck = validateOptionalImage(data.photo, "evidence", { label: "QC photo" });
+      if (!qcCheck.ok) return NextResponse.json({ success: false, error: qcCheck.error }, { status: 400 });
+      const qcPhoto = typeof data.photo === "string" && data.photo ? data.photo : null;
+
       const [row] = await db.insert(poultryFeedQcChecks).values({
         businessId, branchCode,
         batchId: batch?.id ?? null,
@@ -565,7 +570,7 @@ export async function POST(request: NextRequest) {
         textureGrade: data.textureGrade || null,
         contaminantsNote: data.contaminantsNote || null,
         notes: data.notes || null,
-        photo: data.photo || null,
+        photo: qcPhoto,
         testerName: data.testerName || me.name || null,
         testerRole: data.testerRole || me.role || null,
         recordedByName: me.name || null,

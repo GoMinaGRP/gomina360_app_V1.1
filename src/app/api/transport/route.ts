@@ -40,6 +40,7 @@ import {
 } from "@/lib/transport";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -968,6 +969,10 @@ export async function POST(request: NextRequest) {
           finalNotes = finalNotes ? `${finalNotes}\n${customBlock}` : customBlock;
         }
 
+        const checklistCheck = validateOptionalImage(body.photo, "evidence", { label: "Checklist photo" });
+        if (!checklistCheck.ok) return NextResponse.json({ success: false, error: checklistCheck.error }, { status: 400 });
+        const checklistPhoto = body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null;
+
         const [row] = await db.insert(transportVehicleChecklists).values({
           businessId, branchCode: biz.code, ownerId,
           vehicleId, tripId: body.tripId ? Number(body.tripId) : null,
@@ -978,7 +983,7 @@ export async function POST(request: NextRequest) {
           fireExtinguisherOk: bool("fireExtinguisherOk"), firstAidOk: bool("firstAidOk"),
           documentationOk: bool("documentationOk"), cleaningOk: bool("cleaningOk"),
           notes: finalNotes || null,
-          photo: body.photo && String(body.photo).startsWith("data:image/") ? String(body.photo) : null,
+          photo: checklistPhoto,
           userName: user.name, userRole: user.role,
           employeeId: body.employeeId ? Number(body.employeeId) : null,
         }).returning();

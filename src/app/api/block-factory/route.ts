@@ -30,6 +30,7 @@ import { insertDailyEntries, toggleChecklistEntry } from "@/lib/checklistGen";
 import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
+import { validateOptionalImage } from "@/lib/mediaValidation";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -622,6 +623,13 @@ export async function POST(request: NextRequest) {
         densityKgm3: num(data.densityKgm3),
       });
 
+      // QC evidence photo: validated centrally (size + shape) — see
+      // src/lib/mediaValidation.ts. Oversized/corrupt images are refused with
+      // a plain reason instead of being stored as-is.
+      const qcCheck = validateOptionalImage(data.photo, "evidence", { label: "QC photo" });
+      if (!qcCheck.ok) return NextResponse.json({ success: false, error: qcCheck.error }, { status: 400 });
+      const qcPhoto = typeof data.photo === "string" && data.photo ? data.photo : null;
+
       const [row] = await db.insert(blockQcChecks).values({
         businessId,
         branchCode: data.branchCode || batchRow?.branchCode || mixRow?.branchCode || branchCode,
@@ -648,7 +656,7 @@ export async function POST(request: NextRequest) {
         curingDays: num(data.curingDays) === null ? null : Math.round(num(data.curingDays)!),
         rejectedBlocks: Math.max(0, Math.round(num(data.rejectedBlocks) || 0)),
         notes: data.notes || null,
-        photo: data.photo || null,
+        photo: qcPhoto,
         testedAt: data.testedAt ? new Date(data.testedAt) : new Date(),
         testerName: data.testerName || __authSession.user?.name || null,
         testerRole: data.testerRole || __authSession.user?.role || null,

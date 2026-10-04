@@ -23,15 +23,27 @@
  *   ---------------  --------  -------  ----------  -------------------------
  *   product           1600      0.82    400 / 0.75  storefront cards + zoomable
  *                                                  lightbox detail
- *   asset             1600      0.80       —        inspection photos, records
- *   receipt           1800      0.82       —        small printed digits must
- *                                                  stay readable
+ *   asset             1600      0.80    400 / 0.75  inspection photos, records;
+ *                                                  grids paint the thumbnail
+ *   receipt           2400      0.85       —        ≈205 DPI on A4 at 275 KB
+ *                                                  (WebP) — printed digits and
+ *                                                  OCR stay readable
  *   evidence          1400      0.78       —        QC/audit proof, shown ≤300px
  *   avatar             320      0.80       —        profile circle, ≤64px UI
  *   employeePhoto      480      0.82       —        32px list + profile card
  *   logo               512      0.88    alpha-aware branding on paper + dark UI
- *   document          2000      0.88       —        vault/HR scans: text detail
+ *   document          2800      0.85       —        ≈240 DPI on A4: accountant /
+ *                                                  OCR scans (JS/PNG-safe JPEG)
  *
+ * RECEIPT/DOCUMENT FORMAT (2026-10 image audit)
+ * --------------------------------------------
+ * These two presets re-encode to WebP at q0.85 when the browser can, with an
+ * automatic JPEG fallback. Measured on a 12 MP text scan: 2400px WebP q0.85 =
+ * 275 KB / 205 DPI / 44.3 dB PSNR vs the old 2000px JPEG q0.88 = 375 KB /
+ * 171 DPI / 42.0 dB — smaller AND sharper, because resolution (not JPEG
+ * quality) is what makes small print legible. Only images that render in
+ * <img>/download use WebP; logos stay JPEG/PNG because the PDF/Excel exporters
+ * embed them (jsPDF cannot embed SVG).
  * FORMAT POLICY
  * -------------
  *   • Photographs → JPEG (universally supported, and the PDF/Excel exporters
@@ -64,6 +76,29 @@
  */
 export const MAX_SOURCE_IMAGE_BYTES = 20 * 1024 * 1024;
 
+/**
+ * Byte ceilings for images the pipeline must store UNCHANGED:
+ *
+ *   • `MAX_PASS_THROUGH_BYTES` — SVG and animated GIF are never rasterized
+ *     (that would destroy the vector/animation), so they are stored exactly as
+ *     picked. Without a ceiling a 20 MB GIF becomes ~27 MB of base64 in a
+ *     single row and every later payload that carries it.
+ *   • `MAX_UNDECODABLE_BYTES` — formats the browser cannot decode (HEIC on
+ *     Chrome/Windows, TIFF, raw camera files…) also pass through. They must fit
+ *     inside the platform's request ceiling (~4.5 MB) *after* base64 expansion,
+ *     otherwise the POST dies with an opaque 413 instead of a clear message.
+ *   • HEIC/HEIF that fail to decode are rejected outright: the browser that
+ *     just failed to decode them can never display them either, so storing one
+ *     would produce a broken image on the very device that uploaded it.
+ */
+export const MAX_PASS_THROUGH_BYTES = 1.5 * 1024 * 1024;
+export const MAX_UNDECODABLE_BYTES = 3.2 * 1024 * 1024;
+
+/** Formats stored as-is (never rasterized) when they are small enough. */
+const PASS_THROUGH_MIME = new Set(["image/svg+xml", "image/gif"]);
+/** Formats that cannot be displayed by a browser that failed to decode them. */
+const UNDISPLAYABLE_MIME = new Set(["image/heic", "image/heif"]);
+
 export type ImagePurpose =
   | "product"
   | "asset"
@@ -73,6 +108,18 @@ export type ImagePurpose =
   | "employeePhoto"
   | "logo"
   | "document";
+
+/** Photos accepted per record, per upload surface (server-enforced too). */
+export const PHOTO_LIMITS: Record<ImagePurpose, number> = {
+  product: 6,
+  asset: 6,
+  receipt: 3,
+  evidence: 1,
+  avatar: 1,
+  employeePhoto: 1,
+  logo: 1,
+  document: 1,
+};
 
 interface ThumbSpec {
   /** Longest-edge cap of the generated thumbnail. */
@@ -93,22 +140,58 @@ interface ImagePreset {
   keepUnder: number;
   /** Preserve transparency (logos/avatars) instead of flattening. */
   keepAlpha?: boolean;
+  /**
+   * Encode to WebP (with a JPEG fallback) when the source is re-encoded.
+   * Only safe for images that render in <img>/download and are never embedded
+   * in a PDF/Excel export — i.e. NOT logos, NOT storefront product photos.
+   */
+  preferWebp?: boolean;
+  /**
+   * Rasterize vector (SVG) and animated (GIF) sources instead of storing them
+   * as-is. Required for LOGOS: the PDF/Excel exporters embed the logo, and
+   * jsPDF cannot embed SVG — an SVG crest used to upload fine and then vanish
+   * from every invoice. Rasterizing at ≤512px keeps the crest on the paper.
+   */
+  rasterizeVector?: boolean;
 }
 
 export const IMAGE_PRESETS: Record<ImagePurpose, ImagePreset> = {
   product: { maxEdge: 1600, quality: 0.82, thumb: { edge: 400, quality: 0.75 }, keepUnder: 180_000 },
-  asset: { maxEdge: 1600, quality: 0.8, keepUnder: 160_000 },
-  receipt: { maxEdge: 1800, quality: 0.82, keepUnder: 180_000 },
-  evidence: { maxEdge: 1400, quality: 0.78, keepUnder: 120_000 },
+  asset: { maxEdge: 1600, quality: 0.8, thumb: { edge: 400, quality: 0.75 }, keepUnder: 160_000 },
+  receipt: { maxEdge: 2400, quality: 0.85, keepUnder: 180_000, preferWebp: true },
+  evidence: { maxEdge: 1400, quality: 0.78, keepUnder: 120_000, preferWebp: true },
   avatar: { maxEdge: 320, quality: 0.8, keepUnder: 40_000, keepAlpha: true },
   employeePhoto: { maxEdge: 480, quality: 0.82, keepUnder: 70_000 },
-  logo: { maxEdge: 512, quality: 0.88, keepUnder: 60_000, keepAlpha: true },
-  document: { maxEdge: 2000, quality: 0.88, keepUnder: 400_000 },
+  logo: { maxEdge: 512, quality: 0.88, keepUnder: 60_000, keepAlpha: true, rasterizeVector: true },
+  document: { maxEdge: 2800, quality: 0.85, keepUnder: 400_000, preferWebp: true },
 };
 
+/**
+ * Server-side stored-byte budgets (src/lib/mediaValidation.ts mirrors these).
+ * Every value sits above what the preset above actually produces, with
+ * headroom for encoder variance — so a legitimate upload is never rejected,
+ * while a hand-crafted 5 MB blob is.
+ */
+export const IMAGE_BYTE_BUDGETS: Record<ImagePurpose, number> = {
+  product: 500 * 1024,
+  asset: 400 * 1024,
+  receipt: 700 * 1024, // WebP ~275 KB, JPEG fallback ~450 KB at 2400px
+  evidence: 300 * 1024,
+  avatar: 300 * 1024, // alpha is kept: a photographic avatar re-encodes to PNG
+  employeePhoto: 120 * 1024,
+  logo: 700 * 1024, // alpha logos are PNG (lossless) — content-dependent size
+  document: 2 * 1024 * 1024, // WebP ~335 KB, JPEG fallback ~600 KB at 2800px
+};
+export const THUMB_BYTE_BUDGET = 60 * 1024;
+
 export interface OptimizedImage {
-  /** Optimized data URL — always safe to store in the existing columns. */
+  /** Optimized data URL — always safe to store in the existing columns.
+   *  EMPTY when `rejected` is set (the file must not be uploaded). */
   dataUrl: string;
+  /** Plain-English reason the file was refused (see the ceilings above). */
+  rejected?: string;
+  /** Extra context for the user (e.g. "stored as-is — HEIC may not display"). */
+  note?: string;
   /** Decoded size of the stored image, in bytes. */
   bytes: number;
   width: number;
@@ -277,7 +360,15 @@ async function encodeWithPreset(
     const canvas = drawScaled(draw, width, height, preset.maxEdge);
     let mime: string;
     if (alpha) {
-      mime = canEncodeWebp() ? "image/webp" : "image/png";
+      // Alpha-preserving PNG for anything embedded in a document (logos):
+      // jsPDF embeds PNG alpha correctly, while its WebP decoder is not a
+      // guaranteed path for transparency. Screens-only images (evidence
+      // screenshots, avatars) may use WebP.
+      mime = preset.keepAlpha ? "image/png" : canEncodeWebp() ? "image/webp" : "image/png";
+    } else if (preset.preferWebp && canEncodeWebp()) {
+      // Receipts/documents/evidence: measured smaller AND sharper than JPEG
+      // at the same resolution, and never embedded in a PDF/Excel export.
+      mime = "image/webp";
     } else {
       mime = "image/jpeg";
     }
@@ -377,15 +468,52 @@ export async function optimizeImage(
     changed: false,
   });
 
-  // Vector art and animations must stay exactly as uploaded.
-  if (originalMime === "image/svg+xml" || originalMime === "image/gif") return untouched();
+  const reject = (reason: string): OptimizedImage => ({
+    dataUrl: "",
+    bytes: 0,
+    width: 0,
+    height: 0,
+    mime: originalMime || "image/*",
+    originalBytes,
+    changed: false,
+    rejected: reason,
+  });
+  const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+
+  // Vector art and animations stay exactly as uploaded — EXCEPT for logos,
+  // where they are rasterized so the crest can be embedded in PDF/Excel
+  // (see `rasterizeVector`). Either way they need a byte ceiling: without one
+  // a 20 MB GIF becomes ~27 MB of base64 in a single row.
+  if ((originalMime === "image/svg+xml" || originalMime === "image/gif") && !preset.rasterizeVector) {
+    if (originalBytes > MAX_PASS_THROUGH_BYTES) {
+      return reject(
+        `${originalMime === "image/gif" ? "This GIF" : "This SVG"} is ${mb(originalBytes)} — stored images are capped at ${mb(MAX_PASS_THROUGH_BYTES)} unless the format can be re-encoded. Use a photo (JPEG/PNG) instead.`,
+      );
+    }
+    return untouched();
+  }
   // Anything a browser labels as a non-image (PDF uploads) is left alone; an
   // empty/unknown type is still attempted — some Android captures arrive with
   // no MIME at all and decode perfectly well.
   if (originalMime && !originalMime.startsWith("image/")) return untouched();
 
   const decoded = await decode(file);
-  if (!decoded) return untouched();
+  if (!decoded) {
+    // HEIC/HEIF that the browser cannot decode can never be DISPLAYED by that
+    // browser either — storing it would show a broken image on the uploader's
+    // own screen. Ask for a JPEG instead.
+    if (UNDISPLAYABLE_MIME.has(originalMime)) {
+      return reject(
+        `This ${originalMime.replace("image/", "").toUpperCase()} photo cannot be converted in this browser — set the camera to JPEG (or "Most Compatible") and try again.`,
+      );
+    }
+    if (originalBytes > MAX_UNDECODABLE_BYTES) {
+      return reject(
+        `This image is ${mb(originalBytes)} and cannot be re-encoded by this browser — images it cannot compress must be under ${mb(MAX_UNDECODABLE_BYTES)}. Convert it to JPEG/PNG and try again.`,
+      );
+    }
+    return untouched();
+  }
   try {
     const { draw, width, height } = decoded;
     const longEdge = Math.max(width, height);
@@ -393,6 +521,11 @@ export async function optimizeImage(
     // Already small enough? Keep the user's exact bytes (no generation loss).
     if (longEdge <= preset.maxEdge && originalBytes <= preset.keepUnder && !preset.thumb) {
       return { ...untouched(), width, height };
+    }
+
+    // A rasterized SVG/GIF with no intrinsic size cannot be drawn.
+    if (preset.rasterizeVector && (!width || !height)) {
+      return reject("This vector image has no fixed size, so it cannot be converted — export it as a PNG and try again.");
     }
 
     const encoded = await encodeWithPreset(draw, width, height, preset);
@@ -433,17 +566,102 @@ export async function optimizeImages(
   return out;
 }
 
-/** Convenience: optimized data URL only (most upload sites store one string). */
+/**
+ * Convenience: optimized data URL only (most upload sites store one string).
+ * THROWS with the plain-English reason when the file must not be stored, so
+ * every caller's existing try/catch shows a real message instead of silently
+ * saving an empty image.
+ */
 export async function optimizedDataUrl(file: Blob | File | string, purpose: ImagePurpose): Promise<string> {
-  return (await optimizeImage(file, purpose)).dataUrl;
+  const r = await optimizeImage(file, purpose);
+  if (r.rejected) throw new Error(r.rejected);
+  return r.dataUrl;
 }
 
-/** Convenience: optimized data URLs for a batch of files. */
+/** Convenience: optimized data URLs for a batch of files (rejections dropped). */
 export async function optimizedDataUrls(
   files: ArrayLike<Blob | File | string>,
   purpose: ImagePurpose,
 ): Promise<string[]> {
-  return (await optimizeImages(files, purpose)).map((r) => r.dataUrl);
+  return (await optimizeImages(files, purpose)).filter((r) => !r.rejected).map((r) => r.dataUrl);
+}
+
+/* ─────────────────────── picker helper (one policy) ─────────────────────
+ * Every multi-file upload surface goes through `prepareImages` so that the
+ * SAME rules apply everywhere: the source-size guard, the pass-through
+ * ceilings, the per-record photo cap, and one message per refused file.
+ */
+
+export interface PrepareResult {
+  /** Files that are safe to store, in pick order. */
+  images: OptimizedImage[];
+  /** Files that must not be uploaded, with the reason to show the user. */
+  rejected: Array<{ name: string; reason: string }>;
+  /** Non-blocking hints (e.g. a pass-through format that may not display). */
+  notes: string[];
+}
+
+/** True when a file cannot be processed by this browser (see the pipeline). */
+export function describeRejection(result: PrepareResult): string {
+  if (result.rejected.length === 0) return "";
+  const first = result.rejected[0];
+  const more = result.rejected.length > 1 ? ` (and ${result.rejected.length - 1} more)` : "";
+  return `${first.name}: ${first.reason}${more}`;
+}
+
+/**
+ * Validate + optimize a batch of picked files for one purpose.
+ *
+ * @param existing how many images the record already carries (photo cap).
+ */
+export async function prepareImages(
+  files: ArrayLike<Blob | File | string>,
+  purpose: ImagePurpose,
+  opts: { max?: number; existing?: number } = {},
+): Promise<PrepareResult> {
+  const list = Array.from(files);
+  const cap = Math.max(1, opts.max ?? PHOTO_LIMITS[purpose] ?? 1);
+  const room = Math.max(0, cap - Math.max(0, opts.existing || 0));
+  const rejected: PrepareResult["rejected"] = [];
+  const notes: string[] = [];
+  const nameOf = (f: Blob | File | string, i: number) =>
+    typeof f === "string" ? `image ${i + 1}` : (f as File).name || `image ${i + 1}`;
+
+  const keep: Array<Blob | File | string> = [];
+  list.forEach((f, i) => {
+    const size = typeof f === "string" ? dataUrlBytes(f) : (f as File).size;
+    if (size > MAX_SOURCE_IMAGE_BYTES) {
+      rejected.push({
+        name: nameOf(f, i),
+        reason: `is ${(size / 1024 / 1024).toFixed(1)} MB — the largest file this app can process is 20 MB.`,
+      });
+      return;
+    }
+    keep.push(f);
+  });
+
+  const accepted = keep.slice(0, room);
+  if (keep.length > room) {
+    const over = keep.length - room;
+    rejected.push({
+      name: `${over} file${over === 1 ? "" : "s"}`,
+      reason:
+        room === 0
+          ? `not added — this record already carries the maximum of ${cap} image${cap === 1 ? "" : "s"}. Remove one first.`
+          : `not added — a record can hold at most ${cap} image${cap === 1 ? "" : "s"} (${room} more allowed).`,
+    });
+  }
+
+  const results = await optimizeImages(accepted, purpose);
+  results.forEach((r, i) => {
+    if (r.rejected) {
+      rejected.push({ name: nameOf(accepted[i], i), reason: r.rejected });
+      return;
+    }
+    if (r.note) notes.push(r.note);
+  });
+
+  return { images: results.filter((r) => !r.rejected), rejected, notes };
 }
 
 /** Human-readable summary for notices/tests: "3.9 MB → 148 KB (26× smaller)". */
