@@ -614,7 +614,13 @@ export async function POST(request: NextRequest) {
     // Boutique variants are decremented atomically first; their item's
     // aggregate is then recomputed from the variant rows.
     for (const vu of variantUpdates) {
-      const ok = await deductVariantQty(vu.variantId, vu.qty);
+      const ok = await deductVariantQty(vu.variantId, vu.qty, {
+        businessId: Number(businessId),
+        inventoryId: vu.inventoryId,
+        reason: "SALE",
+        refType: "CREDIT_SALE",
+        note: vu.label,
+      });
       if (!ok) {
         return NextResponse.json(
           { success: false, error: `"${vu.label || "variant"}" just sold out — refresh and try again.` },

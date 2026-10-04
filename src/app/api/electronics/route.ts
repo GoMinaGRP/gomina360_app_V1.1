@@ -10,7 +10,7 @@ import {
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { applyStockChange, computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -26,11 +26,12 @@ import { linkSupplier } from "@/lib/supplierLinks";
  */
 async function fulfillElectronicsOrder(order: any, businessId: number, branchCode: string | null, actorName?: string | null, actorRole?: string | null, actorUserId?: number | null, paymentMethod?: string | null) {
   const today = new Date().toISOString().split("T")[0];
+  let stockWarning: string | null = null;
   if (order.inventoryId) {
     const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, Number(order.inventoryId)));
     if (inv) {
       // P5: ONE stock writer (clamps at zero, logs the movement).
-      await applyStockChange({
+      const applied = await applyStockChange({
         businessId: inv.businessId,
         inventoryId: inv.id,
         delta: -(Number(order.quantity) || 0),
@@ -38,6 +39,9 @@ async function fulfillElectronicsOrder(order: any, businessId: number, branchCod
         refType: "ELECTRONICS_ORDER",
         refId: Number(order.id) || null,
       });
+      // Variant products need their combination named — the delivery still
+      // completes (money + serial lifecycle) but the stock move is reported.
+      stockWarning = stockRefusal(applied);
     }
     // Mark matching in-stock serials as SOLD to this customer
     const serialRows = await db
@@ -96,7 +100,7 @@ async function fulfillElectronicsOrder(order: any, businessId: number, branchCod
       customerId: posted.customerId ?? order.customerId ?? null,
     })
     .where(eq(electronicsOrders.id, order.id));
-  return posted;
+  return { ...posted, stockWarning };
 }
 
 export async function GET(request: NextRequest) {
@@ -186,13 +190,15 @@ export async function POST(request: NextRequest) {
         .returning();
       // Orders created straight as DELIVERED complete their sale immediately
       // (stock deduction + finance + serial lifecycle).
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED") {
         const posted = await fulfillElectronicsOrder(row, businessId, branchCode, data.createdByName, data.createdByRole, data.createdByUserId, data.paymentMethod);
+        stockWarning = (posted as any).stockWarning || null;
         row.fulfilledDate = today;
         row.transactionId = posted.transaction?.id ?? null;
         row.customerId = posted.customerId ?? row.customerId;
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     // ── SERIAL: register a unit for serial number tracking ─────────────
@@ -336,7 +342,7 @@ export async function POST(request: NextRequest) {
           target = inv.find((i: any) => i.name?.toUpperCase().includes(key) || key.includes(String(i.name || "").toUpperCase().slice(0, 12)));
         }
         if (target) {
-          await applyStockChange({
+          const applied = await applyStockChange({
             businessId,
             inventoryId: target.id,
             delta: qty,
@@ -345,6 +351,8 @@ export async function POST(request: NextRequest) {
             note: data.itemName ? `Purchase: ${data.itemName}` : null,
             setCostPriceGhs: cost,
           });
+          const refusal = stockRefusal(applied);
+          if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         } else {
           const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
           let sku = `TEC-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
@@ -433,13 +441,15 @@ export async function PATCH(request: NextRequest) {
       if (!row) return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
       // Completing the delivery converts the order into a sale exactly once:
       // stock is deducted, finance records the revenue, serials become SOLD.
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED" && before?.status !== "DELIVERED" && !row.fulfilledDate) {
         const posted = await fulfillElectronicsOrder(row, row.businessId, row.branchCode, data?.actorName || row.createdByName, data?.actorRole || row.createdByRole, data?.createdByUserId, data?.paymentMethod);
+        stockWarning = (posted as any).stockWarning || null;
         row.fulfilledDate = today;
         row.transactionId = posted.transaction?.id ?? null;
         row.customerId = posted.customerId ?? row.customerId;
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     // ── WARRANTY claim lifecycle; resolving restores the linked serial ──

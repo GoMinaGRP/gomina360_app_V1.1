@@ -1,19 +1,28 @@
 import { db } from "@/db";
-import { inventoryItems, stockMovements, businesses } from "@/db/schema";
+import { inventoryItems, stockMovements } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { normalizeInventoryCategory, deriveInventorySubcategory } from "@/lib/inventoryCategories";
+import { computeStockStatus } from "@/lib/stockStatus";
+import { logStockMovement } from "@/lib/stockMovements";
+import { applyVariantDelta, variantLabelOf, variantsForItem } from "@/lib/variantStock";
 
 /**
  * Shared stock helpers — every module (production, harvest, purchases, sales)
  * funnels quantity changes through these so inventory, dashboards, alerts and
  * reports always stay in sync.
+ *
+ * TWO writers, ONE per data family (P6):
+ *   • NON-VARIANT items — this file owns `inventory_items.quantity`.
+ *   • VARIANT items (tracksVariants) — the item quantity is a DERIVED
+ *     aggregate; the size/colour rows in `src/lib/variantStock.ts` are the
+ *     truth. A write here without a `variantId` is REFUSED with a plain
+ *     message instead of silently overwriting (and later being reverted by)
+ *     the aggregate.
  */
 
-export function computeStockStatus(quantity: number, minStockThreshold: number) {
-  if (quantity <= 0) return "OUT_OF_STOCK";
-  if (quantity <= (minStockThreshold || 0)) return "LOW_STOCK";
-  return "IN_STOCK";
-}
+// The shared status rule lives in its own module so both writers can use it;
+// re-exported here for the many callers that import it from "@/lib/stock".
+export { computeStockStatus } from "@/lib/stockStatus";
 
 export const STOCK_REASONS = [
   "PRODUCTION",
@@ -49,6 +58,10 @@ export interface ApplyStockChangeOptions {
   refType?: string | null;
   refId?: number | null;
   note?: string | null;
+  /**
+   * Variant choice for a tracked item. Required for any movement on a product
+   * that has a size/colour matrix — without it the write is refused.
+   */
   variantId?: number | null;
   actor?: StockActor;
   /** Never let the quantity fall below zero (default true, the pre-P5 behaviour). */
@@ -66,6 +79,12 @@ export interface AppliedStockChange {
   deducted: number;
   added: number;
   quantityAfter: number;
+  /** True when nothing moved because the target was wrong (e.g. variant product without a choice). */
+  refused?: boolean;
+  /** Plain-language reason for a refusal (shown to the user by the caller). */
+  error?: string;
+  /** The variant row that moved, when the item tracks variants. */
+  variantId?: number | null;
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -120,6 +139,15 @@ export async function applyStockChange(opts: ApplyStockChangeOptions): Promise<A
   });
   if (!item) return empty;
 
+  // ── Variant items: the size/colour rows are the truth ────────────────
+  // `inventory_items.quantity` is only ever a DERIVED aggregate of those rows,
+  // so an item-level write here would be silently reverted by the next
+  // syncItemAggregate (a lost deduction = oversell). Route the movement to the
+  // exact combination, or refuse with a plain message.
+  if ((item as any).tracksVariants === true) {
+    return applyVariantStockChange(item, businessId, delta, opts);
+  }
+
   const current = Number(item.quantity) || 0;
   const clamp = opts.clampAtZero !== false;
   let next = r4(current + delta);
@@ -143,33 +171,21 @@ export async function applyStockChange(opts: ApplyStockChangeOptions): Promise<A
     .returning();
 
   if (opts.log !== false && delta !== 0) {
-    try {
-      let branchCode = opts.branchCode || (item as any).branchCode || null;
-      if (!branchCode) {
-        const [biz] = await db.select({ code: businesses.code }).from(businesses).where(eq(businesses.id, businessId));
-        branchCode = biz?.code || null;
-      }
-      await db.insert(stockMovements).values({
-        businessId,
-        branchCode,
-        inventoryId: item.id,
-        sku: item.sku || null,
-        itemName: item.name || null,
-        delta,
-        quantityAfter: next,
-        reason: String(opts.reason || "ADJUSTMENT"),
-        refType: opts.refType || null,
-        refId: opts.refId != null ? Number(opts.refId) : null,
-        note: opts.note || null,
-        variantId: opts.variantId != null ? Number(opts.variantId) : null,
-        actorUserId: opts.actor?.id != null ? Number(opts.actor.id) : null,
-        actorName: opts.actor?.name || null,
-        actorRole: opts.actor?.role || null,
-      });
-    } catch (e) {
-      // The movement trail must never break the operation that moved stock.
-      console.error("[stock] movement log failed:", e);
-    }
+    await logStockMovement({
+      businessId,
+      branchCode: opts.branchCode || (item as any).branchCode || null,
+      inventoryId: Number(item.id),
+      sku: item.sku || null,
+      itemName: item.name || null,
+      delta,
+      quantityAfter: next,
+      reason: String(opts.reason || "ADJUSTMENT"),
+      refType: opts.refType || null,
+      refId: opts.refId != null ? Number(opts.refId) : null,
+      note: opts.note || null,
+      variantId: opts.variantId != null ? Number(opts.variantId) : null,
+      actor: opts.actor || null,
+    });
   }
 
   return { item: updated || item, deducted, added, quantityAfter: next };
@@ -261,6 +277,8 @@ export async function stockIn(opts: {
   branchCode?: string | null;
   note?: string | null;
   actor?: StockActor;
+  /** Exact combination for a variant product (required for those items). */
+  variantId?: number | null;
 }) {
   const qty = Number(opts.quantity) || 0;
   if (qty <= 0) return null;
@@ -275,9 +293,16 @@ export async function stockIn(opts: {
     branchCode: opts.branchCode,
     note: opts.note,
     actor: opts.actor,
+    variantId: opts.variantId ?? null,
     setCostPriceGhs: opts.costPriceGhs,
     setSellingPriceGhs: opts.sellingPriceGhs,
   });
+  if (applied.refused) {
+    // Loud but non-fatal: the caller's business action completes, the stock
+    // move does not. The message tells the user exactly what to do instead.
+    console.warn(`[stock] stock-in refused for "${item.name}": ${applied.error}`);
+    return null;
+  }
   return applied.item;
 }
 
@@ -297,9 +322,11 @@ export async function stockOut(opts: {
   branchCode?: string | null;
   note?: string | null;
   actor?: StockActor;
+  /** Exact combination for a variant product (required for those items). */
+  variantId?: number | null;
 }) {
   const qty = Number(opts.quantity) || 0;
-  if (qty <= 0) return { deducted: 0, item: null as any };
+  if (qty <= 0) return { deducted: 0, item: null as any, refused: false, error: undefined };
   const applied = await applyStockChange({
     businessId: opts.businessId,
     inventoryId: opts.inventoryId,
@@ -312,6 +339,105 @@ export async function stockOut(opts: {
     branchCode: opts.branchCode,
     note: opts.note,
     actor: opts.actor,
+    variantId: opts.variantId ?? null,
   });
-  return { deducted: applied.deducted, item: applied.item };
+  return { deducted: applied.deducted, item: applied.item, refused: applied.refused, error: applied.error };
+}
+
+/**
+ * Route one movement on a VARIANT product to its exact combination.
+ *
+ * Resolution order:
+ *   1. an explicit `variantId` (the picker's choice);
+ *   2. a `sku` that matches a variant row's SKU (module flows that key on SKU);
+ *   otherwise the write is REFUSED — a variant product can never be moved by
+ *   its aggregate.
+ *
+ * Clamping mirrors the item-level writer, and one movement row with the
+ * `variantId` is appended, so the trail explains both the combination and the
+ * item aggregate.
+ */
+async function applyVariantStockChange(
+  item: any,
+  businessId: number,
+  delta: number,
+  opts: ApplyStockChangeOptions,
+): Promise<AppliedStockChange> {
+  const empty: AppliedStockChange = { item, deducted: 0, added: 0, quantityAfter: 0 };
+  const rows = await variantsForItem(businessId, Number(item.id));
+  const active = rows.filter((v) => v.isActive !== false);
+
+  let variantId: number | null = null;
+  if (opts.variantId != null && Number(opts.variantId) > 0) {
+    variantId = Number(opts.variantId);
+  } else if (opts.sku) {
+    const bySku = active.find((v) => String(v.sku || "").toUpperCase() === String(opts.sku).toUpperCase());
+    if (bySku) variantId = Number(bySku.id);
+  }
+
+  if (variantId == null) {
+    return {
+      ...empty,
+      quantityAfter: Number(item.quantity) || 0,
+      refused: true,
+      error: `"${item.name}" is stocked by ${active.length > 0 ? "size/colour" : "options"} — choose the combination to move.`,
+    };
+  }
+
+  const target = active.find((v) => Number(v.id) === variantId);
+  if (!target) {
+    return {
+      ...empty,
+      quantityAfter: Number(item.quantity) || 0,
+      refused: true,
+      error: "That size/colour is not sold by this product any more.",
+    };
+  }
+
+  const res = await applyVariantDelta({
+    businessId,
+    variantId,
+    delta,
+    clampAtZero: opts.clampAtZero !== false,
+    trail: {
+      reason: String(opts.reason || "ADJUSTMENT"),
+      refType: opts.refType || "VARIANT_ADJUST",
+      refId: opts.refId ?? null,
+      note: opts.note || null,
+      branchCode: opts.branchCode || (item as any).branchCode || null,
+      actor: opts.actor || null,
+    },
+  });
+  if (!res.ok || !res.variant) {
+    return {
+      ...empty,
+      quantityAfter: Number(item.quantity) || 0,
+      refused: true,
+      error: res.error || "That size/colour could not be updated.",
+    };
+  }
+
+  const applied = Number(res.applied) || 0;
+  const quantityAfter = Number(res.item?.quantity ?? item.quantity) || 0;
+  return {
+    item: { ...item, quantity: quantityAfter, status: res.item?.status ?? item.status },
+    deducted: applied < 0 ? Math.abs(applied) : 0,
+    added: applied > 0 ? applied : 0,
+    quantityAfter,
+    variantId,
+  };
+}
+
+/** Human label for a variant row (used by callers building messages). */
+export { variantLabelOf };
+
+/**
+ * Plain-language refusal message for a stock write, or `null` when it applied.
+ * Routes use it to turn a refused movement into a clear 400 instead of a
+ * silent no-op: "This product is stocked by size/colour — choose the
+ * combination to move."
+ */
+export function stockRefusal(applied: { refused?: boolean; error?: string } | null | undefined): string | null {
+  if (applied && applied.refused) return applied.error || "That stock movement could not be applied.";
+  return null;
 }

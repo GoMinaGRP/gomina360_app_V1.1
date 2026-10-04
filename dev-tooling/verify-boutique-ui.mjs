@@ -106,10 +106,20 @@ try {
   const opened = await waitFor(async () =>
     page.evaluate(() => {
       const sidebar = document.querySelector('[data-testid="nav-sidebar"]') || document;
-      const el = [...sidebar.querySelectorAll("button, a")].find((b) => /Mina Fashion Boutique/i.test(b.textContent || ""));
-      if (!el) return false;
-      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      return true;
+      const find = (re) => [...sidebar.querySelectorAll("button, a")].find((b) => re.test(b.textContent || ""));
+      // The sidebar shows the first few units then a "Show all" expander — the
+      // Boutique unit lives behind it.
+      const unit = find(/Mina Fashion Boutique/i);
+      if (unit) {
+        unit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        return true;
+      }
+      const more = find(/Show all \d+ units/i);
+      if (more) {
+        more.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        return false; // next poll finds the unit
+      }
+      return false;
     }),
   );
   ql(opened, "Boutique unit opens from the sidebar");

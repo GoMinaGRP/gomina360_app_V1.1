@@ -13,7 +13,7 @@ import {
   customers,
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { applyStockChange } from "@/lib/stock";
+import { applyStockChange, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { apiError } from "@/lib/apiError";
@@ -114,7 +114,7 @@ async function stockOutLiters(inventoryId: number, liters: number) {
   const litersPerUnit = m ? Number(m[1]) : 50;
   const qty = liters / litersPerUnit;
   // P5: ONE stock writer — chemical draw is a CONSUMPTION movement.
-  await applyStockChange({
+  const applied = await applyStockChange({
     businessId: inv.businessId,
     inventoryId: inv.id,
     delta: -qty,
@@ -122,6 +122,10 @@ async function stockOutLiters(inventoryId: number, liters: number) {
     refType: "CARWASH_CHEMICAL",
     note: `${liters} L drawn (${litersPerUnit} L per ${inv.unit || "unit"})`,
   });
+  const refusal = stockRefusal(applied);
+  // A chemical that tracks sizes/colours is a misconfiguration, not a sale: the
+  // wash completes and the operator is told exactly why nothing was drawn.
+  if (refusal) console.warn(`[carwash] chemical draw skipped: ${refusal}`);
 }
 
 /** Find-or-create a branch customer and accrue spend + loyalty from a job. */

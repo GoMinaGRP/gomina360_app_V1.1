@@ -3,7 +3,7 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { inventoryItems, transactions, businesses } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-import { applyStockChange } from "@/lib/stock";
+import { applyStockChange, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       }
       const unitCost = Number(data.unitCostGhs) || 0;
       // P5: the ONE stock writer (quantity + status + movement trail).
-      const { item: updated } = await applyStockChange({
+      const { item: updated, ...appliedRestock } = await applyStockChange({
         businessId,
         inventoryId: item.id,
         delta: qty,
@@ -78,6 +78,8 @@ export async function POST(request: NextRequest) {
         actor: __authSession.user,
         setCostPriceGhs: unitCost,
       });
+      const refusal = stockRefusal(appliedRestock as any);
+      if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
 
       let expenseRow = null;
       let pendingApproval = false;

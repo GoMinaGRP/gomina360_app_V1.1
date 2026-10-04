@@ -207,7 +207,14 @@ export async function POST(request: NextRequest) {
     // rows so register, dashboards, low-stock and reports can never drift.
     const variantFailures: string[] = [];
     for (const vu of variantUpdates) {
-      const ok = await deductVariantQty(vu.variantId, vu.qty);
+      const ok = await deductVariantQty(vu.variantId, vu.qty, {
+        businessId: Number(businessId),
+        inventoryId: vu.inventoryId,
+        reason: "SALE",
+        refType: "SALES_CENTER",
+        note: vu.label,
+        actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+      });
       if (!ok) variantFailures.push(`"${vu.label || "variant"}" just sold out — refresh and try again.`);
     }
     if (variantFailures.length > 0) {

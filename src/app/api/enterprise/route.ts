@@ -24,7 +24,7 @@ import {
 } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { applyStockChange, computeStockStatus } from "@/lib/stock";
-import { setVariantsForItem } from "@/lib/boutique";
+import { adjustVariantStock, setVariantsForItem, variantsForItem } from "@/lib/boutique";
 import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, resolveUserOrgIds, businessIdsOfOrgs, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
@@ -250,6 +250,9 @@ export async function PATCH(request: Request) {
 
     const d = data || {};
     const updates: Record<string, any> = {};
+    // Set when a variant-targeted quantity edit was applied (the item total is
+    // DERIVED from the rows, so `updates` legitimately stays empty).
+    let variantQuantityApplied = false;
     // Reassignment to a different business must stay inside the actor's scope.
     if (moduleKey !== "SUPPLIERS" && d.businessId !== undefined && Number(d.businessId) && Number(d.businessId) !== Number(existing.businessId)) {
       if (!(await canAccessBusiness(actor, Number(d.businessId)))) {
@@ -296,6 +299,16 @@ export async function PATCH(request: Request) {
         updates.subcategory = d.subcategory ? String(d.subcategory).trim().slice(0, 120) : null;
       }
       if (typeof d.unit === "string" && d.unit.trim()) updates.unit = d.unit.trim();
+      // VARIANT products: the size/colour rows are the truth and the item's
+      // quantity is a DERIVED aggregate. Editing it directly would be silently
+      // reverted by the next variant movement (lost deduction = oversell), so
+      // the register refuses it. A `variantId` targets the exact combination.
+      const existingBusinessId = Number((existing as any).businessId);
+      const activeVariants =
+        existing.tracksVariants === true
+          ? (await variantsForItem(existingBusinessId, existing.id)).filter((v) => v.isActive !== false)
+          : [];
+      const variantEdit = d.variantId != null ? Number(d.variantId) : null;
       if (d.quantity !== undefined) {
         const qty = Number(d.quantity);
         if (!Number.isFinite(qty) || qty < 0) {
@@ -304,7 +317,39 @@ export async function PATCH(request: Request) {
             { status: 400 }
           );
         }
-        updates.quantity = qty;
+        if (existing.tracksVariants === true) {
+          if (!variantEdit) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: `"${existing.name}" is stocked by size/colour — update a specific combination instead of the item total.`,
+              },
+              { status: 400 }
+            );
+          }
+          if (!activeVariants.some((v) => Number(v.id) === variantEdit)) {
+            return NextResponse.json(
+              { success: false, error: "That size/colour is not sold by this product any more." },
+              { status: 400 }
+            );
+          }
+          const applied = await adjustVariantStock({
+            businessId: existingBusinessId,
+            variantId: variantEdit,
+            quantity: qty,
+            minStockThreshold: d.minStockThreshold !== undefined ? Number(d.minStockThreshold) : null,
+            reason: "ADJUSTMENT",
+            refType: "ENTERPRISE_EDIT",
+            refId: existing.id,
+            actor: { id: (actor as any)?.id ?? null, name: (actor as any)?.name ?? null, role: (actor as any)?.role ?? null },
+          });
+          if (!applied.ok) {
+            return NextResponse.json({ success: false, error: applied.error || "That combination could not be updated." }, { status: 400 });
+          }
+          variantQuantityApplied = true;
+        } else {
+          updates.quantity = qty;
+        }
       }
       if (d.costPriceGhs !== undefined) {
         const v = Number(d.costPriceGhs);
@@ -346,9 +391,16 @@ export async function PATCH(request: Request) {
       if (d.specifications !== undefined) updates.specifications = sanitizeSpecList(d.specifications);
       if (d.variants !== undefined) updates.variants = sanitizeVariantList(d.variants);
       // Recompute stock status from the (possibly updated) quantity/threshold.
-      const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
-      const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
-      updates.status = computeStockStatus(Number(nextQty), Number(nextThreshold));
+      // Variant products keep their DERIVED aggregate/status: syncItemAggregate
+      // is the only thing allowed to write them.
+      if (existing.tracksVariants === true) {
+        if (updates.quantity === undefined) delete updates.quantity;
+        delete updates.status;
+      } else {
+        const nextQty = updates.quantity !== undefined ? updates.quantity : existing.quantity;
+        const nextThreshold = updates.minStockThreshold !== undefined ? updates.minStockThreshold : existing.minStockThreshold;
+        updates.status = computeStockStatus(Number(nextQty), Number(nextThreshold));
+      }
     } else {
       // EMPLOYEES
       if (typeof d.name === "string" && d.name.trim()) updates.name = d.name.trim();
@@ -371,7 +423,7 @@ export async function PATCH(request: Request) {
     if (d.district !== undefined) updates.district = d.district || null;
     if (d.town !== undefined) updates.town = d.town || null;
 
-    if (Object.keys(updates).length === 0) {
+    if (Object.keys(updates).length === 0 && !variantQuantityApplied) {
       return NextResponse.json(
         { success: false, error: "Nothing to update." },
         { status: 400 }
@@ -476,12 +528,16 @@ export async function PATCH(request: Request) {
         clampAtZero: true,
       });
       updated = applied.item || updated;
-    } else {
+    } else if (Object.keys(updates).length > 0) {
       [updated] = await db
         .update(table)
         .set(updates)
         .where(eq(table.id, recordId))
         .returning();
+    } else {
+      // A variant-targeted quantity edit already applied (the item total is
+      // derived from the rows, so there is nothing to write on the parent).
+      [updated] = await db.select().from(table).where(eq(table.id, recordId));
     }
     return NextResponse.json({ success: true, item: updated });
   } catch (error: any) {

@@ -9,7 +9,7 @@ import {
   businesses,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { applyStockChange, computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { notifyPurchase, ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -113,18 +113,24 @@ async function bookExpense(
   });
 }
 
-/** Deduct quantity from a stock item (never below zero), refreshing its status. */
-async function stockOutItem(inventoryId: number, qty: number) {
+/**
+ * Deduct quantity from a stock item (never below zero), refreshing its status.
+ * Returns the refusal message when the item is a variant product that this
+ * flow cannot price per combination yet — the caller surfaces it instead of
+ * silently delivering without a deduction.
+ */
+async function stockOutItem(inventoryId: number, qty: number): Promise<string | null> {
   const [inv] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, inventoryId));
-  if (!inv) return;
+  if (!inv) return null;
   // P5: ONE stock writer (clamps at zero, logs the movement).
-  await applyStockChange({
+  const applied = await applyStockChange({
     businessId: inv.businessId,
     inventoryId: inv.id,
     delta: -qty,
     reason: "SALE",
     refType: "HARDWARE_DELIVERY",
   });
+  return stockRefusal(applied);
 }
 
 export async function GET(request: NextRequest) {
@@ -263,7 +269,8 @@ export async function POST(request: NextRequest) {
       });
 
       if (status === "RECEIVED") {
-        await applyPurchaseReceipt(row, data, biz);
+        const refusal = await applyPurchaseReceipt(row, data, biz);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
       }
       return NextResponse.json({ success: true, item: row });
     }
@@ -302,11 +309,16 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Stock-in for a received supplier purchase + expense booking (shared by POST/PATCH). */
-async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
+/**
+ * Stock-in for a received supplier purchase + expense booking (shared by
+ * POST/PATCH). Returns a refusal message when the target item is a variant
+ * product that needs a size/colour choice — the caller answers 400 with it
+ * instead of booking a receipt that moved no stock.
+ */
+async function applyPurchaseReceipt(purchase: any, data: any, biz: any): Promise<string | null> {
   const qty = Number(purchase.quantity) || 0;
   const cost = Number(purchase.unitCostGhs) || 0;
-  if (qty <= 0) return;
+  if (qty <= 0) return null;
 
   // Match an inventory item by explicit id, then by name prefix; create if absent.
   const inv = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, purchase.businessId));
@@ -320,7 +332,7 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
     );
   }
   if (target) {
-    await applyStockChange({
+    const applied = await applyStockChange({
       businessId: purchase.businessId,
       inventoryId: target.id,
       delta: qty,
@@ -330,6 +342,8 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
       note: purchase.itemName ? `Purchase: ${purchase.itemName}` : null,
       setCostPriceGhs: cost,
     });
+    const refusal = stockRefusal(applied);
+    if (refusal) return refusal;
   } else {
     const taken = new Set(
       (await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku)
@@ -398,6 +412,8 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any) {
       data.createdByUserId
     );
   }
+
+  return null;
 }
 
 export async function PATCH(request: NextRequest) {
@@ -429,8 +445,9 @@ export async function PATCH(request: NextRequest) {
         })
         .where(eq(hardwareOrders.id, Number(id)))
         .returning();
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED" && before?.status !== "DELIVERED" && !row.fulfilledDate) {
-        if (row.inventoryId) await stockOutItem(Number(row.inventoryId), Number(row.quantity) || 0);
+        if (row.inventoryId) stockWarning = await stockOutItem(Number(row.inventoryId), Number(row.quantity) || 0);
         // One writer for money: ledger + receipt + CRM + tracking.
         const posted = await bookOrderSale(
           row,
@@ -449,7 +466,7 @@ export async function PATCH(request: NextRequest) {
         await db.update(hardwareOrders).set({ fulfilledDate: today }).where(eq(hardwareOrders.id, row.id));
         row.fulfilledDate = today;
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     // ── PURCHASE: ORDERED → RECEIVED applies stock-in + expense exactly once ──
@@ -469,7 +486,8 @@ export async function PATCH(request: NextRequest) {
         .returning();
       if (row.status === "RECEIVED" && before?.status !== "RECEIVED") {
         const [biz] = await db.select().from(businesses).where(eq(businesses.id, row.businessId));
-        await applyPurchaseReceipt(row, { ...data, inventoryId: data?.inventoryId }, biz);
+        const refusal = await applyPurchaseReceipt(row, { ...data, inventoryId: data?.inventoryId }, biz);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         await notifyPurchase({
           businessId: row.businessId,
           branchCode: row.branchCode,
@@ -504,11 +522,12 @@ export async function PATCH(request: NextRequest) {
         })
         .where(eq(hardwareDeliveries.id, Number(id)))
         .returning();
+      let stockWarning: string | null = null;
       if (row.status === "DELIVERED" && before?.status !== "DELIVERED" && row.inventoryId && !row.orderNumber) {
         // Standalone dispatch (not linked to a fulfilled order): deduct stock here.
-        await stockOutItem(Number(row.inventoryId), Number(row.quantity) || 0);
+        stockWarning = await stockOutItem(Number(row.inventoryId), Number(row.quantity) || 0);
       }
-      return NextResponse.json({ success: true, item: row });
+      return NextResponse.json({ success: true, item: row, ...(stockWarning ? { stockWarning } : {}) });
     }
 
     return NextResponse.json({ success: false, error: `Unknown entity: ${entity}` }, { status: 400 });

@@ -80,7 +80,7 @@ export async function deductOrderStock(
   const problems: string[] = [];
   const plan: (
     | { kind: "plain"; id: number; businessId: number; qty: number }
-    | { kind: "variant"; variantId: number; inventoryId: number; qty: number; label: string }
+    | { kind: "variant"; variantId: number; inventoryId: number; qty: number; label: string; businessId: number }
   )[] = [];
   for (const li of items || []) {
     if (!li?.inventoryId) continue;
@@ -106,7 +106,14 @@ export async function deductOrderStock(
         );
         continue;
       }
-      plan.push({ kind: "variant", variantId: Number(variant.id), inventoryId: inv.id, qty, label });
+      plan.push({
+        kind: "variant",
+        variantId: Number(variant.id),
+        inventoryId: inv.id,
+        qty,
+        label,
+        businessId: Number(inv.businessId),
+      });
       continue;
     }
     if (inv.quantity < qty) {
@@ -120,7 +127,13 @@ export async function deductOrderStock(
     if (p.kind === "variant") {
       // Atomic conditional decrement — a concurrent sale that emptied the
       // variant between validation and now is reported, never oversold.
-      const ok = await deductVariantQty(p.variantId, p.qty);
+      const ok = await deductVariantQty(p.variantId, p.qty, {
+        businessId: p.businessId,
+        inventoryId: p.inventoryId,
+        reason: "SALE",
+        refType: "ORDER_COMMIT",
+        note: p.label,
+      });
       if (!ok) {
         problems.push(`"${p.label || "That variant"}" just sold out — refresh and choose another size/colour.`);
         continue;
@@ -151,7 +164,13 @@ export async function restoreOrderStock(items: any[]): Promise<void> {
       const qty = Number(li.quantity) || 0;
       const variantId = Number(li.variantId) || 0;
       if (variantId) {
-        await restoreVariantQty(variantId, qty);
+        await restoreVariantQty(variantId, qty, {
+          businessId: Number(inv.businessId),
+          inventoryId: inv.id,
+          reason: "RESTORE",
+          refType: "ORDER_CANCEL",
+          note: `Order cancelled — ${[li.variantSize ? `Size ${li.variantSize}` : null, li.variantColor || null].filter(Boolean).join(" · ") || "variant"}`,
+        });
         await syncItemAggregate(inv.id);
         continue;
       }

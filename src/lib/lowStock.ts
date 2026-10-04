@@ -19,14 +19,27 @@
  * source of truth; this only reads it and shouts.
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { inventoryItems, notifications } from "@/db/schema";
 import { orderNotificationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { pushAfterBell } from "@/lib/push";
+import { lowStockVariantsForBusiness, variantLabelOf } from "@/lib/variantStock";
 
 function todayLocalISO(): string {
   return new Date().toLocaleDateString("en-CA");
+}
+
+/** One size/colour/option combination at or below its own reorder point. */
+export interface VariantStockAlert {
+  variantId: number;
+  label: string;
+  size: string;
+  color: string;
+  sku: string | null;
+  quantity: number;
+  minStockThreshold: number;
+  severity: "OUT" | "LOW";
 }
 
 export interface LowStockItem {
@@ -37,36 +50,98 @@ export interface LowStockItem {
   unit: string;
   minStockThreshold: number;
   severity: "OUT" | "LOW";
+  /** True when the item's stock lives on size/colour rows. */
+  tracksVariants?: boolean;
+  /** Per-combination reorder detail — the actionable part for variant products. */
+  variantAlerts?: VariantStockAlert[];
 }
 
-/** Items at or below their reorder point for one business (OUT first). */
+/**
+ * Items at or below their reorder point for one business (OUT first).
+ *
+ * Variant products are reported with their COMBINATIONS: the item appears when
+ * its aggregate is low OR when any active size/colour row is at/below ITS OWN
+ * reorder point (the per-row `minStockThreshold` finally drives an alert — it
+ * used to be stored and ignored). `variantAlerts` carries the actionable
+ * detail; item-level `quantity`/`severity` stay the aggregate values so every
+ * existing consumer keeps its meaning.
+ */
 export async function lowStockItemsForBusiness(businessId: number): Promise<LowStockItem[]> {
-  const rows = await db
-    .select({
-      id: inventoryItems.id,
-      sku: inventoryItems.sku,
-      name: inventoryItems.name,
-      quantity: inventoryItems.quantity,
-      unit: inventoryItems.unit,
-      minStockThreshold: inventoryItems.minStockThreshold,
-    })
-    .from(inventoryItems)
-    .where(
-      and(
-        eq(inventoryItems.businessId, Number(businessId)),
-        sql`(((${inventoryItems.quantity} <= ${inventoryItems.minStockThreshold} and ${inventoryItems.minStockThreshold} > 0) or ${inventoryItems.quantity} <= 0))`,
+  const bizId = Number(businessId);
+  const [rows, variantRows] = await Promise.all([
+    db
+      .select({
+        id: inventoryItems.id,
+        sku: inventoryItems.sku,
+        name: inventoryItems.name,
+        quantity: inventoryItems.quantity,
+        unit: inventoryItems.unit,
+        minStockThreshold: inventoryItems.minStockThreshold,
+        tracksVariants: inventoryItems.tracksVariants,
+      })
+      .from(inventoryItems)
+      .where(
+        and(
+          eq(inventoryItems.businessId, bizId),
+          sql`(((${inventoryItems.quantity} <= ${inventoryItems.minStockThreshold} and ${inventoryItems.minStockThreshold} > 0) or ${inventoryItems.quantity} <= 0))`,
+        ),
       ),
-    );
-  return rows
-    .map((r) => ({
-      id: Number(r.id),
-      sku: r.sku,
-      name: r.name,
-      quantity: Number(r.quantity),
-      unit: r.unit,
-      minStockThreshold: Number(r.minStockThreshold),
-      severity: Number(r.quantity) <= 0 ? ("OUT" as const) : ("LOW" as const),
-    }))
+    lowStockVariantsForBusiness(bizId),
+  ]);
+
+  const alertsByItem = new Map<number, VariantStockAlert[]>();
+  for (const v of variantRows) {
+    const list = alertsByItem.get(Number(v.inventoryId)) || [];
+    list.push({
+      variantId: Number(v.id),
+      label: variantLabelOf(v.size, v.color),
+      size: v.size || "",
+      color: v.color || "",
+      sku: v.sku || null,
+      quantity: Number(v.quantity) || 0,
+      minStockThreshold: Number(v.minStockThreshold) || 0,
+      severity: (Number(v.quantity) || 0) <= 0 ? "OUT" : "LOW",
+    });
+    alertsByItem.set(Number(v.inventoryId), list);
+  }
+
+  const listed = new Set(rows.map((r) => Number(r.id)));
+  // Variant items whose AGGREGATE is healthy but a combination is not: fetch
+  // just those rows so the alert names the product correctly.
+  const extraIds = [...alertsByItem.keys()].filter((id) => !listed.has(id));
+  const extras = extraIds.length
+    ? await db
+        .select({
+          id: inventoryItems.id,
+          sku: inventoryItems.sku,
+          name: inventoryItems.name,
+          quantity: inventoryItems.quantity,
+          unit: inventoryItems.unit,
+          minStockThreshold: inventoryItems.minStockThreshold,
+          tracksVariants: inventoryItems.tracksVariants,
+        })
+        .from(inventoryItems)
+        .where(and(eq(inventoryItems.businessId, bizId), inArray(inventoryItems.id, extraIds)))
+    : [];
+
+  return [...rows, ...extras]
+    .map((r) => {
+      const variantAlerts = alertsByItem.get(Number(r.id)) || [];
+      const qty = Number(r.quantity) || 0;
+      const severity: "OUT" | "LOW" = qty <= 0 ? "OUT" : "LOW";
+      return {
+        id: Number(r.id),
+        sku: r.sku,
+        name: r.name,
+        quantity: qty,
+        unit: r.unit,
+        minStockThreshold: Number(r.minStockThreshold),
+        severity,
+        ...(r.tracksVariants === true || variantAlerts.length > 0
+          ? { tracksVariants: true, variantAlerts }
+          : {}),
+      } as LowStockItem;
+    })
     .sort((a, b) => (a.severity === b.severity ? a.minStockThreshold - b.quantity : a.severity === "OUT" ? -1 : 1));
 }
 
@@ -80,10 +155,23 @@ async function notifyLowStock(
   const recordRef = `low-stock:${Number(businessId)}:${date}`;
   const recipients = await orderNotificationRecipients(Number(businessId));
   if (!recipients.length) return 0;
-  const anyOut = items.some((i) => i.severity === "OUT");
+  const anyOut = items.some(
+    (i) => i.severity === "OUT" || (i.variantAlerts || []).some((v) => v.severity === "OUT"),
+  );
   const list = items
     .slice(0, 8)
-    .map((i) => `• ${i.name} (${i.sku}) — ${i.quantity} ${i.unit} left, reorder at ${i.minStockThreshold}`)
+    .map((i) => {
+      const alerts = i.variantAlerts || [];
+      if (alerts.length > 0) {
+        const shown = alerts
+          .slice(0, 4)
+          .map((v) => `${v.label} ${v.quantity} left (reorder at ${v.minStockThreshold})`)
+          .join("; ");
+        const more = alerts.length > 4 ? `; +${alerts.length - 4} more combination(s)` : "";
+        return `• ${i.name} (${i.sku}) — ${shown}${more}`;
+      }
+      return `• ${i.name} (${i.sku}) — ${i.quantity} ${i.unit} left, reorder at ${i.minStockThreshold}`;
+    })
     .join("\n");
   const more = items.length > 8 ? `\n…and ${items.length - 8} more` : "";
   let sent = 0;

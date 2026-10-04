@@ -19,7 +19,7 @@ import {
 } from "@/db/schema";
 import { deriveDensityKgm3 } from "@/lib/blockQc";
 import { and, eq } from "drizzle-orm";
-import { applyStockChange, computeStockStatus, ensureInventoryItem, stockIn, stockOut } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, ensureInventoryItem, stockIn, stockOut, stockRefusal } from "@/lib/stock";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
@@ -433,7 +433,7 @@ export async function POST(request: NextRequest) {
       if (goodBlocks > 0) {
         const { item } = await resolveBlockTypeItem(businessId, blockType, { autoCreate: true });
         // P5: ONE stock writer — production output is a PRODUCTION movement.
-        const { item: updated } = await applyStockChange({
+        const { item: updated, ...appliedProduction } = await applyStockChange({
           businessId,
           inventoryId: item.id,
           delta: goodBlocks,
@@ -442,6 +442,10 @@ export async function POST(request: NextRequest) {
           note: `${goodBlocks} blocks moulded${blocksBroken ? ` (${blocksBroken} broken)` : ""}`,
           actor: __authSession.user,
         });
+        {
+          const refusal = stockRefusal(appliedProduction as any);
+          if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
+        }
         stock = {
           sku: updated.sku,
           name: updated.name,
@@ -707,7 +711,7 @@ export async function POST(request: NextRequest) {
 
       const unitCost = Number(data.unitCostGhs) || 0;
       // P5: ONE stock writer.
-      const { item: updated } = await applyStockChange({
+      const { item: updated, ...appliedRestock } = await applyStockChange({
         businessId,
         inventoryId: item.id,
         delta: qty,
@@ -717,6 +721,10 @@ export async function POST(request: NextRequest) {
         actor: __authSession.user,
         setCostPriceGhs: unitCost,
       });
+      {
+        const refusal = stockRefusal(appliedRestock as any);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
+      }
 
       let expenseRow = null;
       let pendingApproval = false;

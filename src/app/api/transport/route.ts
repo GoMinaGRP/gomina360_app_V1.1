@@ -25,7 +25,7 @@ import {
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { linkOrCreateCustomer } from "@/lib/customerLink";
 import { ownerOrgOfBusiness } from "@/lib/notify";
-import { applyStockChange, computeStockStatus } from "@/lib/stock";
+import { applyStockChange, computeStockStatus, stockRefusal } from "@/lib/stock";
 import {
   GPS_PROVIDER_LIBRARY,
   assertTransportBizAccess,
@@ -764,7 +764,7 @@ export async function POST(request: NextRequest) {
             const [inv] = await db.select().from(inventoryItems).where(and(eq(inventoryItems.id, invId), eq(inventoryItems.businessId, businessId)));
             if (inv) {
               // P5: ONE stock writer — parts used on a job are a CONSUMPTION movement.
-              await applyStockChange({
+              const applied = await applyStockChange({
                 businessId,
                 inventoryId: inv.id,
                 delta: -qty,
@@ -774,6 +774,8 @@ export async function POST(request: NextRequest) {
                 note: `Parts used on maintenance #${id}`,
                 actor,
               });
+              const refusal = stockRefusal(applied);
+              if (refusal) console.warn(`[transport] parts usage skipped: ${refusal}`);
             }
           }
         }

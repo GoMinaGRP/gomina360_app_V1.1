@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applyStockChange } from "@/lib/stock";
+import { applyStockChange, stockRefusal } from "@/lib/stock";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import {
@@ -24,8 +24,12 @@ import { linkSupplier } from "@/lib/supplierLinks";
 // zero sample, test or unrelated data). The demo flagship FOOD-01 receives its
 // signature menu from the seed (seed.ts) only.
 
-// Stock-in a received purchase: match inventory by id/name, else create the item.
-async function receiveStock(businessId: number, branchCode: string | null, data: any, qty: number, cost: number) {
+/**
+ * Stock-in a received purchase: match inventory by id/name, else create the
+ * item. Returns a refusal message when the target is a variant product that
+ * needs a size/colour choice (the caller answers 400 with it).
+ */
+async function receiveStock(businessId: number, branchCode: string | null, data: any, qty: number, cost: number): Promise<string | null> {
   const inv = await db.select().from(inventoryItems).where(eq(inventoryItems.businessId, businessId));
   let target = data.inventoryId ? inv.find((i: any) => i.id === Number(data.inventoryId)) : undefined;
   if (!target) {
@@ -34,7 +38,7 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
   }
   if (target) {
     // P5: ONE stock writer (quantity + status + movement trail).
-    await applyStockChange({
+    const applied = await applyStockChange({
       businessId,
       branchCode,
       inventoryId: target.id,
@@ -45,6 +49,8 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
       setCostPriceGhs: cost,
       setExpiryDate: data.expiryDate || null,
     });
+    const refusal = stockRefusal(applied);
+    if (refusal) return refusal;
   } else {
     const taken = new Set((await db.select({ sku: inventoryItems.sku }).from(inventoryItems)).map((r: any) => r.sku));
     let sku = `FOOD-${String(data.itemName || "ITEM").toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 18)}`;
@@ -75,6 +81,8 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
       setExpiryDate: data.expiryDate || null,
     });
   }
+
+  return null;
 }
 
 // Book the purchase expense into the shared Finance ledger.
@@ -241,7 +249,7 @@ export async function POST(request: NextRequest) {
       }
       if (target) {
         // P5: ONE stock writer — waste/usage never bypasses the trail.
-        await applyStockChange({
+        const applied = await applyStockChange({
           businessId,
           inventoryId: target.id,
           delta: -qty,
@@ -250,6 +258,8 @@ export async function POST(request: NextRequest) {
           refId: row?.id != null ? Number(row.id) : null,
           note: data.reason ? `Waste: ${data.reason}` : null,
         });
+        const refusal = stockRefusal(applied);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
       }
       return NextResponse.json({ success: true, item: row });
     }
@@ -296,7 +306,8 @@ export async function POST(request: NextRequest) {
       });
 
       if (status === "RECEIVED") {
-        await receiveStock(businessId, branchCode, data, qty, cost);
+        const refusal = await receiveStock(businessId, branchCode, data, qty, cost);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         if (data.recordExpense !== false) {
           await bookExpense(businessId, biz, branchCode, { ...data, quantity: qty }, row.purchaseNumber, qty * cost, data.receivedDate || today);
         }
@@ -456,7 +467,8 @@ export async function PATCH(request: NextRequest) {
 
       if (newStatus === "RECEIVED" && existing.status !== "RECEIVED") {
         const [biz] = await db.select().from(businesses).where(eq(businesses.id, existing.businessId));
-        await receiveStock(existing.businessId, existing.branchCode, { ...existing, ...data }, existing.quantity, existing.unitCostGhs);
+        const refusal = await receiveStock(existing.businessId, existing.branchCode, { ...existing, ...data }, existing.quantity, existing.unitCostGhs);
+        if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         await notifyPurchase({
           businessId: existing.businessId,
           branchCode: existing.branchCode,
