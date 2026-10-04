@@ -90,7 +90,29 @@ characters (storing an unreadable data URL); oversized images now return a reaso
 | `verify-documents` | 40 / 40 ✅ |
 | `verify-business-backup` | 54 / 54 ✅ |
 | `verify-audit-records` | 29 / 29 ✅ |
-| *(full sweep: `dev-tooling/sweep-image-impl.sh`, 25 suites — results appended to this file's commit)* | |
+| `verify-block-qc` | 51 / 51 ✅ |
+| `verify-feed-mill` | 100 / 100 ✅ |
+| `verify-fish-feed-mill` | 85 / 85 ✅ |
+| `verify-transport` / `verify-transport-ui` | 120 / 0 and 26 / 0 ✅ |
+| `verify-expense-ui` | 39 / 39 ✅ |
+| `verify-p4-writers` / `verify-p5-stock` / `verify-single-writer` | 23, 19, 35 — all green ✅ |
+| `verify-clean-state` | 121 / 121 ✅ |
+| `verify-orders-maps` | 51 / 51 ✅ |
+| `verify-tracking` / `verify-online-ordering` / `verify-credit-sales` | 51 / 34 / 39 — all green ✅ |
+| `verify-storefront-areas` / `verify-nav` / `verify-shared-ui` | 53 / 69 / 30 — all green ✅ |
+| `verify-boutique` / `verify-inventory-permissions` | 74 / 38 — all green ✅ |
+
+Full sweep driver: `dev-tooling/sweep-image-impl.sh` (25 suites, log `/tmp/img-sweep.txt`).
+Everything re-ran green after the final production rebuild.
+
+**Two sweep flakes found and fixed (test-side, no app impact):**
+
+1. `verify-orders-maps` aborted in Z4 because a *previous* suite had left a GPS pin on business #1 that
+   Z4 asserts is cleared. The suite now clears the anchor at baseline and restores whatever it found —
+   it is self-healing in a sweep and still exact when run alone (`f0696f3`).
+2. `verify-expense-ui` could not find its unit in the rail (the 5-unit preview from the navigation
+   work) and timed out before any expense check ran. It now expands the list like a user via
+   `dev-tooling/rail-util.mjs` — 39/39 after the fix (same class of fix as the navigation sweep).
 
 ### New coverage (what the 28 extra checks prove)
 
@@ -114,6 +136,18 @@ client array and its presence in backup/restore.
 | `/api/init` assets: ≤ 1 image per row | ✅ |
 | ledger + assets bootstrap size | ✅ 27 KB |
 | existing images byte-identical after the whole suite | ✅ (pre-existing check, still green) |
+
+### Live end-to-end smoke (shipped build, owner session)
+
+| Signal | Result |
+| --- | --- |
+| `/api/init` raw payload | 34.4 KB · ledger 27 KB · assets 3 KB |
+| ledger rows with receipt images in the bootstrap | **0 / 55** (all 55 carry `receiptCount`) |
+| assets with more than one image in the bootstrap | **0 / 6** |
+| asset modal pickers | gallery (`asset-photo-file`, `accept="image/*"`) + camera (`asset-photo-camera`, `capture="environment"`) |
+| page errors during the whole flow | **0** |
+
+Screenshot: `/home/user/img-smoke-assets.png` (asset register on the shipped build).
 
 ### Manual/visual verification
 
