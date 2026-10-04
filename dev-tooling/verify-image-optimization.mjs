@@ -942,6 +942,118 @@ console.log("\n── C. server-side enforcement ──");
   ok(bootstrapBytes < 4 * 1024 * 1024, "ledger + assets bootstrap stays small", `${Math.round(bootstrapBytes / 1024)} KB`);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   E. LIST-API WIRE BUDGET — no screen paints an image on these payloads, so
+   no image bytes may travel. Each endpoint below used to ship the stored
+   blob(s) because it selected the whole row; the wire-shaping layer
+   (src/lib/imagePayload) now publishes indicators (`photoCount`, `hasPhoto`,
+   `receiptCount`) instead. These checks fail if that regresses.
+   ══════════════════════════════════════════════════════════════════════════ */
+console.log("\n── E. list-API wire budget ──");
+{
+  const bid = created.businessId;
+  // Local POST helper (the section-C helpers are block-scoped).
+  const wirePost = (url, body) =>
+    page.evaluate(
+      async (u, b) => {
+        const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+        let json = null;
+        try { json = await r.json(); } catch { /* non-JSON */ }
+        return { status: r.status, json };
+      },
+      url,
+      body,
+    );
+  const wireReceipt = "data:image/jpeg;base64," + Buffer.from(makePng(24, 24)).toString("base64");
+  const wireTargets = [
+    ["transactions", `/api/transactions?businessId=${bid}`],
+    ["transport", `/api/transport?businessId=${bid}`],
+    ["block-factory", `/api/block-factory?businessId=${bid}`],
+    ["poultry/feed-mill", `/api/poultry/feed-mill?businessId=${bid}`],
+    ["aquaculture/feed-mill", `/api/aquaculture/feed-mill?businessId=${bid}`],
+  ];
+  const inventoryRows = [];
+  for (const [label, url] of wireTargets) {
+    const out = await page.evaluate(async (u) => {
+      const res = await fetch(u);
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* non-JSON */ }
+      const rows = [];
+      for (const key of ["inventory", "rawMaterials", "finishedFeeds"]) {
+        if (Array.isArray(json?.[key])) {
+          for (const r of json[key]) {
+            rows.push({
+              key,
+              id: r?.id,
+              name: String(r?.name || ""),
+              hasPhotoBlob: typeof r?.photo === "string" && r.photo.startsWith("data:"),
+              hasPhotoField: r?.photo !== undefined && r?.photo !== null,
+              count: r?.photoCount,
+              hasPhoto: r?.hasPhoto,
+              carriesPhotosArray: "photos" in (r || {}),
+              carriesThumbArray: "photosThumb" in (r || {}),
+            });
+          }
+        }
+      }
+      const txns = Array.isArray(json?.transactions) ? json.transactions : [];
+      return {
+        status: res.status, bytes: text.length,
+        hasDataUri: text.includes("data:image"),
+        rows,
+        txnBad: txns.filter((t) => "receiptImage" in t || "receiptImages" in t).length,
+        txnCounts: txns.map((t) => t?.receiptCount).filter((v) => v !== undefined),
+      };
+    }, url);
+    ok(out.status === 200, `${label} GET succeeds`, `HTTP ${out.status}`);
+    ok(!out.hasDataUri, `${label} ships no stored image bytes`, `${Math.round(out.bytes / 1024)} KB payload`);
+    ok(out.txnBad === 0, `${label} ledger carries \`receiptCount\`, never a receipt blob`, `${out.txnBad} rows with receipt fields`);
+    inventoryRows.push(...out.rows.map((r) => ({ ...r, label })));
+  }
+  const withArrays = inventoryRows.filter((r) => r.carriesPhotosArray || r.carriesThumbArray);
+  ok(withArrays.length === 0, "no stock row carries the full photo/thumbnail arrays",
+    withArrays.length ? `${withArrays.length} rows (${withArrays[0].label} #${withArrays[0].id})` : `${inventoryRows.length} rows checked`);
+  const withBlob = inventoryRows.filter((r) => r.hasPhotoBlob || r.hasPhotoField);
+  ok(withBlob.length === 0, "no stock row ships a photo at all (these screens paint text, not images)",
+    withBlob.length ? `${withBlob.length} rows, e.g. ${withBlob[0].label} #${withBlob[0].id}` : `${inventoryRows.length} rows checked`);
+  const flagged = inventoryRows.filter((r) => r.count === undefined);
+  ok(flagged.length === 0, "every stock row publishes a numeric `photoCount`",
+    flagged.length ? `${flagged.length} rows missing it` : "all rows");
+
+  // The suite's own product really does have images — the payload just must
+  // not carry them, and the row must still say so.
+  const own = inventoryRows.find((r) => r.name === `${TAG} Optimized Product`);
+  ok(!!own && own.hasPhoto === true && Number(own.count) >= 1,
+    "a row that HAS images is published as hasPhoto + photoCount (no silent data loss)",
+    own ? `hasPhoto=${own.hasPhoto} count=${own.count}` : "created product missing from the payloads");
+
+  // A real receipt (not just the refused probes) proves `receiptCount` works.
+  const posted = await wirePost("/api/transactions", {
+    businessId: bid,
+    type: "EXPENSE",
+    category: "Supplies",
+    amountGhs: 7,
+    description: `${TAG} wire receipt probe`,
+    receiptImage: wireReceipt,
+  });
+  if (posted.status === 200 && posted.json?.transaction?.id) {
+    created.transactionIds.push(Number(posted.json.transaction.id));
+    const listed = await page.evaluate(async (u) => {
+      const res = await fetch(u);
+      const text = await res.text();
+      const j = JSON.parse(text);
+      const t = (j.transactions || []).find((x) => String(x.description || "").includes("wire receipt probe"));
+      return { found: !!t, count: t?.receiptCount, hasBlob: !!t && ("receiptImage" in t || "receiptImages" in t), anyBlob: text.includes("data:image") };
+    }, `/api/transactions?businessId=${bid}`);
+    ok(listed.found && listed.count === 1 && !listed.hasBlob && !listed.anyBlob,
+      "a stored receipt is listed as `receiptCount: 1` with zero bytes on the wire",
+      listed.found ? `count=${listed.count} blob=${listed.hasBlob}` : "posted row not found in the list");
+  } else {
+    ok(false, "a receipt-bearing expense can be posted for the wire probe", `${posted.status} ${JSON.stringify(posted.json)?.slice(0, 80)}`);
+  }
+}
+
 } catch (err) {
   fail++;
   console.error("💥 suite error:", err?.message || err);

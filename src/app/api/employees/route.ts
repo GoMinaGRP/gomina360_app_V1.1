@@ -384,11 +384,18 @@ export async function PATCH(request: Request) {
     // Photo update (upload or camera capture)
     let photoChanged = false;
     if (d.photo !== undefined) {
-      const photoCheck = validateOptionalImage(d.photo, "employeePhoto", { label: "Photo" });
-      if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
+      // A row stored before the current byte budgets must stay editable: an
+      // UNCHANGED photo is accepted as-is (a stale client bundle, or any client
+      // that echoes the stored value back, cannot brick an edit), while a NEW
+      // or CHANGED image is validated against the employeePhoto budget.
+      const unchanged = d.photo === existing.photo;
+      if (!unchanged) {
+        const photoCheck = validateOptionalImage(d.photo, "employeePhoto", { label: "Photo" });
+        if (!photoCheck.ok) return NextResponse.json({ success: false, error: photoCheck.error }, { status: 400 });
+      }
       const photo = d.photo ? String(d.photo) : null;
       updates.photo = photo;
-      photoChanged = true;
+      photoChanged = !unchanged;
     }
 
     if (!Object.keys(updates).length) {

@@ -50,6 +50,7 @@ import { nextTrxNumber } from "@/lib/idNumbers";
 
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 const RAW_CATEGORY = "Feed Raw Materials";
 /** The shared taxonomy may store the umbrella category with this wording in
@@ -183,8 +184,12 @@ export async function GET(request: NextRequest) {
     const millInputs = inputs.filter((i) => batchIds.has(i.batchId));
     const formIds = new Set(forms.map((f) => f.id));
     const millFormItems = formItems.filter((i) => formIds.has(i.formulationId));
-    const rawMaterials = invRows.filter((i) => isRawCategory(i));
-    const finishedFeeds = invRows.filter((i) => isMillCategory(i));
+    // Wire policy (src/lib/imagePayload): no mill screen paints QC evidence or
+    // a stock image — rows carry `photoCount` / `hasPhoto` only. Uploads stay
+    // untouched in the database.
+    const slimInv = slimInventoryRows(invRows, { keepImage: false });
+    const rawMaterials = slimInv.filter((i) => isRawCategory(i));
+    const finishedFeeds = slimInv.filter((i) => isMillCategory(i));
     const consumption = feedRows.filter((f) => f.sourceType === "OWN_MILL");
 
     // Self-heal mill checklist templates once the mill is in use (no seed data).
@@ -196,7 +201,7 @@ export async function GET(request: NextRequest) {
       formulationItems: millFormItems,
       batches,
       batchInputs: millInputs,
-      qcChecks: qc,
+      qcChecks: stripPhotos(qc, ["photo"]),
       rawMaterials,
       finishedFeeds,
       consumption,

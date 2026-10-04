@@ -41,6 +41,7 @@ import {
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -300,14 +301,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       business: { id: biz.id, name: biz.name, code: biz.code },
-      vehicles: vehicles.map(strip),
+      // Wire policy (src/lib/imagePayload): photos no screen renders stay in
+      // the database. Vehicle/fuel/checklist images become `hasPhoto` flags,
+      // the ledger carries `receiptCount`, and stock rows carry `photoCount` /
+      // `hasPhoto` (the fleet screens never paint a product image).
+      vehicles: stripPhotos(vehicles.map(strip), ["photo"]),
       drivers,
-      trips, bookings, fuelLogs: fuels, maintenance: maint, checklists: checks,
+      trips, bookings, fuelLogs: stripPhotos(fuels, ["receiptPhoto"]), maintenance: maint,
+      checklists: stripPhotos(checks, ["photo"]),
       checklistTemplates: templates,
       geofences: fences,
       violations,
-      transactions: txns,
-      inventory: inv,
+      transactions: stripReceipts(txns),
+      inventory: slimInventoryRows(inv, { keepImage: false }),
       insights,
       providers: GPS_PROVIDER_LIBRARY,
       metrics,

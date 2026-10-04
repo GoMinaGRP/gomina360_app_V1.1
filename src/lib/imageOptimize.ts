@@ -512,7 +512,12 @@ export async function optimizeImage(
         `This image is ${mb(originalBytes)} and cannot be re-encoded by this browser — images it cannot compress must be under ${mb(MAX_UNDECODABLE_BYTES)}. Convert it to JPEG/PNG and try again.`,
       );
     }
-    return untouched();
+    // Stored byte-for-byte. Note it so the picker can warn that a format this
+    // browser cannot decode may not display on every device.
+    return {
+      ...untouched(),
+      note: `${originalMime.replace("image/", "").toUpperCase()} images are stored as-is — they may not display on every device.`,
+    };
   }
   try {
     const { draw, width, height } = decoded;

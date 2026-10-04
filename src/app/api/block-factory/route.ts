@@ -31,6 +31,7 @@ import { pushToUsers, urlForNotification } from "@/lib/push";
 import { nextTrxNumber } from "@/lib/idNumbers";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { validateOptionalImage } from "@/lib/mediaValidation";
+import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
 
 // Original factory block types — master list seeds with exactly these keys so
 // all existing production records, orders and filters stay unchanged.
@@ -265,15 +266,19 @@ export async function GET(request: NextRequest) {
       production: production.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       orders: orders.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       deliveries: deliveries.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
-      inventory,
+      // Wire policy (src/lib/imagePayload): stock rows carry `photoCount` /
+      // `hasPhoto` only (the factory paints names and quantities, never the
+      // image); QC evidence photos become `hasPhoto` (the register paints a 📷
+      // indicator, never the image itself).
+      inventory: slimInventoryRows(inventory, { keepImage: false }),
       checklists: checklists.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       blockTypes: types.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
-      qcChecks: qcChecks.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
+      qcChecks: stripPhotos(qcChecks.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)), ["photo"]),
       mixFormulations: mixFormulations.sort((a: any, b: any) => (a.id || 0) - (b.id || 0)),
       mixFormulationItems: mixFormulationItems.filter((i: any) => mixFormIds.has(i.formulationId)),
       mixBatches: mixBatches.sort((a: any, b: any) => (b.id || 0) - (a.id || 0)),
       mixBatchInputs: mixBatchInputs.filter((i: any) => mixBatchIds.has(i.mixBatchId)),
-      mixRawMaterials: inventory.filter((i: any) => i.category === MIX_RAW_CATEGORY),
+      mixRawMaterials: slimInventoryRows(inventory, { keepImage: false }).filter((i: any) => i.category === MIX_RAW_CATEGORY),
     });
   } catch (error: any) {
     return apiError(error);

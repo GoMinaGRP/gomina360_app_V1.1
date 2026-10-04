@@ -11,12 +11,37 @@ function notFound() {
   return NextResponse.json({ success: false, error: "Photo not found." }, { status: 404 });
 }
 
+/**
+ * Hardening note (2026-10 image audit): product photos may legitimately be SVG
+ * (`accept="image/*"`), and this route serves stored bytes with the stored MIME
+ * from the app's own origin. An SVG document opened directly could execute
+ * inline script under the app's session, so every image response carries a
+ * lockdown CSP and `nosniff`.
+ *
+ * `sandbox` + `default-src 'none'` only affect the resource when it is used as
+ * a DOCUMENT; `<img src="/api/menu/photo…">` (how the storefront renders it) is
+ * unaffected, so images keep painting exactly as before.
+ */
+function imageLockdownHeaders(contentType?: string): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Security-Policy": "default-src 'none'; sandbox; img-src 'none'",
+    "X-Content-Type-Options": "nosniff",
+  };
+  // An SVG is the one rasterisable-but-scriptable format: force a download when
+  // it is navigated to, so it can never render as a same-origin document.
+  if (contentType === "image/svg+xml") {
+    headers["Content-Disposition"] = `attachment; filename="image-${Date.now()}.svg"`;
+  }
+  return headers;
+}
+
 function cacheHeaders(src: string, contentType?: string): HeadersInit {
   const etag = `"menu-photo-${createHash("sha1").update(src).digest("base64url").slice(0, 16)}"`;
   return {
     ETag: etag,
     "Cache-Control": `public, max-age=${ONE_HOUR}, stale-while-revalidate=${ONE_DAY}`,
     ...(contentType ? { "Content-Type": contentType } : {}),
+    ...imageLockdownHeaders(contentType),
   };
 }
 

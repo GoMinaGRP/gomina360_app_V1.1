@@ -62,11 +62,17 @@ export function validateImageDataUrl(
     return { ok: false, error: `${label}: no image data.` };
   }
   if (typeof value !== "string") return { ok: false, error: `${label} must be an image.` };
-  const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(value.trim());
+  // Strict base64 (no whitespace/newlines — encoders never emit them, and a
+  // padded payload would otherwise inflate the measured size) and a NON-EMPTY
+  // payload: a zero-byte "image" stores a broken row for every later reader.
+  const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value.trim());
   if (!m) {
     return { ok: false, error: `${label} must be a base64 image (data:image/…;base64,…).` };
   }
   const bytes = dataUrlBytes(value);
+  if (bytes < 4) {
+    return { ok: false, error: `${label} is empty — the file did not upload. Try again.` };
+  }
   const max = opts.maxBytes ?? IMAGE_BYTE_BUDGETS[purpose] ?? THUMB_BUDGET_BYTES;
   if (bytes > max) {
     return {

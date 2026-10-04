@@ -610,7 +610,9 @@ export default function BlockQcCenter({
                       </span>
                     </td>
                     <td className="py-2 pr-3">{c.testerName || "—"}</td>
-                    <td className="py-2">{c.photo ? <Camera className="w-3.5 h-3.5 text-amber-400" /> : <span className="text-slate-700">—</span>}</td>
+                    {/* The API publishes `hasPhoto` instead of shipping the
+                        evidence blob to a screen that only paints an icon. */}
+                    <td className="py-2">{c.hasPhoto || c.photo ? <Camera className="w-3.5 h-3.5 text-amber-400" /> : <span className="text-slate-700">—</span>}</td>
                   </tr>
                 ))}
               </tbody>

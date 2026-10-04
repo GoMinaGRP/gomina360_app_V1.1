@@ -179,6 +179,11 @@ export function EmployeeRegistration({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [camOpen, setCamOpen] = useState(false);
+  /** TRUE only once a NEW photo was picked/captured in this session. Rows
+   *  stored before the current byte budgets must not be re-validated (and a
+   *  re-sent legacy photo would be refused) — so an untouched photo is simply
+   *  not part of the save payload. */
+  const [photoDirty, setPhotoDirty] = useState(false);
   const editing = !!initial?.id;
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -193,6 +198,7 @@ export function EmployeeRegistration({
     setErr("");
     try {
       set("photo", await imageToDataUrl(file));
+      setPhotoDirty(true);
     } catch (err: any) {
       // Shared pipeline refused it (over the source ceiling, or a format this
       // browser cannot decode) — surface the reason.
@@ -220,7 +226,10 @@ export function EmployeeRegistration({
         idType: form.idType || undefined, idNumber: form.idNumber || undefined,
         workPermitNo: form.workPermitNo || undefined, notes: form.notes || undefined,
       };
-      if (form.photo) payload.photo = form.photo;
+      // Send the photo ONLY when it was added/changed/captured here; an
+      // unchanged stored photo stays untouched on the server.
+      if (form.photo && (photoDirty || !editing)) payload.photo = form.photo;
+      if (!form.photo && photoDirty) payload.photo = null; // explicit removal
       if (form.employeeNo) payload.employeeNo = form.employeeNo;
       const r = await fetch("/api/employees", {
         method: editing ? "PATCH" : "POST",
@@ -437,7 +446,7 @@ export function EmployeeRegistration({
           </button>
         </div>
       </div>
-      {camOpen && <CameraCapture onShot={(d) => { set("photo", d); setCamOpen(false); }} onClose={() => setCamOpen(false)} />}
+      {camOpen && <CameraCapture onShot={(d) => { set("photo", d); setPhotoDirty(true); setCamOpen(false); }} onClose={() => setCamOpen(false)} />}
     </div>
   );
 }

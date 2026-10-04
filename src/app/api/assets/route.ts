@@ -88,7 +88,13 @@ export async function PATCH(request: Request) {
     }
     // Image updates are validated centrally when supplied (shape + budget +
     // cap); an omitted field keeps the stored value untouched.
-    const imgCheck = validateImageArray(updates?.assetImages, "asset", { label: "Asset photo" });
+    // A legacy row (stored before the byte budgets) stays editable: when the
+    // caller sends an image set IDENTICAL to what is already stored, it is
+    // accepted untouched; new/changed images must fit the budget.
+    const imagesUnchanged =
+      updates?.assetImages !== undefined &&
+      JSON.stringify(updates.assetImages) === JSON.stringify(asset.assetImages || []);
+    const imgCheck = imagesUnchanged ? { ok: true as const } : validateImageArray(updates?.assetImages, "asset", { label: "Asset photo" });
     if (!imgCheck.ok) return NextResponse.json({ success: false, error: imgCheck.error }, { status: 400 });
     const thumbCheck = validateImageArray(updates?.assetImagesThumb, "asset", {
       label: "Asset thumbnail",

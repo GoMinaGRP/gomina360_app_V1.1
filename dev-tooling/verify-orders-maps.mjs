@@ -736,8 +736,16 @@ async function cleanup() {
   const gpsNow = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
   const bizCount = (await pg.query(`SELECT count(*)::int c FROM businesses`)).rows[0].c;
   const userCount = (await pg.query(`SELECT count(*)::int c FROM users`)).rows[0].c;
+  // The anchor must be back to whatever the branch had BEFORE the suite ran:
+  // a live branch may legitimately carry a pin (every seeded business does),
+  // so asserting a bare NULL would fail on a healthy database just because
+  // the suite restored the very pin it found.
+  const wantGps = baseline.gpsWasSet || { gps_lat: null, gps_lng: null };
   ok("Z4 branch GPS anchor restored & business/user counts unchanged",
-    gpsNow.gps_lat === null && gpsNow.gps_lng === null && bizCount === baseline.bizCount && userCount === baseline.userCount);
+    String(gpsNow.gps_lat) === String(wantGps.gps_lat) &&
+      String(gpsNow.gps_lng) === String(wantGps.gps_lng) &&
+      bizCount === baseline.bizCount && userCount === baseline.userCount,
+    `gps=${gpsNow.gps_lat},${gpsNow.gps_lng} want ${wantGps.gps_lat},${wantGps.gps_lng}`);
   console.log(`   purged: trackings=${trk.rowCount} docs=${docs.rowCount} trxns=${trxs.rowCount} notifications=${ntfs.rowCount} customers=${custs.rowCount} sessions=${sess.rowCount}`);
 }
 
