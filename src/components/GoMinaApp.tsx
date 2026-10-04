@@ -861,7 +861,13 @@ export default function GoMinaApp() {
       return (
         <AuditCommandCenter
           currentUser={currentUser}
-          businesses={scopedBusinesses}
+          // The FULL accessible list (not lens-filtered): the Audit center's own
+          // Owner control IS the Organization Lens for a Super Admin, so it must
+          // be able to offer every owner — while starting on "My Workspace".
+          businesses={businesses}
+          organizations={orgDirectory}
+          orgLens={orgLens}
+          onLensChange={setOrgLens}
           currentCurrency={currentCurrency}
           focusIssueId={auditFocusIssue}
           onFocusHandled={() => setAuditFocusIssue(null)}
