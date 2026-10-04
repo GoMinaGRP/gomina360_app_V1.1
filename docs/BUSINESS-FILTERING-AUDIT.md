@@ -5,7 +5,7 @@ that asks the user to pick a business, plus the Super Owner/Admin sections that 
 
 **The problem in one line:** the platform already has an Owner/Organization concept (`businesses.ownerId` +
 `organizations` directory) and a Super Admin "Organization Lens", but individual screens each re-invent a
-flat business list — so the defaul is often *every* unit on the platform, with no owner grouping, no type
+flat business list — so the default is often *every* unit on the platform, with no owner grouping, no type
 grouping and no search, and at least one screen (Audit & Review) bypasses the lens entirely.
 
 ---
