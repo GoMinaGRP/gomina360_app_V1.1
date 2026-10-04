@@ -20,6 +20,8 @@ import {
   Server,
 } from "lucide-react";
 import AiSectionGuide from "./AiSectionGuide";
+import { myOrgIdOf, unitOptionGroups } from "@/lib/businessScope";
+import { useOrgDirectory } from "@/components/OrgDirectoryContext";
 
 /**
  * CCTV Security Command — Integration Hub sub-module.
@@ -169,6 +171,12 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
     scope.isOwner || (scope.canManage && (scope.businessIds ?? []).includes(businessId));
 
   // Business → Branch grouping with camera counts (from the scoped list).
+  const orgDirectory = useOrgDirectory();
+  const cctvOwnerGroups = useMemo(
+    () => unitOptionGroups(scopedBusinesses, { organizations: orgDirectory, myOrgId: myOrgIdOf(currentUser) }),
+    [scopedBusinesses, currentUser, orgDirectory],
+  );
+
   const tree = useMemo(() => {
     const byBiz = new Map<number, Map<string, any[]>>();
     for (const c of cameras) {
@@ -406,9 +414,16 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
               }`}
               data-testid="cctv-biz-ALL"
             >
-              All Businesses ({cameras.length})
+              All units ({cameras.length})
             </button>
-            {scopedBusinesses.map((b) => {
+            {cctvOwnerGroups.map((g) => (
+              <div key={g.ownerId} data-testid={`cctv-owner-group-${g.ownerId}`}>
+                {cctvOwnerGroups.length > 1 && (
+                  <p className="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                    {g.ownerName} · {g.units.length} unit{g.units.length === 1 ? "" : "s"}
+                  </p>
+                )}
+                {g.units.map((b) => {
               const branches = tree.get(b.id) || new Map<string, any[]>();
               const total = [...branches.values()].reduce((s, arr) => s + arr.length, 0);
               const active = selBusiness === b.id;
@@ -446,7 +461,9 @@ export default function CctvCommandCenter({ currentUser, businesses, onClose }: 
                   )}
                 </div>
               );
-            })}
+                })}
+              </div>
+            ))}
           </aside>
 
           {/* Camera grid */}

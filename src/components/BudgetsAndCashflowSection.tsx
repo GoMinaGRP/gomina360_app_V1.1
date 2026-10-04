@@ -12,6 +12,8 @@
 // Self-fetching: no prop plumbing beyond the business list + current user.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import {
   AlertTriangle,
   Banknote,
@@ -163,10 +165,7 @@ function BudgetsPanel({ currentUser, businesses, currentCurrency }: { currentUse
           ))}
         </select>
         <select value={scope} onChange={(e) => setScope(e.target.value)} className="px-2.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200" data-testid="budget-scope">
-          <option value="all">All businesses (consolidated)</option>
-          {(businesses || []).map((b: any) => (
-            <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
-          ))}
+          <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allValue="all" allLabel="All units (consolidated)" showCode />
         </select>
         <button onClick={() => load()} className="p-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700" title="Refresh">
           <RefreshCw className="w-3.5 h-3.5" />
@@ -393,10 +392,7 @@ function CashflowPanel({ currentUser, businesses, currentCurrency }: { currentUs
     <div className="rounded-2xl border border-slate-700/70 bg-slate-900/60 p-4 sm:p-5 space-y-4" data-testid="cashflow-panel">
       <div className="flex flex-wrap items-center gap-2">
         <select value={scope} onChange={(e) => setScope(e.target.value)} className="px-2.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200" data-testid="cashflow-scope">
-          <option value="all">All businesses (consolidated)</option>
-          {(businesses || []).map((b: any) => (
-            <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
-          ))}
+          <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allValue="all" allLabel="All units (consolidated)" showCode />
         </select>
         <select value={weeks} onChange={(e) => setWeeks(Number(e.target.value))} className="px-2.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200">
           {[8, 13, 26].map((w) => (

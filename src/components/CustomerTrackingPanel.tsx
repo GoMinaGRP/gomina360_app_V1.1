@@ -46,6 +46,8 @@ import {
   parseGoogleMapsPin,
 } from "@/lib/tracking";
 import { validatePhone } from "@/lib/phone";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 
 const STATUS_STYLES: Record<string, string> = {
   RECEIVED: "bg-sky-500/15 text-sky-300 border-sky-500/40",
@@ -948,10 +950,7 @@ export default function CustomerTrackingPanel({
             className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200"
             data-testid="ct-filter-biz"
           >
-            <option value="">All my businesses</option>
-            {scopedBusinesses.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <UnitScopeOptions units={scopedBusinesses} myOrgId={myOrgIdOf(currentUser)} />
           </select>
         )}
         <div className="relative flex-1 min-w-[180px] max-w-sm">

@@ -1,5 +1,7 @@
 "use client";
 
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import React, { useEffect, useState } from "react";
 import AdvisorSectionPicker from "./AdvisorSectionPicker";
 import { farmModuleOfBusiness } from "@/lib/advisorSections";
@@ -921,10 +923,7 @@ export default function EnterpriseUserPanel({
                     onChange={(e) => setNewBusinessId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <option value="">None (HQ / Executive)</option>
-                    {businesses.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
+                    <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allLabel="None (HQ / Executive)" />
                   </select>
                 </div>
                 )}
@@ -1187,10 +1186,7 @@ export default function EnterpriseUserPanel({
                     onChange={(e) => setEditBusinessId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <option value="">None (HQ / Executive)</option>
-                    {businesses.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
+                    <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allLabel="None (HQ / Executive)" />
                   </select>
                 </div>
               </div>

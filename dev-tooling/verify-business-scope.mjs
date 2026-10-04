@@ -394,6 +394,151 @@ try {
   await fCtx.close();
   await fCtx2.close();
 
+  /* ═══════════ G. UI — the Phase C flat unit selectors ═══════════ */
+  console.log("\n── G. Flat unit selectors (Phase C) ──");
+  const gCtx = await browser.createBrowserContext();
+  const gpage = await gCtx.newPage();
+  const gErrors = [];
+  gpage.on("pageerror", (e) => gErrors.push(String(e)));
+  await gpage.goto(BASE + "/", { waitUntil: "networkidle2" });
+  await gpage.waitForSelector('[data-testid="login-email"]', { timeout: 120000 });
+  await gpage.type('[data-testid="login-email"]', OWNER.email);
+  await gpage.type('[data-testid="login-password"]', OWNER.pw);
+  await gpage.click('[data-testid="login-submit"]');
+  await gpage.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 120000 });
+  await sleep(2500);
+
+  const gNav = async (text) => {
+    const hit = await gpage.evaluate((t) => {
+      const els = [...document.querySelectorAll('[data-testid="nav-sidebar"] button, [data-testid="nav-sidebar"] a, button, a')];
+      const el =
+        els.find((e) => (e.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === t.toLowerCase()) ||
+        els.find((e) => (e.textContent || "").replace(/\s+/g, " ").trim().toLowerCase().includes(t.toLowerCase()));
+      if (!el) return false;
+      el.click();
+      return true;
+    }, text);
+    await sleep(2400);
+    return hit;
+  };
+  const gSelect = (sel) =>
+    gpage.evaluate((q) => {
+      const el = document.querySelector(q);
+      if (!el) return null;
+      return {
+        value: el.value,
+        first: el.querySelector(":scope > option")?.textContent.trim() || "",
+        groups: [...el.querySelectorAll("optgroup")].map((g) => g.label),
+      };
+    }, sel);
+  const setLens = async (v) => {
+    await gpage.evaluate((x) => {
+      const el = document.querySelector('[data-testid="org-lens-select"]');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
+      setter.call(el, x);
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, v);
+    await sleep(2400);
+  };
+
+  // G1 — default (My Workspace) lens: plain options, consistent wording.
+  const MY_GROUPS = ["My Workspace (9)", "AU WM Demo Org (1)"];
+  await gNav("Action Center");
+  const actionMy = await gSelect('[data-testid="action-biz-filter"]').catch(() => null) ||
+    await gpage.evaluate(() => {
+      const el = [...document.querySelectorAll("select")].find((s) => s.querySelector("option")?.textContent.trim() === "All units");
+      return el ? { value: el.value, first: el.querySelector(":scope > option").textContent.trim(), groups: [...el.querySelectorAll("optgroup")].map((g) => g.label) } : null;
+    });
+  ok(actionMy?.first === "All units", "Action Center offers “All units” (not “All businesses”)", actionMy?.first || "select missing");
+  ok((actionMy?.groups || []).length === 0, "a single-owner view stays a plain, ungrouped list", `groups=${(actionMy?.groups || []).length}`);
+
+  // G2 — switch to the platform lens: every flat selector names the owner.
+  await setLens("ALL");
+  const actionAll = await gpage.evaluate(() => {
+    const el = [...document.querySelectorAll("select")].find((s) => s.querySelector("option")?.textContent.trim() === "All units");
+    return el ? { groups: [...el.querySelectorAll("optgroup")].map((g) => g.label), last: [...el.querySelectorAll("option")].pop()?.textContent.trim() } : null;
+  });
+  ok(JSON.stringify(actionAll?.groups) === JSON.stringify(MY_GROUPS),
+    "spanning owners groups the Action Center unit list (own workspace first)", (actionAll?.groups || []).join(" | "));
+
+  await gNav("Document Vault");
+  const vault = await gSelect('[data-testid="vault-biz"]');
+  ok(vault?.first === "All units" && JSON.stringify(vault?.groups) === JSON.stringify(MY_GROUPS),
+    "Document Vault uses the same list and grouping", `${vault?.first} · ${(vault?.groups || []).join(" | ")}`);
+
+  await gNav("Pre-Orders");
+  const preo = await gSelect('[data-testid="po-biz"]');
+  ok(preo?.first === "All units" && (preo?.groups || []).length === 2,
+    "Pre-Order catalogue uses the same list and grouping", `${preo?.first} · ${(preo?.groups || []).join(" | ")}`);
+
+  await gNav("Customer Order & Tracking");
+  const track = await gSelect('[data-testid="ct-filter-biz"]');
+  ok(track?.first === "All units" && (track?.groups || []).length === 2,
+    "Customer Order & Tracking drops “All my businesses” for “All units”", `${track?.first} · ${(track?.groups || []).join(" | ")}`);
+
+  await gNav("Finance & Reports");
+  const fin = await gSelect('[data-testid="fin-report-central-business-select"]');
+  const bud = await gSelect('[data-testid="budget-scope"]');
+  ok(fin?.first === "All units (consolidated)" && (fin?.groups || []).length === 2,
+    "the consolidated report says “All units (consolidated)”", `${fin?.first} · ${(fin?.groups || []).join(" | ")}`);
+  ok(bud?.first === "All units (consolidated)" && (bud?.groups || []).length === 2,
+    "Budgets & Cashflow matches the report vocabulary", `${bud?.first} · ${(bud?.groups || []).join(" | ")}`);
+
+  await gNav("Scenario Planning");
+  const scen = await gSelect('[data-testid="scen-scope"]');
+  ok(scen?.first === "All units (enterprise)" && scen?.groups?.[0] === "My Workspace (9)",
+    "Scenario Planning keeps My Workspace first in its scope list", `${scen?.first} · ${(scen?.groups || []).join(" | ")}`);
+
+  await gNav("AI Strategic Advisor");
+  const ai = await gpage.evaluate(() => {
+    const el = [...document.querySelectorAll("select")].find((s) => s.querySelector("option")?.textContent.trim().startsWith("Target:"));
+    return el ? { first: el.querySelector(":scope > option")?.textContent.trim(), groups: [...el.querySelectorAll("optgroup")].map((g) => g.label) } : null;
+  });
+  ok(ai?.groups?.[0] === "My Workspace (9)" && (ai?.groups || []).length === 2,
+    "AI Advisor groups its target list by owner (own workspace first)", (ai?.groups || []).join(" | "));
+
+  await gNav("Sales & Payments");
+  const bm = await gSelect('[data-testid="bm-branch-select"]');
+  ok((bm?.groups || []).length === 2 && bm?.first !== "All units",
+    "the executive Operating Branch picker groups without inventing an “all” row", `${bm?.first} · ${(bm?.groups || []).join(" | ")}`);
+
+  await gNav("Employees & Payroll");
+  await gpage.evaluate(() => document.querySelector('[data-testid="emp-payroll-open"]')?.click());
+  await sleep(2600);
+  const prl = await gSelect('[data-testid="prl-biz-filter"]');
+  ok(prl?.first === "All units" && (prl?.groups || []).length === 2,
+    "the Payroll Command Center filter uses the shared list", `${prl?.first} · ${(prl?.groups || []).join(" | ")}`);
+  await gpage.evaluate(() => document.querySelector('[data-testid="prl-tab-ATTENDANCE"]')?.click());
+  await sleep(2200);
+  const att = await gSelect('[data-testid="attl-filter-biz"]');
+  ok(att?.first === "All units" && (att?.groups || []).length === 2,
+    "the Attendance review filter uses the shared list", `${att?.first} · ${(att?.groups || []).join(" | ")}`);
+  await gpage.evaluate(() => document.querySelector('[data-testid="prl-close"], [data-testid="prl-back"]')?.click());
+  await sleep(1500);
+
+  await gNav("Integrations Hub");
+  await gpage.evaluate(() => document.querySelector('[data-testid="hub-cctv-open"]')?.click());
+  await sleep(2500);
+  const cctv = await gpage.evaluate(() => ({
+    all: document.querySelector('[data-testid="cctv-biz-ALL"]')?.textContent.replace(/\s+/g, " ").trim() || "",
+    groups: [...document.querySelectorAll('[data-testid^="cctv-owner-group-"]')].map((g) => g.querySelector("p")?.textContent.replace(/\s+/g, " ").trim() || ""),
+  }));
+  ok(/^All units \(\d+\)$/.test(cctv.all), "the CCTV rail says “All units”, not “All Businesses”", cctv.all);
+  ok(cctv.groups.length === 2 && /^My Workspace · 9 units$/.test(cctv.groups[0]) && /AU WM Demo Org · 1 unit$/.test(cctv.groups[1]),
+    "the CCTV rail labels each owner with its unit count (own workspace first)", cctv.groups.join(" | "));
+
+  // G3 — back to My Workspace: the grouping disappears again.
+  await setLens("MY");
+  await gNav("Action Center");
+  const back = await gpage.evaluate(() => {
+    const el = [...document.querySelectorAll("select")].find((s) => s.querySelector("option")?.textContent.trim() === "All units");
+    return el ? { groups: [...el.querySelectorAll("optgroup")].map((g) => g.label), opts: el.querySelectorAll("option").length } : null;
+  });
+  ok((back?.groups || []).length === 0 && back?.opts === 10,
+    "returning to My Workspace restores the plain single-owner list", `groups=${(back?.groups || []).length} opts=${back?.opts}`);
+  ok(gErrors.length === 0, "no page errors across the Phase C surfaces", gErrors.slice(0, 2).join(" | "));
+  await gCtx.close();
+
   /* ═══════════ E. UI — scoped auditor ═══════════ */
   console.log("\n── E. Audit & Review UI (scoped auditor) ──");
   // A fresh context: the Super Admin's session cookie must not leak into the

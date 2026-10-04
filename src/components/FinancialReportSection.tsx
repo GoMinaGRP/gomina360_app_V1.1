@@ -38,6 +38,7 @@ import {
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import AiSectionGuide from "./AiSectionGuide";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
 import {
   FinanceGranularity,
   computeFinancialReport,
@@ -76,6 +77,8 @@ interface Props {
   businesses?: any[];
   /** enterprise mode: live metric rows (same provenance as businessMetric). */
   metrics?: any[];
+  /** the caller's own organization — groups the unit picker "My Workspace first". */
+  myOrgId?: number;
   transactions: any[];
   inventory?: any[];
   customers?: any[];
@@ -175,6 +178,7 @@ async function fetchSalesDocuments(businessId?: number | null): Promise<any[]> {
 
 export default function FinancialReportSection({
   mode,
+  myOrgId,
   businessInfo,
   businessMetric,
   businesses = [],
@@ -418,7 +422,7 @@ export default function FinancialReportSection({
   const hdrTitle =
     title ||
     (isEnterprise
-      ? "Enterprise Financial Report — All Businesses & Branches"
+      ? "Enterprise Financial Report — All Units"
       : `Financial Report — ${activeBiz?.name || "This Business"}`);
   const hdrSub =
     subtitle ||
@@ -569,12 +573,7 @@ export default function FinancialReportSection({
                 }}
                 className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-[11px] font-semibold"
               >
-                <option value="ALL">All Businesses (Consolidated)</option>
-                {businesses.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} — {b.code}
-                  </option>
-                ))}
+                <UnitScopeOptions units={businesses} myOrgId={myOrgId} allValue="ALL" allLabel="All units (consolidated)" showCode />
               </select>
             </label>
           ) : (

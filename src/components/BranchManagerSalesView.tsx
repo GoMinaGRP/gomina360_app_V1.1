@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   ShoppingCart,
@@ -989,11 +991,7 @@ export default function BranchManagerSalesView({
             data-testid="bm-branch-select"
             className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500 max-w-xs"
           >
-            {businesses.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name} ({b.code})
-              </option>
-            ))}
+            <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} includeAll={false} showCode />
           </select>
         </div>
       )}

@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import {
   PackageCheck,
   Plus,
@@ -318,10 +320,7 @@ export default function PreorderSetupView({
         </div>
         <div className="flex items-center gap-2">
           <select value={bizId} onChange={(e) => setBizId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200" data-testid="po-biz">
-            <option value="">All units</option>
-            {scopedBusinesses.map((b: any) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
+            <UnitScopeOptions units={scopedBusinesses} myOrgId={myOrgIdOf(currentUser)} />
           </select>
           <button onClick={loadCatalogue} className="p-2 rounded-lg hover:bg-slate-700/70 text-slate-300" title="Refresh" data-testid="po-refresh">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />

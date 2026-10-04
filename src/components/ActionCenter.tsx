@@ -16,6 +16,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import ApprovalInbox from "@/components/ApprovalInbox";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import { CurrencyCode } from "@/lib/currency";
 import {
   AlertTriangle,
@@ -350,10 +352,7 @@ export default function ActionCenter({
           onChange={(e) => setBizFilter(e.target.value)}
           className="px-2.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200"
         >
-          <option value="">All businesses</option>
-          {(businesses || []).map((b: any) => (
-            <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
-          ))}
+          <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allLabel="All units" showCode />
         </select>
         <span className="text-[10px] text-slate-500 ml-auto font-semibold">{tasks.length} shown · {today}</span>
       </div>

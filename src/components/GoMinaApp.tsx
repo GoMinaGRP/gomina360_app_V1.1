@@ -84,6 +84,8 @@ const TransportModule = lazyMod(() => import("./TransportModule"));
 const BoutiqueModule = lazyMod(() => import("./BoutiqueModule"));
 const BusinessDashboardModule = lazyMod(() => import("./BusinessDashboardModule"));
 const UniversalExportCenter = lazyMod(() => import("./UniversalExportCenter"));
+import { OrgDirectoryProvider } from "@/components/OrgDirectoryContext";
+import { myOrgIdOf } from "@/lib/businessScope";
 
 export default function GoMinaApp() {
   const [loading, setLoading] = useState(true);
@@ -1560,6 +1562,7 @@ export default function GoMinaApp() {
       return (
         <AiAdvisorView
           insights={scopedAiInsights}
+          myOrgId={myOrgIdOf(currentUser)}
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshInsights={refreshAllData}
@@ -1571,6 +1574,7 @@ export default function GoMinaApp() {
       return (
         <ScenarioPlannerView
           scenarios={scopedScenarios}
+          myOrgId={myOrgIdOf(currentUser)}
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshScenarios={refreshAllData}
@@ -1897,6 +1901,7 @@ export default function GoMinaApp() {
           }
         />
 
+        <OrgDirectoryProvider value={orgDirectory}>
         <main className="flex-1 min-w-0 overflow-y-auto bg-slate-950/95 pb-12 max-lg:pb-24">
           <div data-printchrome="true" className="sticky top-0 z-30 flex items-center justify-between xl:justify-end gap-2 px-4 sm:px-6 py-2 bg-slate-950/90 backdrop-blur border-b border-slate-800/80">
             {/* Compact "you are here" bar — phones/tablets/small laptops
@@ -1978,6 +1983,7 @@ export default function GoMinaApp() {
             })()}
           {renderActiveView()}
         </main>
+        </OrgDirectoryProvider>
 
         {/* Right-side navigation & location panel (persistent rail ≥xl,
             slide-in drawer on smaller screens) — shows current Business,

@@ -15,6 +15,7 @@ import AiSectionGuide from "./AiSectionGuide";
 import FinancialReportSection from "./FinancialReportSection";
 import BudgetsAndCashflowSection from "./BudgetsAndCashflowSection";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { myOrgIdOf } from "@/lib/businessScope";
 import {
   computeFinancialReport,
   getFinancePeriod,
@@ -253,6 +254,7 @@ export default function EnterpriseFinanceView({
       {/* ── The complete central report (all filters, trends, tables) ── */}
       <FinancialReportSection
         mode="enterprise"
+        myOrgId={myOrgIdOf(currentUser)}
         businesses={businesses}
         metrics={metrics}
         transactions={transactions}
@@ -262,7 +264,7 @@ export default function EnterpriseFinanceView({
         accent="cyan"
         testid="fin-report-central"
         aiModuleKey="SHARED"
-        title="Consolidated Financial Report — All Businesses & Branches"
+        title="Consolidated Financial Report — All Units"
         subtitle="Revenue, sales, expenses, profit, payments, outstanding and trends — filtered by days, months and years, per business and per branch/register."
       />
 

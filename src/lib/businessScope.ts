@@ -151,6 +151,49 @@ export function scopeOwners(units: ScopeUnit[], myOrgId: number = MAIN_ORG_ID): 
   return [...byId.values()].sort((a, b) => (a.isMine !== b.isMine ? (a.isMine ? -1 : 1) : a.name.localeCompare(b.name)));
 }
 
+export type UnitOption = { id: number; name: string; code: string | null };
+export type UnitOptionGroup = { ownerId: number; ownerName: string; isMine: boolean; units: UnitOption[] };
+
+/**
+ * The option list every flat unit <select> should render: the caller's own
+ * workspace first, then the other owners, each group carrying its unit count.
+ * Surfaces that span owners show grouped options (so two units with the same
+ * name are never ambiguous); a single-owner list stays a plain list — no extra
+ * chrome where there is nothing to disambiguate.
+ *
+ * `myOrgId` is optional: panels that do not know the caller's organization
+ * still get correct grouping, they just cannot nominate the "My Workspace"
+ * group first (their unit list is normally a single owner anyway).
+ */
+export function unitOptionGroups(
+  businesses: any[] | null | undefined,
+  opts: { organizations?: OrgLite[] | null; myOrgId?: number } = {},
+): UnitOptionGroup[] {
+  const myOrgId = opts.myOrgId;
+  const dir = new Map((opts.organizations || []).map((o) => [Number(o.id), o]));
+  const byId = new Map<number, UnitOptionGroup>();
+  for (const b of Array.isArray(businesses) ? businesses : []) {
+    if (!b || b.id == null) continue;
+    const ownerId = Number(b.ownerId ?? myOrgId ?? MAIN_ORG_ID);
+    const isMine = myOrgId != null && ownerId === myOrgId;
+    const ownerName =
+      (isMine ? "My Workspace" : "") ||
+      dir.get(ownerId)?.name ||
+      (b.ownerName ? String(b.ownerName) : "") ||
+      `Owner #${ownerId}`;
+    const group = byId.get(ownerId) || { ownerId, ownerName, isMine, units: [] };
+    group.units.push({ id: Number(b.id), name: String(b.name || `Unit #${b.id}`), code: b.code ? String(b.code) : null });
+    byId.set(ownerId, group);
+  }
+  for (const g of byId.values()) {
+    g.units.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+    g.units = g.units.filter((u, i) => g.units.findIndex((x) => x.id === u.id) === i);
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.isMine !== b.isMine ? (a.isMine ? -1 : 1) : a.ownerName.localeCompare(b.ownerName),
+  );
+}
+
 /**
  * Units after applying the owner + type part of a selection. The search box is
  * applied separately (it narrows the PICKER, not the caller's data scope).

@@ -42,6 +42,8 @@ import {
   Cell,
 } from "recharts";
 import AiSectionGuide from "./AiSectionGuide";
+import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { myOrgIdOf } from "@/lib/businessScope";
 import AttendanceReviewPanel from "./AttendanceReviewPanel";
 import { resolveLogo, getCompanyLogo } from "@/lib/logos";
 import { csvSafeCell } from "@/lib/universalExport";
@@ -552,8 +554,7 @@ export default function PayrollCenter({ currentUser, businesses, employees, onCh
               className="px-2.5 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
               data-testid="prl-biz-filter"
             >
-              <option value="ALL">All businesses</option>
-              {scopedBusinesses.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              <UnitScopeOptions units={scopedBusinesses} myOrgId={myOrgIdOf(currentUser)} allValue="ALL" allLabel="All units" />
             </select>
             <AiSectionGuide moduleKey="PAYROLL" section="DEFAULT" variant="header" />
             <button onClick={() => load()} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Refresh" data-testid="prl-refresh">
