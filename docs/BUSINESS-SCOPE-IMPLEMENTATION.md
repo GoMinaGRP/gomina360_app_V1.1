@@ -108,3 +108,35 @@ Organizations, a single owner).
   unit created by the suite could sit behind the "Show all" cap. The suite now
   expands the list before clicking a business by name (was red for data
   reasons, not a product regression).
+
+## Verification — final sweep (all on one build)
+
+| Suite | Result |
+| --- | --- |
+| `verify-business-scope.mjs` (A–H) | **94 / 94** |
+| `lens-verify` · `multiowner-verify` | 15 · 118 |
+| `verify-audit-access` · `verify-audit-records` · `verify-audit-responsive` · `verify-audit-fixes` · `verify-audit-history` | 28 · 29 · 38 · 51 · 38 |
+| `verify-business-manage` · `verify-manage-unit` · `verify-business-backup` | 24 · 24 · 54 |
+| `verify-action-center` · `verify-action-center-ui` · `verify-attendance` · `verify-attendance-gps` · `verify-payroll2` | 38 · 25 · 31 · 24 · 52 |
+| `verify-documents` · `verify-procurement-chain` · `verify-budgets-cashflow` · `verify-finance-allproducts-fresh` | 40 · 64 · 26 · 49 |
+| `verify-customer-ui` · `verify-customer-360` · `verify-tracking` · `verify-orders-maps` · `verify-credit-sales` | 12 · 40 · 51 · ✅ · 39 |
+| `verify-bm-dashboard-access` · `verify-manager-ui` · `verify-employees` · `verify-shared-ui` · `verify-nav` · `verify-ai-guides-ui` | 19 · 7 · 46 · 30 · 69 · 17 |
+| `verify-clean-state` · `verify-clean-state-ui` · `verify-az-app-audit` · `verify-logos` · `verify-online-mgmt` · `verify-storefront-areas` | 121 · 23 · 41 · 35 · 81 · 53 |
+| `verify-responsive` (57 page views + 114 module tabs) · `verify-single-writer` · `verify-p4-writers` · `verify-p5-stock` | clean · 35 · 23 · 19 |
+
+Roles exercised: Super Admin (owner), General Manager (403 on `/api/audit`),
+scoped auditor/branch manager (own unit + separate audit grant), worker.
+Lenses exercised: My Workspace (default), All Organizations, a single owner.
+Owners exercised: GoMina Group (org 1, 9 units) and AU WM Demo Org (org 2,
+1 unit).
+
+## Known limits (not product issues)
+
+- `owner-lifecycle-ui-verify.mjs` is a Playwright suite and needs the Playwright
+  chromium runtime (`libnspr4`), which this sandbox does not have — it fails at
+  browser launch before touching the app. No fixtures are left behind.
+- `verify-orders-maps` flaked once on a map-tile wait and passed on re-run (no
+  storefront or map code was touched by this work).
+- `verify-clean-state-ui` needed one tooling fix: the sidebar previews the first
+  5 units, so a unit created by the suite could sit behind "Show all". Fixed in
+  the suite.
