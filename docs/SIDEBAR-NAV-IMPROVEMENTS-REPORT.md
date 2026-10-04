@@ -78,7 +78,7 @@ Every suite below ran against the production build on `:3000` after the change.
 | `verify-shared-ui` | 30 / 0 |
 | `verify-action-center-ui` | 25 / 25 |
 | `verify-ai-guides-ui` | 17 / 0 |
-| `verify-responsive` | all page views clean, 0 real offenders (see note) |
+| `verify-responsive` | 198 page views + 135 module tabs, 0 console errors; only benign `truncate` offenders left (Command Center, see note) |
 
 **Test-harness fix worth recording:** the unit-list cap broke suites that found a
 business chip by fuzzy text (a 6th unit was no longer in the DOM), which then
