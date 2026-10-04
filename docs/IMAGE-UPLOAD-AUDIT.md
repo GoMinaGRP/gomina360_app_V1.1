@@ -1,6 +1,9 @@
 # Image Upload Audit — GoMina 360
 
-**Date:** 2026-10-03 · **Status:** findings + recommended strategy, **for approval (not implemented)**
+**Date:** 2026-10-03 · **Status:** findings + recommended strategy — **APPROVED and implemented** in
+commit `29cf5c2`; see [`IMAGE-UPLOAD-IMPLEMENTATION-REPORT.md`](./IMAGE-UPLOAD-IMPLEMENTATION-REPORT.md)
+for what shipped, the measured results and the three deliberate deviations (no receipt-thumbnail
+column; higher alpha budgets for avatars/logos; Phase-2 media table deferred).
 **Method:** source review of every upload path, DB schema of every image column, route-level guard
 inventory, and a browser benchmark that reproduces the shipped encoder exactly and measures bytes,
 DPI and PSNR per preset (`dev-tooling/image-audit-bench.mjs`, read-only).
