@@ -390,6 +390,10 @@ export async function PATCH(request: Request) {
       if (d.model !== undefined) updates.model = d.model ? String(d.model).trim().slice(0, 120) : null;
       if (d.specifications !== undefined) updates.specifications = sanitizeSpecList(d.specifications);
       if (d.variants !== undefined) updates.variants = sanitizeVariantList(d.variants);
+      if (d.optionAxis1Label !== undefined)
+        updates.optionAxis1Label = d.optionAxis1Label ? String(d.optionAxis1Label).trim().slice(0, 24) : null;
+      if (d.optionAxis2Label !== undefined)
+        updates.optionAxis2Label = d.optionAxis2Label ? String(d.optionAxis2Label).trim().slice(0, 24) : null;
       // Recompute stock status from the (possibly updated) quantity/threshold.
       // Variant products keep their DERIVED aggregate/status: syncItemAggregate
       // is the only thing allowed to write them.
@@ -1062,6 +1066,10 @@ export async function POST(request: Request) {
       // after the row exists, and it REPLACES the parent quantity with the
       // live sum of variants (the register stays the one stock truth).
       const boutiqueMatrix = data.tracksVariants === true ? normalizeVariantMatrix(data.boutiqueVariants) : [];
+      // What the two axes MEAN for this product (Size / Shoe size / Capacity /
+      // Style / Model / Colour / Pack size …). Presentation only.
+      const axis1Label = String(data.optionAxis1Label || "").trim().slice(0, 24) || null;
+      const axis2Label = String(data.optionAxis2Label || "").trim().slice(0, 24) || null;
       const [inserted] = await db
         .insert(inventoryItems)
         .values({
@@ -1093,6 +1101,8 @@ export async function POST(request: Request) {
           model: data.model ? String(data.model).trim().slice(0, 120) : null,
           specifications: sanitizeSpecList(data.specifications),
           variants: sanitizeVariantList(data.variants),
+          optionAxis1Label: boutiqueMatrix.length > 0 ? axis1Label : null,
+          optionAxis2Label: boutiqueMatrix.length > 0 ? axis2Label : null,
           qrCode: invQr || null,
           registeredByName: data.registeredByName ? String(data.registeredByName).slice(0, 120) : null,
           registeredByUserId: data.registeredByUserId ? Number(data.registeredByUserId) : null,
@@ -1116,6 +1126,9 @@ export async function POST(request: Request) {
       if (boutiqueMatrix.length > 0) {
         try {
           await setVariantsForItem({
+            reason: "OPENING",
+            refType: "INVENTORY_REGISTER",
+            note: "Opening stock registered with the product",
             businessId: bizId,
             inventoryId: inserted.id,
             variants: boutiqueMatrix,

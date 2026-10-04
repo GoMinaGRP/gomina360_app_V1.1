@@ -688,6 +688,8 @@ export const inventoryItems = pgTable("inventory_items", {
   brand: text("brand"),
   model: text("model"),
   specifications: jsonb("specifications"),
+  /** Legacy display-only chips (pre-variant-engine). Superseded by
+   *  `inventory_variants`; kept read-only so existing products keep rendering. */
   variants: jsonb("variants"),
   /** Boutique (and any size/colour retail) — when TRUE this item's stock is
    *  tracked per SIZE/COLOUR variant in `inventory_variants`; `quantity` stays
@@ -695,6 +697,11 @@ export const inventoryItems = pgTable("inventory_items", {
    *  (low stock, finance, reports, dashboards) keeps working unchanged.
    *  Existing items keep the column NULL/false and behave exactly as before. */
   tracksVariants: boolean("tracks_variants").default(false),
+  /** What the two variant axes MEAN for this product (Size, Shoe size,
+   *  Capacity, Style, Model, Colour, Pack size, …). Labels are presentation
+   *  only — storage stays `inventory_variants.size` / `.color`. */
+  optionAxis1Label: text("option_axis1_label"),
+  optionAxis2Label: text("option_axis2_label"),
   /** QR identity tag — globally unique when set; scanned with the camera or
    *  auto-generated at registration, printed on the stock label. */
   qrCode: text("qr_code"),

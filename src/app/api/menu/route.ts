@@ -341,6 +341,12 @@ export async function GET(request: Request) {
             ...(vProjection
               ? {
                   hasVariants: true,
+                  // What the axes mean for this product (defaults are the
+                  // generic Size/Colour the picker has always shown).
+                  optionAxisLabels: {
+                    axis1: i.optionAxis1Label || null,
+                    axis2: i.optionAxis2Label || null,
+                  },
                   variantOptions: {
                     sizes: vProjection.sizes,
                     colors: vProjection.colors,

@@ -285,12 +285,28 @@ export async function POST(request: NextRequest) {
         );
       }
       try {
+        // Axis labels travel with the matrix so the storefront can name the
+        // axes the way the business does ("Capacity", "Shoe size", …).
+        const axis1 = body.axis1Label !== undefined ? String(body.axis1Label || "").trim().slice(0, 24) || null : undefined;
+        const axis2 = body.axis2Label !== undefined ? String(body.axis2Label || "").trim().slice(0, 24) || null : undefined;
+        if (axis1 !== undefined || axis2 !== undefined) {
+          await db
+            .update(inventoryItems)
+            .set({
+              ...(axis1 !== undefined ? { optionAxis1Label: axis1 } : {}),
+              ...(axis2 !== undefined ? { optionAxis2Label: axis2 } : {}),
+            })
+            .where(and(eq(inventoryItems.id, inventoryId), eq(inventoryItems.businessId, businessId)));
+        }
         const saved = await setVariantsForItem({
           businessId,
           inventoryId,
           variants: matrix,
           replace: body.replace !== false,
           actorName: me.name || null,
+          reason: "ADJUSTMENT",
+          refType: "BOUTIQUE_SET_VARIANTS",
+          actor: { id: me.id, name: me.name || null, role: me.role || null },
         });
         ttlInvalidate("init");
         ttlInvalidate("menu");
