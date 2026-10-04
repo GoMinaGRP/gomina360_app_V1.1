@@ -35,6 +35,13 @@ import {
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import ProductLightbox from "@/components/ProductLightbox";
+import {
+  shopPhone,
+  telHref,
+  waHref,
+  shopDirectionsUrl,
+  shopAskText,
+} from "@/lib/shopContact";
 import ProductShareMenu from "@/components/ProductShareMenu";
 import WatermarkOverlay from "@/components/WatermarkOverlay";
 import MiniLeafletMap from "@/components/MiniLeafletMap";
@@ -234,6 +241,12 @@ const HOWTO_STEPS: [string, React.ReactNode][] = [
   ["Place order & track it", <>Tap <span className="font-bold text-emerald-700">Place order</span> — you instantly get a <span className="font-mono text-cyan-700">GM-…</span> code (<span className="font-bold">Copy code</span> to keep it safe). <span className="font-bold text-cyan-700">Track my order live →</span> opens an auto-refreshing page: Received → Confirmed → Processing → Ready/Dispatched → Delivered — pre-orders add Pre-order → Procurement → Shipped → In transit → Arrived → Stock received — plus payment status and a live courier map.</>],
 ];
 
+/** Pickup-point address → branch label, for card tooltips and the shop strip. */
+function shopAddressLine(b: any): string {
+  const pt = (b?.pickupLocations || []).find((x: any) => x && (x.address || "").trim());
+  return String(pt?.address || b?.branchName || "").trim();
+}
+
 type ProductCardProps = {
   p: any;
   fromBiz?: any;
@@ -395,6 +408,50 @@ const ProductCard = React.memo(function ProductCard({
             >
               {shopBiz.businessName}
             </button>
+          </div>
+        )}
+        {/* The selling shop stays reachable from the card itself: call it,
+            WhatsApp it, or get directions — the number is the SHOP's own
+            (customerHelpPhone → contactPhone), never the platform helpdesk. */}
+        {shopBiz && (shopPhone(shopBiz) || shopDirectionsUrl(shopBiz)) && (
+          <div className="mt-1 flex items-center gap-1" data-testid={`oo-contact-${p.id}`}>
+            {shopPhone(shopBiz) && (
+              <a
+                href={telHref(shopPhone(shopBiz))}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
+                title={`Call ${shopBiz.businessName} — ${shopPhone(shopBiz)}`}
+                aria-label={`Call ${shopBiz.businessName} on ${shopPhone(shopBiz)}`}
+                data-testid={`oo-call-${p.id}`}
+              >
+                <Phone className="w-3 h-3" /> Call
+              </a>
+            )}
+            {shopPhone(shopBiz) && (
+              <a
+                href={waHref(shopPhone(shopBiz), shopAskText(shopBiz, p))}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-green-50 border border-green-200 text-[10px] font-bold text-green-700 hover:bg-green-100"
+                title={`WhatsApp ${shopBiz.businessName}`}
+                aria-label={`Ask ${shopBiz.businessName} about ${p.name} on WhatsApp`}
+                data-testid={`oo-wa-${p.id}`}
+              >
+                <MessageCircle className="w-3 h-3" /> Ask
+              </a>
+            )}
+            {shopDirectionsUrl(shopBiz) && (
+              <a
+                href={shopDirectionsUrl(shopBiz)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
+                title={`Directions to ${shopBiz.businessName}${shopAddressLine(shopBiz) ? ` — ${shopAddressLine(shopBiz)}` : ""}`}
+                aria-label={`Get directions to ${shopBiz.businessName}`}
+                data-testid={`oo-dir-${p.id}`}
+              >
+                <Navigation className="w-3 h-3" /> Directions
+              </a>
+            )}
           </div>
         )}
         <div className="text-[10px] text-slate-500 mt-1">
@@ -1536,10 +1593,75 @@ function OrderInner() {
               </div>
             )}
 
-            {biz?.serviceNote && (
-              <p className="text-[10px] font-bold text-sky-700 px-1" data-testid="oo-biz-note">
-                {biz.serviceNote}
-              </p>
+            {/* Focused shop: one slim strip naming the seller and its own
+                contact options — the page must never leave the customer
+                wondering who they are buying from or how to reach them. */}
+            {biz && !allMode && (
+              <div
+                className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-white border border-slate-200 rounded-2xl px-3 py-2 shadow-sm"
+                data-testid="oo-shop-strip"
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <Store className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="text-[12px] font-extrabold text-slate-900 truncate" data-testid="oo-shop-strip-name">
+                    {biz.businessName}
+                  </span>
+                  {biz.branchName && (
+                    <span className="text-[10px] text-slate-500 truncate hidden sm:inline" data-testid="oo-shop-strip-branch">
+                      · {biz.branchName}
+                    </span>
+                  )}
+                </span>
+                {shopPhone(biz) && (
+                  <a
+                    href={telHref(shopPhone(biz))}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
+                    data-testid="oo-shop-call"
+                  >
+                    <Phone className="w-3 h-3" /> {shopPhone(biz)}
+                  </a>
+                )}
+                {shopPhone(biz) && (
+                  <a
+                    href={waHref(shopPhone(biz), `Hello ${biz.businessName}, I would like to ask about an item on GoMina 360 before I order.`)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-green-50 border border-green-200 text-[10px] font-bold text-green-700 hover:bg-green-100"
+                    data-testid="oo-shop-wa"
+                  >
+                    <MessageCircle className="w-3 h-3" /> WhatsApp
+                  </a>
+                )}
+                {shopDirectionsUrl(biz) && (
+                  <a
+                    href={shopDirectionsUrl(biz)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
+                    data-testid="oo-shop-dir"
+                  >
+                    <Navigation className="w-3 h-3" /> Directions
+                  </a>
+                )}
+                {shopAddressLine(biz) && (
+                  <span className="text-[10px] text-slate-500 truncate" data-testid="oo-shop-address">
+                    {shopAddressLine(biz)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={pickAll}
+                  className="ml-auto text-[10px] font-bold text-cyan-700 hover:text-cyan-600 whitespace-nowrap"
+                  data-testid="oo-shop-strip-all"
+                >
+                  Browse all shops ›
+                </button>
+                {biz.serviceNote && (
+                  <p className="w-full text-[10px] font-bold text-sky-700" data-testid="oo-biz-note">
+                    {biz.serviceNote}
+                  </p>
+                )}
+              </div>
             )}
             {biz?.preOrderEnabled === true && (biz?.products || []).some((p: any) => (p.preorderOptions || []).length > 0) && (
               <p className="text-[9px] font-extrabold text-indigo-700 px-1 flex items-center gap-1" data-testid="oo-biz-preorder-badge">
@@ -2236,7 +2358,7 @@ function OrderInner() {
             idx={idx}
             product={lightbox.p}
             wmSpec={wmSpecOf(lightbox.fromBiz || bizOfProduct(lightbox.p))}
-            fromBiz={lightbox.fromBiz}
+            fromBiz={lightbox.fromBiz || bizOfProduct(lightbox.p) || biz}
             canAdd={lightbox.p.available > 0}
             fmtMoney={fmtMoney}
             onClose={() => setLightbox(null)}
