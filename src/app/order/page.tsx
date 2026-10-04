@@ -35,6 +35,7 @@ import {
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
 import ProductLightbox from "@/components/ProductLightbox";
+import CustomerHeader from "@/components/CustomerHeader";
 import {
   shopPhone,
   telHref,
@@ -1282,97 +1283,80 @@ function OrderInner() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      {/* ══ Amazon-style header: logo · search · HELP · track · cart ══ */}
-      <header className="bg-[#131921] text-white sticky top-0 z-40 shadow-lg" data-testid="oo-header">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2.5 pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-          {/* GoMina 360 logo — one click straight to the app's Login page
-              (the storefront's parent brand home). Anonymous customers land
-              on the sign-in screen; signed-in staff land on their dashboard. */}
-          <Link
-            href="/"
-            className="flex items-center gap-2 shrink-0"
-            data-testid="oo-logo"
-            aria-label="GoMina 360 — go to the Login page"
-            title="Go to the GoMina 360 Login page"
-          >
-            <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center font-black text-white text-sm shadow">
-              360
-            </span>
-            <span className="leading-tight hidden xs:block sm:block">
-              <span className="block text-sm font-black">GoMina 360</span>
-              <span className="block text-[9px] text-emerald-300">Official store · live stock</span>
-            </span>
-          </Link>
-          <div className="order-3 sm:order-2 basis-full sm:basis-auto sm:flex-1 min-w-0">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={allMode ? "Search all products across every shop…" : `Search ${biz?.businessName || "this shop"}…`}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-slate-900 bg-white outline-none border-2 border-transparent focus:border-amber-400 shadow-inner"
-                data-testid="oo-search"
-                aria-label="Search products"
-              />
+      {/* ══ Shared customer header (same band as /track): search · HELP ·
+             track link · cart, with the departments strip underneath ══ */}
+      <CustomerHeader
+        strip={
+          biz ? (
+            <div className="bg-[#232f3e] border-t border-slate-700/50">
+              <div className="max-w-7xl mx-auto px-3 sm:px-4 py-1.5 flex gap-1.5 overflow-x-auto" data-testid="oo-catbar">
+                {(allMode ? categoriesAllMode : categories).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setCat(c)}
+                    className={`shrink-0 px-3 py-1.5 rounded-md text-[11px] font-bold transition whitespace-nowrap ${
+                      cat === c
+                        ? "bg-amber-400 text-slate-950"
+                        : "text-slate-200 hover:bg-slate-700/70 hover:text-white"
+                    }`}
+                    data-testid={`oo-cat-${c}`}
+                  >
+                    {c === "ALL" ? "All departments" : c}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="order-2 sm:order-3 ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setHelpOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-[12px] font-black shadow transition"
-              data-testid="oo-help"
-              aria-label="Open help and customer support"
-            >
-              <LifeBuoy className="w-4 h-4" /> HELP
-            </button>
-            <a href="/track" className="px-2 py-2 text-[11px] font-bold text-cyan-300 hover:text-cyan-200" data-testid="oo-track-link">
-              Track order →
-            </a>
-            <button
-              type="button"
-              onClick={() => {
-                if (cart.length === 0) return;
-                setCartOpen(true);
-                window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-              }}
-              className="relative flex items-center gap-1.5 px-2.5 py-2 rounded-lg hover:bg-slate-800 text-white transition"
-              data-testid="oo-header-cart"
-              aria-label={`Cart with ${cartCount} items`}
-            >
-              <ShoppingCart className="w-5 h-5 text-amber-400" />
-              <span className="text-[11px] font-black hidden sm:inline">Cart</span>
-              <span
-                className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${cartCount ? "bg-amber-400 text-slate-950" : "bg-slate-700 text-slate-300"}`}
-                data-testid="oo-header-cart-count"
-              >
-                {cartCount}
-              </span>
-            </button>
+          ) : null
+        }
+      >
+        <div className="order-3 sm:order-2 basis-full sm:basis-auto sm:flex-1 min-w-0">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={allMode ? "Search all products across every shop…" : `Search ${biz?.businessName || "this shop"}…`}
+              className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-slate-900 bg-white outline-none border-2 border-transparent focus:border-amber-400 shadow-inner"
+              data-testid="oo-search"
+              aria-label="Search products"
+            />
           </div>
         </div>
-        {/* Category nav bar (Amazon-style departments strip) */}
-        {biz && (
-          <div className="bg-[#232f3e] border-t border-slate-700/50">
-            <div className="max-w-7xl mx-auto px-3 sm:px-4 py-1.5 flex gap-1.5 overflow-x-auto" data-testid="oo-catbar">
-              {(allMode ? categoriesAllMode : categories).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setCat(c)}
-                  className={`shrink-0 px-3 py-1.5 rounded-md text-[11px] font-bold transition whitespace-nowrap ${
-                    cat === c
-                      ? "bg-amber-400 text-slate-950"
-                      : "text-slate-200 hover:bg-slate-700/70 hover:text-white"
-                  }`}
-                  data-testid={`oo-cat-${c}`}
-                >
-                  {c === "ALL" ? "All departments" : c}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </header>
+        <div className="order-2 sm:order-3 ml-auto flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-[12px] font-black shadow transition"
+            data-testid="oo-help"
+            aria-label="Open help and customer support"
+          >
+            <LifeBuoy className="w-4 h-4" /> HELP
+          </button>
+          <a href="/track" className="px-2 py-2 text-[11px] font-bold text-cyan-300 hover:text-cyan-200" data-testid="oo-track-link">
+            Track order →
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              if (cart.length === 0) return;
+              setCartOpen(true);
+              window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+            }}
+            className="relative flex items-center gap-1.5 px-2.5 py-2 rounded-lg hover:bg-slate-800 text-white transition"
+            data-testid="oo-header-cart"
+            aria-label={`Cart with ${cartCount} items`}
+          >
+            <ShoppingCart className="w-5 h-5 text-amber-400" />
+            <span className="text-[11px] font-black hidden sm:inline">Cart</span>
+            <span
+              className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${cartCount ? "bg-amber-400 text-slate-950" : "bg-slate-700 text-slate-300"}`}
+              data-testid="oo-header-cart-count"
+            >
+              {cartCount}
+            </span>
+          </button>
+        </div>
+      </CustomerHeader>
 
       <main
         className={`max-w-7xl mx-auto px-3 sm:px-4 py-4 space-y-4 ${cart.length ? "pb-[26rem]" : "pb-24"}`}

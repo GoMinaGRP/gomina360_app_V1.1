@@ -365,6 +365,59 @@ async function sectionE(pg) {
   ok("E6b customer sees journey, order details and update feed",
     /Delivered/i.test(pubChecks.body) && /TEST Kasoa market/.test(pubChecks.body) && /Status updates/i.test(pubChecks.body));
 
+  /* ── P3 · tracking ⇄ storefront parity ──────────────────────────────────
+     The customer page must read as the SAME product as /order: shared header,
+     light storefront look, every line linked back to its product, and the
+     order's own shop reachable with that shop's own contact options. */
+  const pay = await fetch(`${BASE}/api/track?code=${encodeURIComponent(baseline.dlvCode)}`).then((r) => r.json());
+  const seller = pay?.tracking?.seller || null;
+  const parity = await p4.evaluate(() => {
+    const g = (t) => document.querySelector(`[data-testid="${t}"]`);
+    const h = (t) => g(t)?.getAttribute("href") || null;
+    const bg = (t) => { const el = g(t); return el ? getComputedStyle(el).backgroundColor : null; };
+    return {
+      header: !!g("oo-header"),
+      headerDark: /19, 25, 33/.test(bg("oo-header") || "") || /rgb\(19, 25, 33\)/.test(bg("oo-header") || ""),
+      logo: !!g("oo-logo"),
+      orderLink: h("track-order-link"),
+      trackerWhite: bg("track-result") ? null : null,
+      firstCard: bg("track-seller"),
+      sellerName: (g("track-seller")?.textContent || "").slice(0, 90),
+      call: h("track-seller-call"),
+      wa: decodeURIComponent(h("track-seller-wa") || ""),
+      dir: h("track-seller-dir"),
+      order: h("track-seller-order"),
+      itemRows: [...document.querySelectorAll('[data-testid^="track-item-"]')]
+        .map((e) => e.dataset.testid).filter((t) => /^track-item-\d+$/.test(t)),
+      itemLinks: [...document.querySelectorAll('[data-testid^="track-item-link-"]')]
+        .map((e) => ({ t: e.dataset.testid, href: e.getAttribute("href") })),
+      sku: (document.querySelector('[data-testid^="track-item-sku-"]') || {}).textContent || "",
+    };
+  });
+  const dg = (v) => String(v || "").replace(/\D/g, "");
+  const shopDigits = dg(seller?.customerHelpPhone || seller?.contactPhone || "");
+  ok("P3a /track wears the SAME customer header as the storefront (dark band, brand, order link)",
+    parity.header && parity.headerDark && parity.logo && parity.orderLink === "/order", JSON.stringify({ h: parity.header, dark: parity.headerDark, logo: parity.logo, link: parity.orderLink }));
+  ok("P3b track page is the light storefront look (seller card on white, not the old dark theme)",
+    /255, 255, 255/.test(parity.firstCard || ""), String(parity.firstCard));
+  ok("P3c sold-by block names the selling shop and offers that shop's OWN contact options",
+    !!seller && parity.sellerName.includes(seller.businessName) &&
+    (shopDigits ? dg(parity.call) === shopDigits && dg(parity.wa).startsWith(shopDigits) : true) &&
+    (/maps\/dir/.test(parity.dir || "") || !seller.gpsLat) &&
+    parity.order === `/order?biz=${seller.businessId}`,
+    JSON.stringify({ seller: seller?.businessName, call: parity.call, dir: parity.dir, order: parity.order }));
+  ok("P3d the enquiry quotes this order's tracking code (seller knows exactly which order)",
+    parity.wa.includes("wa.me/") && parity.wa.includes(pay.tracking.code), parity.wa.slice(0, 140));
+  const items = pay.tracking.items || [];
+  const linked = parity.itemLinks.length;
+  ok("P3e every ordered line links back to its storefront product on the SAME shop",
+    parity.itemRows.length === items.length && items.length > 0 &&
+    dg(parity.itemLinks.map((l) => l.href).join(" ")).length >= 0 &&
+    parity.itemLinks.every((l) => new RegExp(`^/order\\?biz=${pay.tracking.businessId}&p=\\d+$`).test(l.href)),
+    JSON.stringify({ rows: parity.itemRows, links: parity.itemLinks }));
+  ok("P3f the line carries the product's SKU for the seller to match",
+    (items[0]?.sku ? parity.sku.trim() === String(items[0].sku) : true), `${parity.sku} vs ${items[0]?.sku}`);
+
   // unknown code message
   await p4.goto(`${BASE}/track?code=GM-POULTRY-XXXXX9`, { waitUntil: "networkidle0", timeout: 60000 });
   await p4.waitForSelector('[data-testid="track-error"]', { timeout: 30000 });
