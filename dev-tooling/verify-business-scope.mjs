@@ -284,6 +284,116 @@ try {
   ok(pageErrors.length === 0, "no page errors on the Audit & Review surface", pageErrors.slice(0, 2).join(" | "));
   await page.close();
 
+  /* ═══════════ F. the other high-consequence surfaces (Phase B) ═══════════ */
+  console.log("\n── F. Manage Units · Export Center · Command Center ──");
+
+  // Clean contexts: the section-D Super Admin session must not leak in (and
+  // vice-versa) — each role gets its own cookie jar.
+  const fCtx = await browser.createBrowserContext();
+  const fCtx2 = await browser.createBrowserContext();
+
+  // F1 — Manage Units opens on My Workspace (not every owner) and can search.
+  const mpage = await fCtx.newPage();
+  const mErrors = [];
+  mpage.on("pageerror", (e) => mErrors.push(String(e.message).slice(0, 160)));
+  await mpage.goto(`${BASE}/?login=1`, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await mpage.waitForSelector('[data-testid="login-email"]', { timeout: 120000 });
+  await mpage.type('[data-testid="login-email"]', OWNER.email);
+  await mpage.type('[data-testid="login-password"]', OWNER.pw);
+  await mpage.click('[data-testid="login-submit"]');
+  await mpage.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 120000 });
+  await sleep(2200);
+  await mpage.evaluate(() => document.querySelector('[data-testid="sidebar-manage-businesses"]')?.click());
+  await sleep(2500);
+  const manage = await mpage.evaluate(() => ({
+    ownerValue: document.querySelector('[data-testid="org-filter-select"]')?.value,
+    ownerOptions: [...document.querySelectorAll('[data-testid="org-filter-select"] option')].map((o) => o.textContent.trim()),
+    summary: document.querySelector('[data-testid="manage-biz-scope-label"]')?.textContent?.trim() || "",
+    search: !!document.querySelector('[data-testid="manage-biz-search"]'),
+  }));
+  ok(manage.ownerValue === "MY", "Manage Units opens on My Workspace", `filter=${manage.ownerValue}`);
+  ok(/My Workspace/.test(manage.summary) && /of \d+ unit/.test(manage.summary), "the header states the active scope and counts",
+    manage.summary.trim());
+  ok(manage.ownerOptions[0].startsWith("My Workspace") && /^All Owners \/ Orgs \(\d+\)/.test(manage.ownerOptions[1]),
+    "the Owner picker offers My Workspace, All Owners and each owner (counts)", manage.ownerOptions.join(" | "));
+  ok(manage.search, "a unit search box is available");
+  if (manage.search) {
+    const before = await mpage.$eval('[data-testid="manage-biz-scope-label"]', (e) => e.textContent.trim());
+    await mpage.type('[data-testid="manage-biz-search"]', "aqua");
+    await sleep(900);
+    const after = await mpage.$eval('[data-testid="manage-biz-scope-label"]', (e) => e.textContent.trim());
+    ok(before !== after && / 1 of /.test(after), "search narrows the list to the matching unit", after.trim());
+    await mpage.evaluate(() => {
+      const i = document.querySelector('[data-testid="manage-biz-search"]');
+      i.focus(); i.setSelectionRange(0, i.value.length);
+    });
+    await mpage.keyboard.press("Backspace");
+    await sleep(700);
+  }
+  await mpage.evaluate(() => {
+    const s = document.querySelector('[data-testid="org-filter-select"]');
+    s.value = "ALL"; s.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(900);
+  const widened = await mpage.$eval('[data-testid="manage-biz-scope-label"]', (e) => e.textContent.trim());
+  ok(/All owners/.test(widened), "an owner can be widened to All owners explicitly (still available)", widened.trim());
+  ok(mErrors.length === 0, "no page errors in Manage Units", mErrors.slice(0, 2).join(" | "));
+  await mpage.close();
+
+  // F2 — Export Center: default scope is the current workspace, never "everyone".
+  const epage = await fCtx2.newPage();
+  const eErrors = [];
+  epage.on("pageerror", (e) => eErrors.push(String(e.message).slice(0, 160)));
+  await epage.goto(`${BASE}/?login=1`, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await epage.waitForSelector('[data-testid="login-email"]', { timeout: 120000 });
+  await epage.type('[data-testid="login-email"]', OWNER.email);
+  await epage.type('[data-testid="login-password"]', OWNER.pw);
+  await epage.click('[data-testid="login-submit"]');
+  await epage.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 120000 });
+  await sleep(2200);
+  const gridGroupsMine = await epage.$$eval('[data-testid^="cc-owner-group-"]', (es) => es.length);
+  ok(gridGroupsMine === 0, "the Command Center shows no owner headers when only one owner is in view (no clutter)");
+  await epage.evaluate(() => {
+    const s = document.querySelector('[data-testid="org-lens-select"]');
+    s.value = "ALL"; s.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(3000);
+  const gridGroupsAll = await epage.$$eval('[data-testid^="cc-owner-group-"]', (es) =>
+    es.map((e) => (e.textContent || "").replace(/\s+/g, " ").trim())
+  );
+  ok(gridGroupsAll.length >= 2 && /My Workspace/.test(gridGroupsAll[0]),
+    "spanning owners groups the Command Center unit grid under each owner (own workspace first)",
+    gridGroupsAll.join(" | "));
+  await epage.evaluate(() => document.querySelector('[data-testid="universal-export-btn"]')?.click());
+  await epage.waitForSelector('[data-testid="universal-export-modal"]', { timeout: 30000 });
+  await sleep(1000);
+  const exp = await epage.evaluate(() => ({
+    note: document.querySelector('[data-testid="export-scope-note"]')?.textContent?.replace(/\s+/g, " ").trim() || "",
+    unit: document.querySelector('[data-testid="export-scope-unit"]')?.textContent?.replace(/\s+/g, " ").trim() || "",
+    hasBar: !!document.querySelector('[data-testid="export-scope"]'),
+  }));
+  ok(exp.hasBar, "the Export Center uses the shared scope control");
+  ok(/Exports \d+ units? in /.test(exp.note), "the export scope states exactly which workspace it will export", exp.note);
+  ok(!/All Businesses & Branches/i.test(exp.note + exp.unit), "no blanket “All Businesses & Branches” default remains",
+    `${exp.unit}`);
+  await epage.click('[data-testid="export-scope-unit"]');
+  await sleep(600);
+  const expGroups = await epage.$$eval('[data-testid="export-scope-panel"] div', (ds) =>
+    ds.map((d) => (d.textContent || "").replace(/\s+/g, " ").trim()).filter((t) => /^(My Workspace|AU WM|Owner #)/.test(t))
+  );
+  ok(expGroups.length >= 2, "the export unit list groups by owner with counts when owners are in view",
+    expGroups.slice(0, 3).join(" | "));
+  await epage.keyboard.press("Escape");
+  await sleep(300);
+  await epage.evaluate(() => {
+    const s = document.querySelector('[data-testid="org-lens-select"]');
+    s.value = "MY"; s.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await sleep(1800);
+  ok(eErrors.length === 0, "no page errors on the export/command-center surfaces", eErrors.slice(0, 2).join(" | "));
+  await fCtx.close();
+  await fCtx2.close();
+
   /* ═══════════ E. UI — scoped auditor ═══════════ */
   console.log("\n── E. Audit & Review UI (scoped auditor) ──");
   // A fresh context: the Super Admin's session cookie must not leak into the

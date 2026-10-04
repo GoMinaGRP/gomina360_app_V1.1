@@ -42,6 +42,7 @@ import { rollupsByOrg } from "@/lib/orgGrouping";
 import { ActiveTab } from "./Sidebar";
 import FinancialReportSection from "./FinancialReportSection";
 import { businessTypeKeyOf, businessTypeLabelOf } from "@/lib/businessTypeKeys";
+import { scopeUnits } from "@/lib/businessScope";
 import {
   averageRiskScore,
   commandCenterRiskBand,
@@ -155,6 +156,29 @@ export default function CommandCenterDashboard({
         : activeBusinesses.filter((b) => businessTypeKeyOf(b?.category || "Other") === businessTypeFilter),
     [activeBusinesses, businessTypeFilter]
   );
+
+  // Owner grouping for the unit grid: when the current scope spans more than
+  // one Owner (Super Admin on "All owners" / one other owner), the cards are
+  // grouped under their owner with a count — the same grouping the shared
+  // BusinessScopeBar uses everywhere else. Single-owner callers see no headers.
+  const unitOwnerRows = useMemo(() => {
+    const catalogue = scopeUnits(typeScopedBusinesses, organizations);
+    const byId = new Map(catalogue.map((u) => [u.id, u]));
+    const buckets: { ownerId: number; ownerName: string; isMine: boolean; rows: any[] }[] = [];
+    for (const b of typeScopedBusinesses) {
+      const unit = byId.get(Number(b.id));
+      const ownerId = unit?.ownerId ?? 1;
+      let bucket = buckets.find((x) => x.ownerId === ownerId);
+      if (!bucket) {
+        bucket = { ownerId, ownerName: unit?.ownerName || `Owner #${ownerId}`, isMine: !!unit?.isMine, rows: [] };
+        buckets.push(bucket);
+      }
+      bucket.rows.push(b);
+    }
+    buckets.sort((a, b) => (a.isMine !== b.isMine ? (a.isMine ? -1 : 1) : a.ownerName.localeCompare(b.ownerName)));
+    return buckets;
+  }, [typeScopedBusinesses, organizations]);
+  const showOwnerGroups = unitOwnerRows.length > 1;
 
   const allBizIds = useMemo(() => typeScopedBusinesses.map((b) => Number(b.id)).filter(Number.isFinite), [typeScopedBusinesses]);
   const allBizIdsKey = allBizIds.join("|");
@@ -790,7 +814,18 @@ export default function CommandCenterDashboard({
               No active businesses match this business type filter. Click Clear to reset.
             </div>
           )}
-          {typeScopedBusinesses.map((biz) => {
+          {unitOwnerRows.map((group) => (
+            <React.Fragment key={group.ownerId}>
+              {showOwnerGroups && (
+                <div className="col-span-full flex items-center gap-2 pt-1" data-testid={`cc-owner-group-${group.ownerId}`}>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    {group.isMine ? "My Workspace" : group.ownerName}
+                  </span>
+                  <span className="text-[10px] text-slate-500">· {group.rows.length} unit{group.rows.length === 1 ? "" : "s"}</span>
+                  <span className="flex-1 h-px bg-slate-700/70" />
+                </div>
+              )}
+              {group.rows.map((biz) => {
             const active = selectedSet.has(Number(biz.id));
             return (
               <button
@@ -817,7 +852,9 @@ export default function CommandCenterDashboard({
                 )}
               </button>
             );
-          })}
+              })}
+            </React.Fragment>
+          ))}
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Archive,
+  Search,
   ArrowLeft,
   Building2,
   Copy,
@@ -43,6 +44,7 @@ import { qrDataUrl } from "@/lib/qrRegistry";
 import { googleMapsEmbed } from "@/lib/tracking";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { businessTypeKeyOf, businessTypeLabelOf, displayCategory } from "@/lib/businessTypeKeys";
+import { matchesUnit, myOrgIdOf, scopeOwners, scopeUnits, typesInScope } from "@/lib/businessScope";
 
 import WatermarkOverlay from "@/components/WatermarkOverlay";
 import { optimizedDataUrl } from "@/lib/imageOptimize";
@@ -193,36 +195,61 @@ export default function ManageBusinessesModal({
   const orgNameOf = (orgId: any) =>
     organizations.find((o) => Number(o.id) === Number(orgId))?.name ||
     (orgId ? `Organization #${orgId}` : "Unassigned");
-  const [orgFilter, setOrgFilter] = useState<string>("ALL");
+  // Scope: "MY" = the caller's own workspace (the default — a Super Admin
+  // opens on their own units, not every owner's), "ALL" = every permitted unit,
+  // "<orgId>" = one owner. Same model as the shared BusinessScopeBar.
+  const [orgFilter, setOrgFilter] = useState<string>("MY");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const [unitQuery, setUnitQuery] = useState("");
+  const myOrgId = useMemo(() => myOrgIdOf(currentUser), [currentUser]);
+  const scopeCatalogue = useMemo(() => scopeUnits(businesses, organizations, myOrgId), [businesses, organizations, myOrgId]);
+  const scopeOwnerList = useMemo(() => scopeOwners(scopeCatalogue, myOrgId), [scopeCatalogue, myOrgId]);
+  const scopeTypeList = useMemo(
+    () =>
+      typesInScope(
+        scopeCatalogue,
+        { ownerId: orgFilter === "MY" ? "MY" : orgFilter === "ALL" ? "ALL" : Number(orgFilter) },
+        myOrgId,
+      ),
+    [scopeCatalogue, orgFilter, myOrgId],
+  );
+  const matchedIds = useMemo(() => {
+    if (!unitQuery.trim()) return null;
+    return new Set(scopeCatalogue.filter((u) => matchesUnit(u, unitQuery)).map((u) => u.id));
+  }, [scopeCatalogue, unitQuery]);
   const orgScopedBusinesses = useMemo(() => {
-    if (!isSuperAdmin || orgFilter === "ALL") return businesses;
-    return businesses.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
-  }, [businesses, isSuperAdmin, orgFilter]);
+    let rows = businesses;
+    if (isSuperAdmin) {
+      if (orgFilter === "MY") rows = rows.filter((b: any) => Number(b.ownerId ?? myOrgId) === myOrgId);
+      else if (orgFilter !== "ALL") rows = rows.filter((b: any) => String(b.ownerId ?? "") === orgFilter);
+    }
+    if (matchedIds) rows = rows.filter((b: any) => matchedIds.has(Number(b.id)));
+    return rows;
+  }, [businesses, isSuperAdmin, orgFilter, matchedIds, myOrgId]);
   const scopedBusinesses = useMemo(() => {
     if (!isSuperAdmin || typeFilter === "ALL") return orgScopedBusinesses;
     return orgScopedBusinesses.filter((b: any) => businessTypeKeyOf(b.category || "Other") === typeFilter);
   }, [orgScopedBusinesses, isSuperAdmin, typeFilter]);
   // Distinct business types present in the current owner/org filter — drives
   // the Super Admin type filter and prevents stale no-result options.
-  const typeOptions = useMemo(() => {
-    const byKey = new Map<string, { key: string; label: string; count: number }>();
-    for (const b of orgScopedBusinesses) {
-      const key = businessTypeKeyOf(b.category || "Other");
-      const label = businessTypeLabelOf(b.category || "Other");
-      const row = byKey.get(key) || { key, label, count: 0 };
-      row.count += 1;
-      byKey.set(key, row);
-    }
-    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
-  }, [orgScopedBusinesses]);
+  const typeOptions = scopeTypeList;
   const typeOptionsKey = typeOptions.map((t) => t.key).join("|");
   useEffect(() => {
     if (typeFilter !== "ALL" && !typeOptions.some((t) => t.key === typeFilter)) setTypeFilter("ALL");
   }, [typeFilter, typeOptions, typeOptionsKey]);
+  const scopeSummary = useMemo(() => {
+    const label =
+      orgFilter === "MY"
+        ? "My Workspace"
+        : orgFilter === "ALL"
+          ? "All owners"
+          : scopeOwnerList.find((o) => o.id === Number(orgFilter))?.name || `Owner #${orgFilter}`;
+    return `${label} · ${orgScopedBusinesses.length} of ${businesses.length} unit(s)`;
+  }, [orgFilter, scopeOwnerList, orgScopedBusinesses.length, businesses.length]);
   const clearManagementFilters = () => {
-    setOrgFilter("ALL");
+    setOrgFilter("MY");
     setTypeFilter("ALL");
+    setUnitQuery("");
   };
 
   // Category re-type options: restricted orgs are offered ONLY their granted
@@ -276,8 +303,11 @@ export default function ManageBusinessesModal({
       setResetCounts(null);
       setResetMasters(false);
       setResetStaffUsers(false);
-      setOrgFilter("ALL");
+      // Opens on the caller's OWN workspace (the shared default); a Super Admin
+      // can widen to "All Owners / Orgs" or pick one owner explicitly.
+      setOrgFilter("MY");
       setTypeFilter("ALL");
+      setUnitQuery("");
     }
   }, [isOpen]);
 
@@ -1027,14 +1057,12 @@ export default function ManageBusinessesModal({
           {mode === "list" && (
             <>
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="text-xs text-slate-400">
-                  <span className="font-black text-white">{sorted.length}</span> enterprise units
+                <div className="text-xs text-slate-400" data-testid="manage-biz-scope-summary">
+                  <span className="font-black text-white">{sorted.length}</span> enterprise unit{sorted.length === 1 ? "" : "s"}
                   under management
-                  {isSuperAdmin && organizations.length > 0 && (
-                    <span className="ml-1.5 text-slate-500">
-                      · every owner's scope
-                    </span>
-                  )}
+                  <span className="ml-1.5 text-slate-500" data-testid="manage-biz-scope-label">
+                    · {isSuperAdmin && organizations.length > 0 ? scopeSummary : "your workspace"}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                 {isSuperAdmin && organizations.length > 0 && (
@@ -1045,10 +1073,11 @@ export default function ManageBusinessesModal({
                     title="Filter branches by owning Owner / Organization"
                     className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold"
                   >
-                    <option value="ALL">All Owners / Orgs</option>
-                    {organizations.map((o) => (
+                    <option value="MY">My Workspace ({scopeOwnerList.find((o) => o.isMine)?.units ?? 0})</option>
+                    <option value="ALL">All Owners / Orgs ({businesses.length})</option>
+                    {scopeOwnerList.filter((o) => !o.isMine).map((o) => (
                       <option key={o.id} value={String(o.id)}>
-                        {Number(o.id) === 1 ? `${o.name} — main (you)` : o.name}
+                        {o.name} ({o.units})
                       </option>
                     ))}
                   </select>
@@ -1069,13 +1098,23 @@ export default function ManageBusinessesModal({
                     ))}
                   </select>
                 )}
-                {isSuperAdmin && (orgFilter !== "ALL" || typeFilter !== "ALL") && (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    value={unitQuery}
+                    onChange={(e) => setUnitQuery(e.target.value)}
+                    placeholder="Search units by name, code, type…"
+                    data-testid="manage-biz-search"
+                    className="pl-8 pr-2 py-1.5 w-56 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs placeholder:text-slate-500 focus:outline-none focus:border-teal-500/60"
+                  />
+                </div>
+                {(orgFilter !== "MY" || typeFilter !== "ALL" || unitQuery.trim()) && (
                   <button
                     type="button"
                     onClick={clearManagementFilters}
                     data-testid="manage-biz-clear-filters"
                     className="px-2 py-1.5 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-600"
-                    title="Clear Owner/Organization and Business Type filters"
+                    title="Clear Owner/Organization, Business Type and search filters"
                   >
                     Clear
                   </button>

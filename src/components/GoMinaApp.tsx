@@ -1913,6 +1913,8 @@ export default function GoMinaApp() {
               activeModule={activeTab}
               currentUser={currentUser}
               businesses={scopedBusinesses}
+              organizations={orgDirectory}
+              lensLabel={activeLensOrgName}
               data={{
                 metrics: liveMetrics,
                 users: scopedUsers,
