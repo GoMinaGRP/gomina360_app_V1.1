@@ -756,8 +756,9 @@ export default function GoMinaApp() {
         hasSupportEditor: true,
         hasManageBusinesses: true,
         hasOnlineOrdering: currentUser?.role === "OWNER" || !!currentUser?.canManageOnline,
+        advisorCount: usersList.some((u: any) => u?.role === "FARM_ADVISOR") ? 1 : 0,
       }),
-    [currentUser, auditEligible],
+    [currentUser, auditEligible, usersList],
   );
 
   // ⌘K / Ctrl-K (and "/" outside a text field) opens the command palette.
@@ -1854,7 +1855,15 @@ export default function GoMinaApp() {
         />
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      {/*
+        overflow-x-CLIP (not hidden): still clips any stray horizontal bleed,
+        but — unlike `hidden` — it does not create a scroll container, so the
+        sidebar's `position: sticky` keeps working against the page scroller.
+        Before this, the rail simply scrolled away with the page (measured:
+        top = -635px after a 700px scroll), putting the last nav rows ~1700px
+        below the fold on every laptop size.
+      */}
+      <div className="flex flex-1 overflow-x-clip">
         <Sidebar
           activeTab={activeTab}
           onSelectTab={handleSelectTab}
@@ -1872,6 +1881,9 @@ export default function GoMinaApp() {
           onCloseMobile={() => setMobileNavOpen(false)}
           onOpenMobile={() => setMobileNavOpen(true)}
           onOpenPalette={() => setPaletteOpen(true)}
+          /* Fail-open: only a positively-known empty advisor list hides the
+             Farm Advisors row (they are created in Users & Access). */
+          hasFarmAdvisors={usersList.some((u: any) => u?.role === "FARM_ADVISOR")}
           onOpenOnlineOrdering={
             currentUser?.role === "OWNER" || !!currentUser?.canManageOnline
               ? openOnlineOrdering

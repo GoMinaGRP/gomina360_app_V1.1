@@ -59,6 +59,7 @@ export type NavGroupKey =
   | "BRANCH"
   | "INSIGHTS"
   | "GOVERNANCE"
+  | "ADMIN"
   | "SETTINGS"
   | "WORKSPACE";
 
@@ -72,6 +73,14 @@ export interface NavGroup {
   hint?: string;
   /** Governance rule from the audit: a section may not exceed this many rows. */
   cap?: number;
+  /**
+   * Rendered collapsed on first run (the user's own toggle, once made, always
+   * wins). Only low-frequency sections qualify — see the reassessment audit
+   * (docs/SIDEBAR-NAV-REASSESSMENT.md §4). A section containing the
+   * destination currently on screen is force-opened by the rail, so a
+   * default-collapsed section can never hide where you are.
+   */
+  defaultCollapsed?: boolean;
 }
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -99,13 +108,26 @@ export const NAV_GROUPS: NavGroup[] = [
     rail: "Decision Support & Hub",
     hint: "BI, strategy, scenario planning",
     cap: 6,
+    defaultCollapsed: true,
   },
   {
     key: "GOVERNANCE",
-    label: "Governance & Compliance",
+    label: "Oversight & Assurance",
+    // Rail wording unchanged on purpose: breadcrumbs already say this.
     rail: "Oversight & Assurance",
-    hint: "Audit, documents, access, platform",
+    hint: "Audit, reviews, documents",
     cap: 6,
+  },
+  {
+    // Split out of GOVERNANCE (reassessment audit §4): assurance is a daily
+    // read surface, administration is occasional setup. Same rail section, so
+    // every breadcrumb and ctx-* label keeps its existing wording.
+    key: "ADMIN",
+    label: "Administration",
+    rail: "Oversight & Assurance",
+    hint: "Users, advisors, platform",
+    cap: 6,
+    defaultCollapsed: true,
   },
   {
     key: "SETTINGS",
@@ -113,6 +135,7 @@ export const NAV_GROUPS: NavGroup[] = [
     rail: "Settings & Storefront",
     hint: "Storefront, integrations, units",
     cap: 6,
+    defaultCollapsed: true,
   },
   { key: "WORKSPACE", label: "My Sales Workspace", rail: "My Sales Workspace" },
 ];
@@ -140,6 +163,12 @@ export interface NavCtx {
   hasSupportEditor: boolean;
   hasManageBusinesses: boolean;
   hasOnlineOrdering: boolean;
+  /**
+   * How many FARM_ADVISOR accounts the enterprise has. `null`/undefined means
+   * "not known to this surface" and is treated as "show the row" (fail-open):
+   * losing an access console is worse than one extra row.
+   */
+  advisorCount?: number | null;
 }
 
 export function navCtx(currentUser: any, extra: Partial<NavCtx> = {}): NavCtx {
@@ -160,6 +189,7 @@ export function navCtx(currentUser: any, extra: Partial<NavCtx> = {}): NavCtx {
     hasSupportEditor: !!extra.hasSupportEditor,
     hasManageBusinesses: !!extra.hasManageBusinesses,
     hasOnlineOrdering: !!extra.hasOnlineOrdering,
+    advisorCount: extra.advisorCount ?? null,
   };
 }
 
@@ -366,7 +396,9 @@ export const NAV_ENTRIES: NavEntry[] = [
   /* ── Branch Management (BRANCH_MANAGER) ─────────────────── */
   {
     id: "BRANCH_SALES",
-    label: "Sales & Payments",
+    // Named for what it is: the branch-scoped counterpart of the enterprise
+    // "Sales & Payments". Two rows with identical labels was residual D5.
+    label: "Branch Sales & Payments",
     short: "Branch Sales",
     group: "BRANCH",
     order: 10,
@@ -469,7 +501,7 @@ export const NAV_ENTRIES: NavEntry[] = [
     id: "ADVISOR_MANAGE",
     label: "Farm Advisors",
     short: "Farm Advisors",
-    group: "GOVERNANCE",
+    group: "ADMIN",
     order: 30,
     // Shares the ADVISOR tab with the advisor's own console, but the OWNER
     // reaches it as an ACCESS console — hence the distinct id + testid.
@@ -479,13 +511,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     chip: "ACCESS",
     ink: "text-teal-400",
     active: "bg-teal-500/15 text-teal-300 font-bold border-l-2 border-teal-400",
-    eligible: (c) => c.isExecutive,
+    // Hidden only when we positively know there are no advisors to manage
+    // (they are created in Users & Access, which keeps its own row).
+    eligible: (c) => c.isExecutive && c.advisorCount !== 0,
   },
   {
     id: "USERS_MANAGE",
     label: "Enterprise Users",
     short: "Users & Access",
-    group: "GOVERNANCE",
+    group: "ADMIN",
     order: 40,
     Icon: UserCheck,
     keywords: ["users", "access", "roles", "permissions", "assignments", "staff accounts"],
@@ -497,7 +531,7 @@ export const NAV_ENTRIES: NavEntry[] = [
     id: "PLATFORM_ADMIN",
     label: "Platform Owners",
     short: "Platform Owners",
-    group: "GOVERNANCE",
+    group: "ADMIN",
     order: 50,
     Icon: Building2,
     keywords: ["platform", "organizations", "owners", "super admin", "lifecycle"],

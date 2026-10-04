@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import AiSectionGuide from "./AiSectionGuide";
 import {
   ShoppingCart,
@@ -55,6 +55,37 @@ export default function WorkerDashboard({
   onOpenActions,
 }: WorkerDashboardProps) {
   const [activeSubTab, setActiveSubTab] = useState<"SALES" | "CUSTOMERS" | "INVENTORY" | "MY_ACTIVITY" | "TRACKING">("SALES");
+
+  /**
+   * The mobile bottom bar's "Sell" slot targets this workspace's Record Sale
+   * tab. Before, a worker's "Sell" and "Home" both rendered this same screen
+   * (verified: identical screenshot), so the slot was dead. Keeping the
+   * request as a window event means the rail can drive the workspace from
+   * outside without threading new props through GoMinaApp.
+   */
+  useEffect(() => {
+    const onSubTab = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail;
+      const allowed = ["SALES", "CUSTOMERS", "INVENTORY", "MY_ACTIVITY", "TRACKING"];
+      if (typeof detail === "string" && allowed.includes(detail)) {
+        setActiveSubTab(detail as typeof activeSubTab);
+      }
+    };
+    window.addEventListener("gomina:worker-subtab", onSubTab);
+    return () => window.removeEventListener("gomina:worker-subtab", onSubTab);
+  }, []);
+
+  /** Tell the rail which workspace tab is showing, so the mobile bottom bar
+   *  can highlight the right slot (and never claim two at once). */
+  useEffect(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("gomina:worker-subtab-changed", { detail: activeSubTab }),
+      );
+    } catch {
+      /* non-browser / blocked */
+    }
+  }, [activeSubTab]);
 
   // Inventory-linked sale (cart)
   interface CartItem {

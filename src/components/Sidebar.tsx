@@ -48,6 +48,7 @@ import { businessManageIdsOf } from "@/lib/permissions";
 import {
   NavEntry,
   businessIcon,
+  entryById,
   groupByKey,
   navCtx,
   navEntriesFor,
@@ -108,6 +109,8 @@ interface SidebarProps {
   onOpenManageBusinesses?: () => void;
   /** Opens Manage Units → Online Ordering & service areas. */
   onOpenOnlineOrdering?: () => void;
+  /** How many FARM_ADVISOR accounts exist (undefined ⇒ unknown ⇒ show the row). */
+  hasFarmAdvisors?: boolean;
   /** SUPER ADMIN ONLY — Organization Lens context + org directory. */
   organizations?: { id: number; name: string; slug: string; status: string }[];
   orgLens?: string; // "MY" | "ALL" | "<orgId>"
@@ -141,6 +144,7 @@ export default function Sidebar({
   mobileOpen = false,
   onCloseMobile,
   onOpenMobile,
+  hasFarmAdvisors,
 }: SidebarProps) {
   const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
   const isWorker = currentUser?.role === "WORKER";
@@ -167,8 +171,9 @@ export default function Sidebar({
         hasSupportEditor: !!onOpenSupportInfo,
         hasManageBusinesses: !!onOpenManageBusinesses,
         hasOnlineOrdering: !!onOpenOnlineOrdering,
+        advisorCount: hasFarmAdvisors === undefined ? null : hasFarmAdvisors ? 1 : 0,
       }),
-    [currentUser, isUnitManager, isBusinessManager, auditEligible, onOpenSupportInfo, onOpenManageBusinesses, onOpenOnlineOrdering],
+    [currentUser, isUnitManager, isBusinessManager, auditEligible, onOpenSupportInfo, onOpenManageBusinesses, onOpenOnlineOrdering, hasFarmAdvisors],
   );
 
   const sharedCtx = navContext ?? ctx;
@@ -204,11 +209,28 @@ export default function Sidebar({
       window.removeEventListener("storage", sync);
     };
   }, []);
-  const sectionOpen = (key: string) => isSectionOpen(prefs, key);
+  /**
+   * Open state = user's stored choice → the group's `defaultCollapsed` → open.
+   * `forceOpen` (below) is the "you are here" override.
+   */
+  const sectionOpen = (key: string) =>
+    isSectionOpen(prefs, key, !!groupByKey(key as any)?.defaultCollapsed);
   const toggleSection = (key: string) => {
     const open = sectionOpen(key);
     setPrefs(saveNavPrefs({ sections: { ...prefs.sections, [key]: !open } }));
   };
+
+  /**
+   * Auto-reveal: the section holding the destination you are actually on is
+   * always rendered open, even when it is default-collapsed or you collapsed
+   * it earlier. This is what makes default-collapsing safe — a collapsed
+   * section can never hide "where am I" (and it never overwrites the stored
+   * choice, so collapsing it again still works once you navigate away).
+   */
+  const activeEntry = entryById(String(activeTab));
+  const forceOpen = (key: string) =>
+    (!!activeEntry && activeEntry.group === key) ||
+    (key === "MY_BUSINESSES" && businesses.some((b) => b?.code === activeTab));
 
   /* ── recents: remember where the user actually went ── */
   useEffect(() => {
@@ -263,6 +285,16 @@ export default function Sidebar({
   );
 
   const [bizFilter, setBizFilter] = useState("");
+  /**
+   * The unit list used to be a fixed-height scroll box nested inside the
+   * (already scrolling) rail — two scrollbars, and on a phone it cost ~400px
+   * of drawer height on every visit. It now renders the first 5 units inline
+   * and reveals the rest on demand: one scroll container, nothing truncated
+   * away, and the filter still narrows the whole list at any length.
+   */
+  const UNIT_PREVIEW = 5;
+  const [showAllUnits, setShowAllUnits] = useState(false);
+  const [bizFilterOpen, setBizFilterOpen] = useState(false);
   const matchesFilter = (biz: any) => {
     const q = bizFilter.trim().toLowerCase();
     if (!q) return true;
@@ -276,6 +308,19 @@ export default function Sidebar({
   };
   const sortUnits = (list: any[]) =>
     [...list].sort((a, b) => favUnitIndex(a) - favUnitIndex(b));
+  /**
+   * First N for the inline preview; the filter and "Show all" bypass the cap.
+   * The unit you are actually on is always pinned into the preview: a unit you
+   * just created (which navigates you straight into it) or arrived at by any
+   * other route must never be hidden behind the cap.
+   */
+  const capUnits = (list: any[]) => {
+    if (showAllUnits || bizFilter.trim()) return list;
+    const preview = list.slice(0, UNIT_PREVIEW);
+    const activeIdx = list.findIndex((b) => b?.code === activeTab);
+    if (activeIdx >= UNIT_PREVIEW) preview[UNIT_PREVIEW - 1] = list[activeIdx];
+    return preview;
+  };
 
   const isAccessible = (biz: any) => {
     if (isWorker || isBusinessManager) {
@@ -457,6 +502,83 @@ export default function Sidebar({
         ? ((businesses.find((b) => Number(b.id) === Number(assignedBusinessId))?.code ||
             (isBusinessManager ? "BRANCH_SALES" : "COMMAND_CENTER")) as ActiveTab)
         : ("COMMAND_CENTER" as ActiveTab);
+  /**
+   * The bottom bar is FIVE STABLE SLOTS on every role (Home · Actions · Sell ·
+   * Search · Menu) — the reassessment audit rejected adding Records / unit
+   * switching / Finance here. What changes per role is where the slots *point*,
+   * and each slot now reports whether it is the one you are on.
+   *
+   * Worker "Sell" used to be a dead slot: for a worker `homeTab` *is* the
+   * workspace, so "Sell" and "Home" rendered the identical screen (verified by
+   * screenshot hash). It now opens the workspace's Record Sale tab via the same
+   * window event the rail uses elsewhere — no new prop drilling, no navigation
+   * change for anyone else.
+   */
+  const [workerSubTab, setWorkerSubTab] = useState<string>("SALES");
+  useEffect(() => {
+    if (!isWorker) return;
+    const onSub = (ev: Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (typeof d === "string") setWorkerSubTab(d);
+    };
+    window.addEventListener("gomina:worker-subtab-changed", onSub);
+    return () => window.removeEventListener("gomina:worker-subtab-changed", onSub);
+  }, [isWorker]);
+
+  const openWorkerSale = () => {
+    selectTab(homeTab);
+    try {
+      window.dispatchEvent(new CustomEvent("gomina:worker-subtab", { detail: "SALES" }));
+    } catch {
+      /* non-browser / blocked — the workspace simply stays on Home */
+    }
+  };
+  const bottomItems = [
+    {
+      id: "nb-home",
+      label: "Home",
+      Icon: LayoutDashboard,
+      run: () => selectTab(homeTab),
+      // A worker only ever has two reachable places (Action Center + their own
+      // workspace), so "Home" is simply "the workspace, on any tab other than
+      // Record Sale" — Record Sale itself belongs to "Sell".
+      active: isWorker
+        ? activeTab !== "ACTION_CENTER" && workerSubTab !== "SALES"
+        : activeTab === homeTab,
+    },
+    isFarmAdvisor
+      ? {
+          id: "nb-console",
+          label: "Console",
+          Icon: Stethoscope,
+          run: () => selectTab("ADVISOR" as ActiveTab),
+          active: activeTab === "ADVISOR",
+        }
+      : {
+          id: "nb-actions",
+          label: "Actions",
+          Icon: ListTodo,
+          run: () => selectTab("ACTION_CENTER"),
+          active: activeTab === "ACTION_CENTER",
+        },
+    {
+      id: "nb-sell",
+      label: "Sell",
+      Icon: ShoppingCart,
+      run: () =>
+        isWorker
+          ? openWorkerSale()
+          : selectTab(
+              (isBusinessManager ? "BRANCH_SALES" : isExecutive || isUnitManager ? "SALES_CENTER" : homeTab) as ActiveTab,
+            ),
+      active: isWorker
+        ? activeTab !== "ACTION_CENTER" && workerSubTab === "SALES"
+        : activeTab === "SALES_CENTER" || activeTab === "BRANCH_SALES",
+    },
+    { id: "nb-search", label: "Search", Icon: Search, run: () => onOpenPalette?.(), active: false },
+    { id: "nb-menu", label: "Menu", Icon: ChevronsRight, run: () => onOpenMobile?.(), active: mobileOpen },
+  ] as { id: string; label: string; Icon: any; run: () => void; active: boolean }[];
+
   const bottomBar = (
     <nav
       data-testid="nav-bottom-bar"
@@ -464,45 +586,16 @@ export default function Sidebar({
       className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex items-stretch"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      {(
-        [
-          { id: "nb-home", label: "Home", Icon: LayoutDashboard, run: () => selectTab(homeTab) },
-          isFarmAdvisor
-            ? {
-                id: "nb-console",
-                label: "Console",
-                Icon: Stethoscope,
-                run: () => selectTab("ADVISOR" as ActiveTab),
-              }
-            : {
-                id: "nb-actions",
-                label: "Actions",
-                Icon: ListTodo,
-                run: () => selectTab("ACTION_CENTER"),
-              },
-          {
-            id: "nb-sell",
-            label: "Sell",
-            Icon: ShoppingCart,
-            run: () =>
-              selectTab(
-                (isBusinessManager
-                  ? "BRANCH_SALES"
-                  : isExecutive || isUnitManager
-                    ? "SALES_CENTER"
-                    : homeTab) as ActiveTab,
-              ),
-          },
-          { id: "nb-search", label: "Search", Icon: Search, run: () => onOpenPalette?.() },
-          { id: "nb-menu", label: "Menu", Icon: ChevronsRight, run: () => onOpenMobile?.() },
-        ] as { id: string; label: string; Icon: any; run: () => void }[]
-      ).map((b) => (
+      {bottomItems.map((b) => (
         <button
           key={b.id}
           data-testid={b.id}
           onClick={b.run}
           aria-label={b.label}
-          className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-slate-300 hover:text-white hover:bg-slate-800/70 transition"
+          aria-current={b.active ? "page" : undefined}
+          className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition ${
+            b.active ? "text-emerald-300 bg-slate-800/70" : "text-slate-300 hover:text-white hover:bg-slate-800/70"
+          }`}
         >
           <b.Icon className="w-4 h-4" />
           <span className="text-[10px] font-semibold">{b.label}</span>
@@ -531,7 +624,7 @@ export default function Sidebar({
         className={`shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col text-slate-300 overflow-y-auto overflow-x-hidden select-none
           max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-[60] max-lg:w-72 max-lg:shadow-2xl max-lg:transition-transform max-lg:duration-200
           ${mobileOpen ? "max-lg:translate-x-0" : "max-lg:-translate-x-full"}
-          lg:static lg:translate-x-0 lg:transition-[width] lg:duration-200
+          lg:sticky lg:top-0 lg:self-start lg:h-screen lg:translate-x-0 lg:transition-[width] lg:duration-200
           ${collapsed ? "lg:w-14" : "lg:w-64"}`}
       >
         {/* Header row — drawer close on phones, icon-rail toggle on desktop */}
@@ -686,7 +779,7 @@ export default function Sidebar({
             <div
               id="nav-body-MY_BUSINESSES"
               className={
-                sectionOpen("MY_BUSINESSES")
+                sectionOpen("MY_BUSINESSES") || forceOpen("MY_BUSINESSES")
                   ? "transition-all duration-200"
                   : "max-h-0 opacity-0 pointer-events-none overflow-hidden transition-all duration-200"
               }
@@ -728,7 +821,7 @@ export default function Sidebar({
               )}
 
               {/* Type-to-filter once the list is long enough to need it */}
-              {!collapsed && navBusinesses.length > 8 && (
+              {!collapsed && (navBusinesses.length > 8 || bizFilterOpen) && (
                 <div className="relative mt-1">
                   <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
@@ -745,7 +838,9 @@ export default function Sidebar({
               {/* The list is BOUNDED (its own scroll box) but never truncated:
                   every unit stays rendered and reachable — no unit disappears
                   behind a "show more". */}
-              <div className="space-y-1 mt-1 max-h-64 overflow-y-auto pr-0.5" data-testid="nav-biz-list">
+              {/* One scroll container (no nested scrollbar) and never
+                  truncated: 5 units inline, then one tap reveals the rest. */}
+              <div className="space-y-1 mt-1 pr-0.5" data-testid="nav-biz-list">
                 {isSuperAdmin ? (
                   <>
                     {navBusinessGroups.map((group) => (
@@ -784,7 +879,7 @@ export default function Sidebar({
                           )}
                           <span className="ml-auto text-slate-500 shrink-0">{group.businesses.length}</span>
                         </div>
-                        {sortUnits(group.businesses.filter(matchesFilter)).map((biz) =>
+                        {capUnits(sortUnits(group.businesses.filter(matchesFilter))).map((biz) =>
                           renderBizButton(biz),
                         )}
                       </div>
@@ -797,7 +892,9 @@ export default function Sidebar({
                   </>
                 ) : (
                   <>
-                    {sortUnits(navBusinesses.filter(matchesFilter)).map((biz) => renderBizButton(biz))}
+                    {capUnits(sortUnits(navBusinesses.filter(matchesFilter))).map((biz) =>
+                      renderBizButton(biz),
+                    )}
                     {!collapsed && navBusinesses.filter(matchesFilter).length === 0 && (
                       <p className="px-1 py-2 text-[10px] text-slate-500">
                         No unit matches “{bizFilter}”.
@@ -806,10 +903,27 @@ export default function Sidebar({
                   </>
                 )}
               </div>
-              {!collapsed && navBusinesses.length > 5 && (
-                <p className="px-1 pt-1 text-[9px] text-slate-500 flex items-center gap-1">
-                  <Building2 className="w-3 h-3" /> {navBusinesses.length} units · scroll or search ⌘K
-                </p>
+              {!collapsed && navBusinesses.length > UNIT_PREVIEW && !bizFilter.trim() && (
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAllUnits((v) => !v)}
+                    data-testid="nav-biz-show-all"
+                    aria-expanded={showAllUnits}
+                    className="flex items-center gap-1 px-1 py-1 text-[10px] font-bold text-emerald-300 hover:text-emerald-200 rounded"
+                  >
+                    <Building2 className="w-3 h-3 shrink-0" />
+                    {showAllUnits ? "Show fewer" : `Show all ${navBusinesses.length} units`}
+                  </button>
+                  {!bizFilterOpen && navBusinesses.length <= 8 && (
+                    <button
+                      onClick={() => setBizFilterOpen(true)}
+                      data-testid="nav-biz-filter-open"
+                      className="ml-auto px-1 py-1 text-[10px] text-slate-400 hover:text-slate-200 rounded"
+                    >
+                      Filter
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -832,7 +946,7 @@ export default function Sidebar({
 
         {/* ── SECTIONED DESTINATIONS (manifest-driven) ──────────────── */}
         {sections.map(({ group, entries: rows }) => {
-          const open = sectionOpen(group.key);
+          const open = sectionOpen(group.key) || forceOpen(group.key);
           let hubKey: string | null = null;
           return (
             <div key={group.key} className="px-2 sm:px-3 py-2 border-b border-slate-800/70">
@@ -868,15 +982,22 @@ export default function Sidebar({
                   const nodes: React.ReactNode[] = [];
                   if (e.hub && hubKey !== e.hub.key) {
                     hubKey = e.hub.key;
+                    const hubFirst = rows.find((r) => r.hub?.key === e.hub!.key);
+                    // The heading is a real shortcut to the hub's first tab —
+                    // it used to be an inert label over two destinations, so
+                    // tapping "Orders & Fulfilment" did nothing.
                     nodes.push(
-                      <div
+                      <button
                         key={`hub-${e.hub.key}`}
+                        onClick={() => hubFirst && runRow(hubFirst)}
                         data-testid={`nav-hub-${e.hub.key}`}
-                        className="flex items-center gap-1.5 px-1 sm:px-3 pt-1.5 pb-0.5 text-[10px] font-black tracking-wide text-slate-500"
+                        aria-label={e.hub.label}
+                        title={e.hub.label}
+                        className="w-full flex items-center gap-1.5 px-1 sm:px-3 pt-1.5 pb-0.5 text-[10px] font-black tracking-wide text-slate-500 hover:text-slate-300 transition"
                       >
                         <e.hub.Icon className="w-3 h-3 shrink-0" />
                         <span className="truncate">{collapsed ? "" : e.hub.label}</span>
-                      </div>,
+                      </button>,
                     );
                   }
                   nodes.push(renderRow(e, { indented: !!e.hub }));

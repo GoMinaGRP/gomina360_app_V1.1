@@ -306,13 +306,16 @@ function PanelBody({
         </div>
       )}
 
-      {/* Quick navigation within the current section */}
-      {quick.length > 0 && (
+      {/* Quick navigation within the current section — but only when it can
+          actually take you somewhere else. On HQ pages the section is just
+          this one page, and a one-item list highlighting the page you are
+          already on is pure noise (reassessment audit §3 #8). */}
+      {quick.filter((q) => q.tid !== activeTab).length > 0 && (
         <div className="pt-1">
           <div className="px-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
             Quick Navigation
           </div>
-          <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+          <div className="space-y-1 pr-0.5">
             {quick.map((q) => (
               <button
                 key={q.tid}

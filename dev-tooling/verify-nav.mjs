@@ -163,10 +163,22 @@ try {
   ok("A4 every rail row has an accessible name", unnamed === 0, `unnamed=${unnamed}`);
 
   const sections = await pA.$$eval('[data-testid^="nav-section-"]', (n) => n.map((x) => x.getAttribute("data-testid")));
-  const expectSections = ["MY_BUSINESSES", "SELL", "MONEY", "RECORDS", "INSIGHTS", "GOVERNANCE", "SETTINGS"];
+  const expectSections = ["MY_BUSINESSES", "SELL", "MONEY", "RECORDS", "INSIGHTS", "GOVERNANCE", "ADMIN", "SETTINGS"];
   const missing = expectSections.filter((s) => !sections.includes(`nav-section-${s}`));
-  ok("A5 all sections present (My Businesses · Sell & Fulfil · Money · Records · Insights · Governance · Settings)",
+  ok("A5 all sections present (My Businesses · Sell & Fulfil · Money · Records · Insights · Oversight · Administration · Settings)",
     missing.length === 0, missing.join(","));
+  // Low-frequency sections start closed (reassessment audit §4) — but never the
+  // one holding the destination you are on (A7b below).
+  const collapsedDefaults = await pA.evaluate((keys) =>
+    keys.map((k) => `${k}:${document.querySelector(`[data-testid="nav-section-${k}"]`)?.getAttribute("aria-expanded")}`),
+    ["INSIGHTS", "ADMIN", "SETTINGS"]);
+  ok("A5b low-frequency sections start collapsed (Insights · Administration · Settings)",
+    collapsedDefaults.every((x) => x.endsWith(":false")), collapsedDefaults.join(" "));
+  const openDefaults = await pA.evaluate((keys) =>
+    keys.map((k) => `${k}:${document.querySelector(`[data-testid="nav-section-${k}"]`)?.getAttribute("aria-expanded")}`),
+    ["SELL", "MONEY", "RECORDS"]);
+  ok("A5c core sections still start expanded (Sell · Money · Records)",
+    openDefaults.every((x) => x.endsWith(":true")), openDefaults.join(" "));
 
   // Right rail agrees with the left rail (audit defect D3/D4).
   await clickTid(pA, "sidebar-tab-finance");
@@ -197,6 +209,42 @@ try {
   await clickTid(pA, "nav-section-RECORDS");
   await sleep(300);
 
+  // B4 — "you are here" is never hidden: reach AI Advisor (Insights, which
+  // starts collapsed) through the palette and the section must open itself.
+  await clickTid(pA, "sidebar-search-trigger");
+  await sleep(400);
+  await pA.$eval(tid("cmd-palette-input"), (e) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(e, "ai advisor");
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(500);
+  await pA.keyboard.press("Enter");
+  await sleep(1600);
+  const insExpanded = await pA.$eval(tid("nav-section-INSIGHTS"), (e) => e.getAttribute("aria-expanded"));
+  const aiVisible = await pA.$eval('[data-testid="nav-sidebar"] [data-testid="sidebar-item-AI_ADVISOR"]', (e) => e.getBoundingClientRect().height > 5).catch(() => false);
+  const aiCurrent = await pA.$eval('[data-testid="nav-sidebar"] [data-testid="sidebar-item-AI_ADVISOR"]', (e) => e.getAttribute("aria-current")).catch(() => null);
+  ok("B4 navigating into a collapsed section auto-reveals it (and marks the row current)",
+    insExpanded === "true" && aiVisible && aiCurrent === "page",
+    `expanded=${insExpanded} visible=${aiVisible} current=${aiCurrent}`);
+  await pA.reload({ waitUntil: "domcontentloaded" });
+  await pA.waitForSelector('[data-testid="nav-sidebar"]', { timeout: 60000 });
+  await sleep(1500);
+  // After a reload the app returns to Command Center, so the real invariant is
+  // not "Insights stays open" but "whatever page you are on, its row is visible
+  // — no collapsed section can hide where you are".
+  const currentVisible = await pA.evaluate(() => {
+    const row = document.querySelector('[data-testid="nav-sidebar"] [aria-current="page"]');
+    if (!row) return "no-current-row";
+    return row.getBoundingClientRect().height > 5 ? "visible" : "hidden";
+  });
+  const insAfterReload = await pA.$eval(tid("nav-section-INSIGHTS"), (e) => e.getAttribute("aria-expanded"));
+  ok("B4b after a reload, the current row is visible and untouched sections stay collapsed",
+    currentVisible === "visible" && insAfterReload === "false",
+    `current=${currentVisible} insights=${insAfterReload}`);
+  await clickTid(pA, "sidebar-tab-finance");
+  await sleep(1200);
+
   /* ═══════════════ C · N2 — My Businesses: bounded, not truncated ══════ */
   console.log("\n— C · My Businesses —");
   const unitRows = await sidebarRowCount(pA, '[data-testid="nav-sidebar"] [data-biz-code]');
@@ -205,9 +253,28 @@ try {
   const liveUnits = (init.businesses || []).filter(
     (b) => !b.isArchived && Number(b.ownerId ?? 1) === 1,
   ).length;
-  ok("C1 every unit is rendered (nothing hidden behind “show more”)", unitRows >= liveUnits && unitRows > 3, `rows=${unitRows} live=${liveUnits}`);
-  const scrollable = await pA.$eval(tid("nav-biz-list"), (e) => getComputedStyle(e).overflowY);
-  ok("C2 unit list is bounded by its own scroll box", scrollable === "auto" || scrollable === "scroll", scrollable);
+  // N5: the list previews 5 units inline and reveals the rest on demand —
+  // one scroll container, nothing truncated away.
+  ok("C1 unit list previews the first 5 (long lists and short ones alike)",
+    unitRows === Math.min(5, liveUnits), `rows=${unitRows} live=${liveUnits}`);
+  const nestedScroll = await pA.evaluate(() => {
+    const sb = document.querySelector('[data-testid="nav-sidebar"]');
+    return [...sb.querySelectorAll("div")].filter((d) => {
+      const c = getComputedStyle(d);
+      return (c.overflowY === "auto" || c.overflowY === "scroll") && d.scrollHeight > d.clientHeight + 2;
+    }).length;
+  });
+  ok("C2 no nested scroll container inside the rail", nestedScroll === 0, `boxes=${nestedScroll}`);
+  const showAllLabel = await pA.$eval(tid("nav-biz-show-all"), (e) => (e.textContent || "").trim()).catch(() => "");
+  await clickTid(pA, "nav-biz-show-all");
+  await sleep(500);
+  const unitRowsAll = await sidebarRowCount(pA, '[data-testid="nav-sidebar"] [data-biz-code]');
+  ok("C2b “Show all N units” reveals every unit in place (nothing lost)",
+    unitRowsAll >= liveUnits && unitRowsAll > unitRows, `label="${showAllLabel}" rows=${unitRows}→${unitRowsAll} live=${liveUnits}`);
+  await clickTid(pA, "nav-biz-show-all");
+  await sleep(400);
+  ok("C2c …and collapses back to the preview",
+    (await sidebarRowCount(pA, '[data-testid="nav-sidebar"] [data-biz-code]')) === unitRows);
   const filterExists = await exists(pA, "sidebar-biz-filter");
   ok("C3 type-to-filter appears once the list is long (>8 units)", filterExists || liveUnits <= 8, `filter=${filterExists} units=${liveUnits}`);
   if (filterExists) {

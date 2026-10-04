@@ -50,6 +50,9 @@ interface CommandPaletteProps {
   onToggleFavTab?: (id: string) => void;
 }
 
+/** How many rows the palette shows before you type (recents first). */
+const EMPTY_QUERY_LIMIT = 8;
+
 export default function CommandPalette({
   open,
   onClose,
@@ -104,11 +107,15 @@ export default function CommandPalette({
   const results = useMemo<PaletteTarget[]>(() => {
     const q = query.trim();
     if (!q) {
-      // Empty query: quick access first (recents, then favourites), then the
-      // rail order — the palette doubles as a "recently used" list.
+      // Empty query: a SHORT "recently used" list, not a second sidebar.
+      // Before it dumped every destination (up to 24 rows) — which made the
+      // palette useless as a quick switcher on first open. Now: your recents
+      // and favourites first, then just enough of the rail order to fill the
+      // list. Typing is how you reach everything else.
       const recentFirst = navTargets.filter((t) => t.recent || t.starred);
       const rest = navTargets.filter((t) => !t.recent && !t.starred);
-      return [...recentFirst, ...rest, ...unitTargets].slice(0, 24);
+      const units = unitTargets.slice(0, 2);
+      return [...recentFirst, ...rest, ...units].slice(0, EMPTY_QUERY_LIMIT);
     }
     const scored: { t: PaletteTarget; s: number }[] = [];
     entries.forEach((e) => {

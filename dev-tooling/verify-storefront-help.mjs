@@ -178,9 +178,15 @@ async function sectionB(browser, cookies) {
   await po.setViewport({ width: 1440, height: 960 });
   await uiLogin(po, OWNER);
   await po.waitForSelector('[data-testid="command-center-root"]', { timeout: 45000 });
-  const btn = await po.$('[data-testid="open-support-info"]');
-  ok("B1 OWNER sees the amber “Storefront HELP” button on the Command Center", !!btn);
-  await po.click('[data-testid="open-support-info"]');
+  // N5 cleanup: the hero no longer repeats this editor (AI Advisor, Scenario
+  // Planner and Storefront HELP were hero buttons that duplicated rail rows).
+  // The rail row under Settings & Storefront is the entry point now — sections
+  // that start collapsed open on tap, exactly as a user would do it.
+  await po.click('[data-testid="nav-section-SETTINGS"]');
+  await sleep(500);
+  const btn = await po.$('[data-testid="sidebar-support-info"]');
+  ok("B1 OWNER sees the “Support — Storefront HELP” entry in the rail", !!btn);
+  await po.click('[data-testid="sidebar-support-info"]');
   await po.waitForSelector('[data-testid="support-modal"]', { timeout: 15000 });
   await po.waitForSelector('[data-testid="support-name"]', { timeout: 15000 });
   await setInput(po, "support-name", SUPPORT.contactName);
@@ -223,10 +229,22 @@ async function sectionB(browser, cookies) {
   await pgG.setViewport({ width: 1440, height: 960 });
   await uiLogin(pgG, GM);
   await pgG.waitForSelector('[data-testid="command-center-root"]', { timeout: 45000 });
+  await pgG.click('[data-testid="nav-section-SETTINGS"]');
+  await sleep(500);
   const sideEntry = await pgG.$('[data-testid="sidebar-support-info"]');
-  const ccBtn = await pgG.$('[data-testid="open-support-info"]');
-  ok("B4 granted GM sees the sidebar “Support — Storefront HELP” entry AND the dashboard button",
-    !!sideEntry && !!ccBtn);
+  await pgG.click('[data-testid="sidebar-search-trigger"]');
+  await sleep(600);
+  await pgG.$eval('[data-testid="cmd-palette-input"]', (e) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(e, "storefront help");
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(500);
+  const paletteHit = await pgG.$('[data-testid="cmd-item-SUPPORT"]');
+  ok("B4 granted GM sees the rail entry AND the ⌘K result (two surfaces, one destination)",
+    !!sideEntry && !!paletteHit);
+  await pgG.keyboard.press("Escape");
+  await sleep(400);
   await pgG.click('[data-testid="sidebar-support-info"]');
   await pgG.waitForSelector('[data-testid="support-modal"]', { timeout: 15000 });
   const hasSave = await pgG.$('[data-testid="support-save"]');
@@ -236,9 +254,20 @@ async function sectionB(browser, cookies) {
   await api(cookies.owner, "/api/users", { method: "PATCH", body: JSON.stringify({ userId: GM.id, canManageSupport: false }) });
   await pgG.reload({ waitUntil: "networkidle0" });
   await pgG.waitForSelector('[data-testid="command-center-root"]', { timeout: 45000 });
+  await pgG.click('[data-testid="nav-section-SETTINGS"]');
+  await sleep(400);
   const sideGone = await pgG.$('[data-testid="sidebar-support-info"]');
-  const ccGone = await pgG.$('[data-testid="open-support-info"]');
-  ok("B5 revoking hides the sidebar entry AND the dashboard button again", !sideGone && !ccGone);
+  await pgG.click('[data-testid="sidebar-search-trigger"]');
+  await sleep(600);
+  await pgG.$eval('[data-testid="cmd-palette-input"]', (e) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(e, "storefront help");
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(500);
+  const paletteGone = await pgG.$('[data-testid="cmd-item-SUPPORT"]');
+  ok("B5 revoking hides the rail entry AND the ⌘K result again (permission honoured on both surfaces)",
+    !sideGone && !paletteGone);
   await ctxG.close();
 }
 

@@ -90,10 +90,19 @@ export function toggleFavUnit(code: string): void {
   });
 }
 
-export function isSectionOpen(prefs: NavPrefs, key: string): boolean {
-  // Default open: every destination stays one click away on first run, and the
-  // user's own choice (collapsed or expanded) is remembered from then on.
-  return prefs.sections[key] !== false;
+/**
+ * Is this section open, for this user, right now?
+ *
+ * Precedence: the user's own stored choice → the group's `defaultCollapsed`
+ * (low-frequency sections start closed; see the reassessment audit §4) → open.
+ * A section that contains the destination currently on screen is force-opened
+ * by the rail itself, so a default-collapsed section can never hide "you are
+ * here" — that override deliberately does not touch this stored preference.
+ */
+export function isSectionOpen(prefs: NavPrefs, key: string, defaultCollapsed = false): boolean {
+  const stored = prefs.sections[key];
+  if (stored !== undefined) return stored !== false;
+  return !defaultCollapsed;
 }
 
 /**

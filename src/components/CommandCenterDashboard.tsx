@@ -11,9 +11,7 @@ import {
   ArrowDownRight,
   Building2,
   Sliders,
-  Sparkles,
   AlertTriangle,
-  LifeBuoy,
   ExternalLink,
   Zap,
   CheckCircle,
@@ -426,23 +424,11 @@ export default function CommandCenterDashboard({
           </p>
         </div>
 
+        {/* Hero = executive MANAGEMENT actions only (create / manage / access).
+            It used to also repeat AI Advisor, Scenario Planner and Storefront
+            HELP — three destinations that already have a rail row and a ⌘K
+            entry. Removed in the navigation cleanup (reassessment audit §3). */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            onClick={() => onSelectTab("AI_ADVISOR")}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>AI Strategic Advisor</span>
-          </button>
-
-          <button
-            onClick={() => onSelectTab("SCENARIO_PLANNER")}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/40 font-semibold text-xs sm:text-sm transition"
-          >
-            <Sliders className="w-4 h-4" />
-            <span>Scenario Planner</span>
-          </button>
-
           <AiSectionGuide moduleKey="COMMAND_CENTER" section="COMMAND_CENTER" variant="header" />
           {(canManageBusinesses || canOpenManageUnits || canManageOnline) && onOpenManageBusinesses && (
             <button
@@ -474,18 +460,7 @@ export default function CommandCenterDashboard({
               <span>Users &amp; Access</span>
             </button>
           )}
-          {canManageSupportInfo && onOpenSupportInfo && (
-            <button
-              onClick={onOpenSupportInfo}
-              data-testid="open-support-info"
-              title="Edit the customer support information shown in the storefront HELP panel"
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg transition"
-            >
-              <LifeBuoy className="w-4 h-4" />
-              <span>Storefront HELP</span>
-            </button>
-          )}
-        </div>
+                  </div>
       </div>
 
       {/* SUPER ADMIN — Organization Lens "ALL": per-Owner/Org rollups. Each
