@@ -220,7 +220,32 @@ exists, so an order page can no longer be contact-less (today's F6).
 
 ---
 
-## 8. Phased implementation plan (recommendation — no code written)
+## 8. Phased implementation plan — ✅ IMPLEMENTED (P1–P4)
+
+> **Status (see `docs/CUSTOMER-ORDER-TRACKING-IMPLEMENTATION.md`):** all four
+> phases below are implemented, tested and pushed. The plan is kept as the
+> record of what was promised; the implementation report carries the measured
+> results.
+>
+> **Testid deltas agreed during implementation** (the old shape encoded the
+> pre-product-first IA):
+> · `oo-bizsec-*` (one wrapper per shop containing its category sections) is
+>   **superseded** by `oo-catsec-*` (one section per category, every selling
+>   shop inside it) + `oo-sold-by-shop-<productId>` (per-card attribution) +
+>   the `oo-bizrow` shop strip. `verify-finance-allproducts-fresh` S1–S5 and
+>   `verify-storefront-help` C8c were re-encoded accordingly.
+> · `oo-focus-<id>` still exists — it is now the label inside each `oo-biz-<id>`
+>   shop chip (clicking it bubbles to the chip and focuses that shop).
+> · New: `oo-search-summary`, `oo-search-clear`, `oo-suggest-<category>`,
+>   `oo-sold-by-<productId>`, `oo-contact-<productId>`, `oo-call-<productId>`,
+>   `oo-wa-<productId>`, `oo-dir-<productId>`, `oo-shop-strip` (+`-name`,
+>   `-branch`, `-call`, `-wa`, `-dir`, `-address`, `-all`), `oo-cart-shop`,
+>   `oo-lightbox-seller`, `oo-lightbox-shop`, `oo-lightbox-call`,
+>   `oo-lightbox-dir`, `oo-ask-<productId>`, `track-seller` (+`-call`, `-wa`,
+>   `-dir`, `-order`), `track-item-<n>`, `track-item-link-<n>`,
+>   `track-item-sku-<n>`.
+
+## 8·plan (as written before implementation)
 
 | Phase | Scope | Risk |
 | --- | --- | --- |
@@ -285,13 +310,15 @@ New: `oo-shop-filter`, `oo-search-summary`, `oo-sold-by-<productId>`, `oo-ask-<p
   new tables, permissions or notifications.
 - Any change to pricing, stock, payment, tracking statuses or permissions.
 
-## 12. Open questions (I have a default for each; answer to change)
+## 12. Open questions — RESOLVED (implemented per the defaults)
 
-1. **Customer noun** — "Shop" (my default, matches today's copy) or "Business"?
-2. **Category-first default** — my recommendation; the alternative is keeping
-   shop-grouped sections with a collapsed shop header. (I recommend category-first.)
-3. **Near-me** — fold into the filter bar as `Delivering to me (n)` (my default) or keep
-   the standalone card?
-4. **Tracking page theme** — unify on the light storefront look (my default) or keep the
-   dark receipt look and only unify the header/actions?
-5. **Programme scope** — P1–P4 in one go (my default), or P1+P2 first for review?
+1. **Customer noun** — **"Shop"** on both customer pages (HELP/HOWTO copy, empty
+   states, `/track` labels); "Business/Branch/Organization" stays staff-side.
+2. **Category-first default** — **implemented**: the all-shops catalogue is grouped by
+   category, with every selling shop side by side and per-card "Sold by <Shop>".
+3. **Near-me** — **folded into the filter bar** as `Delivering to me (n)` / `All shops (n)`
+   / `Clear`, with the GPS + drop-a-pin affordances on the same row.
+4. **Tracking page theme** — **unified on the light storefront look** behind the shared
+   `CustomerHeader` component (both pages render the same header now).
+5. **Programme scope** — **P1–P4 delivered in one programme**, each phase tested before
+   the next.

@@ -204,7 +204,7 @@ function TrackInner() {
         </a>
       </CustomerHeader>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+      <main className="max-w-2xl lg:max-w-5xl mx-auto px-4 py-6">
         {/* Lookup card */}
         <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
           <h1 className="text-lg font-black text-slate-900 flex items-center gap-2">
@@ -249,9 +249,12 @@ function TrackInner() {
         </section>
 
         {t && (
-          <section className="space-y-4" data-testid="track-result">
+          <section
+            className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0"
+            data-testid="track-result"
+          >
             {/* Current status card */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" role="status" aria-live="polite" aria-atomic="false">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tracking code</div>
@@ -265,6 +268,7 @@ function TrackInner() {
                         ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-700"
                         : "bg-slate-100 border-slate-700 text-slate-600 hover:bg-slate-700"
                     }`}
+                    aria-pressed={notifyOn}
                     data-testid="track-notify-toggle"
                     title="Get a notification on this device when the status changes"
                   >
@@ -275,6 +279,7 @@ function TrackInner() {
                     onClick={() => fetchTracking(t.code, { announce: false })}
                     className="p-2 rounded-lg bg-slate-100 border border-slate-700 text-slate-600 hover:bg-slate-700"
                     title="Refresh now"
+                    aria-label="Refresh this order now"
                     data-testid="track-refresh"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -287,7 +292,19 @@ function TrackInner() {
                   <div className="text-sm font-black text-rose-600 flex items-center gap-2">
                     <XCircle className="w-4 h-4" /> This order was cancelled
                   </div>
-                  <p className="text-[11px] text-rose-200/70 mt-1">Please contact the business for details.</p>
+                  <p className="text-[11px] text-rose-600/90 mt-1">
+                    Please contact the shop for details
+                    {t.seller && shopPhone(t.seller) ? (
+                      <>
+                        {" — "}
+                        <a href={telHref(shopPhone(t.seller))} className="font-black underline" data-testid="track-cancelled-call">
+                          call {shopPhone(t.seller)}
+                        </a>
+                      </>
+                    ) : (
+                      "."
+                    )}
+                  </p>
                 </div>
               ) : (
                 <>
@@ -339,7 +356,7 @@ function TrackInner() {
 
             {/* Live dispatch map (Google Maps) — only while the order is on the road */}
             {t.live && (
-              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-map">
+              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-map">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
                     <MapPin className="w-4 h-4 text-cyan-700" /> Your order is on its way — live location
@@ -384,7 +401,7 @@ function TrackInner() {
 
             {/* Delivery destination — the customer's own Google-Maps pin */}
             {t.fulfillmentType === "DELIVERY" && t.deliveryLocation && (
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-delivery-map">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-delivery-map">
                 <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
                   <MapPin className="w-4 h-4 text-cyan-700" /> Your delivery point
                 </h2>
@@ -423,7 +440,7 @@ function TrackInner() {
 
             {/* Pickup point — the chosen pickup location (or the branch itself) */}
             {t.fulfillmentType === "PICKUP" && t.pickupLocation && (
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-pickup-map">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-pickup-map">
                 <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
                   <Store className="w-4 h-4 text-emerald-700" /> Where to pick up
                 </h2>
@@ -460,24 +477,24 @@ function TrackInner() {
                   )}
                 </div>
                 <p className="mt-1.5 text-[10px] text-slate-500">
-                  Come in when your order shows “Ready for Pickup” above — this is the branch's public location.
+                  Come in when your order shows “Ready for Pickup” above — this is the shop's public location.
                 </p>
               </div>
             )}
 
-            {/* Order & business card */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm">
+            {/* Order details + the ordered lines (full width — it is the receipt) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2">
               <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-3">
                 <Store className="w-4 h-4 text-emerald-700" /> Order details
               </h2>
               <div className="grid grid-cols-2 gap-2 text-[11px] mb-3">
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Business</div>
+                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Shop</div>
                   <div className="text-slate-700 font-bold mt-0.5">{t.businessName}</div>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Branch</div>
-                  <div className="text-slate-700 font-bold mt-0.5">{t.branchName || "Main branch"}</div>
+                  <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Location</div>
+                  <div className="text-slate-700 font-bold mt-0.5">{t.branchName || "Main location"}</div>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
                   <div className="text-slate-500 font-bold text-[9px] uppercase tracking-wider">Customer</div>
@@ -646,7 +663,7 @@ function TrackInner() {
                     </p>
                   )}
                   <p className="text-indigo-700/70">
-                    Deposit confirmed at booking — your goods are sourced from our supplier and become yours the moment they land in branch stock.
+                    Deposit confirmed at booking — your goods are sourced from our supplier and become yours the moment they land in the shop's stock.
                   </p>
                 </div>
               </div>
@@ -699,7 +716,7 @@ function TrackInner() {
 
             {/* Credit sale — installment plan, dated history & outstanding balance */}
             {t.credit && (
-              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm" data-testid="track-credit-card">
+              <div className="bg-white border border-cyan-300 rounded-2xl p-4 sm:p-5 shadow-sm lg:col-span-2" data-testid="track-credit-card">
                 <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 mb-2">
                   <HandCoins className="w-4 h-4 text-cyan-700" /> Credit sale — {t.credit.statusLabel}
                 </h2>
@@ -733,7 +750,7 @@ function TrackInner() {
                 {t.credit.status === "ACTIVE" ? (
                   <p className="text-[11px] text-cyan-700 mb-2" data-testid="track-credit-how">
                     To pay an installment, send MoMo to the business payment number below (quote your tracking code
-                    as reference), call the business, or pay at the branch — every payment shows up here instantly.
+                    as reference), call the shop, or pay at the shop — every payment shows up here instantly.
                   </p>
                 ) : (
                   <p className="text-[11px] text-emerald-700 font-bold mb-2" data-testid="track-credit-settled">
@@ -809,7 +826,8 @@ function TrackInner() {
                   } catch {}
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-700 border border-slate-700 text-slate-600 text-[11px] font-bold"
-                data-testid="track-copy"
+                aria-label="Copy your tracking code"
+                    data-testid="track-copy"
               >
                 <Copy className="w-3.5 h-3.5" /> {copied ? "Link copied!" : "Copy tracking link"}
               </button>

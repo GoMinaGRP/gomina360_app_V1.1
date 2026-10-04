@@ -231,11 +231,11 @@ function QtyInput({
  * asserts both the step count and that these phrases match the live DOM.
  */
 const HOWTO_STEPS: [string, React.ReactNode][] = [
-  ["Browse shops & categories", <>Every product from <span className="font-bold text-emerald-700">all our businesses</span> sits on this ONE page — grouped by business, then category. Tap a store card (or a group's <span className="font-bold">Focus →</span>) to zoom into one shop, tap a <span className="font-bold text-cyan-700">category chip</span> in the bar under the header, or type in the search box to search everywhere. <span className="font-bold text-emerald-700">Use my location</span> sorts branches by who delivers to you.</>],
+  ["Browse shops & categories", <>Every product from <span className="font-bold text-emerald-700">all our shops</span> sits on this ONE page — grouped by <span className="font-bold text-cyan-700">category</span>, with every shop that sells it side by side. Tap a <span className="font-bold">shop chip</span> in the shop row to zoom into one shop, tap a <span className="font-bold text-cyan-700">category chip</span> in the bar under the header, or type in the search box to search everywhere. <span className="font-bold text-emerald-700">Use my location</span> sorts shops by who delivers to you.</>],
   ["See details & zoom photos", <>Tap a product photo, a thumbnail, or its <span className="font-bold text-emerald-700">ⓘ details</span> chip for the full details page — big photos of every angle, price, description & specs. Zoom with the <span className="font-bold">+/−</span> buttons, the mouse wheel, or pinch on touchscreens, then drag to look around.</>],
   ["Pick stock or Pre-order", <>Items <span className="font-bold text-emerald-700">In stock</span> take <span className="font-bold">Add to Cart</span>. Cards showing <span className="font-bold text-indigo-700">Pre-order only</span> (or “pre-order also available”) list indigo option cards — each with its supply method (e.g. Air/Sea), lead days, price and deposit terms. Tap <span className="font-bold text-indigo-700">Pre-order</span> on the option you want.</>],
   ["Set quantities", <>Use <span className="font-bold">+ / −</span> on any card, or tap the number and type an exact quantity. The cart bar at the bottom keeps the running count and total.</>],
-  ["Proceed to Checkout", <>Tap <span className="font-bold">Proceed to Checkout ▼</span> on the cart bar — it guides you down to the one checkout form for the shop you're buying from (each order goes to one branch).</>],
+  ["Proceed to Checkout", <>Tap <span className="font-bold">Proceed to Checkout ▼</span> on the cart bar — it guides you down to the one checkout form for the shop you're buying from (each order goes to one shop).</>],
   ["Your name & phone", <>Your name, and a phone number we can reach you on: <span className="font-bold text-cyan-700">exactly 10 digits</span>, like 0551234567 — no +233 country code. The page tells you instantly if the number is wrong.</>],
   ["Pickup or Delivery", <><span className="font-bold">Pickup</span>: choose a pickup point — you'll see it on the map. <span className="font-bold">Delivery</span>: describe your address, then <span className="font-bold text-rose-600">drag the map</span> until the red centre-pin sits exactly on your doorstep. Zoom with +/−, nudge with the arrow pad, or tap <span className="font-bold text-cyan-700">Use my location</span> for GPS.</>],
   ["Choose payment", <><span className="font-bold">Pay on delivery/pickup</span> (cash or MoMo when the order reaches you), or <span className="font-bold">Pay now with MTN MoMo</span> — the pay-to number is shown — and paste your transaction reference. Pre-orders pay the deposit by MoMo now, the balance on the stated terms. Add a note for the staff if you like.</>],
@@ -1113,7 +1113,7 @@ function OrderInner() {
   const pickBiz = (id: number) => {
     if (id === bizId) { setAllMode(false); return; }
     if (cart.length > 0 && typeof window !== "undefined" &&
-        !window.confirm("Switching business will clear your cart. Continue?")) return;
+        !window.confirm("Switching shops will clear your cart. Continue?")) return;
     setCart([]);
     setBizId(id);
     setAllMode(false);
@@ -1146,7 +1146,7 @@ function OrderInner() {
 
   const placeOrder = async () => {
     setOrderError("");
-    if (!biz) return setOrderError("Choose a business first.");
+    if (!biz) return setOrderError("Choose a shop first.");
     if (cart.length === 0) return setOrderError("Your cart is empty.");
     if (name.trim().length < 2) return setOrderError("Please enter your name.");
     // Customer numbers are Ghana-local: EXACTLY 10 digits (no country code).
@@ -1300,6 +1300,7 @@ function OrderInner() {
                         : "text-slate-200 hover:bg-slate-700/70 hover:text-white"
                     }`}
                     data-testid={`oo-cat-${c}`}
+                    aria-pressed={cat === c}
                   >
                     {c === "ALL" ? "All departments" : c}
                   </button>
@@ -1517,6 +1518,7 @@ function OrderInner() {
                       : "bg-white border-slate-200 hover:border-slate-400"
                   }`}
                   data-testid="oo-biz-all"
+                  aria-pressed={allMode}
                 >
                   <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">🛍️ All shops</div>
                   <div className="text-[9px] text-slate-500 whitespace-nowrap">
@@ -1545,6 +1547,7 @@ function OrderInner() {
                         : "bg-white border-slate-200 hover:border-slate-400"
                     }`}
                     data-testid={`oo-biz-${b.businessId}`}
+                    aria-pressed={bizId === b.businessId && !allMode}
                   >
                     <span
                       className="block text-[12px] font-extrabold whitespace-nowrap text-slate-900"
@@ -1800,7 +1803,7 @@ function OrderInner() {
                       <PackageCheck className={`w-4 h-4 ${fulfillment === "PICKUP" ? "text-emerald-600" : "text-slate-400"}`} />
                       <div className="text-[12px] font-extrabold mt-1 text-slate-900">Pickup</div>
                       <div className="text-[9px] text-slate-500">
-                        {biz.pickupEnabled === false ? "Not offered by this branch" : `Collect at ${biz.branchName}`}
+                        {biz.pickupEnabled === false ? "Not offered by this shop" : `Collect at ${biz.branchName}`}
                       </div>
                     </button>
                     <button
@@ -1813,7 +1816,7 @@ function OrderInner() {
                       <div className="text-[12px] font-extrabold mt-1 text-slate-900">Delivery</div>
                       <div className="text-[9px] text-slate-500">
                         {biz.deliveryEnabled === false
-                          ? "Not offered by this branch"
+                          ? "Not offered by this shop"
                           : biz.serviceRadiusKm != null
                           ? `Within ${biz.serviceRadiusKm} km · live courier map`
                           : "Track the courier live on the map"}
@@ -1879,7 +1882,7 @@ function OrderInner() {
                         prefix="oo-pin"
                         tileStyle={mapStyle}
                         onTileStyleChange={setMapStyle}
-                        hint="The courier navigates to this exact pin — only the branch team and the courier delivering your order can see it. Switch to Satellite for an aerial view."
+                        hint="The courier navigates to this exact pin — only the shop's team and the courier delivering your order can see it. Switch to Satellite for an aerial view."
                       />
                       {deliveryPin && pinAtShopM != null && pinAtShopM < 75 && (
                         <p className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-2.5 py-1.5" data-testid="oo-pin-shop-warn">
@@ -1980,7 +1983,7 @@ function OrderInner() {
                         <span className="block text-[9px] text-slate-500">
                           {depositDueTotal > 0
                             ? `Pre-order deposit ${fmtMoney(depositDueTotal)} is confirmed here first — the branch shares the MoMo number on your tracking page.`
-                            : "The branch shares the MoMo number and confirms your payment on your tracking page."}
+                            : "The shop shares the MoMo number and confirms your payment on your tracking page."}
                         </span>
                         {biz.momoNumber && (
                           <span className="block text-[10px] font-bold text-amber-700 mt-0.5" data-testid="oo-momo-dest">
@@ -2268,7 +2271,7 @@ function OrderInner() {
                           <MapPin className="w-3.5 h-3.5 text-rose-500" />
                         </span>
                         <span className="pt-1"><span className="font-bold text-slate-900 whitespace-pre-line">{support.address}</span><br />
-                        <span className="text-[10px] text-slate-500">Our business location</span></span>
+                        <span className="text-[10px] text-slate-500">Our shop location</span></span>
                       </div>
                     )}
                     {support.openingHours && (
@@ -2389,6 +2392,7 @@ function OrderInner() {
                       }
                       className="p-1 text-slate-400 hover:text-rose-600"
                       data-testid={`oo-cart-rm-${l.product.id}`}
+                      aria-label={`Remove ${l.product.name} from the cart`}
                     >
                       <Trash className="w-3.5 h-3.5" />
                     </button>
