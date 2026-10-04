@@ -585,6 +585,76 @@ try {
   }
   ok(aErrors.length === 0, "no page errors on the auditor’s session", aErrors.slice(0, 2).join(" | "));
   await aCtx.close();
+
+  /* ═══════════ H. Server contract — payload + isolation ═══════════ */
+  console.log("\n── H. Bootstrap payload & endpoint isolation ──");
+  const rawGet = async (t, path) => {
+    const r = await fetch(`${BASE}${path}`, { headers: { "x-gomina-session": t } });
+    const text = await r.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* non-JSON */ }
+    return { status: r.status, text, body };
+  };
+
+  // H1 — the Super Admin's bootstrap payload describes every owner (so grouping
+  // needs no extra call), and the org-2 unit is present.
+  const ownerInit = await rawGet(owner.token, "/api/init");
+  const ownerBiz = ownerInit.body?.businesses || [];
+  const ownerIds = [...new Set(ownerBiz.map((b) => Number(b.ownerId)))].sort((a, b) => a - b);
+  ok(ownerInit.status === 200 && ownerBiz.length > 1 && ownerBiz.every((b) => Number.isFinite(Number(b.ownerId))),
+    "the platform payload carries ownerId on every unit", `${ownerBiz.length} units · owners ${ownerIds.join(",")}`);
+  ok(ownerIds.length >= 2, "the payload spans more than one owner (the lens has something to switch between)", `owners ${ownerIds.join(",")}`);
+
+  // H2 — a scoped caller's payload is exactly their scope, and publishes no
+  // owner directory (names belong to Super Admins only).
+  const audInit = await rawGet(auditor.token, "/api/init");
+  const audBiz = audInit.body?.businesses || [];
+  const audIds = audBiz.map((b) => Number(b.id)).sort((a, b) => a - b);
+  const foreign = ownerBiz.map((b) => Number(b.id)).filter((id) => !audIds.includes(id));
+  ok(audInit.status === 200 && audIds.length === 1 && audIds.every((id) => !foreign.includes(id)),
+    "a scoped caller receives only units they can access (no other owner's unit)",
+    `units ${audIds.join(",") || "none"} vs foreign ${foreign.slice(0, 3).join(",")}`);
+  ok(!/"ownerName"|"ownerId"\s*:\s*[0-9]+\s*,\s*"createdAt"/.test(audInit.text) || !/"ownerName"/.test(audInit.text),
+    "no owner names are published to a scoped caller", audInit.text.includes('"ownerName"') ? "ownerName present" : "clean");
+  ok(foreign.length > 0, "there are other owners' units to try to reach", `foreign ids ${foreign.slice(0, 4).join(",")}`);
+
+  // H3 — a forged businessId is refused, never answered with rows.
+  const target = foreign.includes(8) ? 8 : foreign[0];
+  for (const [path, label] of [
+    [`/api/transactions?businessId=${target}`, "transactions"],
+    [`/api/tasks?businessId=${target}`, "tasks"],
+    [`/api/documents?businessId=${target}`, "documents"],
+  ]) {
+    const r = await rawGet(auditor.token, path);
+    ok(r.status === 403 || /outside your scope|do not have access/i.test(r.text),
+      `a forged businessId on /api/${label} is refused, not answered`, `${r.status}${r.body?.error ? " — " + r.body.error : ""}`);
+  }
+  // Endpoints that filter by scope instead of erroring must return ZERO rows of
+  // the foreign unit (silently serving them would be the leak).
+  const empForeign = await rawGet(auditor.token, `/api/employees?businessId=${target}`);
+  const empRows = (empForeign.body?.employees || []).filter((e) => Number(e.businessId) === Number(target));
+  ok(empRows.length === 0, "the employees endpoint returns none of the foreign unit's rows", `${empForeign.status} · ${empRows.length} rows`);
+
+  // H4 — the caller's OWN unit still answers in full: every id in their
+  // payload must be readable, or the narrowing would have broken the scope.
+  const ownId = audIds[0];
+  const ownTx = await rawGet(auditor.token, `/api/transactions?businessId=${ownId}`);
+  const ownRows = ownTx.body?.transactions || [];
+  ok(ownTx.status === 200 && ownRows.every((t) => Number(t.businessId) === ownId),
+    "the caller's own unit still answers in full", `${ownRows.length} rows · business ${ownId}`);
+  const ownTasks = await rawGet(auditor.token, `/api/tasks?businessId=${ownId}`);
+  ok(ownTasks.status === 200, "the shared task endpoint does not refuse the caller's own unit", `status ${ownTasks.status}`);
+  // The audit axis is a GRANT, deliberately separate from operational access:
+  // this caller operates unit 1 but may audit unit 2 only.
+  const ownAudit = await rawGet(auditor.token, `/api/audit?businessIds=${ownId}`);
+  const grantedUnits = [...new Set((ownAudit.body?.bizList || []).map((b) => Number(b.id)))];
+  ok(ownAudit.status === 200 && (ownAudit.body?.bizList || []).length === 0,
+    "operational access alone does not open the audit axis (grants decide)",
+    `asked unit ${ownId} → ${grantedUnits.length} auditable unit(s)`);
+  const grantedAudit = await rawGet(auditor.token, `/api/audit?businessIds=${AUDITOR_BIZ}`);
+  const grantedIds = [...new Set((grantedAudit.body?.bizList || []).map((b) => Number(b.id)))];
+  ok(grantedIds.length === 1 && grantedIds[0] === AUDITOR_BIZ,
+    "the granted unit is still the only one auditable", `granted ${grantedIds.join(",") || "none"}`);
 } catch (err) {
   fail++;
   console.error("💥 suite error:", err?.message || err);

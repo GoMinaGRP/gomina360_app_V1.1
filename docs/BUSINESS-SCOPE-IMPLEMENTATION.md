@@ -62,13 +62,45 @@ always the authority.
   ai-guides-ui, clean-state, clean-state-ui, az-app-audit, credit-sales,
   finance-allproducts-fresh — all green.
 
-## Phase D — server contract (pending)
+## Phase D — server contract & isolation lock
 
-- Extend `ownerId` narrowing / `ownerId` on payloads to the remaining
-  list endpoints whose panels narrow client-side, and extend
-  `verify-lens.mjs`/`verify-business-scope.mjs` to lock the contract.
-- Keep the same rule as `/api/audit`: a client-supplied owner/unit can only
-  intersect with the caller's server scope.
+Findings first (probed live, then codified in `verify-business-scope.mjs` §H):
+
+- **No new widening parameter is needed.** `/api/audit` is the only payload that
+  spans owners by design, and it already takes the intersecting `?ownerId=` /
+  `?businessIds=` narrowing (Phase A). Every other list endpoint narrows by
+  `businessId` and — crucially — filters rows through the caller's server-side
+  scope rather than trusting the parameter, so a forged id can only ever return
+  nothing. `/api/init` already carries `ownerId` on every unit.
+- **What was missing was proof.** Section H now locks the contract:
+  - the platform payload describes every owner (ownerId on 10 units, owners 1 & 2);
+  - a scoped caller's payload contains only units they can access and publishes
+    **no owner names/directory** (owner naming stays a Super Admin capability);
+  - a forged `businessId` is refused with 403 on `/api/transactions`,
+    `/api/tasks` and `/api/documents`, and returns zero foreign rows on
+    `/api/employees` (scope-filtered, not parameter-trusted);
+  - the caller's own unit still answers in full (25 transactions, tasks 200);
+  - the **audit axis is a grant, not operational access**: this caller operates
+    unit 1 but may audit unit 2 only, and asking for their operational unit
+    returns 0 auditable units. Forging an id never widens it.
+
+Deliberately NOT done: making `/api/init` lens-aware. The lens switches
+instantly client-side over an already-scoped payload (Super Admin ⇒ platform
+payload), which every surface now filters through `scopedBusinesses`; moving the
+lens into the request would add a refetch/reload path for no correctness gain.
+
+## Final state
+
+| Phase | Commit | Scope | Verification |
+| --- | --- | --- | --- |
+| A | `4612bf8` | model + Audit & Review + `/api/audit` narrowing | 50 checks + audit 29/28/38, lens 15, multiowner 118 |
+| B | `8aa53d1` | Manage Units · Export Center · Command Center | 64 checks + 12 suites |
+| C | `edc99de` | 16 flat selectors → one shared list | 81 checks + 23 suites |
+| D | this commit | payload/isolation contract lock | 94 checks (A–H) |
+
+`dev-tooling/verify-business-scope.mjs` is the standing regression suite for the
+whole feature (roles: Super Admin, scoped auditor; lenses: My Workspace, All
+Organizations, a single owner).
 
 ## Test fragility fixed along the way
 
