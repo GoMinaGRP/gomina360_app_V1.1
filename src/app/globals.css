@@ -171,6 +171,23 @@ main video {
   }
 }
 
+/* Customer storefront: the shop strip and the category strip are deliberately
+   ONE horizontal line each (they scroll sideways), even where the generic
+   toolbar rule above would wrap them — a wall of shop cards above the catalogue
+   is exactly what the product-first layout removes. Higher specificity than
+   `main .flex:has(> button + button)` on purpose. */
+main [data-testid="oo-bizrow"],
+[data-testid="oo-catbar"] {
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+main [data-testid="oo-bizrow"] > *,
+[data-testid="oo-catbar"] > * {
+  flex: 0 0 auto;
+}
+
 /* Wide content that is genuinely tabular scrolls INSIDE its own box — the page
    itself never scrolls sideways. */
 .gm-scroll-x {

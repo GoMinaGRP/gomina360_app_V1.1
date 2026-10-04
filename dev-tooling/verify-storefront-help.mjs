@@ -394,7 +394,9 @@ async function sectionC(browser) {
       cartBadge: !!document.querySelector('[data-testid="oo-header-cart-count"]'),
       bizRow: !!document.querySelector('[data-testid="oo-bizrow"]'),
       bizAll: !!document.querySelector('[data-testid="oo-biz-all"]'),
-      groups: document.querySelectorAll('[data-testid^="oo-bizsec-"]').length,
+      groups: [...document.querySelectorAll('[data-testid^="oo-biz-"]')]
+        .filter((el) => !/-(area|dist|out)-/.test(el.dataset.testid) && el.dataset.testid !== "oo-biz-all").length,
+      soldBy: document.querySelectorAll('[data-testid^="oo-sold-by-shop-"]').length,
     };
   });
   ok("C6 sticky Amazon-style header carries the search bar", structure.sticky && structure.searchInHeader,
@@ -410,7 +412,8 @@ async function sectionC(browser) {
     structure.photos >= 1, `photos=${structure.photos}`);
   ok("C8b header cart button with live count badge + store cards row (All businesses)",
     structure.cartBtn && structure.cartBadge && structure.bizRow && structure.bizAll);
-  ok("C8c all businesses stay grouped on one page", structure.groups >= 3, `groups=${structure.groups}`);
+  ok("C8c all shops stay on one page (shop strip + per-card shop attribution)",
+    structure.groups >= 3 && structure.soldBy >= 5, `shops=${structure.groups} soldBy=${structure.soldBy}`);
 
   // Photo lightbox from the one-page grid adds to the RIGHT shop
   await clickT(page, "oo-photo-1");

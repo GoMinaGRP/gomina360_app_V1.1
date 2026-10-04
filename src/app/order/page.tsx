@@ -85,6 +85,47 @@ function wmSpecOf(b: any) {
     : null;
 }
 
+/**
+ * Storefront search — ONE matcher for the whole catalogue.
+ *
+ * The customer types what they know: a product name, a category ("blocks"),
+ * a brand, a SKU off a receipt, a description word, or the shop they bought
+ * from last time. All of those are searchable here; the previous matcher only
+ * looked at the product name, so "hardware" or "POULTRY-01" found nothing.
+ */
+function productHaystack(p: any, b: any): string {
+  return [
+    p?.name,
+    p?.category,
+    p?.subcategory,
+    p?.brand,
+    p?.model,
+    p?.sku,
+    p?.description,
+    p?.unit,
+    b?.businessName,
+    b?.businessCode,
+    b?.branchName,
+    b?.category,
+  ]
+    .filter((x) => typeof x === "string" && x.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+/** Every whitespace-separated term must appear (AND) — "block 6" narrows. */
+function matchesProductQuery(p: any, b: any, query: string): boolean {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return true;
+  const hay = productHaystack(p, b);
+  // WORD-PREFIX match: every term must start a word somewhere in the haystack,
+  // so "cement" finds "Portland Cement 50kg" (and even the partial "ceme")
+  // without dragging in "Steel & Reinfor-cement" by accident.
+  return q
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => new RegExp(`(^|[^a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(hay));
+}
 
 interface CartLine {
   biz: any;
@@ -211,6 +252,11 @@ type ProductCardProps = {
   shareBiz?: any;
   /** Deep-link focus ring: a shared-product link highlights its card. */
   highlight?: boolean;
+  /** All-shops view: name the selling shop on the card (product-first grids
+   *  must never leave the customer guessing who they are buying from). */
+  showShop?: boolean;
+  /** Focus that shop's catalogue (from the card's shop name). */
+  onFocusShop?: (biz: any) => void;
 };
 
 function optionQtysEqual(a: Record<string, number>, b: Record<string, number>) {
@@ -231,6 +277,8 @@ function productCardPropsEqual(prev: ProductCardProps, next: ProductCardProps) {
     prev.onOpenLightbox === next.onOpenLightbox &&
     prev.shareBiz === next.shareBiz &&
     prev.highlight === next.highlight &&
+    prev.showShop === next.showShop &&
+    prev.onFocusShop === next.onFocusShop &&
     optionQtysEqual(prev.optionQtys, next.optionQtys) &&
     optionQtysEqual(prev.variantQtys, next.variantQtys)
   );
@@ -248,6 +296,8 @@ const ProductCard = React.memo(function ProductCard({
   onOpenLightbox,
   shareBiz,
   highlight = false,
+  showShop = false,
+  onFocusShop,
 }: ProductCardProps) {
   const photos = productPhotos(p);
   // Grid tiles + the gallery strip paint the small thumbnails (~18 KB); the
@@ -269,6 +319,7 @@ const ProductCard = React.memo(function ProductCard({
   }, [isVariantProduct, p?.id]);
   const chosen = variantFor(p, sel);
   const pickOk = !isVariantProduct || isPickComplete(p, sel);
+  const shopBiz = fromBiz || wmBiz || null;
   const q = isVariantProduct ? (chosen ? variantQtys[String(chosen.id)] || 0 : 0) : qStock;
   const maxQty = isVariantProduct ? (chosen ? Math.max(0, chosen.available) : 0) : p.available;
   return (
@@ -330,6 +381,22 @@ const ProductCard = React.memo(function ProductCard({
           </div>
         )}
         <div className="text-[13px] font-semibold text-slate-900 leading-snug line-clamp-2 flex-1">{p.name}</div>
+        {/* Sold by — every product stays linked to its selling shop, and one
+            tap focuses that shop's own catalogue. */}
+        {showShop && shopBiz && (
+          <div className="mt-0.5 flex items-center gap-1 min-w-0" data-testid={`oo-sold-by-${p.id}`}>
+            <Store className="w-3 h-3 text-emerald-600 shrink-0" />
+            <button
+              type="button"
+              onClick={() => onFocusShop?.(shopBiz)}
+              className="text-[10px] font-bold text-slate-600 hover:text-cyan-700 truncate text-left"
+              title={`See everything ${shopBiz.businessName} sells`}
+              data-testid={`oo-sold-by-shop-${p.id}`}
+            >
+              {shopBiz.businessName}
+            </button>
+          </div>
+        )}
         <div className="text-[10px] text-slate-500 mt-1">
           <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-bold text-slate-600" data-testid={`oo-category-${p.id}`}>{p.category}</span>
           {/* Subcategory registered in Inventory — keeps the branch's own wording. */}
@@ -521,6 +588,9 @@ function OrderInner() {
   // survive re-deploys. Resolution happens against the SAME org-scoped menu
   // payload the storefront renders (no extra surface, no cross-tenant read).
   const [shareKey, setShareKey] = useState<string | null>(null);
+  // Shop-strip search — only rendered once a catalogue has more shops than one
+  // row can carry; it narrows the STRIP, never the products.
+  const [shopSearch, setShopSearch] = useState("");
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const shareFocusDone = useRef(false);
 
@@ -649,9 +719,8 @@ function OrderInner() {
   );
 
   const products = useMemo(() => {
-    const q = search.trim().toLowerCase();
     return (biz?.products || []).filter(
-      (p: any) => (cat === "ALL" || p.category === cat) && (!q || p.name.toLowerCase().includes(q)),
+      (p: any) => (cat === "ALL" || p.category === cat) && matchesProductQuery(p, biz, search),
     );
   }, [biz, cat, search]);
 
@@ -671,6 +740,8 @@ function OrderInner() {
   const lineUnitPrice = (l: CartLine) => (l.option ? Number(l.option.priceGhs ?? l.product.price) : Number(l.product.price));
   const cartTotal = cart.reduce((acc, l) => acc + lineUnitPrice(l) * l.qty, 0);
   const cartCount = cart.reduce((acc, l) => acc + l.qty, 0);
+  /** The one shop this order belongs to — a single-shop cart must SAY its shop. */
+  const cartShop = cart[0]?.biz?.businessName || (cart.length ? biz?.businessName : "") || "";
   // Pre-order quick facts for the checkout strip.
   const preorderLines = cart.filter((l) => l.option);
   const hasPreorder = preorderLines.length > 0;
@@ -754,29 +825,57 @@ function OrderInner() {
     return ["ALL", ...Array.from(s)];
   }, [visibleBiz]);
 
-  const allGroups = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return visibleBiz
-      .map(({ b, serves, distanceM, areaName }) => {
-        const its = (b.products || []).filter(
-          (p: any) => (cat === "ALL" || p.category === cat) && (!q || p.name.toLowerCase().includes(q)),
-        );
-        const secs: { name: string; items: any[] }[] = [];
-        for (const pr of its) {
-          const name = String(pr.category || "Other");
-          let s = secs.find((g) => g.name === name);
-          if (!s) { s = { name, items: [] }; secs.push(s); }
-          s.items.push(pr);
-        }
-        return { b, serves, distanceM, areaName, secs, count: its.length };
-      })
-      // Zero-product businesses never clutter the one-page grid.
-      .filter((g) => g.count > 0);
+  /**
+   * ALL-SHOPS catalogue — the DEFAULT view (product-first).
+   *
+   * Products are grouped by CATEGORY, not by shop: "Building Materials" shows
+   * every shop's blocks side by side so the customer can compare, and each card
+   * names its selling shop ("Sold by …"). The shop dimension is a filter
+   * (`oo-bizrow` strip below), not the page's spine.
+   */
+  const catGroups = useMemo(() => {
+    const byCat = new Map<string, { name: string; items: { p: any; b: any; distanceM: number | null }[] }>();
+    for (const d of visibleBiz) {
+      for (const pr of d.b.products || []) {
+        if (cat !== "ALL" && pr.category !== cat) continue;
+        if (!matchesProductQuery(pr, d.b, search)) continue;
+        const name = String(pr.category || "Other");
+        let g = byCat.get(name);
+        if (!g) { g = { name, items: [] }; byCat.set(name, g); }
+        g.items.push({ p: pr, b: d.b, distanceM: d.distanceM ?? null });
+      }
+    }
+    // Richest shelves first, then alphabetical — a shopper sees the categories
+    // with the most to offer before the one-product corners.
+    return [...byCat.values()].sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name));
   }, [visibleBiz, search, cat]);
-  const allProductsCount = useMemo(
-    () => allGroups.reduce((a, g) => a + g.count, 0),
-    [allGroups],
+
+  /** Shop-strip rows after the strip's own search box (serving shops first). */
+  const stripBiz = useMemo(() => {
+    const q = shopSearch.trim().toLowerCase();
+    const rows = q
+      ? visibleBiz.filter((d) => `${d.b.businessName} ${d.b.branchName || ""} ${d.b.businessCode || ""}`.toLowerCase().includes(q))
+      : visibleBiz;
+    return [...rows].sort((a, b) => (a.serves !== b.serves ? (a.serves ? -1 : 1) : (a.distanceM ?? 0) - (b.distanceM ?? 0)));
+  }, [visibleBiz, shopSearch]);
+
+  /** Search feedback: how many products match and from how many shops. */
+  const resultCount = useMemo(() => catGroups.reduce((a, g) => a + g.items.length, 0), [catGroups]);
+  const resultShops = useMemo(
+    () => new Set(catGroups.flatMap((g) => g.items.map((i) => i.b.businessId))).size,
+    [catGroups],
   );
+  /** Shelf count for the "All shops" row — the whole in-scope catalogue. */
+  const allProductsCount = useMemo(
+    () => visibleBiz.reduce((a, d) => a + (d.b.products || []).length, 0),
+    [visibleBiz],
+  );
+  /** Categories offered as suggestions when a search comes back empty. */
+  const suggestCategories = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of visibleBiz) for (const p of d.b.products || []) s.add(String(p.category || "Other"));
+    return [...s].slice(0, 6);
+  }, [visibleBiz]);
 
 
   // A branch's own pickup points: preselect when there is only one; any
@@ -970,6 +1069,23 @@ function OrderInner() {
   // is never touched by simply switching views).
   const pickAll = () => setAllMode(true);
 
+  /** Stable (memo-safe) "show me this shop's catalogue" — used by the card's
+   *  "Sold by <Shop>" chip, which must not invalidate the memoised grid. */
+  const focusShop = useCallback((b: any) => {
+    const id = b?.businessId;
+    if (!id) return;
+    if (id === bizIdRef.current) { setAllMode(false); return; }
+    if (cartRef.current.length > 0 && typeof window !== "undefined" &&
+        !window.confirm(`Switching to ${b.businessName} will clear your cart. Continue?`)) return;
+    setCart([]);
+    setBizId(id);
+    setAllMode(false);
+    setCat("ALL");
+    setSearch("");
+    setPickPointId(null);
+    setDeliveryPin(null);
+  }, []);
+
   const placeOrder = async () => {
     setOrderError("");
     if (!biz) return setOrderError("Choose a business first.");
@@ -1075,7 +1191,7 @@ function OrderInner() {
   // memoized module-level <ProductCard/>; this wrapper only computes the
   // per-card bits that depend on live cart state, so typing in the form or
   // toggling UI chrome no longer re-renders the whole catalog.
-  const renderProduct = (p: any, fromBiz?: any) => {
+  const renderProduct = (p: any, fromBiz?: any, showShop = false) => {
     const qtys: Record<string, number> = {};
     for (const opt of p.preorderOptions || []) qtys[String(opt.id)] = cartQty(`${p.id}:${opt.id}`);
     // Boutique: quantity already in the cart for each chosen variant id.
@@ -1098,6 +1214,8 @@ function OrderInner() {
         onOpenLightbox={openLightbox}
         shareBiz={fromBiz || biz}
         highlight={highlightId === p.id}
+        showShop={showShop}
+        onFocusShop={focusShop}
       />
     );
   };
@@ -1212,26 +1330,24 @@ function OrderInner() {
 
         {menu && !placed && (
           <>
-            {/* Welcome strip — where everything lives & how the flow works */}
-            <section className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-              <h1 className="text-base font-black text-slate-900 flex items-center gap-2">
-                <Store className="w-4 h-4 text-emerald-600" /> Everything from all our businesses — live stock, one page
-              </h1>
-              <p className="text-[11px] text-slate-600 mt-1">
-                Pick products, place your order, and get a <span className="font-mono font-bold text-cyan-700">GM-*</span> tracking
-                code instantly. Follow every step — confirmation, preparation, dispatch with a live map, delivery —
-                on the <a href="/track" className="text-cyan-700 font-bold underline">tracking page</a>. No account, ever.
-                New here? Tap the <span className="font-black text-amber-700">HELP</span> button above for the {HOWTO_STEPS.length}-step guide,
-                support contacts and opening hours.
-              </p>
-            </section>
+            {/* One-line intro — the how-to guide lives in HELP; products are the page. */}
+            <p className="px-1 text-[11px] text-slate-600" data-testid="oo-intro">
+              <span className="font-black text-slate-800">{allProductsCount}</span> product{allProductsCount === 1 ? "" : "s"} from{" "}
+              <span className="font-black text-slate-800">{visibleBiz.length}</span> shop{visibleBiz.length === 1 ? "" : "s"} — live stock, one page.
+              Place your order and get a <span className="font-mono font-bold text-cyan-700">GM-*</span> tracking code instantly
+              (<a href="/track" className="text-cyan-700 font-bold underline">track it here</a>). New? Tap{" "}
+              <span className="font-black text-amber-700">HELP</span> for the {HOWTO_STEPS.length}-step guide.
+            </p>
 
-            {/* Branches serving my location (Google Maps) */}
-            <section className="bg-white border border-slate-200 rounded-2xl p-3.5 space-y-2 shadow-sm" data-testid="oo-serve-card">
+            {/* ── Filter bar: delivery area + the ONE-LINE shop strip ─────────
+                The shop list used to be a wall of cards above the catalogue
+                (472 px on a phone). It is now a single scrollable row — the
+                shop dimension is a filter here, not the page's spine. */}
+            <section className="bg-white border border-slate-200 rounded-2xl px-3 py-2 space-y-1.5 shadow-sm" data-testid="oo-serve-card">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[12px] font-extrabold text-slate-900 flex items-center gap-1.5 flex-1 min-w-[140px]">
-                  <Globe className="w-4 h-4 text-emerald-600" /> Branches serving your location
-                </h2>
+                <span className="text-[11px] font-extrabold text-slate-900 flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-emerald-600" /> Delivery
+                </span>
                 {!custLoc ? (
                   <>
                     <button
@@ -1262,7 +1378,7 @@ function OrderInner() {
                       }`}
                       data-testid="oo-locate-nearonly"
                     >
-                      Serving me ({servingCount})
+                      Delivering to me ({servingCount})
                     </button>
                     <button
                       onClick={() => setNearOnly(false)}
@@ -1273,7 +1389,7 @@ function OrderInner() {
                       }`}
                       data-testid="oo-locate-showall"
                     >
-                      All ({decorated.length})
+                      All shops ({decorated.length})
                     </button>
                     <button
                       onClick={clearLoc}
@@ -1284,6 +1400,23 @@ function OrderInner() {
                     </button>
                   </>
                 )}
+                {/* Search feedback — how many products match, and from how many
+                    shops. Typing in the header must answer "did anything match?". */}
+                {search.trim() !== "" && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] font-bold text-slate-700" data-testid="oo-search-summary">
+                    <Search className="w-3 h-3 text-slate-400" />
+                    {resultCount} product{resultCount === 1 ? "" : "s"} · {resultShops} shop{resultShops === 1 ? "" : "s"} match “{search.trim()}”
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-600 hover:text-rose-600"
+                      data-testid="oo-search-clear"
+                      aria-label="Clear search"
+                    >
+                      ✕ clear
+                    </button>
+                  </span>
+                )}
               </div>
               {locErr && (
                 <p className="text-[10px] font-bold text-amber-700" data-testid="oo-locate-error">{locErr}</p>
@@ -1293,7 +1426,7 @@ function OrderInner() {
                   <span className="text-emerald-700 font-bold">{custLoc.source === "GPS" ? "GPS fix" : "Pinned"}</span>{" "}
                   <span className="font-mono">{custLoc.lat.toFixed(5)}, {custLoc.lng.toFixed(5)}</span>
                   {custLoc.accuracyM ? ` · ±${Math.round(custLoc.accuracyM)} m` : ""} — showing{" "}
-                  <span className="font-bold text-slate-900">{servingCount}</span> of {decorated.length} branches whose
+                  <span className="font-bold text-slate-900">{servingCount}</span> of {decorated.length} shops whose
                   delivery area covers you, with the distance to each.
                 </p>
               )}
@@ -1312,60 +1445,78 @@ function OrderInner() {
                   prefix="oo-loc-pin"
                   tileStyle={mapStyle}
                   onTileStyleChange={setMapStyle}
-                  hint="Drop the pin where you are — we show only the branches that deliver to that point. Switch to Satellite for an aerial view."
+                  hint="Drop the pin where you are — we show only the shops that deliver to that point. Switch to Satellite for an aerial view."
                 />
               )}
             </section>
 
-            {/* Shop by store — business picker */}
+            {/* Shop filter — ONE row, horizontally scrollable. Choosing a shop
+                focuses its catalogue (same as the old store card). */}
             {visibleBiz.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-2xl p-5 text-center space-y-2 shadow-sm" data-testid="oo-no-biz">
-                <p className="text-sm text-slate-700 font-bold">No branch currently delivers to this location.</p>
+                <p className="text-sm text-slate-700 font-bold">No shop currently delivers to this location.</p>
                 <p className="text-[11px] text-slate-500">
-                  You can still browse every branch and choose pickup — or try a different spot.
+                  You can still browse every shop and choose pickup — or try a different spot.
                 </p>
                 <button
                   onClick={() => setNearOnly(false)}
                   className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold"
                   data-testid="oo-no-biz-showall"
                 >
-                  Show all branches
+                  Show all shops
                 </button>
               </div>
             ) : (
-              <div className="flex gap-2 overflow-x-auto pb-1" data-testid="oo-bizrow">
+              <div className="flex items-stretch gap-2 overflow-x-auto pb-1" data-testid="oo-bizrow">
                 <button
                   onClick={pickAll}
-                  className={`shrink-0 px-3 py-2 rounded-xl border text-left transition shadow-sm ${
+                  className={`shrink-0 px-3 py-1.5 rounded-xl border text-left transition shadow-sm ${
                     allMode
                       ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-400"
                       : "bg-white border-slate-200 hover:border-slate-400"
                   }`}
                   data-testid="oo-biz-all"
                 >
-                  <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">🛍️ All businesses</div>
+                  <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">🛍️ All shops</div>
                   <div className="text-[9px] text-slate-500 whitespace-nowrap">
                     {allProductsCount} product{allProductsCount === 1 ? "" : "s"} · one page
                   </div>
                 </button>
-                {visibleBiz.map(({ b, serves, distanceM, areaName }) => (
+                {visibleBiz.length > 8 && (
+                  <div className="shrink-0 self-center">
+                    <input
+                      value={shopSearch}
+                      onChange={(e) => setShopSearch(e.target.value)}
+                      placeholder="Find a shop…"
+                      className="w-32 px-2 py-1.5 rounded-lg border border-slate-300 text-[11px] outline-none focus:border-cyan-500"
+                      data-testid="oo-shop-search"
+                      aria-label="Find a shop"
+                    />
+                  </div>
+                )}
+                {stripBiz.map(({ b, serves, distanceM, areaName }) => (
                   <button
                     key={b.businessId}
                     onClick={() => pickBiz(b.businessId)}
-                    className={`shrink-0 px-3 py-2 rounded-xl border text-left transition shadow-sm ${
+                    className={`shrink-0 px-3 py-1.5 rounded-xl border text-left transition shadow-sm ${
                       bizId === b.businessId && !allMode
                         ? "bg-cyan-50 border-cyan-500 ring-1 ring-cyan-400"
                         : "bg-white border-slate-200 hover:border-slate-400"
                     }`}
                     data-testid={`oo-biz-${b.businessId}`}
                   >
-                    <div className="text-[12px] font-extrabold whitespace-nowrap text-slate-900">{b.businessName}</div>
-                    <div className="text-[9px] text-slate-500 whitespace-nowrap">
-                      {b.branchName} · {b.products.length} product{b.products.length === 1 ? "" : "s"}
-                    </div>
-                    <div className="flex items-center gap-1 mt-0.5">
+                    <span
+                      className="block text-[12px] font-extrabold whitespace-nowrap text-slate-900"
+                      data-testid={`oo-focus-${b.businessId}`}
+                    >
+                      {b.businessName}
+                    </span>
+                    <div className="flex items-center gap-1 whitespace-nowrap">
+                      <span className="text-[9px] text-slate-500">
+                        {b.products.length} product{b.products.length === 1 ? "" : "s"}
+                      </span>
                       {serves && (b.serviceAreas || []).length > 0 && (
-                        <span className="text-[9px] font-bold text-cyan-700 truncate max-w-[140px]" data-testid={`oo-biz-area-${b.businessId}`}>
+                        <span className="text-[9px] font-bold text-cyan-700 max-w-[110px] truncate" data-testid={`oo-biz-area-${b.businessId}`}>
                           {areaName || `${(b.serviceAreas || []).length} area${(b.serviceAreas || []).length === 1 ? "" : "s"}`}
                         </span>
                       )}
@@ -1384,6 +1535,7 @@ function OrderInner() {
                 ))}
               </div>
             )}
+
             {biz?.serviceNote && (
               <p className="text-[10px] font-bold text-sky-700 px-1" data-testid="oo-biz-note">
                 {biz.serviceNote}
@@ -1408,60 +1560,61 @@ function OrderInner() {
 
             {biz && (
               <>
-                {/* Products — ALL businesses on one page (default), or the
-                    focused business grouped by Product Category */}
+                {/* Catalogue — category-first (default) or the focused shop's
+                    own shelves. The same products, grouped by what they ARE. */}
                 {allMode ? (
-                  allGroups.length === 0 || allGroups.every((g) => g.count === 0) ? (
-                    <p className="text-center text-slate-500 text-xs py-8" data-testid="oo-empty">No products match.</p>
+                  resultCount === 0 ? (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-2 shadow-sm" data-testid="oo-empty">
+                      <p className="text-sm font-bold text-slate-800">No products match “{search.trim()}”.</p>
+                      <p className="text-[11px] text-slate-500">Try a different word, or browse one of these categories:</p>
+                      <div className="flex flex-wrap justify-center gap-1.5 pt-1">
+                        {suggestCategories.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => { setSearch(""); setCat(c); }}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold hover:border-cyan-400 hover:text-cyan-700"
+                            data-testid={`oo-suggest-${c}`}
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ) : (
                     <div className="space-y-5" data-testid="oo-catalog">
-                      {allGroups.map((g) => (
-                        <section key={g.b.businessId} className="space-y-2.5" data-testid={`oo-bizsec-${g.b.businessId}`}>
-                          <div className="flex items-center gap-2 flex-wrap rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
-                            <Store className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <div className="min-w-0 flex-1">
-                              <h3 className="text-[13px] font-black text-slate-900 leading-tight truncate">{g.b.businessName}</h3>
-                              <p className="text-[10px] text-slate-500 leading-tight">
-                                {g.b.branchName} · {g.count} product{g.count === 1 ? "" : "s"}
-                              </p>
-                            </div>
-                            {g.distanceM != null && (
-                              <span className="text-[9px] font-bold text-slate-500">
-                                {g.distanceM < 1000 ? `${Math.round(g.distanceM)} m` : `${(g.distanceM / 1000).toFixed(1)} km`}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => pickBiz(g.b.businessId)}
-                              className="shrink-0 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold hover:text-cyan-700 hover:border-cyan-400"
-                              data-testid={`oo-focus-${g.b.businessId}`}
-                            >
-                              Focus →
-                            </button>
+                      {catGroups.map((g) => (
+                        <section key={g.name} className="space-y-2.5" data-testid={`oo-catsec-${g.name}`}>
+                          <div className="flex items-center gap-2 px-0.5">
+                            <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-emerald-500 to-cyan-500" />
+                            <h3 className="text-[13px] font-black uppercase tracking-wider text-slate-800">{g.name}</h3>
+                            <span className="text-[10px] font-bold text-slate-500" data-testid={`oo-catsec-count-${g.name}`}>
+                              {g.items.length} item{g.items.length === 1 ? "" : "s"}
+                            </span>
+                            <span className="ml-auto text-[9px] font-bold text-slate-400 whitespace-nowrap">
+                              {new Set(g.items.map((i) => i.b.businessId)).size} shop{new Set(g.items.map((i) => i.b.businessId)).size === 1 ? "" : "s"}
+                            </span>
                           </div>
-                          {g.secs.map((sec) => (
-                            <section key={sec.name} className="space-y-2" data-testid={`oo-catsec-${g.b.businessId}-${sec.name}`}>
-                              <div className="flex items-center gap-2 px-0.5">
-                                <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-emerald-500 to-cyan-500" />
-                                <h3 className="text-[12px] font-black uppercase tracking-wider text-slate-800">{sec.name}</h3>
-                                <span
-                                  className="text-[10px] font-bold text-slate-500"
-                                  data-testid={`oo-catsec-count-${g.b.businessId}-${sec.name}`}
-                                >
-                                  {sec.items.length} item{sec.items.length === 1 ? "" : "s"}
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                                {sec.items.map((pr) => renderProduct(pr, g.b))}
-                              </div>
-                            </section>
-                          ))}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                            {g.items.map((it) => renderProduct(it.p, it.b, true))}
+                          </div>
                         </section>
                       ))}
                     </div>
                   )
                 ) : products.length === 0 ? (
-                  <p className="text-center text-slate-500 text-xs py-8" data-testid="oo-empty">No products match.</p>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-2 shadow-sm" data-testid="oo-empty">
+                    <p className="text-sm font-bold text-slate-800">No products match “{search.trim()}”.</p>
+                    <p className="text-[11px] text-slate-500">Clear the search to see everything {biz?.businessName} sells.</p>
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-[11px] font-bold text-slate-700 hover:text-cyan-700"
+                      data-testid="oo-search-clear-empty"
+                    >
+                      Clear search
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-4" data-testid="oo-catalog">
                     {sections.map((sec) => (
@@ -2147,6 +2300,16 @@ function OrderInner() {
                 <ShoppingCart className="w-4 h-4 text-amber-500" />
                 {cartCount} item{cartCount === 1 ? "" : "s"} {cartOpen ? "▾" : "▴"}
               </button>
+              {cartShop && (
+                <span
+                  className="inline-flex items-center gap-1 min-w-0 max-w-[110px] sm:max-w-[240px] text-[10px] font-bold text-emerald-700"
+                  data-testid="oo-cart-shop"
+                  title={`This order is from ${cartShop}`}
+                >
+                  <Store className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{cartShop}</span>
+                </span>
+              )}
               <button onClick={() => { setCart([]); }} className="text-[10px] text-slate-400 hover:text-rose-600 font-bold" data-testid="oo-clear">Clear</button>
               <span className="flex-1" />
               <span className="text-sm font-black text-slate-900" data-testid="oo-cart-total">{fmtMoney(cartTotal)}</span>
