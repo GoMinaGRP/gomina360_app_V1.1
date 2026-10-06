@@ -511,8 +511,13 @@ try {
   const created = await api("POST", "/api/users", ownToken, {
     name: "Nav Verify Manager",
     email,
-    role: "ACCOUNTANT",
-    assignedBusinessId: null,
+    // BRANCH_MANAGER: a unit role with NO finance in its preset, which is what
+    // the I3 assertions below need ("money needs its own grant"). An Accountant
+    // would legitimately hold Finance (D3 preset), so it cannot be this fixture.
+    role: "BRANCH_MANAGER",
+    // A unit-scoped role must carry a primary unit (the API rejects unitless
+    // unit roles with 400); the manage-grant below is what this row is testing.
+    assignedBusinessId: bizA.id,
     phone: "+233 24 000 0000",
     businessManageIds: [bizA.id],
   });
@@ -528,7 +533,26 @@ try {
   });
   ok("I2 no duplicate test-id anywhere in the rail for a manage grantee",
     Object.values(managerRows).every((n) => n === 1), JSON.stringify(Object.entries(managerRows).filter(([, n]) => n > 1)));
-  ok("I3 Finance & Reports appears once (was twice)", (managerRows["sidebar-tab-finance"] || 0) === 1, `count=${managerRows["sidebar-tab-finance"]}`);
+  // SENSITIVE SURFACE (Owner-authorised): Finance & Reports is no longer part
+  // of the "Manage Business / Unit" bundle. The granted manager must NOT be
+  // offered the money console until the OWNER issues the dedicated
+  // `canViewFinance` authorisation — at which point it appears exactly once.
+  ok("I3 Finance & Reports is withheld from a manage grantee (money needs its own grant)",
+    (managerRows["sidebar-tab-finance"] || 0) === 0, `count=${managerRows["sidebar-tab-finance"]}`);
+  const financeGrant = await api("PATCH", "/api/users", ownToken, { userId: created.json?.user?.id, canViewFinance: true });
+  ok("I3b OWNER can authorise Finance & Reports for the manager", financeGrant.status === 200, `${financeGrant.status}`);
+  // A full reload re-bootstraps /api/init with the new authorisation; the
+  // suite's own sleeper keeps the wait deterministic across chromium builds.
+  await pI.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+  await sleep(2200);
+  const grantedRows = await pI.evaluate(() => {
+    const all = [...document.querySelectorAll('[data-testid="nav-sidebar"] [data-testid]')].map((e) => e.getAttribute("data-testid"));
+    const counts = {};
+    all.forEach((t) => (counts[t] = (counts[t] || 0) + 1));
+    return counts;
+  });
+  ok("I3c Finance & Reports then appears exactly once for the authorised manager",
+    (grantedRows["sidebar-tab-finance"] || 0) === 1, `count=${grantedRows["sidebar-tab-finance"]}`);
   ok("I4 Tracking appears once (was twice)", (managerRows["sidebar-tab-tracking"] || 0) === 1, `count=${managerRows["sidebar-tab-tracking"]}`);
   ok("I5 Manage Units moved into Settings & Storefront and keeps its test-id", (managerRows["sidebar-manage-units"] || 0) === 1);
   ok("I6 MANAGE chip still marks the granted unit", await exists(pI, `sidebar-chip-manage-${bizA.code}`));

@@ -8,7 +8,6 @@ import {
   users,
   userSessions,
   auditTrail,
-  companySettings,
 } from "@/db/schema";
 import { desc, eq, inArray, and, sql } from "drizzle-orm";
 import { BUSINESS_TYPES, businessTypeKeyOf, businessTypeLabelOf } from "@/lib/businessTypes";
@@ -16,12 +15,12 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import {
   requireSuperAdmin,
   getSessionInfo,
-  setUserPassword,
   UNAUTHENTICATED,
   FORBIDDEN,
   bustSessionCache,
 } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { provisionOrganization, invalidatePublicCaches, ProvisionError } from "@/lib/organizationProvisioning";
 
 /**
  * Platform-level organization (Owner) lifecycle — SUPER ADMIN ONLY.
@@ -38,8 +37,6 @@ import { apiError } from "@/lib/apiError";
  *          SET/GRANT/REVOKE/UNRESTRICT_BUSINESS_TYPES — allowed business types.
  * Every mutation is written to the immutable audit trail.
  */
-
-const ROLE_LEVEL = "OWNER";
 
 async function writeAdminTrail(actor: any, action: string, targetLabel: string, detail: string, ownerId: number | null) {
   await db.insert(auditTrail).values({
@@ -112,115 +109,47 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  ttlInvalidate("menu");
-  ttlInvalidate("init");
+  invalidatePublicCaches();
   try {
     const actor = await requireSuperAdmin(request);
     if (!actor) return FORBIDDEN("Only the platform Super Admin can create organizations.");
 
     const body = await request.json();
-    const name = String(body.name || "").trim().slice(0, 160);
-    const ownerName = String(body.ownerName || "").trim().slice(0, 120);
-    const ownerEmail = String(body.ownerEmail || "").trim().toLowerCase().slice(0, 160);
-    const ownerPhone = String(body.ownerPhone || "").trim().slice(0, 60) || "+233 24 000 0000";
-    const contactPhone = String(body.contactPhone || "").trim().slice(0, 60) || null;
-    if (!name || !ownerName || !ownerEmail) {
-      return NextResponse.json(
-        { success: false, error: "Organization name, owner name and owner email are required." },
-        { status: 400 },
-      );
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
-      return NextResponse.json({ success: false, error: "That owner email does not look valid." }, { status: 400 });
-    }
 
-    // Globally-unique login identity (product decision D3).
-    const [dupe] = await db.select({ id: users.id }).from(users).where(eq(users.email, ownerEmail));
-    if (dupe) {
-      return NextResponse.json(
-        { success: false, error: "A user with this email already exists." },
-        { status: 409 },
-      );
-    }
-
-    // Slug: derived from the name, unique-safe for future per-owner storefronts.
-    const baseSlug =
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        .slice(0, 60) || "org";
-    let slug = baseSlug;
-    for (let i = 2; ; i++) {
-      const [taken] = await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.slug, slug));
-      if (!taken) break;
-      slug = `${baseSlug}-${i}`;
-    }
-
-    const [org] = await db
-      .insert(organizations)
-      .values({
-        name,
-        slug,
-        status: "ACTIVE",
-        contactEmail: ownerEmail,
-        contactPhone,
-        createdByUserId: actor.id,
-      })
-      .returning();
-
-    const [owner] = await db
-      .insert(users)
-      .values({
-        name: ownerName,
-        email: ownerEmail,
-        role: ROLE_LEVEL,
-        assignedBusinessId: null,
-        phone: ownerPhone,
-        isActive: true,
-        isWorkerEnabled: true,
-        createdByUserId: actor.id,
-        canRecordSales: true,
-        canExportData: true,
-        isSuperAdmin: false,
-        primaryOrgId: org.id,
-      })
-      .returning();
-
-    const initialPassword = String(body.ownerPassword || "").trim() || `GoMina-${Math.random().toString(36).slice(2, 10)}`;
-    await setUserPassword(owner.id, initialPassword);
-
-    await db.insert(organizationMembers).values({
-      organizationId: org.id,
-      userId: owner.id,
-      roleInOrg: "OWNER",
-      isPrimary: true,
-    });
-    await db.update(organizations).set({ ownerUserId: owner.id, updatedAt: new Date() }).where(eq(organizations.id, org.id));
-
-    // Clean workspace: per-org settings row (no logo — the Owner uploads theirs).
-    await db.insert(companySettings).values({
-      organizationId: org.id,
-      updatedByUserId: actor.id,
-      updatedByName: actor.name,
-      updatedByRole: actor.role,
+    // The ONE provisioning routine — shared verbatim with the approval of a
+    // platform registration request (/api/platform-requests → PROVISION), so a
+    // request-approved Owner is created exactly like a manually-provisioned one.
+    const result = await provisionOrganization(actor, {
+      name: body.name,
+      ownerName: body.ownerName,
+      ownerEmail: body.ownerEmail,
+      ownerPhone: body.ownerPhone,
+      contactPhone: body.contactPhone,
+      ownerPassword: body.ownerPassword,
     });
 
     await writeAdminTrail(
       actor,
       "CREATE_ORGANIZATION",
-      `${name} (#${org.id})`,
-      `Provisioned organization "${name}" (${slug}) with OWNER ${ownerName} <${ownerEmail}> (user #${owner.id}).`,
-      org.id,
+      `${result.organization.name} (#${result.organization.id})`,
+      `Provisioned organization "${result.organization.name}" (${result.organization.slug}) with OWNER ` +
+        `${result.owner.name} <${result.owner.email}> (user #${result.owner.id}).`,
+      result.organization.id,
     );
 
     return NextResponse.json({
       success: true,
-      organization: { id: org.id, name: org.name, slug: org.slug, status: org.status },
-      owner: { id: owner.id, name: owner.name, email: owner.email, role: owner.role },
-      initialPassword, // returned ONCE — hand it to the new Owner securely
+      organization: result.organization,
+      owner: result.owner,
+      initialPassword: result.initialPassword, // returned ONCE — hand it to the new Owner securely
     });
   } catch (error: any) {
+    // Caller-correctable provisioning problems keep their exact status/contract
+    // (400 invalid input, 409 duplicate email) so the console's error copy and
+    // the existing suites are unchanged.
+    if (error instanceof ProvisionError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     return apiError(error);
   }
 }

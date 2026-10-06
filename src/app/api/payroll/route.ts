@@ -3,6 +3,7 @@ import { nextTrxNumber } from "@/lib/idNumbers";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import crypto from "crypto";
 import { db } from "@/db";
+import { batchReads } from "@/lib/batchRead";
 import {
   payrollRuns,
   payrollEntries,
@@ -26,6 +27,7 @@ import {
   UNAUTHENTICATED,
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
+import { canSeeFinancials } from "@/lib/permissions";
 import { apiError } from "@/lib/apiError";
 
 /**
@@ -50,6 +52,13 @@ const otPayFor = (salary: number, hours: number) =>
 
 async function assertManage(user: any, businessId: number) {
   if (user.isSuperAdmin) return null;
+  // Running payroll is a FINANCIAL SURFACE: the OWNER's `canViewFinance`
+  // authorisation is required on top of record-management and business scope.
+  if (!canSeeFinancials(user)) {
+    return FORBIDDEN(
+      "Payroll is restricted to the OWNER and the users the OWNER authorises for Finance & Reports."
+    );
+  }
   if (!canManageSharedRecords(user)) {
     return FORBIDDEN(
       "Only the OWNER (or a manager the OWNER has granted record-management permission) can run payroll."
@@ -151,6 +160,16 @@ export async function GET(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
+    // FINANCIAL SURFACE — a payroll run is salary money. Reading it (runs,
+    // entries, payslips, attendance-linked pay, the statutory report) requires
+    // the OWNER, the platform Super Admin or an OWNER-authorised
+    // (`canViewFinance`) viewer. Business scoping alone is not enough: a shop
+    // worker's branch id must never unlock the branch salary ledger.
+    if (!canSeeFinancials(user)) {
+      return FORBIDDEN(
+        "Payroll is restricted to the OWNER and the users the OWNER authorises for Finance & Reports."
+      );
+    }
     const url = new URL(request.url);
     const businessId = url.searchParams.get("businessId");
     const period = url.searchParams.get("period");
@@ -158,7 +177,12 @@ export async function GET(request: Request) {
     const allowed = await accessibleBusinessIds(user); // null ⇒ OWNER
     const inScope = (bid: number) => allowed === null || allowed.includes(bid);
 
-    let runs = await db.select().from(payrollRuns).orderBy(desc(payrollRuns.id));
+    // ONE round trip for the page's base reads (see src/lib/batchRead.ts).
+    const PY = await batchReads([
+      { key: "runs", table: payrollRuns, order: "id", scope: "none" },
+      { key: "businesses", table: businesses, scope: "none" },
+    ]);
+    let runs = PY.runs;
     runs = runs.filter((r) => inScope(r.businessId));
     if (businessId) runs = runs.filter((r) => r.businessId === Number(businessId));
     if (period) runs = runs.filter((r) => r.period === period);
@@ -187,7 +211,7 @@ export async function GET(request: Request) {
     // Report aggregation across the scoped entries
     const byMonth = new Map<string, any>();
     const byBiz = new Map<number, any>();
-    const bizRows = await db.select().from(businesses);
+    const bizRows = PY.businesses;
     const bizName = (id: number) => bizRows.find((b) => b.id === id)?.name || `Business #${id}`;
     const comp = { base: 0, allowances: 0, overtime: 0, deductions: 0 };
     for (const e of allEntries) {
@@ -292,9 +316,9 @@ export async function POST(request: Request) {
     if (body.action === "SAVE_STATUTORY") {
       // Statutory configuration is enterprise-wide: the OWNER, or a manager
       // the OWNER granted record-management permission, may change it.
-      if (user.role !== "OWNER" && !canManageSharedRecords(user)) {
+      if (user.role !== "OWNER" && (!canSeeFinancials(user) || !canManageSharedRecords(user))) {
         return FORBIDDEN(
-          "Only the OWNER (or a manager the OWNER has granted record-management permission) can change statutory rates."
+          "Only the OWNER (or an OWNER-authorised Finance & Reports manager with record-management permission) can change statutory rates."
         );
       }
       const d = body.data || {};

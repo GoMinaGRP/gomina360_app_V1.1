@@ -52,6 +52,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import { roleShortLabel } from "@/lib/roles";
 
 interface BranchManagerSalesViewProps {
   currentUser: any;
@@ -924,7 +925,12 @@ export default function BranchManagerSalesView({
           </div>
           <div>
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
-              {isExecutive ? "EXECUTIVE • SALES CENTER" : "BRANCH MANAGER • SALES CENTER"}
+              {/* The chip names the CALLER's role from the registry, so a
+                  Supervisor or Accountant works the same register without the
+                  screen telling them they are a Branch Manager. */}
+              {isExecutive
+                ? "EXECUTIVE • SALES CENTER"
+                : `${(roleShortLabel(currentUser?.role) || "Unit").toUpperCase()} • SALES CENTER`}
             </span>
             <h2 className="text-xl font-bold text-white mt-0.5">
               {activeBiz?.name || "Branch"} — Sales Dashboard

@@ -170,6 +170,29 @@ export async function applyStockChange(opts: ApplyStockChangeOptions): Promise<A
     .where(eq(inventoryItems.id, item.id))
     .returning();
 
+  // Threshold crossing: the moment an item falls to/below its reorder point
+  // (or hits zero) the unit's team hears about it — once per item per day.
+  // Only a real CROSSING alerts (IN_STOCK → LOW/OUT), never a lingering state.
+  const quietReasons = ["OPENING", "RESTORE"]; // book-keeping, not operations
+  if (delta < 0 && (item as any).status !== set.status && !quietReasons.includes(String(opts.reason || "").toUpperCase())) {
+    const { notifyStockThresholdCrossing } = await import("@/lib/notifyActivity");
+    await notifyStockThresholdCrossing({
+      businessId,
+      branchCode: opts.branchCode || (item as any).branchCode || null,
+      inventoryId: Number(item.id),
+      itemName: String(item.name || "Stock item"),
+      sku: item.sku || null,
+      unit: (item as any).unit || null,
+      quantityAfter: next,
+      fromStatus: (item as any).status || null,
+      toStatus: String(set.status),
+      threshold: Number(item.minStockThreshold) || 0,
+      actorName: opts.actor?.name || null,
+      actorUserId: opts.actor?.id ?? null,
+      reason: String(opts.reason || "ADJUSTMENT"),
+    });
+  }
+
   if (opts.log !== false && delta !== 0) {
     await logStockMovement({
       businessId,

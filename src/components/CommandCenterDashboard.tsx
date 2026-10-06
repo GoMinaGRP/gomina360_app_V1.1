@@ -82,6 +82,10 @@ interface CommandCenterDashboardProps {
    *  focused workspace view ("MY"/one org) or the platform oversight view
    *  ("ALL" ⇒ per-organization rollups + platform totals). */
   currentUser?: any;
+  /** Sensitive-surface flag: money/ROI are shown only to the OWNER or an
+   *  OWNER-authorised viewer (`canViewFinance`). Unauthorised viewers see
+   *  locked placeholders — never figures. */
+  financialsAuthorized?: boolean;
   organizations?: { id: number; name: string; slug?: string; status: string }[];
   orgLens?: string;
   lensOrgName?: string;
@@ -104,6 +108,7 @@ export default function CommandCenterDashboard({
   canCreateBusiness = false,
   canManageOnline = false,
   canManageUsersConsole = false,
+  financialsAuthorized = true,
   checklists,
   currentUser = null,
   organizations = [],
@@ -111,6 +116,11 @@ export default function CommandCenterDashboard({
   lensOrgName = "",
 }: CommandCenterDashboardProps) {
   const isSuperAdminUser = !!currentUser?.isSuperAdmin;
+  // FINANCIAL SURFACE — figures render only for authorised viewers.
+  const showMoney = financialsAuthorized !== false;
+  const money = (value: number, currency: CurrencyCode = currentCurrency, compact = false): string =>
+    showMoney ? formatMoney(value, currency, compact) : "•••••";
+  const pctText = (value: number | string): string => (showMoney ? `${value}%` : "•••");
   const [chartView, setChartView] = useState<
     "PROFIT_BAR" | "ROI_RADAR" | "CASH_AREA" | "SALES_BAR" | "ASSETS_BAR"
   >("PROFIT_BAR");
@@ -352,18 +362,19 @@ export default function CommandCenterDashboard({
   const avgRisk = averageRiskScore(displayData);
   const avgRiskBand = avgRisk > 0 ? commandCenterRiskBand(avgRisk) : null;
 
-  // Chart dataset formatted in current currency
+  // Chart dataset formatted in current currency. Unauthorised viewers get an
+  // all-zero dataset so no figure can be reconstructed from labels or tooltips.
   const chartDataset = displayData.map((d) => ({
     name: d.shortName,
-    Revenue: convertGhs(d.revenueGhs, currentCurrency),
-    Expenses: convertGhs(d.expensesGhs, currentCurrency),
-    Profit: convertGhs(d.netProfitGhs, currentCurrency),
-    ROI: d.roiPercent,
+    Revenue: showMoney ? convertGhs(d.revenueGhs, currentCurrency) : 0,
+    Expenses: showMoney ? convertGhs(d.expensesGhs, currentCurrency) : 0,
+    Profit: showMoney ? convertGhs(d.netProfitGhs, currentCurrency) : 0,
+    ROI: showMoney ? d.roiPercent : 0,
     Risk: d.riskScore,
-    CashFlow: convertGhs(d.cashFlowGhs, currentCurrency),
+    CashFlow: showMoney ? convertGhs(d.cashFlowGhs, currentCurrency) : 0,
     Sales: d.salesCount,
-    Assets: convertGhs(d.assetsValueGhs, currentCurrency),
-    Inventory: convertGhs(d.inventoryValueGhs, currentCurrency),
+    Assets: showMoney ? convertGhs(d.assetsValueGhs, currentCurrency) : 0,
+    Inventory: showMoney ? convertGhs(d.inventoryValueGhs, currentCurrency) : 0,
   }));
 
   // Selection helpers
@@ -446,6 +457,15 @@ export default function CommandCenterDashboard({
           <p className="text-sm text-slate-300 mt-1 max-w-2xl">
             Compare revenue, expenses, net profit, ROI %, cash flow, assets, inventory, growth, and risks across your entire business portfolio.
           </p>
+          {!showMoney && (
+            <div data-testid="cc-finance-restricted" className="mt-3 inline-flex items-start gap-2 px-3 py-2 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs font-semibold max-w-2xl">
+              <span aria-hidden>🔒</span>
+              <span>
+                Financial figures are restricted to the OWNER and users the OWNER has authorised.
+                Operational indicators stay live; ask the OWNER for the <strong>Finance &amp; Reports</strong> authorisation to see revenue, profit, cash flow and ROI.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Hero = executive MANAGEMENT actions only (create / manage / access).
@@ -524,15 +544,15 @@ export default function CommandCenterDashboard({
                 <div className="grid grid-cols-3 gap-2 mt-3 text-center">
                   <div>
                     <div className="text-[9px] text-slate-500 font-bold">REVENUE</div>
-                    <div className="text-xs font-black text-emerald-400">{formatMoney(o.revenueGhs, currentCurrency, true)}</div>
+                    <div className="text-xs font-black text-emerald-400">{money(o.revenueGhs, currentCurrency, true)}</div>
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-500 font-bold">EXPENSES</div>
-                    <div className="text-xs font-black text-rose-400">{formatMoney(o.expensesGhs, currentCurrency, true)}</div>
+                    <div className="text-xs font-black text-rose-400">{money(o.expensesGhs, currentCurrency, true)}</div>
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-500 font-bold">NET PROFIT</div>
-                    <div className={`text-xs font-black ${o.netProfitGhs >= 0 ? "text-teal-300" : "text-rose-300"}`}>{formatMoney(o.netProfitGhs, currentCurrency, true)}</div>
+                    <div className={`text-xs font-black ${o.netProfitGhs >= 0 ? "text-teal-300" : "text-rose-300"}`}>{money(o.netProfitGhs, currentCurrency, true)}</div>
                   </div>
                 </div>
               </div>
@@ -551,8 +571,8 @@ export default function CommandCenterDashboard({
             <span>Total Enterprise Revenue</span>
             <DollarSign className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-lg sm:text-xl font-black text-emerald-400 mt-1" data-testid="cc-kpi-revenue" data-value={totalRevenue}>
-            {formatMoney(totalRevenue, currentCurrency, true)}
+          <div className="text-lg sm:text-xl font-black text-emerald-400 mt-1" data-testid="cc-kpi-revenue" data-value={showMoney ? totalRevenue : undefined}>
+            {money(totalRevenue, currentCurrency, true)}
           </div>
           <div className="flex items-center text-[10px] text-emerald-400 mt-1 font-medium">
             <ArrowUpRight className="w-3 h-3 mr-0.5" />
@@ -566,12 +586,10 @@ export default function CommandCenterDashboard({
             <TrendingUp className="w-4 h-4 text-teal-400" />
           </div>
           <div className="text-lg sm:text-xl font-black text-teal-300 mt-1">
-            {formatMoney(totalNetProfit, currentCurrency, true)}
+            {money(totalNetProfit, currentCurrency, true)}
           </div>
           <div className="flex items-center text-[10px] text-teal-400 mt-1 font-medium">
-            <span>
-              Margin: {((totalNetProfit / (totalRevenue || 1)) * 100).toFixed(1)}%
-            </span>
+            <span>Margin: {pctText(((totalNetProfit / (totalRevenue || 1)) * 100).toFixed(1))}</span>
           </div>
         </div>
 
@@ -581,7 +599,7 @@ export default function CommandCenterDashboard({
             <Zap className="w-4 h-4 text-yellow-400" />
           </div>
           <div className="text-lg sm:text-xl font-black text-yellow-300 mt-1">
-            {avgRoi}%
+            {pctText(avgRoi)}
           </div>
           <div className="flex items-center text-[10px] text-yellow-400 mt-1 font-medium">
             <span>High return threshold (&gt;15%)</span>
@@ -594,7 +612,7 @@ export default function CommandCenterDashboard({
             <DollarSign className="w-4 h-4 text-cyan-400" />
           </div>
           <div className="text-lg sm:text-xl font-black text-cyan-300 mt-1">
-            {formatMoney(totalCashFlow, currentCurrency, true)}
+            {money(totalCashFlow, currentCurrency, true)}
           </div>
           <div className="flex items-center text-[10px] text-cyan-400 mt-1 font-medium">
             <span>Liquid surplus ready</span>
@@ -607,7 +625,7 @@ export default function CommandCenterDashboard({
             <Building2 className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-lg sm:text-xl font-black text-purple-300 mt-1">
-            {formatMoney(totalAssets, currentCurrency, true)}
+            {money(totalAssets, currentCurrency, true)}
           </div>
           <div className="flex items-center text-[10px] text-purple-300 mt-1 font-medium">
             <span>Machinery, Land & Equip.</span>
@@ -1209,14 +1227,14 @@ export default function CommandCenterDashboard({
                     <td className="px-4 py-3.5 text-right font-semibold text-cyan-300">
                       {biz.salesCount}
                     </td>
-                    <td className="px-4 py-3.5 text-right font-semibold text-slate-200" data-testid={`cc-bizrev-${biz.id}`} data-value={biz.revenueGhs}>
-                      {formatMoney(biz.revenueGhs, currentCurrency)}
+                    <td className="px-4 py-3.5 text-right font-semibold text-slate-200" data-testid={`cc-bizrev-${biz.id}`} data-value={showMoney ? biz.revenueGhs : undefined}>
+                      {money(biz.revenueGhs, currentCurrency)}
                     </td>
                     <td className="px-4 py-3.5 text-right text-rose-300">
-                      {formatMoney(biz.expensesGhs, currentCurrency)}
+                      {money(biz.expensesGhs, currentCurrency)}
                     </td>
                     <td className="px-4 py-3.5 text-right font-extrabold text-emerald-400">
-                      {formatMoney(biz.netProfitGhs, currentCurrency)}
+                      {money(biz.netProfitGhs, currentCurrency)}
                       <div className="text-[10px] text-slate-400 font-normal">
                         ({marginPercent}% margin)
                       </div>
@@ -1227,13 +1245,13 @@ export default function CommandCenterDashboard({
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-right font-semibold text-cyan-300">
-                      {formatMoney(biz.cashFlowGhs, currentCurrency)}
+                      {money(biz.cashFlowGhs, currentCurrency)}
                     </td>
                     <td className="px-4 py-3.5 text-right text-slate-300">
-                      {formatMoney(biz.assetsValueGhs, currentCurrency, true)}
+                      {money(biz.assetsValueGhs, currentCurrency, true)}
                     </td>
                     <td className="px-4 py-3.5 text-right text-slate-300">
-                      {formatMoney(biz.inventoryValueGhs, currentCurrency, true)}
+                      {money(biz.inventoryValueGhs, currentCurrency, true)}
                     </td>
                     <td className="px-4 py-3.5 text-center font-bold text-emerald-400">
                       +{biz.growthRatePercent}%

@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Link2,
+  Lock,
   Wallet,
   Landmark,
   ShieldCheck,
@@ -185,6 +186,11 @@ export function EmployeeRegistration({
    *  not part of the save payload. */
   const [photoDirty, setPhotoDirty] = useState(false);
   const editing = !!initial?.id;
+  // Salary is a FINANCIAL field: a viewer without the OWNER's Finance &
+  // Reports authorisation receives the roster with `financialsRestricted` and
+  // no figure. The field stays out of the payload so an edit can never blank
+  // the stored salary, and the server refuses a salary change for them.
+  const salaryRestricted = editing && initial?.financialsRestricted === true;
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const toggleDay = (d: string) =>
@@ -216,7 +222,8 @@ export function EmployeeRegistration({
     try {
       const payload: any = {
         name: form.name, role: form.role, businessId: Number(form.businessId), branch: form.branch || undefined,
-        salaryGhs: Number(form.salaryGhs), phone: form.phone, email: form.email, hireDate: form.hireDate,
+        ...(salaryRestricted ? {} : { salaryGhs: Number(form.salaryGhs) }),
+        phone: form.phone, email: form.email, hireDate: form.hireDate,
         dateOfBirth: form.dateOfBirth || undefined, gender: form.gender || undefined,
         address: form.address || undefined, emergencyContactName: form.emergencyContactName || undefined,
         emergencyContactPhone: form.emergencyContactPhone || undefined,
@@ -258,7 +265,8 @@ export function EmployeeRegistration({
     return () => window.removeEventListener("keydown", handleKey);
   }, [camOpen, onClose]);
 
-  const valid = form.name.trim() && form.role.trim() && form.businessId && Number(form.salaryGhs) >= 0 && form.salaryGhs !== "";
+  const salaryOk = salaryRestricted || (Number(form.salaryGhs) >= 0 && form.salaryGhs !== "");
+  const valid = form.name.trim() && form.role.trim() && form.businessId && salaryOk;
 
   return (
     <div
@@ -367,8 +375,14 @@ export function EmployeeRegistration({
                 <input className={inputCls} value={form.role} onChange={(e) => set("role", e.target.value)} data-testid="ereg-role" />
               </div>
               <div>
-                <label className={labelCls}>Basic monthly salary (GH₵) <span className="text-rose-400">*</span></label>
-                <input type="number" step="0.01" className={inputCls} value={form.salaryGhs} onChange={(e) => set("salaryGhs", e.target.value)} data-testid="ereg-salary" />
+                <label className={labelCls}>Basic monthly salary (GH₵) {salaryRestricted ? <Lock className="w-3 h-3 inline text-slate-500" /> : <span className="text-rose-400">*</span>}</label>
+                {salaryRestricted ? (
+                  <div className="px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-[11px] text-slate-400" data-testid="ereg-salary-restricted">
+                    Restricted — the OWNER manages salary (Finance &amp; Reports authorisation).
+                  </div>
+                ) : (
+                  <input type="number" step="0.01" className={inputCls} value={form.salaryGhs} onChange={(e) => set("salaryGhs", e.target.value)} data-testid="ereg-salary" />
+                )}
               </div>
               <div>
                 <label className={labelCls}>Notes</label>
@@ -644,7 +658,7 @@ export function EmployeeProfile({
                   <Field label="Assigned days" value={emp.workDays} tid="epr-f-days" />
                   <Field label="Leave entitlement" value={emp.leaveEntitlementDays != null ? `${emp.leaveEntitlementDays} days/yr` : null} tid="epr-f-leave" />
                   <Field label="Hire date" value={emp.hireDate} tid="epr-f-hiredate" />
-                  <Field label="Basic salary" value={fmt(emp.salaryGhs)} tid="epr-f-salary" />
+                  <Field label="Basic salary" value={emp.financialsRestricted ? "Restricted" : fmt(emp.salaryGhs)} tid="epr-f-salary" />
                   <Field label="Status" value={emp.status} tid="epr-f-status" />
                 </div>
               </div>

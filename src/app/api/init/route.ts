@@ -7,7 +7,9 @@ import { canViewSection, anySectionAllowed, farmModuleOfBusiness } from "@/lib/a
 import { BUSINESS_TYPES } from "@/lib/businessTypes";
 import { ensureTodayFor, sweepOverdueCritical } from "@/lib/checklistGen";
 import { compressJsonBody } from "@/lib/httpGzip";
+import { jsonETag, notModified, PRIVATE_REVALIDATE } from "@/lib/httpCache";
 import { sql } from "drizzle-orm";
+import { canSeeFinancials } from "@/lib/permissions";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 
@@ -44,6 +46,10 @@ function initCacheKey(session: any, allowed: number[] | null): string {
     r: me.role,
     o: me.organizationIds || [],
     b: allowed === null ? "ALL" : [...allowed].sort((a, b) => a - b),
+    // Sensitive-surface grants are part of the cache identity: authorising a
+    // viewer must never be served the pre-grant (trimmed) snapshot.
+    f: canSeeFinancials(me) ? 1 : 0,
+    m: me.canManageUsers ? 1 : 0,
   });
   return `init:v1:${me.id}:${createHash("sha1").update(scope).digest("base64url").slice(0, 12)}`;
 }
@@ -96,12 +102,17 @@ export async function GET(request: Request) {
     const cached = ttlGet<InitCacheEntry>(cacheKey);
     if (cached !== undefined) {
       const acceptsGzip = /\bgzip\b/i.test(request.headers.get("accept-encoding") || "");
+      // Conditional request: an unchanged payload costs a 304 with no body.
+      const hitETag = jsonETag(cached.raw);
+      const notModifiedHit = notModified(request, hitETag);
+      if (notModifiedHit) return notModifiedHit;
       if (cached.gz && acceptsGzip) {
         return new Response(new Uint8Array(cached.gz), {
           status: 200,
           headers: {
             "Content-Type": "application/json",
-            "Cache-Control": "no-store",
+            "Cache-Control": PRIVATE_REVALIDATE,
+            ETag: hitETag,
             "Content-Encoding": "gzip",
             "Content-Length": String(cached.gz.length),
             Vary: "Accept-Encoding",
@@ -111,7 +122,13 @@ export async function GET(request: Request) {
       }
       return new Response(cached.raw, {
         status: 200,
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "hit", Vary: "Accept-Encoding" },
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": PRIVATE_REVALIDATE,
+          ETag: hitETag,
+          "X-Init-Cache": "hit",
+          Vary: "Accept-Encoding",
+        },
       });
     }
 
@@ -354,6 +371,66 @@ export async function GET(request: Request) {
       },
     };
 
+    // ── Financial data minimization (Owner-authorised surfaces only) ──────
+    // Money and performance figures are a SENSITIVE SURFACE: they ship only to
+    // the OWNER, the platform Super Admin and viewers the OWNER explicitly
+    // authorised (`canViewFinance`). Everybody else — a newly created General
+    // Manager included — receives operationally-shaped rows with the monetary
+    // figures removed, so no figure can be read from the network tab even if a
+    // hidden screen were forced open. Rationale per dataset:
+    //   • metrics      → aggregate P&L (revenue/expenses/profit/ROI/cash flow,
+    //                    asset & inventory valuation, growth) ⇒ zeroed + flagged.
+    //   • employees    → salary is personal financial data ⇒ dropped.
+    //   • assets       → purchase/current valuation is capex data ⇒ dropped
+    //                    (the register, tags, condition and photos stay).
+    //   • transactions → operational ledger of the viewer's own scope; amounts
+    //                    stay because recording a sale requires them.
+    //   • creditSales  → receivables the branch must chase; operational.
+    if (!canSeeFinancials(me)) {
+      const restrictedMetrics = (payload.metrics || []).map((m: any) => ({
+        id: m.id,
+        businessId: m.businessId,
+        period: m.period,
+        // Non-financial operational signals stay live.
+        salesCount: m.salesCount,
+        riskScore: m.riskScore,
+        lastUpdated: m.lastUpdated,
+        // Every monetary / performance figure is withheld.
+        financialsRestricted: true,
+        revenueGhs: 0,
+        expensesGhs: 0,
+        netProfitGhs: 0,
+        roiPercent: 0,
+        cashFlowGhs: 0,
+        assetsValueGhs: 0,
+        inventoryValueGhs: 0,
+        growthRatePercent: 0,
+      }));
+      (payload as any).metrics = restrictedMetrics;
+      (payload as any).employees = (payload.employees || []).map((e: any) => {
+        const { salaryGhs, ...rest } = e;
+        return { ...rest, salaryGhs: null, financialsRestricted: true };
+      });
+      (payload as any).assets = (payload.assets || []).map((a: any) => {
+        const { purchasePriceGhs, currentValueGhs, ...rest } = a;
+        return { ...rest, purchasePriceGhs: null, currentValueGhs: null, financialsRestricted: true };
+      });
+    }
+
+    // ── Worker payload minimization ───────────────────────────────────────
+    // A shop worker's workspace is self-contained: their own sales, their own
+    // branch's stock and customers. The branch's RECEIVABLES ledger (customer
+    // credit, what each debtor owes) and their colleagues' transactional
+    // history are management views — /api/transactions already restricts a
+    // worker to the transactions they recorded themselves, and the bootstrap
+    // payload matches that exactly.
+    if (String(me.role || "").toUpperCase() === "WORKER") {
+      (payload as any).creditSales = [];
+      (payload as any).transactions = (payload.transactions || []).filter(
+        (t: any) => String(t.recordedBy || "") === String(me.name || "\u0000"),
+      );
+    }
+
     // ── Farm Advisor payload slimming (data minimization) ────────────────
     // An invited advisor monitors farm OPERATIONS — never finance, HR, the
     // user directory or storefront management. The full snapshot above is
@@ -447,12 +524,16 @@ export async function GET(request: Request) {
         ? gzipSync(Buffer.from(raw, "utf8"))
         : null;
     ttlSet(cacheKey, { raw, gz }, INIT_TTL_MS);
+    const freshETag = jsonETag(raw);
+    const notModifiedFresh = notModified(request, freshETag);
+    if (notModifiedFresh) return notModifiedFresh;
     if (gz) {
       return new Response(new Uint8Array(gz), {
         status: 200,
         headers: {
           "Content-Type": "application/json",
-          "Cache-Control": "no-store",
+          "Cache-Control": PRIVATE_REVALIDATE,
+          ETag: freshETag,
           "Content-Encoding": "gzip",
           "Content-Length": String(gz.length),
           Vary: "Accept-Encoding",
@@ -462,7 +543,13 @@ export async function GET(request: Request) {
     }
     return new Response(raw, {
       status: 200,
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Init-Cache": "miss", Vary: "Accept-Encoding" },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": PRIVATE_REVALIDATE,
+        ETag: freshETag,
+        "X-Init-Cache": "miss",
+        Vary: "Accept-Encoding",
+      },
     });
   } catch (error: any) {
     console.error("Error in /api/init:", error);

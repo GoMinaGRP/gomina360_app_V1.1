@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
+import { batchReads } from "@/lib/batchRead";
 import {
   employees,
   employeeDocuments,
@@ -18,6 +19,7 @@ import {
   UNAUTHENTICATED,
 } from "@/lib/auth";
 import { canManageSharedRecords } from "@/lib/recordPermissions";
+import { canSeeFinancials } from "@/lib/permissions";
 import { apiError } from "@/lib/apiError";
 import { createEmployeeRecord, nextEmployeeNo, recordEmployeeHistory } from "@/lib/employeeCreate";
 import { validateOptionalImage, validateImageDataUrl } from "@/lib/mediaValidation";
@@ -105,6 +107,12 @@ export async function GET(request: Request) {
   ttlInvalidate("init");
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
+    // Salary is personal financial data: the roster (name, role, schedule,
+    // contacts, documents, attendance) is operational, the MONEY is not.
+    // /api/init already withholds `salaryGhs` from viewers the OWNER has not
+    // authorised for Finance & Reports — this endpoint now agrees with it, so
+    // the figure cannot be read back over HTTP by a branch user.
+    const financialsAuthorized = canSeeFinancials(user);
     const url = new URL(request.url);
     const businessId = url.searchParams.get("businessId");
     const employeeId = url.searchParams.get("employeeId");
@@ -112,7 +120,12 @@ export async function GET(request: Request) {
     const allowed = await accessibleBusinessIds(user); // null ⇒ OWNER
     const inScope = (bid: number) => allowed === null || allowed.includes(bid);
 
-    let rows = await db.select().from(employees).orderBy(employees.id);
+    // ONE round trip for the page's base read (see src/lib/batchRead.ts).
+    const EMP = await batchReads([{ key: "employees", table: employees, scope: "none" }]);
+    // The original read was ORDER BY id ASC; the batch has no ORDER BY, so
+    // restore that ordering explicitly.
+    const empRowsAsc = [...EMP.employees].sort((a: any, b: any) => Number(a.id) - Number(b.id));
+    let rows = empRowsAsc;
     rows = rows.filter((e) => inScope(e.businessId));
     if (businessId) rows = rows.filter((e) => e.businessId === Number(businessId));
     if (employeeId) rows = rows.filter((e) => e.id === Number(employeeId));
@@ -145,7 +158,8 @@ export async function GET(request: Request) {
         const a = attRows.find((r) => r.employeeId === id);
         links[id] = {
           payrollEntries: p?.cnt || 0,
-          payrollNet: Math.round((p?.net || 0) * 100) / 100,
+          // Net pay is money — the indicator count stays, the amount does not.
+          payrollNet: financialsAuthorized ? Math.round((p?.net || 0) * 100) / 100 : null,
           attendanceRows: a?.cnt || 0,
           overtimeHours: Math.round((a?.ot || 0) * 100) / 100,
           leaveDaysTaken: a?.leaveDays || 0,
@@ -189,9 +203,13 @@ export async function GET(request: Request) {
       for (const h of hcounts) (links[h.employeeId] ||= {}).historyCount = h.cnt;
     }
 
+    const visibleEmployees = financialsAuthorized
+      ? rows
+      : rows.map(({ salaryGhs, ...rest }: any) => ({ ...rest, salaryGhs: null, financialsRestricted: true }));
+
     return NextResponse.json({
       success: true,
-      employees: rows,
+      employees: visibleEmployees,
       documents: metas,
       documentFiles: employeeId ? docs.filter((d) => d.employeeId === Number(employeeId)).map((d) => ({ id: d.id, fileData: d.fileData })) : [],
       history,
@@ -199,6 +217,7 @@ export async function GET(request: Request) {
       scope: {
         canManage: canManageSharedRecords(user),
         isOwner: user.role === "OWNER",
+        canSeeFinancials: financialsAuthorized,
         businessIds: allowed,
       },
     });
@@ -398,6 +417,16 @@ export async function PATCH(request: Request) {
       photoChanged = !unchanged;
     }
 
+    // Basic salary is a FINANCIAL field: a record-manager the OWNER has not
+    // authorised for Finance & Reports may edit the roster but not the money —
+    // which also protects stored salaries from being blanked by a form that
+    // legitimately received no salary figure.
+    if (updates.salaryGhs !== undefined && !canSeeFinancials(user)) {
+      return FORBIDDEN(
+        "Basic salary is restricted to the OWNER and the users the OWNER authorises for Finance & Reports."
+      );
+    }
+
     if (!Object.keys(updates).length) {
       return NextResponse.json({ success: false, error: "Nothing changed to update." }, { status: 400 });
     }
@@ -410,7 +439,12 @@ export async function PATCH(request: Request) {
     if (photoChanged) {
       await hist(id, updated.businessId, "PHOTO_UPDATED", updated.photo ? "Profile photo updated" : "Profile photo removed", user);
     }
-    return NextResponse.json({ success: true, employee: updated, changes: changes.length + (photoChanged ? 1 : 0) });
+    // The edited row is echoed back — withhold the salary here too, so an
+    // edit is not a side channel around the read restriction.
+    const safeUpdated = canSeeFinancials(user)
+      ? updated
+      : (({ salaryGhs, ...rest }: any) => ({ ...rest, salaryGhs: null, financialsRestricted: true }))(updated);
+    return NextResponse.json({ success: true, employee: safeUpdated, changes: changes.length + (photoChanged ? 1 : 0) });
   } catch (error: any) {
     return apiError(error);
   }

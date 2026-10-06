@@ -6,7 +6,7 @@ import LoginScreen from "./LoginScreen";
 import Sidebar, { ActiveTab } from "./Sidebar";
 import CommandPalette from "./nav/CommandPalette";
 import OrdersFulfilmentHub from "./OrdersFulfilmentHub";
-import { navCtx } from "@/lib/navManifest";
+import { navCtx, defaultTabFor } from "@/lib/navManifest";
 import ContextNavigator, { ContextBar } from "./ContextNavigator";
 import NotificationBell from "./NotificationBell";
 import PushNotifications from "./PushNotifications";
@@ -23,7 +23,7 @@ import {
 import { isSeededBaselineTxn } from "@/lib/financeReport";
 import { getOfflineQueue } from "@/lib/offlineSync";
 import { installSessionBridge, setSessionToken, clearSessionToken } from "@/lib/sessionBridge";
-import { businessManageIdsOf } from "@/lib/permissions";
+import { businessManageIdsOf, canSeeEnterpriseUsers, canSeeFinancials } from "@/lib/permissions";
 import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
 import { readCachedBranding, fetchBranding, withBranding } from "@/lib/brandingCache";
@@ -86,8 +86,16 @@ const BusinessDashboardModule = lazyMod(() => import("./BusinessDashboardModule"
 const UniversalExportCenter = lazyMod(() => import("./UniversalExportCenter"));
 import { OrgDirectoryProvider } from "@/components/OrgDirectoryContext";
 import { myOrgIdOf } from "@/lib/businessScope";
+import { isOrgexecRole, roleCategory } from "@/lib/roles";
 
-export default function GoMinaApp() {
+/**
+ * `loginRegistrationInvite` is resolved on the SERVER (`src/app/page.tsx`) from
+ * the platform owner's login-page switch and passed straight through to the
+ * sign-in gate. It is a plain boolean — the login page never fetches it, so the
+ * gate keeps its static prerender and makes no extra request. Defaults to
+ * hidden, so every other mount (`<GoMinaApp />` in tests/tools) is unaffected.
+ */
+export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRegistrationInvite?: boolean } = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +119,8 @@ export default function GoMinaApp() {
   // Deep-linking focus targets for notifications (approvals, tasks, orders, trackings)
   const [actionCenterFocusApprovalId, setActionCenterFocusApprovalId] = useState<number | null>(null);
   const [actionCenterFocusTaskId, setActionCenterFocusTaskId] = useState<number | null>(null);
+  /** Platform request reference the review console must open + highlight. */
+  const [platformRequestFocus, setPlatformRequestFocus] = useState<string | null>(null);
   const [trackingFocusCode, setTrackingFocusCode] = useState<string | null>(null);
   const [trackingFocusId, setTrackingFocusId] = useState<number | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -224,6 +234,11 @@ export default function GoMinaApp() {
     },
     [lensOrgId, bizOwnerOf]
   );
+  // FINANCIAL SURFACE (component scope): money may only be DERIVED for the
+  // OWNER, the platform Super Admin or an OWNER-authorised viewer. The flag is
+  // read by liveMetrics (which otherwise re-derives revenue from the ledger and
+  // would defeat the server-side trimming) and by the render gates below.
+  const financialsAuthorized = canSeeFinancials(currentUser);
   const scopedBusinesses = useMemo(() => lensScope(businesses), [lensScope, businesses]);
   const scopedMetrics = useMemo(() => lensScope(metrics), [lensScope, metrics]);
   const scopedCustomers = useMemo(() => lensScope(customers), [lensScope, customers]);
@@ -524,10 +539,16 @@ export default function GoMinaApp() {
   // signed out (login wall), so we park the requested workspace and jump as
   // soon as the session is confirmed.
   const pendingTabRef = useRef<string | null>(null);
+  const pendingPlatformRequestRef = useRef<string | null>(null);
   useEffect(() => {
     try {
-      const t = new URLSearchParams(window.location.search).get("tab");
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get("tab");
       if (t) pendingTabRef.current = t;
+      // A push-notification click carries the platform request reference so the
+      // console opens with THAT request expanded, not an unfiltered queue.
+      const req = params.get("request");
+      if (req) pendingPlatformRequestRef.current = req;
     } catch { /* non-browser env */ }
   }, []);
   // The pending tab is consumed by the role-landing effect below (the single
@@ -617,6 +638,26 @@ export default function GoMinaApp() {
     }
 
     return metricRows.map((m) => {
+      // Unauthorised viewer: the server already withheld every monetary figure
+      // in business_metrics. Do NOT re-derive them from the operational ledger
+      // (assets/transactions) here — that would rebuild the exact P&L this
+      // surface is meant to withhold.
+      if (!financialsAuthorized) {
+        return {
+          ...m,
+          revenueGhs: 0,
+          expensesGhs: 0,
+          netProfitGhs: 0,
+          cashFlowGhs: 0,
+          roiPercent: 0,
+          assetsValueGhs: 0,
+          inventoryValueGhs: 0,
+          growthRatePercent: 0,
+          financialsRestricted: true,
+          baselineTxId: baseId,
+        };
+      }
+
       // Live asset value: prefer the sum of registered assets when available;
       // fall back to the seeded metric so the number is never blank.
       const liveAssetsValue = assetValueByBiz[m.businessId] || m.assetsValueGhs;
@@ -655,7 +696,7 @@ export default function GoMinaApp() {
         baselineTxId: baseId,
       };
     });
-  }, [scopedMetrics, scopedTransactions, scopedAssets, scopedBusinesses]);
+  }, [scopedMetrics, scopedTransactions, scopedAssets, scopedBusinesses, financialsAuthorized]);
 
   // Reset to a role-appropriate landing tab whenever the active user changes.
   // Prevents a lower-privilege user from inheriting an executive tab (data leak).
@@ -663,19 +704,21 @@ export default function GoMinaApp() {
   // it is the exact workspace the user asked to open.
   useEffect(() => {
     if (!currentUser) return;
+    if (pendingPlatformRequestRef.current) {
+      // Park the request BEFORE switching tabs: the console reads the focus
+      // value as soon as it mounts, so it must already be set.
+      setPlatformRequestFocus(pendingPlatformRequestRef.current);
+      pendingPlatformRequestRef.current = null;
+    }
     if (pendingTabRef.current) {
       setActiveTab(pendingTabRef.current as ActiveTab);
       pendingTabRef.current = null;
       return;
     }
-    if (currentUser.role === "BRANCH_MANAGER") {
-      setActiveTab("BRANCH_SALES");
-    } else if (currentUser.role === "WORKER") {
-      // Worker view is self-contained; render layer intercepts regardless of tab.
-      setActiveTab("COMMAND_CENTER");
-    } else {
-      setActiveTab("COMMAND_CENTER");
-    }
+    // Registry-owned landing tab (src/lib/navManifest.ts defaultTabFor): unit
+    // leads/specialists open their unit register, the advisor opens the
+    // console, executives open HQ, shop floor renders its own dashboard.
+    setActiveTab(defaultTabFor(currentUser) as ActiveTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id]);
 
@@ -796,13 +839,20 @@ export default function GoMinaApp() {
   };
 
   const renderActiveView = () => {
-    const isExecutive =
-      currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
+    // Registry-owned: a Co-Owner/GM is an executive by definition, and no other
+    // role can be (audit finding F4: hand-written role triples).
+    const isExecutive = isOrgexecRole(currentUser?.role);
+    // Sensitive surfaces — never implied by role. OWNER/Super Admin, or the
+    // OWNER's explicit grant. See src/lib/permissions.ts.
+    const maySeeEnterpriseUsers = canSeeEnterpriseUsers(currentUser);
+    const maySeeFinancials = financialsAuthorized;
     // Deep links from the branch workspace into the canonical enterprise modules
     // (Customers & CRM / Inventory & Stock) are offered whenever the module guard
     // below would let that user open them.
     const canOpenEnterpriseModules = isExecutive || businessManageIdsOf(currentUser).length > 0;
     const isBranchManager = currentUser?.role === "BRANCH_MANAGER";
+    // Registry category — Supervisor & Accountant work one unit, same as a BM.
+    const unitSpecialist = roleCategory(currentUser?.role) === "UNIT_SPECIALIST";
 
     // ── Farm Advisor workspace ─────────────────────────────────────────
     // The external advisor sees exactly two things: their Advisor Console
@@ -895,7 +945,10 @@ export default function GoMinaApp() {
             setActionCenterFocusApprovalId(null);
             setActionCenterFocusTaskId(null);
           }}
-          onSelectTab={(tab: string) => handleSelectTab(tab as ActiveTab)}
+          onSelectTab={(tab: string, opts?: { platformRequestRef?: string | null }) => {
+            if (opts?.platformRequestRef) setPlatformRequestFocus(opts.platformRequestRef);
+            handleSelectTab(tab as ActiveTab);
+          }}
         />
       );
     }
@@ -986,6 +1039,42 @@ export default function GoMinaApp() {
       }
     }
 
+    // UNIT SPECIALISTS (SUPERVISOR / ACCOUNTANT): the same strictly-scoped unit
+    // workspace a Branch Manager gets — their unit's register, assets, roster
+    // (attendance review), order tracking, action center and the dashboards the
+    // OWNER granted. Everything else falls back to the unit register, so a deep
+    // link can never open an enterprise module (audit finding F7).
+    if (unitSpecialist) {
+      const ownSpecialistUnit = scopedBusinesses.find((b: any) => b.id === currentUser?.assignedBusinessId);
+      const allowedSpecialist = new Set<string>([
+        "BRANCH_SALES",
+        "BRANCH_ASSETS",
+        "WORKERS_MANAGE",
+        "TRACKING",
+        "ACTION_CENTER",
+      ]);
+      if (currentUser?.canViewFinance) allowedSpecialist.add("TRANSACTIONS");
+      for (const b of scopedBusinesses) if (b?.code) allowedSpecialist.add(b.code);
+      if (!allowedSpecialist.has(activeTab)) {
+        const bizMetric = liveMetrics.find((m) => m.businessId === ownSpecialistUnit?.id);
+        return (
+          <BranchManagerSalesView
+            currentUser={currentUser}
+            businessInfo={ownSpecialistUnit}
+            businessMetrics={bizMetric}
+            inventory={scopedInventory}
+            customers={scopedCustomers}
+            transactions={scopedTransactions}
+            businesses={scopedBusinesses}
+            metrics={liveMetrics}
+            currentCurrency={currentCurrency}
+            isOnline={isOnline}
+            onRefreshData={refreshAllData}
+          />
+        );
+      }
+    }
+
     // EXECUTIVE (Owner / General Manager): unified Sales Center across all branches.
     if (isExecutive && activeTab === "SALES_CENTER") {
       return (
@@ -1027,27 +1116,46 @@ export default function GoMinaApp() {
     // CCTV-granted managers reach ONLY the Integrations Hub (their CCTV scope);
     // every other executive module stays locked.
     const cctvManagerEntry = !isExecutive && !!currentUser?.canManageCctv && activeTab === "INTEGRATIONS";
-    // OWNER-granted Finance & Reports viewers (non-executives) reach ONLY the
-    // enterprise Finance & Reports tab — every other executive module stays
-    // locked. Data is scope-safe: /api/init already filters every entity to
-    // the businesses the user can access.
-    const financeGranteeEntry = !isExecutive && !!currentUser?.canViewFinance && activeTab === "FINANCE";
+    // OWNER-granted Finance & Reports viewers reach ONLY the enterprise Finance
+    // & Reports tab — every other executive module stays locked. Data is
+    // scope-safe: /api/init already filters every entity to the businesses the
+    // user can access, and financial figures ship only to authorised viewers.
+    const financeGranteeEntry =
+      !isExecutive &&
+      maySeeFinancials &&
+      // FINANCE: the OWNER-granted viewer's own surface. TRANSACTIONS: a
+      // unit-scoped finance holder (Accountant preset) reconciles their unit's
+      // ledger — the list stays scoped to the units they can reach.
+      (activeTab === "FINANCE" || (unitSpecialist && activeTab === "TRANSACTIONS"));
+    // OWNER-granted Enterprise Users administrators reach ONLY the staff
+    // directory — the same surface the OWNER holds, delegated explicitly.
+    const usersGranteeEntry = !isExecutive && maySeeEnterpriseUsers && activeTab === "USERS_MANAGE";
     // OWNER-delegated "Manage Business / Unit" managers may open the
     // business-scoped enterprise modules — every list is server-scoped to the
-    // units they can reach — but never the global HQ surfaces (Command Center,
-    // Users & Access, AI Advisor, Scenario Planning, Integrations Hub).
+    // units they can reach — but never the global HQ or money surfaces
+    // (Command Center, Users & Access, Finance & Reports, AI Advisor, Scenario
+    // Planning, Integrations Hub). Opening Finance requires the OWNER's
+    // dedicated `canViewFinance` grant, handled above.
     const isUnitManager = businessManageIdsOf(currentUser).length > 0;
     const unitManagerEntry =
       !isExecutive &&
       isUnitManager &&
-      ["INVENTORY", "TRANSACTIONS", "ASSETS", "CUSTOMERS", "SUPPLIERS", "EMPLOYEES", "FINANCE"].includes(activeTab);
-    if (!isExecutive && executiveOnlyTabs.includes(activeTab) && !cctvManagerEntry && !financeGranteeEntry && !unitManagerEntry) {
+      ["INVENTORY", "TRANSACTIONS", "ASSETS", "CUSTOMERS", "SUPPLIERS", "EMPLOYEES"].includes(activeTab);
+    if (
+      !isExecutive &&
+      executiveOnlyTabs.includes(activeTab) &&
+      !cctvManagerEntry &&
+      !financeGranteeEntry &&
+      !usersGranteeEntry &&
+      !unitManagerEntry
+    ) {
       return (
         <div className="flex items-center justify-center min-h-[60vh] p-8">
           <div className="bg-amber-900/20 border border-amber-500/30 rounded-2xl p-8 max-w-md text-center space-y-3">
             <h2 className="text-lg font-bold text-amber-300">Access Restricted</h2>
             <p className="text-sm text-slate-300">
-              This enterprise module is available to Owners and General Managers only.
+              This module is restricted. Ask the OWNER to authorise your access from
+              the Enterprise Users console.
             </p>
           </div>
         </div>
@@ -1114,7 +1222,7 @@ export default function GoMinaApp() {
     }
 
     // OWNER & GENERAL_MANAGER: Enterprise User Directory & Transfer Hub
-    if (activeTab === "USERS_MANAGE") {
+    if (activeTab === "USERS_MANAGE" && maySeeEnterpriseUsers) {
       return (
         <EnterpriseUserPanel
           currentUser={currentUser}
@@ -1128,7 +1236,13 @@ export default function GoMinaApp() {
 
     // SUPER ADMIN ONLY: Platform Owners & Organizations console
     if (activeTab === "PLATFORM_ADMIN") {
-      return <PlatformAdminPanel currentUser={currentUser} />;
+      return (
+        <PlatformAdminPanel
+          currentUser={currentUser}
+          focusRequestRef={platformRequestFocus}
+          onFocusRequestHandled={() => setPlatformRequestFocus(null)}
+        />
+      );
     }
 
     if (activeTab === "COMMAND_CENTER") {
@@ -1140,6 +1254,10 @@ export default function GoMinaApp() {
           inventory={scopedInventory}
           currentCurrency={currentCurrency}
           currentUser={currentUser}
+          // FINANCIAL SURFACE: revenue/profit/cash-flow/ROI render only for the
+          // OWNER or an OWNER-authorised viewer; everybody else sees locked
+          // placeholders and an explicit "ask the OWNER" notice.
+          financialsAuthorized={maySeeFinancials}
           organizations={orgDirectory}
           orgLens={orgLens}
           lensOrgName={activeLensOrgName}
@@ -1159,7 +1277,9 @@ export default function GoMinaApp() {
           // only the OWNER or staff carrying the canManageOnline grant may
           // open the Online Storefront & Delivery Areas management.
           canManageOnline={currentUser?.role === "OWNER" || !!currentUser?.canManageOnline}
-          canManageUsersConsole={currentUser?.role === "OWNER" || !!currentUser?.canManageUsers}
+          // ENTERPRISE USERS SURFACE — the console button follows the same
+          // resolution as the sidebar row: OWNER / Super Admin / OWNER-granted.
+          canManageUsersConsole={maySeeEnterpriseUsers}
           // Customer Support (storefront HELP) editor — the OWNER always;
           // any user carrying the OWNER's canManageSupport grant.
           onOpenSupportInfo={() => setIsSupportOpen(true)}
@@ -1465,7 +1585,7 @@ export default function GoMinaApp() {
     }
 
     // Shared Enterprise Module — Central Financial Report (Owner / GM only)
-    if (activeTab === "FINANCE") {
+    if (activeTab === "FINANCE" && maySeeFinancials) {
       return (
         <EnterpriseFinanceView
           businesses={scopedBusinesses}
@@ -1617,7 +1737,13 @@ export default function GoMinaApp() {
 
   // No valid session → render ONLY the sign-in screen (no data is fetched).
   if (!signedIn || !currentUser) {
-    return <LoginScreen onSuccess={handleLoginSuccess} notice={loginNotice} />;
+    return (
+      <LoginScreen
+        onSuccess={handleLoginSuccess}
+        notice={loginNotice}
+        showRegistrationInvite={loginRegistrationInvite}
+      />
+    );
   }
 
   if (error) {
@@ -1694,7 +1820,59 @@ export default function GoMinaApp() {
               const recRef = String(n?.recordRef || "");
               const recId = n?.recordId != null ? Number(n.recordId) : null;
 
-              // 1. Audit issues & reviews: Direct deep link to Issue / Audit Command Center
+              // 0. Platform registration requests: the Super Admin's own review
+              //    queue. `platform-request:<REF>` carries the exact request, so
+              //    the click opens it expanded rather than the whole console.
+              if (t.startsWith("PLATFORM_REQUEST")) {
+                const ref = recRef.startsWith("platform-request:")
+                  ? recRef.slice("platform-request:".length)
+                  : null;
+                setPlatformRequestFocus(ref);
+                setActiveTab("PLATFORM_ADMIN");
+                return;
+              }
+
+              // 0b. Activity notifications (money, stock crossings, flagged
+              //     notes): open the unit's workspace they belong to. Money rows
+              //     carry the accounting figures — the OWNER's Finance console is
+              //     the right destination when the account may see it.
+              if (t === "SALE_RECORDED" || t === "EXPENSE_RECORDED") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                setActiveTab(financialsAuthorized ? "FINANCE" : "COMMAND_CENTER");
+                return;
+              }
+              if (t === "STOCK_LOW" || t === "STOCK_OUT") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                setActiveTab("INVENTORY");
+                return;
+              }
+              if (t === "OPS_NOTE_FLAGGED") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                setActiveTab("COMMAND_CENTER");
+                return;
+              }
+
+              // 1. Audit-trail events are NOT audit issues: they link to the
+              //    record's workspace (below), not to an issue inbox.
+              if (t === "AUDIT_EVENT") {
+                if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                setActiveTab("COMMAND_CENTER");
+                return;
+              }
+
+              // 1b. Audit issues & reviews: Direct deep link to Issue / Audit Command Center
               if (t.startsWith("AUDIT") || recType.startsWith("audit") || n?.issueId) {
                 const reviewerSide = t === "AUDIT_ISSUE_RESPONSE" || t === "AUDIT_ISSUE_RESOLVED";
               if (reviewerSide && (auditEligible || currentUser?.role === "OWNER" || !!currentUser?.canManageAuditors)) {

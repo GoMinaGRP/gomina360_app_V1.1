@@ -362,6 +362,25 @@ export async function postSale(opts: PostSaleOptions): Promise<PostSaleResult> {
   }
 
   ttlInvalidate("init");
+
+  // Money activity → the unit's money watchers (bell + one push per day).
+  // Rolled up per business/day by notifyActivity; never blocks the sale.
+  {
+    const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+    await notifyMoneyActivity({
+      businessId,
+      branchCode: resolvedBranchCode,
+      kind: "SALE",
+      amountGhs: totals.total,
+      actorName: actor.name || "Sales Center",
+      actorUserId: actor.id ?? null,
+      recordRef: newDoc?.documentNumber || trxNum,
+      recordId: Number(newTrx?.id) || null,
+      recordType: "transactions",
+      label: `${opts.category || "Sale"}${customerName ? ` to ${customerName}` : ""}`,
+    });
+  }
+
   return {
     success: true,
     totals,

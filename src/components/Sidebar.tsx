@@ -62,6 +62,7 @@ import {
   pushRecent,
   quickAccessIds,
 } from "@/lib/navPrefs";
+import { isOrgexecRole, normaliseRole, roleCategory } from "@/lib/roles";
 
 export type ActiveTab =
   | "COMMAND_CENTER"
@@ -146,11 +147,13 @@ export default function Sidebar({
   onOpenMobile,
   hasFarmAdvisors,
 }: SidebarProps) {
-  const isBusinessManager = currentUser?.role === "BRANCH_MANAGER";
-  const isWorker = currentUser?.role === "WORKER";
-  const isFarmAdvisor = currentUser?.role === "FARM_ADVISOR";
-  const isExecutive =
-    currentUser?.role === "OWNER" || currentUser?.role === "GENERAL_MANAGER";
+  // One registry (src/lib/roles.ts) decides these, so the rail agrees with the
+  // nav context it renders. The hand-written pair below used to omit CO_OWNER,
+  // so a Co-Owner's rail treated them as a non-executive (audit finding F4/F5).
+  const isBusinessManager = normaliseRole(currentUser?.role) === "BRANCH_MANAGER";
+  const isWorker = roleCategory(currentUser?.role) === "SHOP_FLOOR";
+  const isFarmAdvisor = roleCategory(currentUser?.role) === "EXTERNAL";
+  const isExecutive = isOrgexecRole(currentUser?.role);
   const isSuperAdmin = !!currentUser?.isSuperAdmin;
   const myOrgName = organizations.find((o) => Number(o.id) === 1)?.name || "GoMina Group";
 

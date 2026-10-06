@@ -8,6 +8,8 @@
  * Business → Branch → Customer → Order (sale document/transaction) → Products.
  */
 
+import { normaliseRole, roleLabel } from "@/lib/roles";
+
 export const TRACK_STATUSES = [
   "RECEIVED",
   "CONFIRMED",
@@ -254,12 +256,21 @@ export function normalizeTrackingCode(raw: string | null | undefined): string {
     .replace(/\s+/g, "");
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  OWNER: "Owner",
-  GENERAL_MANAGER: "General Manager",
-  BRANCH_MANAGER: "Branch Manager",
+/**
+ * Customer-facing role names. This is the ONLY place a role is deliberately
+ * renamed: a customer reading the tracking timeline should see "Branch staff",
+ * not an internal enum. Every other role falls back to the ONE registry label
+ * (src/lib/roles.ts), so a new role can never render as a blank or a raw token.
+ */
+const CUSTOMER_FACING_ROLE_NAMES: Partial<Record<string, string>> = {
   WORKER: "Branch staff",
 };
+
+export function customerFacingRoleName(role: unknown): string {
+  const key = normaliseRole(role);
+  if (!key) return "Staff";
+  return CUSTOMER_FACING_ROLE_NAMES[key] || roleLabel(key);
+}
 
 /** Canonical Google Maps link for a pin (opens the place page / directions). */
 export function googleMapsLink(lat: number, lng: number): string {
@@ -541,7 +552,7 @@ export function publicTrackingPayload(row: any, biz: any, credit?: any) {
           ? "Payment Confirmed"
           : TRACK_STATUS_LABELS[h.status as TrackStatus] || h.status,
       at: h.at,
-      by: h.byRole === "CUSTOMER" ? "You (customer)" : ROLE_LABELS[h.byRole] || "Staff",
+      by: h.byRole === "CUSTOMER" ? "You (customer)" : customerFacingRoleName(h.byRole),
       note: h.note || null,
     })),
     live,

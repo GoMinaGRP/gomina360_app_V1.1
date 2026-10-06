@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
+import { batchReads } from "@/lib/batchRead";
 import { businesses, fulfillmentMethods, fulfillmentOptions, inventoryItems, organizations, suppliers } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { canAccessBusiness, filterByAccess, accessibleBusinessIds, getSessionInfo } from "@/lib/auth";
@@ -19,8 +20,16 @@ export async function GET(request: NextRequest) {
     const bizFilter = Number(url.searchParams.get("businessId") || 0) || null;
 
     const allowed = await accessibleBusinessIds(me);
-    let methodRows = await db.select().from(fulfillmentMethods);
-    let optionRows = await db.select().from(fulfillmentOptions);
+    // ONE round trip for the whole page (see src/lib/batchRead.ts).
+    const FF = await batchReads([
+      { key: "methods", table: fulfillmentMethods, scope: "none" },
+      { key: "options", table: fulfillmentOptions, scope: "none" },
+      { key: "businesses", table: businesses, scope: "none" },
+      { key: "inventory", table: inventoryItems, scope: "none" },
+      { key: "suppliers", table: suppliers, scope: "none" },
+    ]);
+    let methodRows = FF.methods;
+    let optionRows = FF.options;
     // Tenant scope: org-wide methods (businessId null) belong to MY orgs.
     const myOrgIds: number[] = Array.isArray(me.organizationIds) ? me.organizationIds.map(Number) : [];
     if (!me.isSuperAdmin) {
@@ -30,11 +39,11 @@ export async function GET(request: NextRequest) {
     if (bizFilter) optionRows = optionRows.filter((o) => Number(o.businessId) === bizFilter);
 
     const invIds = [...new Set(optionRows.map((o) => o.inventoryId))];
-    const invRows = invIds.length ? await db.select().from(inventoryItems) : [];
+    const invRows = invIds.length ? FF.inventory.filter((i: any) => invIds.includes(Number(i.id))) : [];
     const byInv = new Map(invRows.map((i) => [i.id, i]));
 
     // Per-unit enable state (drives the setup toggle next to the unit picker).
-    const bizAll = await db.select().from(businesses);
+    const bizAll = FF.businesses;
     const scopeSet = allowed === null ? null : new Set(allowed);
     const preorderFlags = bizAll
       .filter((b) => (scopeSet == null ? true : scopeSet.has(Number(b.id))))
@@ -44,14 +53,14 @@ export async function GET(request: NextRequest) {
     // actually sees, only the fields the setup dropdown needs. When a
     // business filter is on the URL, restrict to that unit's items.
     const scopedScope = allowed === null ? null : new Set(allowed);
-    const allInvRows = await db.select().from(inventoryItems);
+    const allInvRows = FF.inventory;
     const inventory = allInvRows
       .filter((i) => (scopedScope == null ? true : scopedScope.has(Number(i.businessId))))
       .filter((i) => (bizFilter ? Number(i.businessId) === bizFilter : true))
       .map((i) => ({ id: i.id, businessId: i.businessId, name: i.name, sku: i.sku, quantity: i.quantity, status: i.status, unitPriceGhs: i.sellingPriceGhs, category: i.category }));
 
     // Suppliers the caller may link to options / purchase orders (org-scoped).
-    let supplierRows = await db.select().from(suppliers);
+    let supplierRows = FF.suppliers;
     if (!me.isSuperAdmin) {
       supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? -1)));
     }

@@ -27,8 +27,9 @@ import {
   type NoteAnalysis,
 } from "@/lib/dailyNotesAi";
 import { apiError } from "@/lib/apiError";
+import { ROLE_GROUPS } from "@/lib/roles";
 
-const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+const MANAGE_ROLES: readonly string[] = ROLE_GROUPS.UNIT_ADMIN;
 const MAX_LEN = 2000;
 
 function toInsights(row: any): InsightsState {
@@ -170,6 +171,24 @@ export async function POST(request: NextRequest) {
     // Continuous history update.
     const next = foldNoteIntoInsights(prior, { noteDate, analysis });
     await upsertInsights(businessId, next);
+
+    // A note the AI read as WATCH/URGENT is a supervisor observation the unit's
+    // managers (and the OWNER on URGENT) must see; an INFO note stays a log.
+    if (String(analysis.severity).toUpperCase() === "WATCH" || String(analysis.severity).toUpperCase() === "URGENT") {
+      const { notifyOpsNoteFlagged } = await import("@/lib/notifyActivity");
+      await notifyOpsNoteFlagged({
+        businessId,
+        branchCode: biz.code || null,
+        noteId: Number(note.id),
+        noteDate,
+        severity: String(analysis.severity).toUpperCase() as "WATCH" | "URGENT",
+        actorName: user.name || "Staff",
+        actorUserId: user.id ?? null,
+        summary: analysis.summary || null,
+        flags: Array.isArray(analysis.flags) ? analysis.flags : null,
+        excerpt: content,
+      });
+    }
 
     return NextResponse.json({ success: true, note, analysis, insights: next });
   } catch (error: any) {

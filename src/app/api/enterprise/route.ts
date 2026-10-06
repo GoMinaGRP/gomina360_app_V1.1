@@ -31,6 +31,7 @@ import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, resolveUserOr
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
+import { auditEvent } from "@/lib/audit";
 import { approvalRequests } from "@/db/schema";
 import { validateImageArray, validateOptionalImage, THUMB_BUDGET_BYTES } from "@/lib/mediaValidation";
 
@@ -504,6 +505,17 @@ export async function PATCH(request: Request) {
       }
     }
 
+    // Every applied edit lands on the audit trail naming the fields that
+    // changed; auditEvent also rings the bell for the high-signal kinds
+    // (an employee/salary edit, for instance). The actor is never notified.
+    const changedKeys = Object.keys(updates);
+    const logOwnerId =
+      moduleKey === "SUPPLIERS"
+        ? (existing.ownerId ?? session.orgId ?? null)
+        : (existing.businessId != null
+            ? await ownerOrgOfBusiness(Number(existing.businessId))
+            : (session.orgId ?? null));
+
     // P5: an un-gated quantity edit is an ADJUSTMENT movement, so the trail
     // records who corrected stock and from what. Variant-tracked products keep
     // their aggregate derived from the variant rows (syncItemAggregate) — the
@@ -543,6 +555,21 @@ export async function PATCH(request: Request) {
       // derived from the rows, so there is nothing to write on the parent).
       [updated] = await db.select().from(table).where(eq(table.id, recordId));
     }
+    const finalRow: any = updated || existing;
+    await auditEvent({
+      actorUserId: actor?.id,
+      actorName: actor?.name,
+      actorRole: actor?.role,
+      action: "UPDATE",
+      targetType: moduleKey,
+      targetLabel: String(finalRow?.name || existing?.name || `${moduleKey} #${recordId}`),
+      recordType: moduleKey.toLowerCase(),
+      recordId,
+      businessId: existing?.businessId != null ? Number(existing.businessId) : null,
+      branchCode: existing?.branchCode ?? null,
+      ownerId: logOwnerId,
+      detail: changedKeys.length ? `Changed: ${changedKeys.join(", ")}` : "Record values updated",
+    });
     return NextResponse.json({ success: true, item: updated });
   } catch (error: any) {
     return apiError(error);
@@ -712,6 +739,24 @@ export async function DELETE(request: Request) {
       .returning();
 
     await db.delete(table).where(eq(table.id, recordId));
+
+    // High-signal deletion → the OWNER/CO_OWNER bell (the log above is the
+    // immutable evidence). Never blocks the delete.
+    try {
+      const { notifyRecordDeletion } = await import("@/lib/notifyActivity");
+      await notifyRecordDeletion({
+        module: moduleKey,
+        recordLabel: label,
+        reason: cleanReason,
+        deletedByName: actor?.name || null,
+        deletedByUserId: actor?.id ?? null,
+        businessId: existing.businessId ?? null,
+        branchCode: existing.branchCode ?? null,
+        ownerId: logOwnerId,
+      });
+    } catch (e) {
+      console.error("deletion notification warning:", e);
+    }
 
     return NextResponse.json({
       success: true,

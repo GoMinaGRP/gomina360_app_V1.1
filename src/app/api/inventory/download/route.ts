@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { inventoryDownloads } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -82,23 +82,32 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '50');
     const downloaderRole = searchParams.get('downloaderRole');
 
-    let rows = await db.select().from(inventoryDownloads).orderBy(desc(inventoryDownloads.createdAt)).limit(limit);
+    // ── Scope IN SQL, then order, then limit ────────────────────────────
+    // Same shape as the asset download ledger: tenant scope narrows the query
+    // (not a post-limit JavaScript filter, which let foreign rows consume the
+    // page), and the list is most-recent-first with `id` as the tie-break.
+    const myOrgIds = (me.organizationIds || []).map(Number).filter(Boolean);
+    const where: any[] = [];
 
     // Scope: Super Admin ⇒ all; OWNER/GM ⇒ their organization's records;
     // everyone else ⇒ their own downloads only.
     if (!me.isSuperAdmin) {
       const isExec = me.role === 'OWNER' || me.role === 'GENERAL_MANAGER';
       if (isExec) {
-        const myOrgs = new Set(me.organizationIds || []);
-        rows = rows.filter((r) => r.ownerId != null && myOrgs.has(Number(r.ownerId)));
+        if (!myOrgIds.length) return NextResponse.json({ success: true, downloads: [] });
+        where.push(inArray(inventoryDownloads.ownerId, myOrgIds));
       } else {
-        rows = rows.filter((r) => Number(r.downloaderUserId) === Number(me.id));
+        where.push(eq(inventoryDownloads.downloaderUserId, Number(me.id)));
       }
     }
+    if (downloaderRole) where.push(eq(inventoryDownloads.downloaderRole, downloaderRole));
 
-    if (downloaderRole) {
-      rows = rows.filter((r) => r.downloaderRole === downloaderRole);
-    }
+    let query: any = db.select().from(inventoryDownloads);
+    if (where.length === 1) query = query.where(where[0]);
+    else if (where.length > 1) query = query.where(and(...where));
+    const rows = await query
+      .orderBy(desc(inventoryDownloads.createdAt), desc(inventoryDownloads.id))
+      .limit(limit);
 
     return NextResponse.json({
       success: true,

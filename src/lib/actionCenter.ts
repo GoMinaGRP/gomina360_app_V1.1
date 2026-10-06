@@ -23,6 +23,7 @@
 
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { isPlatformRequestActionable } from "@/lib/platformRequests";
 import { pushAfterBell } from "@/lib/push";
 import {
   actionTasks,
@@ -35,6 +36,7 @@ import {
   inventoryItems,
   notifications,
   organizationMembers,
+  platformRequests,
   transportMaintenance,
   users,
 } from "@/db/schema";
@@ -269,7 +271,7 @@ export async function completeLinkedTasksForSource(
 // ─── Linked open items (read-only views over existing systems) ─────────────
 
 export interface LinkedItem {
-  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST" | "APPROVAL" | "LOW_STOCK" | "ORDER" | "MAINTENANCE";
+  kind: "AUDIT_ISSUE" | "ADVISOR_FOLLOW_UP" | "CHECKLIST" | "APPROVAL" | "LOW_STOCK" | "ORDER" | "MAINTENANCE" | "PLATFORM_REQUEST";
   id: number;
   businessId: number | null;
   branchCode?: string | null;
@@ -282,6 +284,9 @@ export interface LinkedItem {
   /** Deep link the UI offers (opens the owning module). */
   openTab: string;
   openHint: string;
+  /** Optional identifier the target module focuses on open (e.g. a platform
+   *  request reference), so the click lands ON the item and not merely near it. */
+  openRef?: string | null;
 }
 
 /** Open audit issues in scope (managers/owners see their businesses' issues;
@@ -437,6 +442,69 @@ export async function linkedApprovals(
     assignedUserName: r.requestedByName,
     openTab: "ACTION_CENTER",
     openHint: "Approvals inbox",
+  }));
+}
+
+/**
+ * Platform registration requests awaiting the platform team (SUPER ADMIN ONLY).
+ *
+ * These are PLATFORM-level records: they belong to no tenant, so they are never
+ * derived from a business scope — an organization OWNER, GM or BM must not see
+ * them anywhere, including here. That is why this source is gated on the Super
+ * Admin flag rather than on `allowedBusinessIds`.
+ *
+ * The list is LIVE: it is recomputed from `platform_requests` on every read, so
+ * the Action Center can never disagree with the review queue. A request leaves
+ * the list the moment it stops being actionable — rejected, closed, or approved
+ * AND provisioned (see `isPlatformRequestActionable`).
+ */
+export async function linkedPlatformRequests(
+  user: { id: number; role?: string | null; isSuperAdmin?: boolean },
+  limit = 40,
+): Promise<LinkedItem[]> {
+  if (!user?.isSuperAdmin) return [];
+  const { platformRequests } = await import("@/db/schema");
+  const { isPlatformRequestActionable, purposeLabel, businessTypeLabel, platformRequestBellTitle } = await import(
+    "@/lib/platformRequests"
+  );
+  const rows = await db
+    .select({
+      id: platformRequests.id,
+      reference: platformRequests.reference,
+      purpose: platformRequests.purpose,
+      businessName: platformRequests.businessName,
+      businessType: platformRequests.businessType,
+      contactName: platformRequests.contactName,
+      contactEmail: platformRequests.contactEmail,
+      contactPhone: platformRequests.contactPhone,
+      location: platformRequests.location,
+      status: platformRequests.status,
+      createdOrganizationId: platformRequests.createdOrganizationId,
+      createdAt: platformRequests.createdAt,
+    })
+    .from(platformRequests)
+    .orderBy(desc(platformRequests.id))
+    .limit(200);
+
+  const actionable = rows.filter((r) => isPlatformRequestActionable(r.status, r.createdOrganizationId));
+  return actionable.slice(0, limit).map((r) => ({
+    kind: "PLATFORM_REQUEST" as const,
+    id: Number(r.id),
+    businessId: null,
+    branchCode: null,
+    title: `${r.businessName || r.contactName || "Registration"} — ${purposeLabel(r.purpose)}${
+      r.businessType ? ` (${businessTypeLabel(r.businessType)})` : ""
+    }`,
+    detail: `${platformRequestBellTitle(r.status, r.createdOrganizationId)} · ${r.contactName || "Applicant"}${
+      r.contactPhone ? ` · ${r.contactPhone}` : ""
+    }${r.contactEmail ? ` · ${r.contactEmail}` : ""}`,
+    priority: String(r.status) === "PENDING" ? "HIGH" : "MEDIUM",
+    dueDate: null,
+    assignedUserId: null,
+    assignedUserName: r.contactName || null,
+    openTab: "PLATFORM_ADMIN",
+    openHint: `Review request · ${r.reference}`,
+    openRef: r.reference,
   }));
 }
 
@@ -672,6 +740,7 @@ export async function autoCompleteLinkedTasks(): Promise<number> {
           eq(actionTasks.sourceType, "LOW_STOCK"),
           eq(actionTasks.sourceType, "ORDER"),
           eq(actionTasks.sourceType, "MAINTENANCE"),
+          eq(actionTasks.sourceType, "PLATFORM_REQUEST"),
         ),
       ),
     )
@@ -722,6 +791,26 @@ export async function autoCompleteLinkedTasks(): Promise<number> {
         .limit(1);
       if (ord && ["DELIVERED", "COMPLETED", "CANCELLED"].includes(String(ord.status).toUpperCase())) {
         completed += await completeLinkedTasksForSource("ORDER", Number(t.sourceId), ord.driverName || "Fulfillment", `Order is ${ord.status}.`);
+      }
+    } else if (t.sourceType === "PLATFORM_REQUEST" && t.sourceId != null) {
+      const [req] = await db
+        .select({
+          status: platformRequests.status,
+          createdOrganizationId: platformRequests.createdOrganizationId,
+          reference: platformRequests.reference,
+        })
+        .from(platformRequests)
+        .where(eq(platformRequests.id, Number(t.sourceId)))
+        .limit(1);
+      // Same rule as the bell / badge / linked list: the mirror closes exactly
+      // when the request stops needing the platform team.
+      if (req && !isPlatformRequestActionable(req.status, req.createdOrganizationId)) {
+        completed += await completeLinkedTasksForSource(
+          "PLATFORM_REQUEST",
+          Number(t.sourceId),
+          "Platform Owners",
+          `Request ${req.reference} is ${req.status}.`,
+        );
       }
     } else if (t.sourceType === "MAINTENANCE" && t.sourceId != null) {
       const [maint] = await db

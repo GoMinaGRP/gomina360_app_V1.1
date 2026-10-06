@@ -87,6 +87,40 @@ function selectList(table: PgTable, opts: { exclude?: string[]; extra?: string[]
   return [...names, ...(opts.extra || [])].join(", ");
 }
 
+/**
+ * RECORD ORDERING — newest first, everywhere.
+ *
+ * Postgres returns unordered rows in physical order, which drifts as a table is
+ * updated (an UPDATE relocates the tuple). Every list the app paints straight
+ * from the bootstrap payload — transaction ledgers, credit sales, customers,
+ * assets, inventory, employees, AI insights, scenarios, integrations and the
+ * eight specialized operation logs — therefore carries an explicit
+ * `ORDER BY "id" DESC` here. `id` is a monotonic sequence, so "id DESC" is
+ * exactly "most recently recorded first", and it is stable across databases.
+ * Identity lists (businesses, users, organizations) keep ASC so their order is
+ * a stable, predictable unit/staff directory order.
+ */
+const NEWEST_FIRST = ` ORDER BY "id" DESC`;
+
+/**
+ * Row cap for the eight per-module OPERATIONS LOG feeds in the bootstrap
+ * payload (poultry, block factory, aquaculture, livestock, restaurant,
+ * electronics, car wash, hardware).
+ *
+ * These are "recent activity" lists — each module's own screen fetches its
+ * complete data from its own route (/api/poultry, /api/block-factory, …), so
+ * the bootstrap copy only needs the newest rows to paint immediately. Without
+ * a cap these tables made the dashboard payload grow without bound as a busy
+ * unit recorded logs (docs/PERFORMANCE-AUDIT.md §3 B1). 500 newest rows per
+ * table per viewer is far more than any list shows and keeps the payload flat.
+ *
+ * Deliberately NOT applied to transactions, inventory, customers, employees or
+ * credit sales: screens compute money totals from those arrays on the client,
+ * so capping them would silently change reported figures. Bounding them needs
+ * server-side aggregates first — see the follow-up list in the audit doc.
+ */
+const LOG_FEED_LIMIT = 500;
+
 const LOG_TABLES = [
   poultryLogs,
   blockFactoryLogs,
@@ -162,13 +196,13 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
   // 3 — customers: business-stamped rows follow business scope; untyped rows
   // follow the owner's org (mirrors the drizzle or(...) pre-scoping).
   stmts.push(
-    `SELECT ${selectList(customers)} FROM "customers"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}`
+    `SELECT ${selectList(customers)} FROM "customers"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}${NEWEST_FIRST}`
   );
   // 4 — suppliers (per-organization directory)
-  stmts.push(`SELECT ${selectList(suppliers)} FROM "suppliers"${whereIn("owner_id", orgScope)}`);
+  stmts.push(`SELECT ${selectList(suppliers)} FROM "suppliers"${whereIn("owner_id", orgScope)}${NEWEST_FIRST}`);
   // 5-9 — business-stamped tables
-  stmts.push(`SELECT ${selectList(employees)} FROM "employees"${whereIn("business_id", bids)}`);
-  stmts.push(`SELECT ${selectList(assets)} FROM "assets"${whereIn("business_id", bids)}`);
+  stmts.push(`SELECT ${selectList(employees)} FROM "employees"${whereIn("business_id", bids)}${NEWEST_FIRST}`);
+  stmts.push(`SELECT ${selectList(assets)} FROM "assets"${whereIn("business_id", bids)}${NEWEST_FIRST}`);
   stmts.push(
     `SELECT ${selectList(inventoryItems, {
       // `photos` (N × base64 data URLs) and its thumbnail array never leave
@@ -177,24 +211,24 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
       // /api/init), plus the raw `photo` for records that predate thumbnails.
       exclude: ["photos", "photosThumb"],
       extra: [`coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos else '[]'::jsonb end), 0) AS "photoCount"`],
-    })} FROM "inventory_items"${whereIn("business_id", bids)}`
+    })} FROM "inventory_items"${whereIn("business_id", bids)}${NEWEST_FIRST}`
   );
   {
     const trxScope = whereIn("business_id", bids);
     const trxStatusFilter = `("status" = 'COMPLETED' OR "status" IS NULL)`;
     stmts.push(
-      `SELECT ${selectList(transactions)} FROM "transactions"${trxScope ? `${trxScope} AND ${trxStatusFilter}` : ` WHERE ${trxStatusFilter}`}`
+      `SELECT ${selectList(transactions)} FROM "transactions"${trxScope ? `${trxScope} AND ${trxStatusFilter}` : ` WHERE ${trxStatusFilter}`}${NEWEST_FIRST}`
     );
   }
-  stmts.push(`SELECT ${selectList(creditSales)} FROM "credit_sales"${whereIn("business_id", bids)}`);
+  stmts.push(`SELECT ${selectList(creditSales)} FROM "credit_sales"${whereIn("business_id", bids)}${NEWEST_FIRST}`);
   // 10 — ai insights
-  stmts.push(`SELECT ${selectList(aiInsights)} FROM "ai_insights"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}`);
+  stmts.push(`SELECT ${selectList(aiInsights)} FROM "ai_insights"${whereIn("business_id", bids)}${orIn("owner_id", orgScope)}${NEWEST_FIRST}`);
   // 11 — scenario simulations (business-targeted or org-owned)
   stmts.push(
-    `SELECT ${selectList(scenarioSimulations)} FROM "scenario_simulations"${whereIn("target_business_id", bids)}${orIn("owner_id", orgScope)}`
+    `SELECT ${selectList(scenarioSimulations)} FROM "scenario_simulations"${whereIn("target_business_id", bids)}${orIn("owner_id", orgScope)}${NEWEST_FIRST}`
   );
   // 12 — integrations
-  stmts.push(`SELECT ${selectList(integrations)} FROM "integrations"${whereIn("owner_id", orgScope)}`);
+  stmts.push(`SELECT ${selectList(integrations)} FROM "integrations"${whereIn("owner_id", orgScope)}${NEWEST_FIRST}`);
   // 13-14 — checklists. Entries are generated DAILY per business (~8 rows ×
   // N businesses every day — the one table that grows automatically), and the
   // only bootstrap consumer (Command Center compliance) reads TODAY's rows;
@@ -213,7 +247,9 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
   }
   // 15-22 — specialized logs
   for (const t of LOG_TABLES) {
-    stmts.push(`SELECT ${selectList(t)} FROM "${getTableName(t as any)}"${whereIn("business_id", bids)}`);
+    stmts.push(
+      `SELECT ${selectList(t)} FROM "${getTableName(t as any)}"${whereIn("business_id", bids)}${NEWEST_FIRST} LIMIT ${LOG_FEED_LIMIT}`
+    );
   }
   // 23 — executive org member ids
   stmts.push(

@@ -5,6 +5,14 @@ import { users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { rolePreset, type RoleKey } from "@/lib/roles";
+import { inRoleGroup } from "@/lib/roles";
+
+/** The canonical WORKER token. Typed against the registry, so removing or
+ *  renaming the role becomes a compile error instead of a silent string drift. */
+const WORKER_ROLE_KEY: RoleKey = "WORKER";
+/** The registry's WORKER baseline — every default this route applies. */
+const workerPreset = rolePreset(WORKER_ROLE_KEY);
 
 // BRANCH_MANAGER: List all WORKER accounts within their branch
 /** Never expose auth secrets on user rows. */
@@ -19,7 +27,7 @@ const stripSecret = (u: any) => {
 async function managerCanScope(user: any, businessId: number): Promise<boolean> {
   if (!user) return false;
   if (user.isSuperAdmin) return true;
-  if (!["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(user.role)) return false;
+  if (!inRoleGroup("UNIT_ADMIN", user.role)) return false;
   return canAccessBusiness(user, businessId);
 }
 
@@ -79,6 +87,7 @@ export async function POST(request: Request) {
       canRecordSales,
       canRecordExpenses,
       canManageStock,
+      canExportData,
     } = body;
 
     if (!name || !email) {
@@ -107,7 +116,9 @@ export async function POST(request: Request) {
       .values({
         name,
         email,
-        role: "WORKER",
+        role: WORKER_ROLE_KEY, // registry key — one source of truth for the role token
+        // The WORKER preset is the baseline every creation path starts from.
+        canExportData: canExportData ?? workerPreset.canExportData === true,
         assignedBusinessId: Number(assignedBusinessId),
         phone: phone || "+233 24 000 0000",
         avatarUrl:
@@ -118,9 +129,11 @@ export async function POST(request: Request) {
         isActive: true,
         isWorkerEnabled: true,
         createdByUserId: createdByUserId ? Number(createdByUserId) : null,
-        canRecordSales: canRecordSales ?? true,
-        canRecordExpenses: canRecordExpenses ?? false,
-        canManageStock: canManageStock ?? false,
+        // Unspecified capability ⇒ the registry's WORKER preset, so the unit
+        // roster and the access console apply the same default (audit F3).
+        canRecordSales: canRecordSales ?? workerPreset.canRecordSales === true,
+        canRecordExpenses: canRecordExpenses ?? workerPreset.canRecordExpenses === true,
+        canManageStock: canManageStock ?? workerPreset.canManageStock === true,
       })
       .returning();
 
@@ -136,7 +149,8 @@ export async function PATCH(request: Request) {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
     const body = await request.json();
-    const { workerId, action, canRecordSales, canRecordExpenses, canManageStock } = body;
+    const { workerId, action, canRecordSales, canRecordExpenses, canManageStock, canExportData } =
+      body;
 
     if (!workerId) {
       return NextResponse.json(
@@ -179,6 +193,7 @@ export async function PATCH(request: Request) {
           canRecordSales: canRecordSales ?? existing.canRecordSales,
           canRecordExpenses: canRecordExpenses ?? existing.canRecordExpenses,
           canManageStock: canManageStock ?? existing.canManageStock,
+          canExportData: canExportData ?? existing.canExportData,
         })
         .where(eq(users.id, Number(workerId)))
         .returning();

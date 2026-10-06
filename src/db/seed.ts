@@ -671,6 +671,22 @@ async function seedDatabaseInner() {
     },
   ]);
 
+  // 2a-bis. OWNER-ISSUED AUTHORISATIONS (sensitive surfaces).
+  // Enterprise Users and the financial reports are never implied by a role —
+  // they open only through an explicit grant recorded against the OWNER. In
+  // this workspace the OWNER authorises the General Manager for both, which is
+  // the normal real-world shape: the GM runs the staff directory and reads the
+  // Central Financial Report on the OWNER's behalf. A newly invited GM or any
+  // other role starts with NEITHER (see dev-tooling/verify-enterprise-permissions.mjs).
+  await db.execute(sql`
+    UPDATE users
+       SET can_manage_users = true,
+           can_view_finance = true
+     WHERE id = 2
+       AND role = 'GENERAL_MANAGER'
+       AND (can_manage_users IS DISTINCT FROM true OR can_view_finance IS DISTINCT FROM true)
+  `);
+
   // 2b. Insert WORKER (Sales Person) accounts across branches
   // Manager user IDs: 3=Emmanuel(POULTRY), 4=Kofi(BLOCK), 5=Selorm(AQUA), 6=Ibrahim(LIVESTOCK), 7=Esi(FOOD), 8=Richmond(TECH), 9=Yaw(WASH)
   await db.insert(users).values([

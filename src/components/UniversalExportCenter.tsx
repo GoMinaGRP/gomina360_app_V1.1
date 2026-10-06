@@ -27,6 +27,7 @@ import {
 import { resolveLogo } from "@/lib/logos";
 import BusinessScopeBar from "./BusinessScopeBar";
 import { myOrgIdOf, scopeOwners, scopeUnits } from "@/lib/businessScope";
+import { exportModuleDenial } from "@/lib/permissions";
 
 interface Props {
   activeModule: string;
@@ -187,6 +188,11 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
   const effectiveModule = isWorker ? "WORKER_DASHBOARD" : activeModule;
   const moduleLabel = MODULE_LABELS[effectiveModule] || effectiveModule.replace(/_/g, " ");
   const activeBusiness = businesses.find((b) => b.code === effectiveModule);
+
+  // Sensitive-surface gate, mirrored from the API so the panel explains the
+  // restriction BEFORE a click (the server is still the enforcement point).
+  const scopedBusinessForGate = scopeBusinessId === "ALL" ? null : Number(scopeBusinessId) || null;
+  const moduleDenial = exportModuleDenial(currentUser, effectiveModule, scopedBusinessForGate);
 
   useEffect(() => {
     if (activeBusiness) setScopeBusinessId(String(activeBusiness.id));
@@ -733,7 +739,12 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
                     {isBranchManager && <div className="text-cyan-300 font-semibold"><ShieldCheck className="w-3 h-3 inline mr-1" />Branch Manager export is automatically restricted to the assigned branch.</div>}
                   </div>
 
-                  {!hasExportPermission ? (
+                  {moduleDenial ? (
+                    <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs" data-testid="universal-export-restricted">
+                      <ShieldCheck className="w-4 h-4 inline mr-1" />
+                      {moduleDenial}
+                    </div>
+                  ) : !hasExportPermission ? (
                     <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
                       <ShieldCheck className="w-4 h-4 inline mr-1" />
                       You do not have export permission. {isWorker ? "Ask your Branch Manager to enable export access for your account." : "Please contact the Owner or General Manager to grant export access."}

@@ -34,6 +34,7 @@ import {
 } from "@/lib/checklistGen";
 import { checklistPlanTemplates } from "@/db/schema";
 import { resolveProfile, BENCHMARK_TEMPLATES } from "@/lib/poultryBenchmarking";
+import { roleGroupMembers } from "@/lib/roles";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
@@ -284,7 +285,7 @@ export async function POST(request: NextRequest) {
       // recommended plan for immediate per-flock customization.
       const role = String(session.user.role || "").toUpperCase();
       const planMode = String(data.checklistPlan?.mode || "").toUpperCase();
-      const MANAGE = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+      const MANAGE = roleGroupMembers("UNIT_ADMIN");
       let checklistPlanApplied: string | null = null;
       if (
         isPoultryCategory(biz?.category) &&

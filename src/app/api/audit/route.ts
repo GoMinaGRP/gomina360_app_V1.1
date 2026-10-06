@@ -15,8 +15,9 @@
 // Every mutation also writes an immutable audit_trail row.
 
 import { NextResponse } from "next/server";
+import { getTableColumns, getTableName } from "drizzle-orm";
 import { and, desc, eq, inArray, isNotNull, ne, or } from "drizzle-orm";
-import { db } from "@/db";
+import { db, getPool } from "@/db";
 import {
   users,
   transactions,
@@ -70,7 +71,9 @@ import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
 import { apiError } from "@/lib/apiError";
+import { mapRawRows } from "@/lib/rawRowMapper";
 import { validateOptionalImage } from "@/lib/mediaValidation";
+import { cachedJson } from "@/lib/httpCache";
 
 const MODULES = [...AUDIT_MODULES] as string[];
 
@@ -282,21 +285,155 @@ const atOf = (date: string, ts: any): string => {
 let codeOfCache: Map<number, string> = new Map();
 async function codeOf(): Promise<Map<number, string>> {
   // Refreshed per request so newly-created businesses resolve immediately.
-  codeOfCache = new Map((await db.select().from(businesses)).map((b) => [b.id, b.code]));
+  // (The audit request already batched the business list — see loadAuditData —
+  // so this only queries on the record-detail path.)
+  if (codeOfCache.size === 0) {
+    codeOfCache = new Map((await db.select().from(businesses)).map((b) => [b.id, b.code]));
+  }
   return codeOfCache;
 }
 const branchOf = (businessId: number, branchCode?: string | null) => branchCode || codeOfCache.get(businessId) || null;
 
 /** Pulls the reviewable universe for this caller from the EXISTING tables and
  *  normalizes it into one shape the control center can browse. */
-async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
+/**
+ * ── ONE-ROUND-TRIP AUDIT READS ──────────────────────────────────────────────
+ *
+ * The Audit & Review centre used to issue ~126 SEQUENTIAL queries per request
+ * (each `await db.select()` = one network round trip). Against a remote
+ * database that is pure latency: measured 1 875 ms at 40 ms RTT, and ~12 s on a
+ * cross-region link — for data that is a few thousand rows.
+ *
+ * Every read is now concatenated into ONE multi-statement simple-protocol
+ * query (the same technique /api/init uses), and the big record tables are
+ * filtered in SQL by the caller's business scope instead of reading every
+ * tenant's rows and discarding them in JavaScript.
+ *
+ * SAFETY
+ *  • Scope is a SUPERSET filter: `canSeeRecord()` (business + module + branch)
+ *    still runs in JavaScript afterwards — defence in depth, unchanged.
+ *    Super Admin (scope.businessIds === null) gets exactly the previous rows.
+ *  • The only interpolated values are integer business ids that came from the
+ *    database (never user input); identical to initSnapshot's guarantee.
+ *  • If the batch fails (e.g. an older schema missing a table), we fall back to
+ *    the original per-read drizzle selects, so behaviour can never regress.
+ */
+type AuditReadSpec = {
+  key: string;
+  table: any;
+  limit: number | null;
+  order: boolean;
+  where: string | null;
+  /** Business filter for the batched SQL: "business" (default when the table
+   *  has a business_id column) or "none" (reads that must keep their original
+   *  global shape — the audit trail's platform rows carry a NULL business_id
+   *  and payroll entries are joined to scoped runs afterwards). */
+  scope?: "business" | "none";
+  whereField?: string;
+  whereValue?: string;
+};
+type AuditData = Record<string, any[]>;
+
+const AUDIT_READS: ReadonlyArray<AuditReadSpec> = [
+  { key: 'businesses|all|none|', table: businesses, limit: null, order: false, where: null, scope: 'none' },
+  { key: 'organizations|all|none|', table: organizations, limit: null, order: false, where: null, scope: 'none' },
+  { key: 'organizationMembers|all|none|', table: organizationMembers, limit: null, order: false, where: null, scope: 'none' },
+  { key: 'auditAssignments|all|id|', table: auditAssignments, limit: null, order: true, where: null, scope: 'none' },
+  { key: 'auditIssueUpdates|800|id|', table: auditIssueUpdates, limit: 800, order: true, where: null, scope: 'none' },
+  { key: 'auditTrail|300|id|', table: auditTrail, limit: 300, order: true, where: null, scope: 'none' },
+  { key: 'auditTrail|120|id|USER', table: auditTrail, limit: 120, order: true, where: `"target_type" = 'USER'`, whereField: "targetType", whereValue: "USER", scope: 'none' },
+  { key: 'auditTrail|120|id|GRANT', table: auditTrail, limit: 120, order: true, where: `"target_type" = 'GRANT'`, whereField: "targetType", whereValue: "GRANT", scope: 'none' },
+  { key: 'users|all|id|', table: users, limit: null, order: false, where: null, scope: 'none' },
+  { key: 'auditReviews|500|id|', table: auditReviews, limit: 500, order: true, where: null },
+  { key: 'transactions|240|id|', table: transactions, limit: 240, order: true, where: null },
+  { key: 'inventoryItems|200|id|', table: inventoryItems, limit: 200, order: true, where: null },
+  { key: 'employees|200|id|', table: employees, limit: 200, order: true, where: null },
+  { key: 'payrollRuns|120|id|', table: payrollRuns, limit: 120, order: true, where: null },
+  { key: 'payrollEntries|600|none|', table: payrollEntries, limit: 600, order: false, where: null, scope: 'none' },
+  { key: 'payrollAttendance|300|id|', table: payrollAttendance, limit: 300, order: true, where: null },
+  { key: 'assets|120|id|', table: assets, limit: 120, order: true, where: null },
+  { key: 'cctvCameras|120|id|', table: cctvCameras, limit: 120, order: true, where: null },
+  { key: 'livestockLogs|120|id|', table: livestockLogs, limit: 120, order: true, where: null },
+  { key: 'restaurantLogs|120|id|', table: restaurantLogs, limit: 120, order: true, where: null },
+  { key: 'electronicsLogs|120|id|', table: electronicsLogs, limit: 120, order: true, where: null },
+  { key: 'carWashLogs|120|id|', table: carWashLogs, limit: 120, order: true, where: null },
+  { key: 'hardwareLogs|120|id|', table: hardwareLogs, limit: 120, order: true, where: null },
+  { key: 'poultryFeedLogs|120|id|', table: poultryFeedLogs, limit: 120, order: true, where: null },
+  { key: 'poultryProduction|120|id|', table: poultryProduction, limit: 120, order: true, where: null },
+  { key: 'poultryHealthRecords|120|id|', table: poultryHealthRecords, limit: 120, order: true, where: null },
+  { key: 'poultryFeedFormulations|80|id|', table: poultryFeedFormulations, limit: 80, order: true, where: null },
+  { key: 'poultryFeedBatches|120|id|', table: poultryFeedBatches, limit: 120, order: true, where: null },
+  { key: 'poultryFeedQcChecks|120|id|', table: poultryFeedQcChecks, limit: 120, order: true, where: null },
+  { key: 'fishFeedFormulations|80|id|', table: fishFeedFormulations, limit: 80, order: true, where: null },
+  { key: 'fishFeedBatches|120|id|', table: fishFeedBatches, limit: 120, order: true, where: null },
+  { key: 'fishFeedQcChecks|120|id|', table: fishFeedQcChecks, limit: 120, order: true, where: null },
+  { key: 'blockMixFormulations|80|id|', table: blockMixFormulations, limit: 80, order: true, where: null },
+  { key: 'blockMixBatches|120|id|', table: blockMixBatches, limit: 120, order: true, where: null },
+  { key: 'assets|all|none|', table: assets, limit: null, order: false, where: null },
+  { key: 'assetAuditLogs|200|id|', table: assetAuditLogs, limit: 200, order: true, where: null },
+  { key: 'employeeHistory|200|id|', table: employeeHistory, limit: 200, order: true, where: null },
+  { key: 'recordDeletionLogs|200|id|', table: recordDeletionLogs, limit: 200, order: true, where: null },
+  { key: 'auditTrail|all|none|', table: auditTrail, limit: null, order: false, where: null },
+];
+
+const intList = (ids: number[]) => (ids.length ? ids.map((n) => Math.trunc(Number(n)) || 0).join(",") : "-1");
+
+async function loadAuditData(scope: Scope): Promise<AuditData> {
+  const scopedIds = scope.businessIds; // null ⇒ Super Admin ⇒ no filter (previous behaviour)
+  const buildSql = (spec: AuditReadSpec, scoped: boolean): string => {
+    const cols = getTableColumns(spec.table) as Record<string, { name: string }>;
+    const tableName = getTableName(spec.table);
+    const clauses: string[] = [];
+    if (spec.where) clauses.push(spec.where);
+    const businessScoped = spec.scope !== "none" && !!cols.businessId;
+    if (scoped && scopedIds && businessScoped) clauses.push(`"${cols.businessId.name}" IN (${intList(scopedIds)})`);
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const order = spec.order ? ` ORDER BY "id" DESC` : "";
+    const limit = spec.limit ? ` LIMIT ${spec.limit}` : "";
+    return `SELECT * FROM "${tableName}"${where}${order}${limit}`;
+  };
+
+  try {
+    // Assets carry no cap in the original code (lookup map), so they are read
+    // in full for Super Admin and by scope for everyone else.
+    const sqls = AUDIT_READS.map((spec) => buildSql(spec, true));
+    const results = (await getPool().query(sqls.join(";\n") + ";")) as unknown as Array<{ rows: Record<string, any>[] }>;
+    const data: AuditData = {};
+    AUDIT_READS.forEach((spec, i) => {
+      data[spec.key] = mapRawRows(spec.table, results?.[i]?.rows ?? []);
+    });
+    // Keeps branchOf() (and the record-detail path) working without its own query.
+    codeOfCache = new Map((data["businesses|all|none|"] ?? []).map((b: any) => [b.id, b.code]));
+    return data;
+  } catch (batchError) {
+    // Schema-drift safety net: same reads, one query each (the original path).
+    console.warn("[audit] batched reads failed, falling back to per-read queries:", (batchError as any)?.message || batchError);
+    const data: AuditData = {};
+    for (const spec of AUDIT_READS) {
+      const cols = getTableColumns(spec.table) as Record<string, any>;
+      let q: any = db.select().from(spec.table);
+      if (spec.whereField && spec.whereValue !== undefined) q = q.where(eq((spec.table as any)[spec.whereField], spec.whereValue));
+      if (spec.order) q = q.orderBy(desc(spec.table.id));
+      if (spec.limit) q = q.limit(spec.limit);
+      let rows: any[] = await q;
+      if (scopedIds && spec.scope !== "none" && cols.businessId) {
+        rows = rows.filter((r: any) => r.businessId == null || scopedIds.includes(Number(r.businessId)));
+      }
+      data[spec.key] = rows;
+    }
+    codeOfCache = new Map((data["businesses|all|none|"] ?? []).map((b: any) => [b.id, b.code]));
+    return data;
+  }
+}
+
+async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecordRow[]> {
   const codeMap = await codeOf();
   const keep = (businessId: number, module: string, branchCode?: string | null) => scope.businessIds === null || canSeeRecord(scope, businessId, module, branchCode);
   const rows: AuditRecordRow[] = [];
   const push = (r: AuditRecordRow) => { if (keep(r.businessId, r.module, r.branchCode)) rows.push(r); };
 
   // FINANCE — transactions & MoMo (INCOME = sales, EXPENSE/INVESTMENT/TRANSFER)
-  const txns = await db.select().from(transactions).orderBy(desc(transactions.id)).limit(240);
+  const txns = AUD["transactions|240|id|"];
   for (const t of txns) {
     const receipts = Array.isArray(t.receiptImages) ? t.receiptImages.length : t.receiptImage ? 1 : 0;
     push({
@@ -310,7 +447,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // INVENTORY — stock items (full detail: quantities, prices, dates, photos)
-  const items = await db.select().from(inventoryItems).orderBy(desc(inventoryItems.id)).limit(200);
+  const items = AUD["inventoryItems|200|id|"];
   for (const i of items) {
     const photoCount = Array.isArray(i.photos) ? i.photos.length : i.photo ? 1 : 0;
     push({
@@ -324,7 +461,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // EMPLOYEES
-  const emps = await db.select().from(employees).orderBy(desc(employees.id)).limit(200);
+  const emps = AUD["employees|200|id|"];
   for (const e of emps) {
     push({
       key: `EMPLOYEE:employees:${e.id}`, recordType: "EMPLOYEE", recordSource: "employees", recordId: e.id,
@@ -337,8 +474,8 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // PAYROLL — runs (entries folded in for totals)
-  const runs = await db.select().from(payrollRuns).orderBy(desc(payrollRuns.id)).limit(120);
-  const entries = await db.select().from(payrollEntries).limit(600);
+  const runs = AUD["payrollRuns|120|id|"];
+  const entries = AUD["payrollEntries|600|none|"];
   const byRun = new Map<number, { count: number; net: number }>();
   for (const en of entries) {
     const cur = byRun.get(en.runId) || { count: 0, net: 0 };
@@ -359,7 +496,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // ATTENDANCE
-  const att = await db.select().from(payrollAttendance).orderBy(desc(payrollAttendance.id)).limit(300);
+  const att = AUD["payrollAttendance|300|id|"];
   for (const a of att) {
     push({
       key: `PAYROLL_ATTENDANCE:payroll_attendance:${a.id}`, recordType: "PAYROLL_ATTENDANCE", recordSource: "payroll_attendance", recordId: a.id,
@@ -371,7 +508,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // ASSETS
-  const assetRows = await db.select().from(assets).orderBy(desc(assets.id)).limit(120);
+  const assetRows = AUD["assets|120|id|"];
   for (const a of assetRows) {
     push({
       key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id,
@@ -384,7 +521,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // CCTV
-  const cams = await db.select().from(cctvCameras).orderBy(desc(cctvCameras.id)).limit(120);
+  const cams = AUD["cctvCameras|120|id|"];
   for (const c of cams) {
     push({
       key: `CCTV_CAMERA:cctv_cameras:${c.id}`, recordType: "CCTV_CAMERA", recordSource: "cctv_cameras", recordId: c.id,
@@ -402,42 +539,42 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
       ref, title, detail, module: "OPERATIONS", businessId, branchCode: branchOf(businessId, null),
       workerName: worker, date: day10(date), at: atOf(day10(date), at), amountGhs: null, status: "LOGGED",
     });
-  for (const l of await db.select().from(livestockLogs).orderBy(desc(livestockLogs.id)).limit(120))
+  for (const l of AUD["livestockLogs|120|id|"])
     opsPush("livestock_logs", l.id, l.businessId, l.tagNumber, `${l.animalType} ${l.tagNumber} — ${l.weightKg}kg`, `Breed ${l.breed} · vaccination ${l.vaccinationStatus}${l.pregnantStatus ? " · pregnant" : ""}`, null, l.recordedDate);
-  for (const l of await db.select().from(restaurantLogs).orderBy(desc(restaurantLogs.id)).limit(120))
+  for (const l of AUD["restaurantLogs|120|id|"])
     opsPush("restaurant_logs", l.id, l.businessId, `SHIFT-${l.shiftDate}-${l.id}`, `Kitchen shift ${l.shiftDate} — ${l.totalOrders} orders`, `Popular: ${l.mostPopularDish} · waste ${l.wastePercent}% · MoMo GH₵ ${l.momoReceiptsGhs} / cash GH₵ ${l.cashReceiptsGhs}`, null, l.shiftDate);
-  for (const l of await db.select().from(electronicsLogs).orderBy(desc(electronicsLogs.id)).limit(120))
+  for (const l of AUD["electronicsLogs|120|id|"])
     opsPush("electronics_logs", l.id, l.businessId, l.serialNumber, `${l.productName} — ${l.brand}`, `Warranty ${l.warrantyMonths}mo · retail GH₵ ${l.retailPriceGhs} · ${l.inStock ? "in stock" : "sold out"}`, null, l.lastCheckedDate);
-  for (const l of await db.select().from(carWashLogs).orderBy(desc(carWashLogs.id)).limit(120))
+  for (const l of AUD["carWashLogs|120|id|"])
     opsPush("car_wash_logs", l.id, l.businessId, `SHIFT-${l.shiftDate}-${l.id}`, `Car wash shift ${l.shiftDate} — ${l.vehiclesWashed} vehicles`, `Revenue GH₵ ${l.totalRevenueGhs} · chemicals ${l.chemicalUsedLiters}L`, null, l.recordedDate || l.shiftDate);
-  for (const l of await db.select().from(hardwareLogs).orderBy(desc(hardwareLogs.id)).limit(120))
+  for (const l of AUD["hardwareLogs|120|id|"])
     opsPush("hardware_logs", l.id, l.businessId, l.receiveNoteNumber, `${l.itemName} × ${l.quantityReceived} ${l.unit}`, `Supplier ${l.supplierName} · condition ${l.condition}`, l.receivedBy, l.recordedDate, tsIso((l as any).createdAt));
   // POULTRY — closes the "poultry records flagged ✅" hole: feeding,
   // production, health, and the full feed-mill chain (formulas → batches →
   // QC) are auditable records like every other operations log.
-  for (const l of await db.select().from(poultryFeedLogs).orderBy(desc(poultryFeedLogs.id)).limit(120))
+  for (const l of AUD["poultryFeedLogs|120|id|"])
     opsPush("poultry_feed_logs", l.id, l.businessId, `FDL-${l.id}`, `Poultry feeding — ${l.feedType} × ${l.quantityKg} kg`, `Source ${l.sourceType || "PURCHASED"}${l.batchNumber ? ` · from batch ${l.batchNumber}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
-  for (const l of await db.select().from(poultryProduction).orderBy(desc(poultryProduction.id)).limit(120))
+  for (const l of AUD["poultryProduction|120|id|"])
     opsPush("poultry_production", l.id, l.businessId, `PP-${l.id}`, `Poultry production — ${l.productionType}${l.eggsCollected ? ` · ${l.eggsCollected} eggs` : ""}${l.birdsHarvested ? ` · ${l.birdsHarvested} birds` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.layPercentage ? ` · lay ${l.layPercentage}%` : ""}${l.fcr ? ` · FCR ${l.fcr}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
-  for (const l of await db.select().from(poultryHealthRecords).orderBy(desc(poultryHealthRecords.id)).limit(120))
+  for (const l of AUD["poultryHealthRecords|120|id|"])
     opsPush("poultry_health_records", l.id, l.businessId, `PHR-${l.id}`, `Poultry health — ${l.recordType}${l.diseaseOrCondition ? ` · ${l.diseaseOrCondition}` : ""}${l.mortalityCount ? ` · ${l.mortalityCount} dead` : ""}`, `Flock ${l.batchNumber || l.flockId || "—"}${l.vaccineOrDrug ? ` · ${l.vaccineOrDrug}` : ""}${l.nextDueDate ? ` · next due ${l.nextDueDate}` : ""}`, l.recordedByName || null, l.recordedDate, tsIso((l as any).createdAt));
-  for (const f of await db.select().from(poultryFeedFormulations).orderBy(desc(poultryFeedFormulations.id)).limit(80))
+  for (const f of AUD["poultryFeedFormulations|80|id|"])
     opsPush("poultry_feed_formulations", f.id, f.businessId, f.formulationNo, `Feed formula — ${f.name} (${f.feedType}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
-  for (const b of await db.select().from(poultryFeedBatches).orderBy(desc(poultryFeedBatches.id)).limit(120))
+  for (const b of AUD["poultryFeedBatches|120|id|"])
     opsPush("poultry_feed_batches", b.id, b.businessId, b.batchNumber, `Feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
-  for (const q of await db.select().from(poultryFeedQcChecks).orderBy(desc(poultryFeedQcChecks.id)).limit(120))
+  for (const q of AUD["poultryFeedQcChecks|120|id|"])
     opsPush("poultry_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.batchId ? ` · batch ${q.batchNumber || q.batchId}` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "", tsIso(q.testedAt));
   // FISH FEED MILL — same chain for the aquaculture mill (formulas → batches → QC).
-  for (const f of await db.select().from(fishFeedFormulations).orderBy(desc(fishFeedFormulations.id)).limit(80))
+  for (const f of AUD["fishFeedFormulations|80|id|"])
     opsPush("fish_feed_formulations", f.id, f.businessId, f.formulationNo, `Fish feed formula — ${f.name} (${f.species} · ${f.feedClass} ${f.feedStage}) v${f.version || 1}`, `Batch size ${f.batchSizeKg} kg${f.cpPctTarget ? ` · CP ${f.cpPctTarget}%` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
-  for (const b of await db.select().from(fishFeedBatches).orderBy(desc(fishFeedBatches.id)).limit(120))
+  for (const b of AUD["fishFeedBatches|120|id|"])
     opsPush("fish_feed_batches", b.id, b.businessId, b.batchNumber, `Fish feed batch — ${b.formulationName || "formulation"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.yieldPct ? ` · yield ${b.yieldPct}%` : ""}${b.ingredientCostGhs ? ` · cost GH₵ ${Number(b.ingredientCostGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} (${(b.costPerKgGhs ?? 0).toFixed(2)}/kg)` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
-  for (const q of await db.select().from(fishFeedQcChecks).orderBy(desc(fishFeedQcChecks.id)).limit(120))
+  for (const q of AUD["fishFeedQcChecks|120|id|"])
     opsPush("fish_feed_qc_checks", q.id, q.businessId, q.batchNumber || `QC-${q.id}`, `Fish feed QC — ${q.testName} → ${q.passFail}`, `Stage ${q.stage}${q.floatPct != null ? ` · ${q.floatPct}% float` : ""}${q.testResult ? ` · ${q.testResult}` : ""}`, q.testerName || q.recordedByName || null, tsDay(q.testedAt) || "", tsIso(q.testedAt));
   // BLOCK FACTORY — MIXING chain (recipes → mixer batches).
-  for (const f of await db.select().from(blockMixFormulations).orderBy(desc(blockMixFormulations.id)).limit(80))
+  for (const f of AUD["blockMixFormulations|80|id|"])
     opsPush("block_mix_formulations", f.id, f.businessId, f.formulationNo, `Mix recipe — ${f.name} (${f.blockType}) v${f.version || 1}`, `Batch ${f.batchSizeKg} kg${f.waterCementRatio ? ` · w/c ${f.waterCementRatio}` : ""}${f.active === false ? " · INACTIVE" : ""}`, f.createdByName || null, tsDay(f.createdAt) || "", tsIso(f.createdAt));
-  for (const b of await db.select().from(blockMixBatches).orderBy(desc(blockMixBatches.id)).limit(120))
+  for (const b of AUD["blockMixBatches|120|id|"])
     opsPush("block_mix_batches", b.id, b.businessId, b.mixBatchNumber, `Mix batch — ${b.formulationName || "recipe"} · ${b.actualInputKg} kg → ${b.actualOutputKg ?? "—"} kg`, `Status ${b.status}${b.slumpMm != null ? ` · slump ${b.slumpMm} mm` : ""}${b.costPerKgGhs ? ` · GH₵ ${(b.costPerKgGhs).toFixed(2)}/kg` : ""}`, b.recordedByName || b.operatorName || null, tsDay(b.createdAt) || b.productionDate || "", tsIso(b.createdAt));
 
   // OPERATIONS — daily checklist tasks: one auditable row per dated task
@@ -484,8 +621,8 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
 
   // ASSETS — the immutable activity/approval log (add, edit, transfer, delete,
   // approve, reject) is itself reviewable, and links to the live asset record.
-  const assetById = new Map((await db.select().from(assets)).map((a) => [a.id, a]));
-  const assetActs = await db.select().from(assetAuditLogs).orderBy(desc(assetAuditLogs.id)).limit(200);
+  const assetById = new Map((AUD["assets|all|none|"]).map((a) => [a.id, a]));
+  const assetActs = AUD["assetAuditLogs|200|id|"];
   for (const act of assetActs) {
     const ast = assetById.get(act.assetId);
     if (!ast) continue; // orphan log (asset hard-deleted) — skip
@@ -499,7 +636,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   }
 
   // EMPLOYEES — the HR history log (created, updated, photo/document changes).
-  const empHist = await db.select().from(employeeHistory).orderBy(desc(employeeHistory.id)).limit(200);
+  const empHist = AUD["employeeHistory|200|id|"];
   for (const h of empHist) {
     push({
       key: `EMPLOYEE_HISTORY:employee_history:${h.id}`, recordType: "EMPLOYEE_HISTORY", recordSource: "employee_history", recordId: h.id,
@@ -514,7 +651,7 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
   // Supplier deletions carry no business context (suppliers are a global
   // directory), so they surface for the unrestricted OWNER only.
   const DELETION_MODULE: Record<string, string> = { TRANSACTIONS: "FINANCE", INVENTORY: "INVENTORY", EMPLOYEES: "EMPLOYEES" };
-  const delRows = await db.select().from(recordDeletionLogs).orderBy(desc(recordDeletionLogs.id)).limit(200);
+  const delRows = AUD["recordDeletionLogs|200|id|"];
   for (const d of delRows) {
     const mod = DELETION_MODULE[d.module];
     if (!mod) continue;
@@ -531,12 +668,8 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
 
   // USERS — access-management activities (grant/revoke auditor access,
   // delegate/revoke auditor-management) linked into the Records section.
-  const userActs = await db.select().from(auditTrail)
-    .where(eq(auditTrail.targetType, "USER"))
-    .orderBy(desc(auditTrail.id)).limit(120);
-  const grantActs = await db.select().from(auditTrail)
-    .where(eq(auditTrail.targetType, "GRANT"))
-    .orderBy(desc(auditTrail.id)).limit(120);
+  const userActs = AUD["auditTrail|120|id|USER"];
+  const grantActs = AUD["auditTrail|120|id|GRANT"];
   const accessActs = [...userActs, ...grantActs].sort((a, b) => b.id - a.id);
   for (const t of accessActs) {
     push({
@@ -552,15 +685,15 @@ async function collectRecords(scope: Scope): Promise<AuditRecordRow[]> {
 }
 
 /** Loads reviews visible to this caller (business + module scoped). */
-async function scopedReviews(scope: Scope) {
-  const all = await db.select().from(auditReviews).orderBy(desc(auditReviews.id)).limit(500);
+function scopedReviews(scope: Scope, AUD: AuditData) {
+  const all: any[] = AUD["auditReviews|500|id|"] ?? [];
   if (scope.businessIds === null) return all;
   const ids = scope.businessIds;
   return all.filter((r) => r.businessId != null && ids.includes(r.businessId) && canSee(scope, r.businessId, r.module) && branchOk(scope, r.businessId, (r as any).branchCode));
 }
 
-async function scopedTrail(scope: Scope) {
-  const all = await db.select().from(auditTrail).orderBy(desc(auditTrail.id)).limit(300);
+function scopedTrail(scope: Scope, AUD: AuditData) {
+  const all: any[] = AUD["auditTrail|300|id|"] ?? [];
   if (scope.businessIds === null) return all;
   const ids = scope.businessIds;
   const orgs = new Set(scope.ownerIds);
@@ -739,16 +872,17 @@ export async function GET(request: Request) {
     const from = url.searchParams.get("from") || "";
     const to = url.searchParams.get("to") || "";
 
-    let records = await collectRecords(scope);
-    let reviews = (await scopedReviews(scope)).map((r) => ({ ...r, status: normStatus(r.status) }));
-    let log = await scopedTrail(scope);
+    const AUD = await loadAuditData(scope);
+    let records = await collectRecords(scope, AUD);
+    let reviews = scopedReviews(scope, AUD).map((r) => ({ ...r, status: normStatus(r.status) }));
+    let log = scopedTrail(scope, AUD);
 
     // Owner / unit-set narrowing. `ownerId` groups by businesses.owner_id; the
     // two filters intersect with each other and with the caller's own scope.
     const scopedIds = (id: number) => scope.businessIds === null || scope.businessIds.includes(id);
     let narrowed: Set<number> | null = null;
     if (fOwnerId !== null || fBusinessIds.length > 0) {
-      const ownerBiz = await db.select({ id: businesses.id, ownerId: businesses.ownerId }).from(businesses);
+      const ownerBiz = (AUD["businesses|all|none|"] ?? []).map((b: any) => ({ id: b.id, ownerId: b.ownerId }));
       const byOwner = fOwnerId !== null ? ownerBiz.filter((b) => Number(b.ownerId ?? 1) === fOwnerId) : ownerBiz;
       const chosen = fBusinessIds.length > 0 ? byOwner.filter((b) => fBusinessIds.includes(Number(b.id))) : byOwner;
       narrowed = new Set(chosen.map((b) => Number(b.id)).filter(scopedIds));
@@ -800,20 +934,18 @@ export async function GET(request: Request) {
     let grants: any[] = [];
     let grantUsers: any[] = [];
     if (scope.canGrant) {
-      const g = await db.select().from(auditAssignments).orderBy(desc(auditAssignments.id));
+      const g = AUD["auditAssignments|all|id|"] ?? [];
       grants = scope.grantBusinessIds === null ? g : g.filter((x) => scope.grantBusinessIds!.includes(x.businessId));
-      const all = await db.select().from(users);
+      const all = AUD["users|all|id|"] ?? [];
       // Auditor candidates are strictly members of the caller's own
       // organization(s) — the platform Super Admin sees everyone.
+      const orgsForCandidates = new Set(user.organizationIds?.length ? user.organizationIds : [-1]);
       const memberUserIds = user.isSuperAdmin
         ? null
         : new Set(
-            (
-              await db
-                .select({ userId: organizationMembers.userId })
-                .from(organizationMembers)
-                .where(inArray(organizationMembers.organizationId, user.organizationIds?.length ? user.organizationIds : [-1]))
-            ).map((m) => Number(m.userId)),
+            (AUD["organizationMembers|all|none|"] ?? [])
+              .filter((m: any) => orgsForCandidates.has(Number(m.organizationId)))
+              .map((m: any) => Number(m.userId)),
           );
       grantUsers = all
         .filter((u) => u.role !== "OWNER" && u.isActive)
@@ -828,11 +960,9 @@ export async function GET(request: Request) {
     // without guessing; the owner's NAME is only published to a Super Admin
     // (a normal owner's units are all their own organization).
     const orgNames = new Map(
-      (await db.select({ id: organizations.id, name: organizations.name }).from(organizations)).map((o) => [Number(o.id), o.name]),
+      (AUD["organizations|all|none|"] ?? []).map((o: any) => [Number(o.id), o.name]),
     );
-    const bizAll = await db
-      .select({ id: businesses.id, name: businesses.name, code: businesses.code, ownerId: businesses.ownerId })
-      .from(businesses);
+    const bizAll = (AUD["businesses|all|none|"] ?? []).map((b: any) => ({ id: b.id, name: b.name, code: b.code, ownerId: b.ownerId }));
     let bizList = scope.businessIds === null ? bizAll : bizAll.filter((b) => scope.businessIds!.includes(b.id));
     if (narrowed) bizList = bizList.filter((b) => narrowed!.has(Number(b.id)));
     const publishOwnerNames = !!user.isSuperAdmin;
@@ -854,7 +984,7 @@ export async function GET(request: Request) {
     const issueIds = new Set(reviews.filter(isIssue).map((r) => r.id));
     const threads: Record<number, any[]> = {};
     if (issueIds.size > 0) {
-      const upd = await db.select().from(auditIssueUpdates).orderBy(desc(auditIssueUpdates.id)).limit(800);
+      const upd = AUD["auditIssueUpdates|800|id|"] ?? [];
       for (const u of upd) {
         if (!issueIds.has(u.issueId)) continue;
         (threads[u.issueId] ||= []).push(u);
@@ -863,7 +993,7 @@ export async function GET(request: Request) {
     }
 
     const report = buildReport(records, reviews);
-    return NextResponse.json({ success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList: bizOut, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
+    return cachedJson(request, { success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList: bizOut, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
   } catch (error: any) {
     return apiError(error);
   }

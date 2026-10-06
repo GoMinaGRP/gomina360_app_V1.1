@@ -545,11 +545,31 @@ try {
   await client.query(`update public.ai_insights x set owner_id = b.owner_id from public.businesses b
       where x.business_id = b.id and x.owner_id is null`);
   await client.query(`update public.ai_insights set owner_id = 1 where owner_id is null`);
+  // Notifications — derive the tenant, but NEVER attribute a platform-scope row
+  // to a tenant. `PLATFORM_REQUEST_NEW` bell rows are written with business_id =
+  // null AND owner_id = null ON PURPOSE (they belong to the platform, not to any
+  // business); the old blanket `set owner_id = 1 where owner_id is null` re-bound
+  // them to organization 1 on every build. Order matters: the recipient's own
+  // organization wins over the org-1 fallback, and the fallback only applies to
+  // rows that actually look tenant-scoped (they carry a business). Anything left
+  // null is genuinely tenant-less — leaving it null is safer than mis-attributing
+  // it, and tenant queries filter on owner_id, so it stays private.
   await client.query(`update public.notifications x set owner_id = b.owner_id from public.businesses b
       where x.business_id = b.id and x.owner_id is null`);
-  await client.query(`update public.notifications set owner_id = 1 where owner_id is null`);
+  // `type <> 'PLATFORM_REQUEST_NEW'`: the recipient of a platform notification
+  // IS a tenant user (the Super Admin belongs to organization 1), so recipient
+  // derivation must be skipped for platform-scope types — add any future
+  // platform-scope type to this exclusion.
   await client.query(`update public.notifications n set owner_id = ou.primary_org_id from public.users ou
-      where n.user_id = ou.id and n.owner_id is null`);
+      where n.user_id = ou.id and ou.primary_org_id is not null and n.owner_id is null
+        and n.type <> 'PLATFORM_REQUEST_NEW'`);
+  await client.query(`update public.notifications set owner_id = 1 where owner_id is null and business_id is not null`);
+  // One-time repair for databases that ran the previous backfill: it attributed
+  // platform-scope rows to organization 1. They must be tenant-less, and a
+  // tenant query filters on owner_id — so leaving the stamp in place would leak
+  // the platform request into organization 1's scope. Idempotent.
+  await client.query(`update public.notifications set owner_id = null
+      where type = 'PLATFORM_REQUEST_NEW' and business_id is null and owner_id is not null`);
   await client.query(`update public.universal_exports x set owner_id = b.owner_id from public.businesses b
       where x.business_id = b.id and x.owner_id is null`);
   await client.query(`update public.universal_exports x set owner_id = u.primary_org_id from public.users u
@@ -597,35 +617,29 @@ try {
 
   // Serial realignment sweep: seeded explicit-id rows desynchronise a serial
   // sequence (they bypass nextval), so the next runtime INSERT collides.
-  // Realign EVERY public serial sequence against its table's live max(id).
+  // Realign EVERY public serial sequence against its table's live max(id) —
+  // forward-only: a sequence is never rewound, so primary keys of deleted rows
+  // are never reused (id reuse is what let a stale company_settings row abort
+  // organization provisioning). See dev-tooling/seq-realign.mjs for the full
+  // post-mortem.
   {
-    const tables = await client.query(
-      `select t.relname as table_name
-         from pg_class t join pg_namespace n on n.oid = t.relnamespace
-        where n.nspname = 'public' and t.relkind = 'r'`,
+    const { realignSequencesForwardOnly } = await import("./seq-realign.mjs");
+    await realignSequencesForwardOnly(client, (m) => console.log(m));
+
+    // Visibility only — never mutate live data from a build. A per-org settings
+    // row outliving its organization is harmless now (organization ids are
+    // never reused and the provisioning insert absorbs a stale row), but it is
+    // dead weight worth reporting so an operator can prune it deliberately.
+    const orphans = await client.query(
+      `select count(*)::int c from company_settings
+        where organization_id is not null
+          and organization_id not in (select id from organizations)`,
     );
-    for (const { table_name } of tables.rows) {
-      // Tables legitimately exist without an `id` column (natural-key tables
-      // like system_markers); pg_get_serial_sequence raises for those —
-      // skip them instead of failing the whole migration.
-      const hasId = await client.query(
-        `select 1 from information_schema.columns
-          where table_schema = 'public' and table_name = $1 and column_name = 'id'`,
-        [table_name],
+    if (orphans.rows[0].c > 0) {
+      console.log(
+        `[db:migrate] note: ${orphans.rows[0].c} company_settings row(s) reference a deleted organization ` +
+          `(harmless, safe to prune: delete from company_settings where organization_id not in (select id from organizations))`,
       );
-      if (!hasId.rowCount) continue;
-      const seq = await client.query(`select pg_get_serial_sequence($1, 'id') as s`, [`public.${table_name}`]);
-      const s = seq.rows[0]?.s;
-      if (s) {
-        const short = s.startsWith("public.") ? s.slice(7) : s;
-        // Empty table ⇒ is_called must be FALSE (the first real row takes 1);
-        // setval(seq, 1, true) on an empty table makes the next insert skip 1.
-        await client.query(
-          `select setval('${short.replace(/'/g, "''")}',
-             (select coalesce(max(id),1) from public.${table_name}),
-             (select count(*) > 0 from public.${table_name}))`,
-        );
-      }
     }
   }
 

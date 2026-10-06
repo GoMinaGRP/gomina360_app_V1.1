@@ -7,6 +7,7 @@ import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { generateDeliveryNote, generateVetReport, validateDocUpload } from "@/lib/documents";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * /api/documents — R4 Document Vault.
@@ -48,7 +49,7 @@ const DOC_TYPES = [
   "CERTIFICATE", "LICENCE_PERMIT", "INSURANCE", "VEHICLE_DOCUMENT", "SUPPLIER_INVOICE", "OTHER",
 ];
 
-const isManager = (me: any) => ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(String(me?.role || ""));
+const isManager = (me: any) => inRoleGroup("UNIT_ADMIN", me?.role);
 
 export async function GET(request: NextRequest) {
   try {

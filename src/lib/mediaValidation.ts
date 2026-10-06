@@ -33,8 +33,19 @@ import { IMAGE_BYTE_BUDGETS, PHOTO_LIMITS, type ImagePurpose } from "./imageOpti
 export const THUMB_BUDGET_BYTES = 60 * 1024;
 
 export type ValidationOk = { ok: true; bytes: number; mime: string };
-export type ValidationErr = { ok: false; error: string };
+/**
+ * `reason` lets a route answer with the RIGHT status: an oversized payload is
+ * 413, anything else about the value is 400. Before this, every image failure
+ * was collapsed into one code, so a client could not tell "too big" from
+ * "not an image" (and a non-image was reported as 413).
+ */
+export type ValidationErr = { ok: false; error: string; reason: "INVALID" | "TOO_LARGE" };
 export type Validation = ValidationOk | ValidationErr;
+
+/** The HTTP status a rejected image deserves. */
+export function imageErrorStatus(check: ValidationErr): 400 | 413 {
+  return check.reason === "TOO_LARGE" ? 413 : 400;
+}
 
 /** Decoded byte length of a base64 data URL. */
 export function dataUrlBytes(url: string): number {
@@ -59,24 +70,25 @@ export function validateImageDataUrl(
 ): Validation {
   const label = opts.label || "image";
   if (value === null || value === undefined || value === "") {
-    return { ok: false, error: `${label}: no image data.` };
+    return { ok: false, reason: "INVALID", error: `${label}: no image data.` };
   }
-  if (typeof value !== "string") return { ok: false, error: `${label} must be an image.` };
+  if (typeof value !== "string") return { ok: false, reason: "INVALID", error: `${label} must be an image.` };
   // Strict base64 (no whitespace/newlines — encoders never emit them, and a
   // padded payload would otherwise inflate the measured size) and a NON-EMPTY
   // payload: a zero-byte "image" stores a broken row for every later reader.
   const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value.trim());
   if (!m) {
-    return { ok: false, error: `${label} must be a base64 image (data:image/…;base64,…).` };
+    return { ok: false, reason: "INVALID", error: `${label} must be a base64 image (data:image/…;base64,…).` };
   }
   const bytes = dataUrlBytes(value);
   if (bytes < 4) {
-    return { ok: false, error: `${label} is empty — the file did not upload. Try again.` };
+    return { ok: false, reason: "INVALID", error: `${label} is empty — the file did not upload. Try again.` };
   }
   const max = opts.maxBytes ?? IMAGE_BYTE_BUDGETS[purpose] ?? THUMB_BUDGET_BYTES;
   if (bytes > max) {
     return {
       ok: false,
+      reason: "TOO_LARGE",
       error: `${label} is ${fmtBytes(bytes)} — the limit after optimisation is ${fmtLimit(max)}.`,
     };
   }
@@ -111,11 +123,14 @@ export function validateImageArray(
   opts: { max?: number; label?: string; maxBytes?: number; allowNulls?: boolean } = {},
 ): Validation {
   if (value === null || value === undefined) return { ok: true, bytes: 0, mime: "" };
-  if (!Array.isArray(value)) return { ok: false, error: `${opts.label || "images"} must be a list.` };
+  if (!Array.isArray(value))
+    return { ok: false, reason: "INVALID", error: `${opts.label || "images"} must be a list.` };
   const max = opts.max ?? PHOTO_LIMITS[purpose] ?? 1;
   if (value.length > max) {
     return {
       ok: false,
+      // Too MANY images is a shape problem (400), not a byte-size one (413).
+      reason: "INVALID",
       error: `A record can hold at most ${max} image${max === 1 ? "" : "s"} — ${value.length} were sent.`,
     };
   }

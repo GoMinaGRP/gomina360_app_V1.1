@@ -100,11 +100,23 @@ export async function ensureTemplates(
  * rows the Owner deactivated… no — deactivation is a deliberate Owner
  * choice, so re-activation happens ONLY on an explicit enable action.
  */
+/** Businesses whose stage plan was already reconciled with this build in this
+ *  process (the scan is a no-op after the first pass unless the build changes,
+ *  and a deploy always starts new processes). */
+const stagePlanSyncedAt = new Map<number, number>();
+const STAGE_PLAN_SYNC_TTL_MS = 5 * 60 * 1000;
+
 export async function ensureStagePlanTemplates(
   businessId: number,
   branchCode: string | null,
   opts?: { reactivate?: boolean }
 ) {
+  const syncedAt = stagePlanSyncedAt.get(businessId);
+  if (!opts?.reactivate && syncedAt !== undefined && Date.now() - syncedAt < STAGE_PLAN_SYNC_TTL_MS) {
+    // Already reconciled in this process — one read instead of a hit-per-task
+    // scan (and avoid the writes entirely, see the change-driven guards below).
+    return db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId));
+  }
   const existing = await db
     .select()
     .from(checklistTemplates)
@@ -120,6 +132,20 @@ export async function ensureStagePlanTemplates(
       if (found.origin === "STAGE_PLAN") {
         // Refresh ONLY system-owned rows, and only metadata the Owner hasn't
         // deliberately changed (activation stays untouched unless reactivate).
+        // CHANGE-DRIVEN: a row whose metadata already matches this build is
+        // NOT written. (The old code issued one UPDATE per task on every read —
+        // ~30 round trips per checklist screen against a remote database.)
+        const alreadyCurrent =
+          found.birdType === t.birdType &&
+          JSON.stringify(found.stageKeys ?? null) === JSON.stringify(t.stageKeys ?? null) &&
+          (found.frequency ?? null) === (t.frequency ?? null) &&
+          (found.priority ?? null) === (t.priority ?? null) &&
+          !!found.houseScoped === !!t.houseScoped &&
+          (!opts?.reactivate || found.isActive !== false);
+        if (alreadyCurrent) {
+          rows.push(found);
+          continue;
+        }
         await db
           .update(checklistTemplates)
           .set({
@@ -140,6 +166,18 @@ export async function ensureStagePlanTemplates(
         // flock-level plan stays complete instead of silently missing
         // critical tasks. Origin becomes STAGE_PLAN so future refreshes keep
         // its metadata in sync — the label stays the Owner's forever.
+        const adoptedAlready =
+          found.origin === "STAGE_PLAN" &&
+          found.birdType === t.birdType &&
+          JSON.stringify(found.stageKeys ?? null) === JSON.stringify(t.stageKeys ?? null) &&
+          (found.frequency ?? null) === (t.frequency ?? null) &&
+          (found.priority ?? null) === (t.priority ?? null) &&
+          !!found.houseScoped === !!t.houseScoped &&
+          (!opts?.reactivate || found.isActive !== false);
+        if (adoptedAlready) {
+          rows.push(found);
+          continue;
+        }
         await db
           .update(checklistTemplates)
           .set({
@@ -193,6 +231,7 @@ export async function ensureStagePlanTemplates(
   }
   if (adopted > 0) {
     console.log(`[checklistGen] stage plan: adopted ${adopted} existing item(s) whose task keys match system stage tasks (Owner labels/assignments kept)`);
+  stagePlanSyncedAt.set(businessId, Date.now());
   }
   return rows;
 }
@@ -277,6 +316,38 @@ function genLockKey(businessId: number, date: string): number {
  *  business+date. With the stage plan enabled, flock-scoped rows are added
  *  per ACTIVE flock at its current production stage, and re-runs only add
  *  what's missing (a flock registered mid-day still gets today's tasks). */
+/**
+ * PROCESS-LEVEL MEMO: "this business's checklist for this date has already been
+ * generated in this process".
+ *
+ * generateEntriesForDate() is idempotent but not free — an advisory lock plus
+ * template and entry reads on EVERY call, and the checklist panel asks for
+ * today's plan on every open. Against a remote database those round trips are
+ * the whole cost of the screen (measured: /api/checklists ≈ 1 s at 40 ms RTT).
+ *
+ * The memo can never hide data: it only skips work that has already run
+ * successfully in this process, it expires after 60 s, and every template
+ * mutation invalidates it explicitly (invalidateChecklistGeneration), so a
+ * newly added item still materialises immediately.
+ */
+const GENERATED_TTL_MS = 60_000;
+const generatedAt = new Map<string, number>();
+
+export function invalidateChecklistGeneration(businessId?: number): void {
+  if (businessId === undefined) {
+    generatedAt.clear();
+    stagePlanSyncedAt.clear();
+    return;
+  }
+  const prefix = `${businessId}:`;
+  for (const k of [...generatedAt.keys()]) if (k.startsWith(prefix)) generatedAt.delete(k);
+  stagePlanSyncedAt.delete(businessId);
+}
+
+function generationKey(businessId: number, branchCode: string | null, date: string): string {
+  return `${businessId}:${branchCode || "-"}:${date}`;
+}
+
 export async function generateEntriesForDate(
   businessId: number,
   branchCode: string | null,
@@ -284,6 +355,18 @@ export async function generateEntriesForDate(
   bizCode?: string | null,
   bizCategory?: string | null
 ) {
+  const genKey = generationKey(businessId, branchCode, date);
+  const lastGenerated = generatedAt.get(genKey);
+  if (lastGenerated !== undefined && Date.now() - lastGenerated < GENERATED_TTL_MS) {
+    // Already generated in this process: skip the advisory lock, the template
+    // read and the insert pass, and just hand back the rows for this date
+    // (ONE round trip instead of five) — same return contract for callers.
+    return db
+      .select()
+      .from(checklistEntries)
+      .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, date)));
+  }
+
   await ensureTemplates(businessId, branchCode, bizCode ?? null, bizCategory ?? null);
 
   const lockKey = genLockKey(businessId, date);
@@ -517,6 +600,7 @@ export async function generateEntriesForDate(
       const [r] = await db.insert(checklistEntries).values(row).returning();
       inserted.push(r);
     }
+    generatedAt.set(genKey, Date.now()); // success → skip the lock + reads for the next 60 s
     return [...existing, ...inserted];
   } finally {
     await db.execute(sql`select pg_advisory_unlock(${lockKey})`).catch(() => {});

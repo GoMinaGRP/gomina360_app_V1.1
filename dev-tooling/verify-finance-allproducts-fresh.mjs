@@ -461,7 +461,12 @@ async function cleanup() {
     `start=${JSON.stringify(base)} end=${JSON.stringify(counts)}`);
   ok("Z2 all nine TEST units fully removed", baseline.createdBizIds.every((id) => id > 0) &&
     (await pg.query(`SELECT count(*)::int c FROM businesses WHERE name LIKE 'TEST%'`)).rows[0].c === 0);
-  ok("Z3 no stray Finance & Reports grants left", (await pg.query(`SELECT count(*)::int c FROM users WHERE can_view_finance=true`)).rows[0].c === 0);
+  // "No stray grant" means no grant OUTSIDE the seed's OWNER-issued
+  // authorisation: the workspace OWNER authorises their General Manager for
+  // Finance & Reports (users.can_view_finance on the demo GM), which is the
+  // intended steady state — suite fixtures use @gomina360.test accounts.
+  ok("Z3 no stray Finance & Reports grants left",
+    (await pg.query(`SELECT count(*)::int c FROM users WHERE can_view_finance=true AND email NOT LIKE '%@gomina360.com'`)).rows[0].c === 0);
   // M5: compare against the quantity snapshotted at suite start, and never a
   // hard-coded historical number (ids/stock re-seed on every bootstrap).
   const probe = baseline.stockProbe || 1;

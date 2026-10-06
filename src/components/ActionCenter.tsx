@@ -22,6 +22,7 @@ import { CurrencyCode } from "@/lib/currency";
 import {
   AlertTriangle,
   ArrowUpRight,
+  Building2,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -59,6 +60,7 @@ const SOURCE_LABELS: Record<string, string> = {
   ORDER: "Customer order",
   MAINTENANCE: "Maintenance",
   APPROVAL: "Approval request",
+  PLATFORM_REQUEST: "Platform registration",
   CHECKLIST: "Checklist item",
   BUDGET_BREACH: "Budget breach",
   AI_INSIGHT: "AI insight",
@@ -85,7 +87,9 @@ export default function ActionCenter({
   focusApprovalId?: number | null;
   focusTaskId?: number | null;
   onFocusHandled?: () => void;
-  onSelectTab?: (tab: string) => void;
+  /** Open another workspace; `opts.platformRequestRef` focuses a specific
+   *  platform registration request in the review console. */
+  onSelectTab?: (tab: string, opts?: { platformRequestRef?: string | null }) => void;
 }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -200,7 +204,7 @@ export default function ActionCenter({
           dueDate: item.dueDate || null,
           sourceType,
           sourceId: item.id,
-          sourceRef: item.sourceRef || `${sourceType}:${item.id}`,
+          sourceRef: item.sourceRef || item.openRef || `${sourceType}:${item.id}`,
           sourceLabel: item.sourceLabel || SOURCE_LABELS[sourceType] || "Linked item",
         }),
       });
@@ -506,7 +510,7 @@ export default function ActionCenter({
       )}
 
       {/* Linked open items */}
-      {(linked.auditIssues?.length || linked.advisorFollowUps?.length || linked.lowStock?.length || linked.orders?.length || linked.maintenance?.length || linked.checklist?.length) ? (
+      {(linked.platformRequests?.length || linked.auditIssues?.length || linked.advisorFollowUps?.length || linked.lowStock?.length || linked.orders?.length || linked.maintenance?.length || linked.checklist?.length) ? (
         <div className="rounded-2xl border border-slate-700/70 bg-slate-900/60 p-4 sm:p-5 space-y-4" data-testid="action-linked">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-black text-slate-200 flex items-center gap-2">
@@ -514,6 +518,29 @@ export default function ActionCenter({
             </h3>
             <span className="text-[10px] text-slate-500">Nothing is copied: track an item to give yourself a deadline.</span>
           </div>
+
+          {linked.platformRequests?.length > 0 && (
+            <div data-testid="action-platform-requests">
+              <p className="text-[10px] font-black uppercase tracking-wider text-fuchsia-300 mb-1.5 flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5" /> Platform registrations awaiting you ({linked.platformRequests.length})
+              </p>
+              <div className="space-y-1.5">
+                {linked.platformRequests.slice(0, 8).map((i: LinkedItem) => (
+                  <LinkedRow
+                    key={`pr-${i.id}`}
+                    item={i}
+                    icon={<Building2 className="w-3.5 h-3.5 text-fuchsia-300 shrink-0 mt-0.5" />}
+                    tracked={alreadyTracked("PLATFORM_REQUEST", i.id)}
+                    busy={busy}
+                    onTrack={() => trackLinked(i, "PLATFORM_REQUEST")}
+                    onOpen={() => onSelectTab?.("PLATFORM_ADMIN", { platformRequestRef: i.openRef || null })}
+                    openLabel={String(i.openHint || "Review request")}
+                    today={today}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           {linked.auditIssues?.length > 0 && (
             <div>

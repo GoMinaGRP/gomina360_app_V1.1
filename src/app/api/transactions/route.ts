@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { transactions, businesses, recordDeletionLogs } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import {
   canManageSharedRecords,
   canManageExpenses,
@@ -26,38 +26,80 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const businessIdParam = searchParams.get("businessId");
 
+    // ── PAGINATION (see docs/PERFORMANCE-AUDIT.md §3 B3) ────────────────
+    // The ledger used to be returned in FULL for every caller: no LIMIT, no
+    // paging, all tenants' rows read and then filtered in JavaScript. That is
+    // (a) the largest unbounded read in the app, (b) a hard failure waiting to
+    // happen — a Vercel Function response body is capped at 4.5 MB, which this
+    // payload reaches at a few thousand rows.
+    // Now: newest-first page, 2 000 rows by default, `?limit=` up to 5 000 and
+    // `?limit=all` for genuine full-ledger needs (exports/backups), plus
+    // `hasMore` so clients can walk history. The response shape is unchanged
+    // apart from the additive `hasMore`/`limit` fields.
+    const DEFAULT_LIMIT = 2000;
+    const MAX_LIMIT = 5000;
+    const limitParam = (searchParams.get("limit") || "").toLowerCase();
+    const pageSize =
+      limitParam === "all" ? null : Math.min(MAX_LIMIT, Math.max(1, Number(limitParam) || DEFAULT_LIMIT));
+
+    // WORKER: the self-contained workspace shows only the worker's OWN
+    // recorded transactions (the dashboard filters by `recordedBy` anyway), so
+    // the server never ships a colleague's ledger to a shop worker.
+    const isWorkerUser = String(session.user.role || "").toUpperCase() === "WORKER";
+    const ownOnly = (rows: any[]) =>
+      isWorkerUser
+        ? rows.filter((t) => String(t.recordedBy || "") === String(session.user.name || ""))
+        : rows;
+
     if (businessIdParam && businessIdParam !== "ALL") {
       const bId = parseInt(businessIdParam, 10);
       if (!isNaN(bId)) {
         if (!(await canAccessBusiness(session.user, bId))) {
           return FORBIDDEN("You do not have access to that business.");
         }
-        const results = await db
+        let txnQuery: any = db
           .select()
           .from(transactions)
           .where(eq(transactions.businessId, bId))
           .orderBy(desc(transactions.id));
+        if (pageSize !== null) txnQuery = txnQuery.limit(pageSize + 1);
+        const results = await txnQuery;
         // Receipt photos are evidence, not list decoration: no screen renders
         // them from this endpoint (the Records drawer fetches one full record
         // on demand). Shipping them made the ledger payload grow without bound
         // — a 300-receipt workspace paid ~80-100 MB per open. `receiptCount`
         // keeps "📎 N" indicators working.
-        return NextResponse.json({ success: true, transactions: stripReceipts(results) });
+        const page = pageSize === null ? results : results.slice(0, pageSize);
+        return NextResponse.json({
+          success: true,
+          transactions: stripReceipts(ownOnly(page)),
+          hasMore: pageSize !== null && results.length > pageSize,
+          limit: pageSize,
+        });
       }
     }
 
-    const allTrx = await db
-      .select()
-      .from(transactions)
-      .orderBy(desc(transactions.id));
-    if (session.user.isSuperAdmin) {
-      return NextResponse.json({ success: true, transactions: stripReceipts(allTrx) });
-    }
+    // Scope in SQL rather than reading every tenant's ledger and filtering in
+    // JavaScript — same rows for the caller, far less work for the database.
     const { accessibleBusinessIds } = await import("@/lib/auth");
     const allowed = await accessibleBusinessIds(session.user);
-    const scoped =
-      allowed === null ? allTrx : allTrx.filter((t) => allowed.includes(t.businessId));
-    return NextResponse.json({ success: true, transactions: stripReceipts(scoped) });
+    let allQuery: any = db.select().from(transactions).orderBy(desc(transactions.id));
+    if (allowed !== null) {
+      allQuery = db
+        .select()
+        .from(transactions)
+        .where(inArray(transactions.businessId, allowed.length ? allowed : [-1]))
+        .orderBy(desc(transactions.id));
+    }
+    if (pageSize !== null) allQuery = allQuery.limit(pageSize + 1);
+    const allTrx = await allQuery;
+    const page = pageSize === null ? allTrx : allTrx.slice(0, pageSize);
+    return NextResponse.json({
+      success: true,
+      transactions: stripReceipts(ownOnly(page)),
+      hasMore: pageSize !== null && allTrx.length > pageSize,
+      limit: pageSize,
+    });
   } catch (error: any) {
     return apiError(error);
   }
@@ -181,6 +223,26 @@ export async function POST(request: Request) {
       .returning();
 
     ttlInvalidate("init");
+
+    // Money activity → the unit's money watchers. Revenue recorded straight on
+    // the ledger (INCOME) is a sale; EXPENSE rows never reach this branch (they
+    // are routed through expensePosting above, which notifies on its own path).
+    if (String(newTrx.type || "").toUpperCase() === "INCOME") {
+      const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+      await notifyMoneyActivity({
+        businessId: Number(businessId),
+        branchCode: resolvedBranchCode,
+        kind: "SALE",
+        amountGhs: Number(newTrx.amountGhs) || 0,
+        actorName: session.user.name || null,
+        actorUserId: session.user.id ?? null,
+        recordRef: newTrx.transactionNumber,
+        recordId: Number(newTrx.id) || null,
+        recordType: "transactions",
+        label: newTrx.category || "Sales",
+      });
+    }
+
     return NextResponse.json({ success: true, transaction: newTrx });
   } catch (error: any) {
     console.error("POST /api/transactions error:", error);
@@ -412,6 +474,24 @@ export async function DELETE(request: Request) {
       .returning();
 
     await db.delete(transactions).where(eq(transactions.id, recordId));
+
+    // A deleted money record is high-signal: the OWNER/CO_OWNER get the bell
+    // (the deletion log above stays the immutable evidence).
+    try {
+      const { notifyRecordDeletion } = await import("@/lib/notifyActivity");
+      await notifyRecordDeletion({
+        module: "TRANSACTIONS",
+        recordLabel: `${existing.transactionNumber} — GH₵ ${existing.amountGhs} (${existing.category})`,
+        reason: cleanReason,
+        deletedByName: actor?.name || null,
+        deletedByUserId: actor?.id ?? null,
+        businessId: existing.businessId ?? null,
+        branchCode: existing.branchCode ?? null,
+        ownerId: bizRow?.ownerId ?? null,
+      });
+    } catch (e) {
+      console.error("deletion notification warning:", e);
+    }
 
     return NextResponse.json({
       success: true,

@@ -4,33 +4,34 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  ShoppingCart,
-  Search,
-  Store,
-  Plus,
-  Minus,
-  Trash,
-  X,
-  PackageCheck,
-  Copy,
-  Truck,
   Banknote,
-  Smartphone,
-  MapPin,
-  Navigation,
-  Globe,
-  ZoomIn,
+  Building2,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
-  User as UserIcon,
-  Phone,
   ClipboardList,
+  Clock,
+  Copy,
+  Globe,
+  Info,
   LifeBuoy,
   Mail,
+  MapPin,
   MessageCircle,
-  Clock,
-  CalendarClock,
-  Info,
+  Minus,
+  Navigation,
+  PackageCheck,
+  Phone,
+  Plus,
+  Search,
+  ShoppingCart,
+  Smartphone,
+  Store,
+  Trash,
+  Truck,
+  User as UserIcon,
+  X,
+  ZoomIn,
 } from "lucide-react";
 import LocationPinPicker, { type PinValue } from "@/components/LocationPinPicker";
 import AddressAutocomplete, { type AddressSuggestion } from "@/components/AddressAutocomplete";
@@ -2185,6 +2186,15 @@ function OrderInner() {
           <p className="text-[11px] text-slate-600">
             Need a hand? Tap the <button type="button" onClick={() => setHelpOpen(true)} className="font-black text-amber-700 underline" data-testid="oo-help-footer">HELP</button> button for support contacts, opening hours and the {HOWTO_STEPS.length}-step guide.
           </p>
+          {support?.registrationEnabled !== false && (
+            <p className="text-[11px] text-slate-600" data-testid="oo-footer-join">
+              Own a business?{" "}
+              <a href="/join" className="font-black text-emerald-700 underline">
+                Register it on GoMina 360
+              </a>{" "}
+              — the platform team will get back to you.
+            </p>
+          )}
           <p className="text-[10px] text-slate-400">GoMina 360 · Official customer storefront — no sign-in needed.</p>
         </div>
       </footer>
@@ -2300,6 +2310,41 @@ function OrderInner() {
                   </p>
                 )}
               </section>
+
+              {/* ══ Join GoMina 360 — PLATFORM-BRANDED recruitment CTA ══════════
+                  Copy is deliberately about the PLATFORM ("your business on
+                  GoMina 360"), never about the shop the customer is browsing:
+                  /order is a centralized marketplace, so this block is seen by
+                  shoppers of every tenant and must not imply that any shop is
+                  recruiting, nor that a request goes to that shop. Rendered
+                  only when the platform owner has switched it on. */}
+              {support?.registrationEnabled !== false && (
+                <section
+                  className="rounded-xl border border-emerald-300 bg-gradient-to-br from-emerald-50 to-teal-50 px-3.5 py-3 space-y-1.5"
+                  data-testid="oo-help-join"
+                >
+                  <h3 className="text-[12px] font-black uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-emerald-600" /> Join GoMina 360
+                  </h3>
+                  <p className="text-[12px] font-bold text-slate-900">
+                    {support?.registrationHeadline || "Run your business on GoMina 360"}
+                  </p>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    {support?.registrationNote ||
+                      "Sell online, track stock, staff, money and farm or factory production in one place. Register your business and the platform team will call you back."}
+                  </p>
+                  <a
+                    href="/join"
+                    className="inline-flex items-center gap-1.5 mt-0.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black shadow-sm transition"
+                    data-testid="oo-help-join-cta"
+                  >
+                    <Building2 className="w-3.5 h-3.5" /> Register your business
+                  </a>
+                  <p className="text-[10px] text-slate-500">
+                    Goes privately to the GoMina 360 platform team — not to any shop on this page.
+                  </p>
+                </section>
+              )}
 
               {/* How to use this order page — step count is derived from the
                   HOWTO_STEPS source of truth (see module scope). */}

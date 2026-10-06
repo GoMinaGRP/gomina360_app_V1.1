@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
-import { validateOptionalImage } from "@/lib/mediaValidation";
+import { imageErrorStatus, validateOptionalImage } from "@/lib/mediaValidation";
 
 /**
  * My Profile — self-service profile data for the SIGNED-IN user.
@@ -35,7 +35,13 @@ export async function PUT(request: NextRequest) {
 
     const photoCheck = validateOptionalImage(photo, "avatar", { label: "Photo" });
     if (!photoCheck.ok) {
-      return NextResponse.json({ success: false, error: photoCheck.error }, { status: 413 });
+      // The status now says WHICH failure it was: an oversized payload is 413,
+      // anything else about the value is 400. Collapsing both into one code made
+      // a client read "not an image" as "too big" (and vice versa).
+      return NextResponse.json(
+        { success: false, error: photoCheck.error },
+        { status: imageErrorStatus(photoCheck) },
+      );
     }
 
     const value = photo ?? null;

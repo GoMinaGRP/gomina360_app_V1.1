@@ -1,13 +1,38 @@
 "use client";
 
 import React, { useState } from "react";
-import { Lock, Mail, ShieldCheck, Eye, EyeOff, AlertTriangle, PackageSearch, ShoppingCart } from "lucide-react";
+import {
+  AlertTriangle,
+  Building2,
+  Eye,
+  EyeOff,
+  Lock,
+  Mail,
+  PackageSearch,
+  ShieldCheck,
+  ShoppingCart,
+} from "lucide-react";
 
 /**
  * GoMina 360 secure sign-in gate. Every user logs in with their own email +
  * password; the session is an httpOnly cookie (7 days, SameSite=Lax).
  */
-export default function LoginScreen({ onSuccess, notice }: { onSuccess: (user: any, sessionToken?: string) => void; notice?: string }) {
+export default function LoginScreen({
+  onSuccess,
+  notice,
+  /**
+   * The platform owner's login-page registration switch. Resolved on the SERVER
+   * (see `src/app/page.tsx`, ISR) and passed down as a plain boolean, so this
+   * page performs no fetch of its own and stays purely an authentication gate.
+   * Absent/undefined ⇒ hidden (the default); the Order Page HELP invite and
+   * `/join` are governed separately and are never affected by this flag.
+   */
+  showRegistrationInvite = false,
+}: {
+  onSuccess: (user: any, sessionToken?: string) => void;
+  notice?: string;
+  showRegistrationInvite?: boolean;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -163,6 +188,21 @@ export default function LoginScreen({ onSuccess, notice }: { onSuccess: (user: a
             </a>
           </div>
           <p className="text-[9px] text-slate-600 text-center -mt-1">Customers: no sign-in needed for ordering & tracking</p>
+
+          {/* Platform recruitment entry — OFF by default: the sign-in gate is
+              an authentication surface. The platform owner turns it on from
+              Customer Support → "Join GoMina 360 — registration" (Super Admin
+              only). Platform-branded: this page is GoMina 360 itself. */}
+          {showRegistrationInvite && (
+            <a
+              href="/join"
+              className="flex items-center justify-center gap-1.5 py-2 rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-300 text-xs font-bold transition"
+              data-testid="login-join-link"
+            >
+              <Building2 className="w-4 h-4" />
+              Want your business on GoMina 360? Register it
+            </a>
+          )}
         </form>
       </div>
     </div>

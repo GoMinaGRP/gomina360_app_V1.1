@@ -13,6 +13,8 @@ import {
   Info,
   Save,
   ShieldCheck,
+  Megaphone,
+  ExternalLink,
 } from "lucide-react";
 
 /**
@@ -23,6 +25,17 @@ import {
  * information shoppers see when they tap HELP on the public customer order
  * page: contact name, phone, WhatsApp, email, business address/location,
  * opening hours and any other important support notes.
+ *
+ * SCOPE: the form edits the row the server says this caller actually writes
+ * (`edit.row`). For the Super Admin and the platform organisation's staff that
+ * is the PLATFORM row — the published storefront helpdesk. For any other
+ * organisation's OWNER it is that organisation's own row. This is what fixes
+ * the old asymmetry where the editor LOADED organisation #1's row but SAVED
+ * the caller's own.
+ *
+ * The "Join GoMina 360" registration CTA (Super Admin only) is edited here
+ * too: it is platform recruitment policy, so a tenant-scoped canManageSupport
+ * grant cannot open or close public registration.
  */
 export default function CustomerSupportModal({
   isOpen,
@@ -45,6 +58,14 @@ export default function CustomerSupportModal({
   const [openingHours, setOpeningHours] = useState("");
   const [extraInfo, setExtraInfo] = useState("");
   const [meta, setMeta] = useState("");
+  // Platform registration CTA (Super Admin only).
+  const [canEditRegistration, setCanEditRegistration] = useState(false);
+  const [regEnabled, setRegEnabled] = useState(true);
+  const [regHeadline, setRegHeadline] = useState("");
+  const [regNote, setRegNote] = useState("");
+  // The LOGIN-PAGE switch — separate from the order-page invite above so the
+  // two surfaces can never be changed by accident.
+  const [regLoginEnabled, setRegLoginEnabled] = useState(false);
 
   const isOwner = currentUser?.role === "OWNER";
   const allowed = isOwner || !!currentUser?.canManageSupport;
@@ -58,7 +79,11 @@ export default function CustomerSupportModal({
       try {
         const res = await fetch("/api/support-info", { cache: "no-store" });
         const d = await res.json();
-        const i = d?.info;
+        // `edit.row` is the row THIS caller's Save will write — the platform
+        // row for platform editors, their own organisation's row otherwise.
+        // Falling back to `info` keeps the form usable against an older server.
+        const i = d?.edit ? d.edit.row : d?.info;
+        setCanEditRegistration(!!d?.edit?.canEditRegistration);
         setContactName(i?.contactName || "");
         setPhone(i?.phone || "");
         setWhatsapp(i?.whatsapp || "");
@@ -66,6 +91,10 @@ export default function CustomerSupportModal({
         setAddress(i?.address || "");
         setOpeningHours(i?.openingHours || "");
         setExtraInfo(i?.extraInfo || "");
+        setRegEnabled(i?.registrationEnabled !== false);
+        setRegHeadline(i?.registrationHeadline || "");
+        setRegNote(i?.registrationNote || "");
+        setRegLoginEnabled(i?.loginRegistrationEnabled === true);
         setMeta(
           i?.updatedByName
             ? `Last saved by ${i.updatedByName}${i.updatedAt ? ` · ${new Date(i.updatedAt).toLocaleString()}` : ""}`
@@ -120,11 +149,29 @@ export default function CustomerSupportModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contactName, phone, whatsapp, email, address, openingHours, extraInfo,
+          // Omitted entirely for non-Super-Admins: the server preserves the
+          // published CTA untouched when this key is absent.
+          ...(canEditRegistration
+            ? {
+                registration: {
+                  enabled: regEnabled,
+                  headline: regHeadline,
+                  note: regNote,
+                  // Only the sign-in gate. The order-page invite and /join keep
+                  // reading `enabled` above and are unaffected either way.
+                  loginEnabled: regLoginEnabled,
+                },
+              }
+            : {}),
         }),
       });
       const d = await res.json().catch(() => null);
       if (res.ok && d?.success) {
-        setSaved("Saved — customers see this the moment they tap HELP on the order page.");
+        setSaved(
+          d?.scope === "PLATFORM"
+            ? "Saved — customers see this the moment they tap HELP on the order page."
+            : "Saved — this is your organisation's own helpdesk information.",
+        );
         setMeta(
           d.info?.updatedByName
             ? `Last saved by ${d.info.updatedByName}${d.info.updatedAt ? ` · ${new Date(d.info.updatedAt).toLocaleString()}` : ""}`
@@ -215,6 +262,86 @@ export default function CustomerSupportModal({
                 <textarea value={extraInfo} onChange={(e) => setExtraInfo(e.target.value)} rows={3}
                   placeholder="Other important support information (delivery notes, MoMo guidance, after-hours contact…)" className={`${field} resize-none`} data-testid="support-extra" />
               </div>
+
+              {/* ── Platform registration CTA — SUPER ADMIN ONLY ─────────────
+                  This controls the public "Join GoMina 360" block inside the
+                  storefront HELP panel, the order-page footer line and the
+                  /join page. It is platform recruitment policy, so it is
+                  deliberately NOT editable by a tenant-scoped
+                  canManageSupport grant — only by the platform Super Admin. */}
+              {canEditRegistration && (
+                <div className="rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/5 p-3 space-y-2.5" data-testid="support-registration-block">
+                  <div className="flex items-start gap-2">
+                    <Megaphone className="w-4 h-4 text-fuchsia-300 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-black text-fuchsia-200 uppercase tracking-wider">
+                        Join GoMina 360 — registration
+                      </p>
+                      <p className="text-[10px] text-slate-400 leading-snug">
+                        Order-page invite, public sign-up page, and the staff sign-in page.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={regEnabled}
+                      onChange={(e) => setRegEnabled(e.target.checked)}
+                      className="accent-fuchsia-500"
+                      data-testid="support-registration-enabled"
+                    />
+                    Show the registration invite on the customer order page
+                  </label>
+
+                  {/* The SIGN-IN PAGE switch — deliberately separate: the
+                      staff gate is an authentication surface, so this stays
+                      hidden unless the platform owner asks for it. Toggling it
+                      changes the Order page and /join in NO way. */}
+                  <label className="flex items-start gap-2 text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={regLoginEnabled}
+                      onChange={(e) => setRegLoginEnabled(e.target.checked)}
+                      className="accent-fuchsia-500 mt-0.5"
+                      data-testid="support-registration-login-enabled"
+                    />
+                    <span>
+                      Show the “Want your business on GoMina 360? Register it” link on the staff
+                      sign-in page
+                      <span className="block text-[10px] text-slate-500 leading-snug">
+                        Sign-in page only — the order page invite above and the /join page are
+                        unaffected. Off by default, so the sign-in page stays focused on
+                        authentication.
+                      </span>
+                    </span>
+                  </label>
+
+                  <input
+                    value={regHeadline}
+                    onChange={(e) => setRegHeadline(e.target.value)}
+                    placeholder="Headline (e.g. Run your business on GoMina 360)"
+                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 focus:border-fuchsia-500/60 rounded-xl text-sm text-white outline-none"
+                    data-testid="support-registration-headline"
+                  />
+                  <textarea
+                    value={regNote}
+                    onChange={(e) => setRegNote(e.target.value)}
+                    rows={2}
+                    placeholder="Short invitation (e.g. Tell us about your business and the team will call you back.)"
+                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 focus:border-fuchsia-500/60 rounded-xl text-sm text-white outline-none resize-none"
+                    data-testid="support-registration-note"
+                  />
+                  <a
+                    href="/join"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-fuchsia-300 hover:text-fuchsia-200"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Preview the public sign-up page
+                  </a>
+                </div>
+              )}
 
               {error && (
                 <div className="px-3 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs" data-testid="support-error">

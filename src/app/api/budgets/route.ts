@@ -3,7 +3,8 @@ import { and, eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { budgets, businesses, expenseCategories, transactions } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
-import { businessManageIdsOf } from "@/lib/permissions";
+import { businessManageIdsOf, canSeeFinancials } from "@/lib/permissions";
+import { ROLE_GROUPS } from "@/lib/roles";
 
 /**
  * Budgets & budget-vs-actual (P4, part 1).
@@ -23,7 +24,8 @@ import { businessManageIdsOf } from "@/lib/permissions";
  * organization exactly like supplier orders and goods receipts.
  */
 
-const EXEC_ROLES = ["OWNER", "GENERAL_MANAGER"];
+/** Registry-owned executive bench. */
+const EXEC_ROLES: readonly string[] = ROLE_GROUPS.EXECUTIVE;
 const isExec = (u: any) => !!u && (EXEC_ROLES.includes(String(u.role).toUpperCase()) || !!u.isSuperAdmin);
 const isSeededBaseline = (t: any) => /^TRX-\d{4}-100[1-6]$/.test(String(t?.transactionNumber || ""));
 
@@ -46,8 +48,11 @@ export async function GET(request: NextRequest) {
     const allowed = await accessibleBusinessIds(user);
     const scopeParam = String(searchParams.get("businessId") || "all").toLowerCase();
     const period = normPeriod(searchParams.get("period")) || new Date().toISOString().slice(0, 7);
-    const role = String(user.role || "").toUpperCase();
-    if (role === "WORKER") return FORBIDDEN("Budgets are a management view.");
+    // FINANCIAL SURFACE — budgets expose planned vs actual money: OWNER,
+    // Super Admin or an OWNER-authorised (`canViewFinance`) viewer only.
+    if (!canSeeFinancials(user)) {
+      return FORBIDDEN("Budgets & budget-vs-actual are restricted to the OWNER and the users the OWNER authorises for Finance & Reports.");
+    }
 
     let bizIds: number[];
     if (scopeParam === "all" || scopeParam === "0") {

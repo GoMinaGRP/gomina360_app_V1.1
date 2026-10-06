@@ -26,15 +26,17 @@ import {
   resetFlockPlan,
   saveFlockPlanAsTemplate,
   upsertPlanState,
+  invalidateChecklistGeneration,
 } from "@/lib/checklistGen";
 import { stageKeysOfBirdType, isStagePlanBirdType } from "@/lib/poultryStages";
 import { setSystemMarker } from "@/lib/systemMarkers";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { ROLE_GROUPS } from "@/lib/roles";
 
 // Roles allowed to manage checklist templates and generate daily checklists.
-const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+const MANAGE_ROLES: readonly string[] = ROLE_GROUPS.CHECKLIST_MANAGER;
 
 /** Resolve a flock that belongs to the given business (or null). */
 async function flockForBusiness(businessId: number, flockId: number) {
@@ -167,6 +169,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // A new/edited/removed checklist item must materialise on the next read
+  // (the generation memo would otherwise skip it for up to 60 s).
+  invalidateChecklistGeneration();
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
@@ -503,6 +508,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  // A new/edited/removed checklist item must materialise on the next read
+  // (the generation memo would otherwise skip it for up to 60 s).
+  invalidateChecklistGeneration();
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
@@ -670,6 +678,9 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // A new/edited/removed checklist item must materialise on the next read
+  // (the generation memo would otherwise skip it for up to 60 s).
+  invalidateChecklistGeneration();
   try {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();

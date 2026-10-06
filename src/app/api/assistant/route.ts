@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { buildAssistantFeed, answerQuestion } from "@/lib/biAssistant";
+import { roleGroupMembers } from "@/lib/roles";
 
 /**
  * /api/assistant — R5 Unified BI Assistant.
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
     const role = String(me.role || "").toUpperCase();
-    const allowedRoles = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+    const allowedRoles = roleGroupMembers("UNIT_ADMIN");
     if (!allowedRoles.includes(role) && !me.isSuperAdmin) {
       return FORBIDDEN("The BI Assistant is available to the Owner, General Manager and Branch Managers.");
     }
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
     if (!session) return UNAUTHENTICATED();
     const me = session.user;
     const role = String(me.role || "").toUpperCase();
-    const allowedRoles = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+    const allowedRoles = roleGroupMembers("UNIT_ADMIN");
     if (!allowedRoles.includes(role) && !me.isSuperAdmin) {
       return FORBIDDEN("The BI Assistant is available to the Owner, General Manager and Branch Managers.");
     }

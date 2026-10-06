@@ -41,6 +41,16 @@ const TYPE_CATEGORY: Record<string, PushCategory> = {
   ADVISOR_NOTE_ADDED: "alerts",
   ADVISOR_NOTE_RESPONSE: "messages",
   ADVISOR_FOLLOWUP_STATUS: "tasks",
+  // Platform-level events — the Super Admin's own pipeline, not a tenant's.
+  PLATFORM_REQUEST_NEW: "messages",
+  // Activity notifications: money movement is a report-style summary the
+  // OWNER opted into; stock/notes are operational alerts.
+  SALE_RECORDED: "reports",
+  EXPENSE_RECORDED: "reports",
+  STOCK_LOW: "alerts",
+  STOCK_OUT: "alerts",
+  AUDIT_EVENT: "approvals",
+  OPS_NOTE_FLAGGED: "alerts",
 };
 
 export function categoryForType(type: string): PushCategory {
@@ -52,12 +62,25 @@ export function categoryForType(type: string): PushCategory {
 }
 
 /** Where a tap on the notification should land inside the staff app. */
-export function urlForNotification(type: string, opts?: { branchCode?: string | null; issueId?: number | null }): string {
+export function urlForNotification(
+  type: string,
+  opts?: { branchCode?: string | null; issueId?: number | null; platformRequestRef?: string | null },
+): string {
   const t = String(type || "").toUpperCase();
+  // Platform registration requests land on the Platform Owners console, with the
+  // request itself focused/expanded when the reference is known.
+  if (t.startsWith("PLATFORM_REQUEST")) {
+    const ref = String(opts?.platformRequestRef || "").trim();
+    return ref ? `/?tab=PLATFORM_ADMIN&request=${encodeURIComponent(ref)}` : "/?tab=PLATFORM_ADMIN";
+  }
   if (t.startsWith("AUDIT")) return "/?tab=AUDIT";
   if (t.startsWith("APPROVAL")) return "/?tab=ACTION_CENTER";
   if (t.startsWith("TASK") || t === "DAILY_DIGEST") return "/?tab=ACTION_CENTER";
-  if (t === "LOW_STOCK") return "/?tab=INVENTORY";
+  if (t === "LOW_STOCK" || t === "STOCK_LOW" || t === "STOCK_OUT") return "/?tab=INVENTORY";
+  if (t === "SALE_RECORDED" || t === "EXPENSE_RECORDED") {
+    return opts?.branchCode ? `/?tab=${encodeURIComponent(opts.branchCode)}` : "/?tab=COMMAND_CENTER";
+  }
+  if (t === "AUDIT_EVENT") return "/?tab=AUDIT";
   if (t.startsWith("ADVISOR")) {
     // Advisor note events: staff land on the unit's dashboard; the advisor's
     // own console carries their cross-unit follow-ups.

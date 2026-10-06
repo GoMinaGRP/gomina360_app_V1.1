@@ -10,6 +10,8 @@ import {
   decideApprovalRequest,
   pendingRequestsForApprover,
 } from "@/lib/approvals";
+import { ROLE_GROUPS } from "@/lib/roles";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * R1 Approvals API (CAPABILITY-AUDIT-REPORT §4).
@@ -34,7 +36,8 @@ import {
  * policy's organization; decisions re-resolve the live policy server-side.
  */
 
-const POLICY_ROLES = ["OWNER", "GENERAL_MANAGER"];
+/** Who may define/approve org policy (registry-owned). */
+const POLICY_ROLES: readonly string[] = ROLE_GROUPS.POLICY;
 
 function cleanAction(v: unknown): string | null {
   const a = String(v || "").toUpperCase();
@@ -194,7 +197,7 @@ export async function POST(request: NextRequest) {
         return FORBIDDEN("That business belongs to another organization.");
       }
       const approverRole = String(body?.approverRole || "OWNER").toUpperCase();
-      if (!["OWNER", "GENERAL_MANAGER"].includes(approverRole)) {
+      if (!inRoleGroup("POLICY", approverRole)) {
         return NextResponse.json({ success: false, error: "approverRole must be OWNER or GENERAL_MANAGER." }, { status: 400 });
       }
       const approverUserId = Number(body?.approverUserId) || null;
@@ -267,7 +270,7 @@ export async function POST(request: NextRequest) {
       if (body?.isActive !== undefined) set.isActive = !!body.isActive;
       if (body?.approverRole !== undefined) {
         const ar = String(body.approverRole).toUpperCase();
-        if (!["OWNER", "GENERAL_MANAGER"].includes(ar)) {
+        if (!inRoleGroup("POLICY", ar)) {
           return NextResponse.json({ success: false, error: "approverRole must be OWNER or GENERAL_MANAGER." }, { status: 400 });
         }
         set.approverRole = ar;
