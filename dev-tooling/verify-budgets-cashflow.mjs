@@ -66,7 +66,10 @@ try {
 
   // Live actual for the business this month (baseline excluded).
   const exp = await q(
-    "select category, amount_ghs, transaction_number from transactions where business_id = 1 and type = 'EXPENSE' and date like $1",
+    // Actuals are COMPLETED rows only — this mirrors the route's own rule
+    // (`!t.status || t.status === 'COMPLETED'`); an APPROVED-but-unpaid
+    // request left by another suite must not be counted as money spent.
+    "select category, amount_ghs, transaction_number from transactions where business_id = 1 and type = 'EXPENSE' and (status is null or status = 'COMPLETED') and date like $1",
     [`${period}-%`],
   );
   const liveExp = exp.filter((t) => !isBaseline(t.transaction_number));

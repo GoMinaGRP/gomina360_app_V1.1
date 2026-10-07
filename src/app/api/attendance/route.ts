@@ -4,6 +4,7 @@ import { attendanceLogs, businesses, employees, payrollAttendance } from "@/db/s
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getSessionInfo, accessibleBusinessIds, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
+import { ROLE_GROUPS, inRoleGroup } from "@/lib/roles";
 
 /**
  * Staff Attendance — Clock In / Clock Out with GPS.
@@ -19,7 +20,6 @@ import { apiError } from "@/lib/apiError";
  * employee/day always wins (never overwritten).
  */
 
-const REVIEW_ROLES = ["GENERAL_MANAGER", "BRANCH_MANAGER", "SUPERVISOR", "ACCOUNTANT"];
 const WORK_START_HOURS = 8; // standard shift — anything beyond counts as OT
 
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -33,7 +33,8 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number) {
 }
 
 function reviewerScope(user: any, allowed: number[] | null) {
-  const canReview = user.role === "OWNER" || !!user.canManageRecords || REVIEW_ROLES.includes(user.role);
+  // One registry rule instead of a role literal + a parallel list.
+  const canReview = inRoleGroup("ATTENDANCE_REVIEW", user.role) || !!user.canManageRecords;
   if (!canReview) return { canReview: false, businessIds: [] as number[] | null };
   // Only the platform Super Admin is scope-unrestricted; an org OWNER gets
   // their organization's business ids from `allowed`.
@@ -145,7 +146,7 @@ export async function POST(request: NextRequest) {
       // Business resolution: non-privileged roles are pinned to their
       // assignment; OWNER/GM pick the branch they are physically at.
       let businessId: number | null = null;
-      if (["WORKER", "BRANCH_MANAGER", "SUPERVISOR", "ACCOUNTANT"].includes(user.role)) {
+      if (inRoleGroup("CLOCK_IN", user.role)) {
         businessId = user.assignedBusinessId ? Number(user.assignedBusinessId) : null;
         if (!businessId) {
           return NextResponse.json({ success: false, error: "Your account is not assigned to a business branch yet" }, { status: 400 });

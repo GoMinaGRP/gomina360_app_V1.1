@@ -13,6 +13,7 @@ import { apiError } from "@/lib/apiError";
 import { auditLog } from "@/lib/audit";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { customer360, customerInsights, upcomingFollowUps } from "@/lib/customerInsights";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * /api/customer-interactions — R3 CRM timeline.
@@ -138,7 +139,7 @@ export async function PATCH(request: NextRequest) {
     const [row] = await db.select().from(customerInteractions).where(eq(customerInteractions.id, id));
     if (!row) return NextResponse.json({ success: false, error: "Interaction not found." }, { status: 404 });
     const isAuthor = Number(row.actorUserId) === Number(me.id);
-    const isManager = row.businessId != null && (await canAccessBusiness(me, Number(row.businessId))) && ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(String(me.role || ""));
+    const isManager = row.businessId != null && (await canAccessBusiness(me, Number(row.businessId))) && inRoleGroup("UNIT_ADMIN", me.role);
     if (!isAuthor && !isManager && !me.isSuperAdmin) {
       return FORBIDDEN("Only the author or a manager of the unit can edit this interaction.");
     }

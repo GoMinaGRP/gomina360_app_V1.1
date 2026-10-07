@@ -31,6 +31,7 @@ import {
   buildLifecycleSchedule,
   effectivePlanItemsForFlock,
 } from "@/lib/poultryStages";
+import { ROLE_GROUPS } from "@/lib/roles";
 
 /**
  * DailyChecklistPanel — the unified daily checklist used by every GoMina 360
@@ -55,7 +56,7 @@ const CATEGORIES = [
   "HYGIENE", "ADMIN",
 ];
 
-const MANAGE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+const MANAGE_ROLES: readonly string[] = ROLE_GROUPS.CHECKLIST_MANAGER;
 
 const FREQUENCIES = ["DAILY", "WEEKLY", "MONTHLY", "STAGE_ONCE"];
 

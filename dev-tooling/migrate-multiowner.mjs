@@ -7,6 +7,7 @@
  * Safe to run repeatedly. Usage: node dev-tooling/migrate-multiowner.mjs
  */
 import { createRequire } from "node:module";
+import { realignSequencesForwardOnly } from "./seq-realign.mjs";
 const { Client } = createRequire(import.meta.url)("pg");
 
 const DB = process.env.DATABASE_URL || "postgresql://postgres:postgres@127.0.0.1:5432/app_db";
@@ -22,24 +23,12 @@ async function main() {
     await c.query(`INSERT INTO organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)
                    SELECT 1, 'GoMina Group', 'gomina-group', 'ACTIVE', 'kwame.owner@gomina360.com', 1, 1
                    WHERE NOT EXISTS (SELECT 1 FROM organizations WHERE id = 1)`);
-    // Serial realignment sweep: any seeded explicit-id row desynchronises the
-    // serial sequence (explicit ids bypass nextval, so the next runtime insert
-    // collides — observed on organizations AND payroll_statutory_config).
-    // Realign every public sequence against its table's live max(id).
-    const seqSweep = await c.query(`SELECT t.relname AS table_name
-        FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
-        WHERE n.nspname = 'public' AND t.relkind = 'r'`);
-    for (const { table_name } of seqSweep.rows) {
-      const seq = await c.query(`SELECT pg_get_serial_sequence($1, 'id') AS s`, [`public.${table_name}`]);
-      if (seq.rows[0]?.s) {
-        // Empty table ⇒ is_called must be FALSE (the first real row takes 1);
-        // setval(seq, 1, true) on an empty table makes the next insert skip 1.
-        await c.query(`SELECT setval($1,
-                         (SELECT COALESCE(MAX(id), 1) FROM public.${table_name}),
-                         (SELECT COUNT(*) > 0 FROM public.${table_name}))`,
-          [seq.rows[0].s]);
-      }
-    }
+    // Serial realignment sweep: seeded explicit-id rows desynchronise the
+    // serial sequence, so realign every public sequence against its live
+    // max(id) — FORWARD-ONLY, never rewound (see dev-tooling/seq-realign.mjs
+    // for why rewinding caused duplicate-key failures on organization id reuse).
+    await realignSequencesForwardOnly(c, (m) => console.log(m));
+
     await c.query(`UPDATE users SET is_super_admin = TRUE WHERE id = 1 AND (is_super_admin IS DISTINCT FROM TRUE)`);
     await c.query(`UPDATE users SET primary_org_id = 1 WHERE primary_org_id IS NULL`);
     await c.query(`INSERT INTO organization_members (organization_id, user_id, role_in_org, is_primary)
@@ -96,14 +85,21 @@ async function main() {
       const r = await c.query(`UPDATE ai_insights SET owner_id = 1 WHERE owner_id IS NULL`);
       console.log("· ai_insights backfilled", r.rowCount);
     }
+    // Never attribute a platform-scope notification to a tenant: platform rows
+    // carry business_id = NULL AND owner_id = NULL by design. Recipient org
+    // first, then the org-1 fallback for business-scoped rows only (see the
+    // same rule in migrate-production-schema.mjs).
     await c.query(`UPDATE notifications x SET owner_id = b.owner_id FROM businesses b
                    WHERE x.business_id = b.id AND x.owner_id IS NULL`);
+    // Platform-scope types are excluded: their recipient (the Super Admin) is a
+    // tenant user, so recipient derivation would wrongly bind them to org 1.
+    await c.query(`UPDATE notifications n SET owner_id = ou.primary_org_id FROM users ou
+                   WHERE n.user_id = ou.id AND ou.primary_org_id IS NOT NULL AND n.owner_id IS NULL
+                     AND n.type <> 'PLATFORM_REQUEST_NEW'`);
     {
-      const r = await c.query(`UPDATE notifications n SET owner_id = 1 WHERE owner_id IS NULL`);
+      const r = await c.query(`UPDATE notifications SET owner_id = 1 WHERE owner_id IS NULL AND business_id IS NOT NULL`);
       console.log("· notifications backfilled", r.rowCount);
     }
-    await c.query(`UPDATE notifications n SET owner_id = ou.primary_org_id FROM users ou
-                   WHERE n.user_id = ou.id AND n.owner_id IS NULL`);
     await c.query(`UPDATE universal_exports x SET owner_id = b.owner_id FROM businesses b
                    WHERE x.business_id = b.id AND x.owner_id IS NULL`);
     await c.query(`UPDATE universal_exports x SET owner_id = u.primary_org_id FROM users u

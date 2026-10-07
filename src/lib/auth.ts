@@ -512,8 +512,8 @@ export async function requireSuperAdmin(request: Request): Promise<any | null> {
   return info.user;
 }
 
-export async function setUserPassword(userId: number, password: string) {
-  await db
+export async function setUserPassword(userId: number, password: string, executor: any = db) {
+  await executor
     .update(users)
     .set({
       passwordHash: hashPassword(password),

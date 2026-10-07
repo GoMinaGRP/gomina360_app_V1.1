@@ -13,6 +13,7 @@
  */
 
 import { and, desc, eq } from "drizzle-orm";
+import { platformRequestBellTitle, isPlatformRequestActionable } from "@/lib/platformRequests";
 import { db } from "@/db";
 import { pushAfterBell, urlForNotification } from "@/lib/push";
 import {
@@ -26,6 +27,7 @@ import {
   userBusinessAccess,
   users,
 } from "@/db/schema";
+import { inRoleGroup } from "@/lib/roles";
 
 /** Statuses meaning "this order no longer needs anyone's attention". */
 const CLOSED_ORDER_STATUSES = ["DELIVERED", "COMPLETED", "CANCELLED"];
@@ -344,8 +346,9 @@ export async function auditEscalationRecipients(
   const excluded = new Set((opts.excludeIds || []).filter((x): x is number => x != null).map(Number));
   const sev = String(priority || "MEDIUM").toUpperCase();
   const wantOwner = sev === "HIGH" || sev === "CRITICAL" || !!opts.unassigned;
-  const isManagerRole = (r: string | null | undefined) =>
-    !!r && ["GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"].includes(String(r).toUpperCase());
+  // Registry-owned unit-lead bench — the phantom "MANAGER" role this used to
+  // match never existed in the database.
+  const isManagerRole = (r: string | null | undefined) => inRoleGroup("UNIT_LEAD", r);
   return staffAll.filter((u: any) => {
     if (u.isActive === false || !memberIds.has(Number(u.id)) || excluded.has(Number(u.id))) return false;
     if (String(u.role).toUpperCase() === "OWNER") return wantOwner;
@@ -358,7 +361,6 @@ export async function auditEscalationRecipients(
 // Both ride the same rails as every other bell notification: fanOut with
 // per-user (type, recordRef) dedupe and OS-level push.
 
-const CHECKLIST_MANAGER_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"];
 
 /** Announce a flock's production-stage change (BROODING → GROWER → …) to the
  *  business' managers. recordRef `poultry-stage:{flockId}:{stageKey}` makes
@@ -375,7 +377,7 @@ export async function notifyPoultryStageTransition({
   branchCode?: string | null;
 }): Promise<number> {
   const recipients = (await orderNotificationRecipients(businessId)).filter((u: any) =>
-    CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase())
+    inRoleGroup("CHECKLIST_MANAGER", u.role)
   );
   if (!recipients.length) return 0;
   const ageTxt = String(stage.birdType).toUpperCase() === "LAYERS" ? `week ${stage.ageWeeks}` : `day ${stage.ageDays}`;
@@ -415,7 +417,7 @@ export async function notifyChecklistOverdue({
   }[];
 }): Promise<number> {
   const all = await orderNotificationRecipients(businessId);
-  const managers = all.filter((u: any) => CHECKLIST_MANAGER_ROLES.includes(String(u.role || "").toUpperCase()));
+  const managers = all.filter((u: any) => inRoleGroup("CHECKLIST_MANAGER", u.role));
   const assignedIds = new Set(
     tasks.map((t) => Number(t.assignedToUserId)).filter((n) => Number.isFinite(n) && n > 0)
   );
@@ -604,5 +606,152 @@ export async function notifyDunning({
     });
   } catch (e) {
     console.error("[notify] notifyDunning failed:", e);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PLATFORM-LEVEL NOTIFICATIONS (Super Admin only)
+
+   Every helper above is TENANT-scoped: `fanOut` requires a businessId and
+   `orderNotificationRecipients` only ever returns members of that business's
+   own organization. A platform registration request has no business and no
+   tenant, so it needs its own, deliberately tiny path rather than a loosened
+   version of the tenant one.
+
+   Privacy: rows are written with businessId = null AND ownerId = null — they
+   belong to no tenant. The bell (`GET /api/notifications`) returns only
+   `userId = me`, so these are visible exclusively to the Super Admin(s), and
+   no tenant can enumerate them.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Every active platform Super Admin — the recipients of a platform request.
+ * Mirrors `orderNotificationRecipients`' shape but is intentionally NOT
+ * derived from any business or organization.
+ */
+export async function platformOwnerRecipients(): Promise<{ id: number; name: string }[]> {
+  const rows = await db
+    .select({ id: users.id, name: users.name, isActive: users.isActive, isSuperAdmin: users.isSuperAdmin })
+    .from(users)
+    .where(eq(users.isSuperAdmin, true));
+  return rows
+    .filter((u) => u.isActive !== false)
+    .map((u) => ({ id: Number(u.id), name: u.name }));
+}
+
+/**
+ * Bell + push the Super Admin(s) about a new platform request.
+ *
+ * Deduped on (userId, type, recordRef) exactly like `fanOut`, so a retry can
+ * never double-notify. The notification body carries NO personal contact
+ * details — the Super Admin opens the console to read the submission
+ * (a lock screen is not the place for an applicant's phone number).
+ */
+export async function notifyPlatformRequest(request: {
+  id: number;
+  reference: string;
+  purposeLabel: string;
+  businessName?: string | null;
+  contactName?: string | null;
+}): Promise<number> {
+  try {
+    const recipients = await platformOwnerRecipients();
+    if (!recipients.length) return 0;
+    const recordRef = `platform-request:${request.reference}`;
+    const title = "New platform request";
+    const body = `${request.purposeLabel}${request.businessName ? ` — ${request.businessName}` : ""}${
+      request.contactName ? ` (${request.contactName})` : ""
+    } · ref ${request.reference}`;
+    const pushedIds: number[] = [];
+    for (const u of recipients) {
+      const dupes = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.userId, u.id),
+            eq(notifications.type, "PLATFORM_REQUEST_NEW"),
+            eq(notifications.recordRef, recordRef),
+          ),
+        )
+        .limit(1);
+      if (dupes.length) continue;
+      await db.insert(notifications).values({
+        userId: u.id,
+        type: "PLATFORM_REQUEST_NEW",
+        title,
+        body,
+        recordType: "platform-request",
+        recordId: request.id,
+        recordRef,
+        businessId: null,
+        branchCode: null,
+        actorName: "Storefront",
+        priority: "HIGH",
+        ownerId: null, // platform scope — belongs to no tenant
+      });
+      pushedIds.push(u.id);
+    }
+    if (pushedIds.length) {
+      // The URL carries the reference: a notification click (in-app bell or a
+      // web-push click) opens the review console WITH that request expanded,
+      // instead of dropping the operator on an unsorted queue.
+      pushAfterBell(pushedIds, {
+        type: "PLATFORM_REQUEST_NEW",
+        title,
+        body,
+        url: urlForNotification("PLATFORM_REQUEST_NEW", { platformRequestRef: request.reference }),
+      });
+    }
+    return pushedIds.length;
+  } catch (e) {
+    // A notification failure must never fail the applicant's submission.
+    console.error("[notify] notifyPlatformRequest failed:", e);
+    return 0;
+  }
+}
+
+/**
+ * Keep the bell TRUE as a request moves through its lifecycle.
+ *
+ * A platform request produces ONE bell row per Super Admin ("New platform
+ * request"). Without this, approving or rejecting the request left that row
+ * unread forever — the badge kept demanding attention for work already done,
+ * and the title still claimed the request was new. Every decision now rewrites
+ * the row's title/body to the current state, and marks it read as soon as
+ * nothing is left to do. It never *un-reads* a row: an operator who has already
+ * looked at a still-actionable request is not nagged again.
+ *
+ * @returns how many bell rows were updated
+ */
+export async function syncPlatformRequestBells(request: {
+  reference: string;
+  status: string;
+  createdOrganizationId?: number | null;
+  businessName?: string | null;
+  contactName?: string | null;
+  decisionReason?: string | null;
+}): Promise<number> {
+  try {
+    const reference = String(request.reference || "").trim();
+    if (!reference) return 0;
+    const recordRef = `platform-request:${reference}`;
+    const title = platformRequestBellTitle(request.status, request.createdOrganizationId);
+    const actionable = isPlatformRequestActionable(request.status, request.createdOrganizationId);
+    const body =
+      `${request.businessName ? `${request.businessName} — ` : ""}${request.contactName || "Applicant"}` +
+      ` · ref ${reference}` +
+      (request.status ? ` · ${String(request.status).replace(/_/g, " ").toLowerCase()}` : "") +
+      (request.status === "REJECTED" && request.decisionReason ? `: ${String(request.decisionReason).slice(0, 160)}` : "");
+    const rows = await db
+      .update(notifications)
+      .set({ title, body, ...(actionable ? {} : { isRead: true }) })
+      .where(and(eq(notifications.type, "PLATFORM_REQUEST_NEW"), eq(notifications.recordRef, recordRef)))
+      .returning({ id: notifications.id });
+    return rows.length;
+  } catch (e) {
+    // A bell refresh must never fail the operator's action.
+    console.error("[notify] syncPlatformRequestBells failed:", e);
+    return 0;
   }
 }

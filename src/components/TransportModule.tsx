@@ -13,6 +13,7 @@ import {
   AreaChart, Area, CartesianGrid,
 } from "recharts";
 import { CurrencyCode, formatMoney } from "@/lib/currency";
+import { inRoleGroup } from "@/lib/roles";
 
 type Props = {
   currentUser: any;
@@ -272,7 +273,8 @@ export default function TransportModule(props: Props) {
   const violations: any[] = data?.violations || [];
   const insights: any[] = data?.insights || [];
   const byVehicle = data?.utilizationByVehicle || {};
-  const canEdit = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER"].includes(String(currentUser?.role || "").toUpperCase());
+  // Same registry rule the API enforces (audit finding F4).
+  const canEdit = inRoleGroup("EXECUTIVE", currentUser?.role) || inRoleGroup("UNIT_LEAD", currentUser?.role);
   const vehById = useCallback((id: any) => vehicles.find((v) => v.id === Number(id)), [vehicles]);
 
   // Daily Revenue monitor — all income transactions for this unit flow here

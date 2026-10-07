@@ -5,6 +5,7 @@ import { desc, eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, sharesOrganization, UNAUTHENTICATED } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
+import { exportModuleDenial } from "@/lib/permissions";
 
 async function getUser(userId: number) {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -12,13 +13,9 @@ async function getUser(userId: number) {
 }
 
 function isExecutive(role?: string | null) {
-  return role === "OWNER" || role === "GENERAL_MANAGER";
+  return role === "OWNER" || role === "CO_OWNER" || role === "GENERAL_MANAGER";
 }
 
-/**
- * GET /api/exports?userId=1
- * Owner/GM see all audit history; Branch Managers see their branch; Workers see only their requests.
- */
 export async function GET(request: NextRequest) {
   try {
     const __authSession = await getSessionInfo(request);
@@ -107,8 +104,10 @@ export async function POST(request: NextRequest) {
     if (!isExecutive(user.role)) {
       // Branch Managers must have canExportData=true for direct export.
       // Workers always create pending requests but still need canExportData
-      // to be eligible to submit at all.
-      if (user.canExportData === false) {
+      // to be eligible to submit at all. A NULL/undefined toggle is NOT a
+      // grant — only an explicit true opens the door (newly created accounts
+      // start closed).
+      if (!user.canExportData) {
         return NextResponse.json(
           {
             success: false,
@@ -138,9 +137,19 @@ export async function POST(request: NextRequest) {
       scopedBranchName = biz?.name || null;
     }
 
-    // Executives exporting a specific business must have (org-scoped) access to it.
-    if (isExecutive(user.role) && scopedBusinessId != null && !(await canAccessBusiness(user, scopedBusinessId))) {
+    // Anyone exporting a specific unit must actually have (org-scoped) access to
+    // it. Branch Managers and Workers were pinned to their assigned unit above,
+    // so this only ever rejects a scope the caller tried to claim.
+    if (scopedBusinessId != null && !(await canAccessBusiness(user, scopedBusinessId))) {
       return NextResponse.json({ success: false, error: "You do not have access to that business." }, { status: 403 });
+    }
+
+    // ── Module gate (sensitive surfaces) ─────────────────────────────────
+    // Runs on the FINAL scope: a Branch Manager or Worker has already been
+    // pinned to their assigned unit above, so `scopedBusinessId` is honest.
+    const moduleDenial = exportModuleDenial(user, moduleKey, scopedBusinessId);
+    if (moduleDenial) {
+      return NextResponse.json({ success: false, error: moduleDenial }, { status: 403 });
     }
 
     // Workers always need approval, regardless of requested status.
@@ -205,6 +214,14 @@ export async function PATCH(request: NextRequest) {
     // Tenant boundary: no action on another organization's export records.
     if (!actor.isSuperAdmin && existing.ownerId != null && !(actor.organizationIds || []).includes(Number(existing.ownerId))) {
       return NextResponse.json({ success: false, error: "That export belongs to a different organization." }, { status: 403 });
+    }
+
+    // The sensitive-surface gate applies to the DECISION as well as the request:
+    // nobody may approve, reject or complete an export of a surface they are
+    // not authorised to see, even if the requester could not have created it.
+    const recordModuleDenial = exportModuleDenial(actor, existing.moduleKey, existing.businessId ?? null);
+    if (recordModuleDenial) {
+      return NextResponse.json({ success: false, error: recordModuleDenial }, { status: 403 });
     }
 
     if (action === "APPROVE" || action === "REJECT") {

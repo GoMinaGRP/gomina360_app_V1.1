@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from '@/db';
 import { assetDownloads, users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 
@@ -107,25 +107,34 @@ export async function GET(request: NextRequest) {
       return FORBIDDEN('You can only view your own download history.');
     }
 
-    let query = db.select().from(assetDownloads);
+    // ── Scope IN SQL, then order, then limit ────────────────────────────
+    // The previous shape fetched `limit` newest rows and filtered by
+    // organization in JavaScript, so an executive in a multi-organization
+    // workspace could receive a short (even empty) page while other
+    // organizations' rows consumed the whole limit. Tenant scope now narrows
+    // the query itself. Ordering is MOST RECENT FIRST (`created_at DESC`,
+    // `id DESC` as the tie-break): this is a history list.
+    const me = __authSession.user;
+    const myOrgIds = (me.organizationIds || []).map(Number).filter(Boolean);
+    const scopeWhere: any[] = [];
 
-    if (userId) {
-      query = query.where(eq(assetDownloads.downloaderUserId, parseInt(userId))) as any;
-    } else if (!isExecutive) {
-      query = query.where(eq(assetDownloads.downloaderUserId, __authSession.user.id)) as any;
+    const targetUserId = userId ? parseInt(userId) : null;
+    if (targetUserId) scopeWhere.push(eq(assetDownloads.downloaderUserId, targetUserId));
+    else if (!isExecutive) scopeWhere.push(eq(assetDownloads.downloaderUserId, me.id));
+
+    // Executives (non-Super-Admin) never leave their own organization(s).
+    if (!me.isSuperAdmin) {
+      if (!myOrgIds.length) return NextResponse.json({ success: true, downloads: [] });
+      scopeWhere.push(inArray(assetDownloads.ownerId, myOrgIds));
     }
 
-    let downloads = await query.orderBy(assetDownloads.createdAt).limit(limit);
-    // Executives (non-Super-Admin) are limited to their own organization's records.
-    if (!__authSession.user.isSuperAdmin && isExecutive) {
-      const myOrgs = new Set(__authSession.user.organizationIds || []);
-      downloads = downloads.filter((d: any) => d.ownerId != null && myOrgs.has(Number(d.ownerId)));
-    }
-    // An executive peeking at a specific user must still stay in-org.
-    if (userId && isExecutive && !__authSession.user.isSuperAdmin) {
-      const targetId = parseInt(userId);
-      downloads = downloads.filter((d: any) => Number(d.downloaderUserId) === targetId);
-    }
+    let query: any = db.select().from(assetDownloads);
+    if (scopeWhere.length === 1) query = query.where(scopeWhere[0]);
+    else if (scopeWhere.length > 1) query = query.where(and(...scopeWhere));
+
+    const downloads = await query
+      .orderBy(desc(assetDownloads.createdAt), desc(assetDownloads.id))
+      .limit(limit);
 
     return NextResponse.json({
       success: true,

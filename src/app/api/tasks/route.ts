@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { purposeLabel } from "@/lib/platformRequests";
 import {
   actionTasks,
   businesses,
   notifications,
   organizationMembers,
+  platformRequests,
   userBusinessAccess,
   users,
 } from "@/db/schema";
@@ -16,12 +18,14 @@ import {
   linkedAdvisorFollowUps,
   linkedChecklistSummary,
   linkedApprovals,
+  linkedPlatformRequests,
   linkedLowStock,
   linkedPendingOrders,
   linkedMaintenanceJobs,
 } from "@/lib/actionCenter";
 import { pushAfterBell } from "@/lib/push";
 import { businessManageIdsOf } from "@/lib/permissions";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * Unified Action Center API (P1).
@@ -40,8 +44,9 @@ import { businessManageIdsOf } from "@/lib/permissions";
  * every write re-verifies business access + same-organization assignees.
  */
 
-const EXEC_ROLES = ["OWNER", "GENERAL_MANAGER"];
-const isExec = (u: any) => !!u && (EXEC_ROLES.includes(String(u.role).toUpperCase()) || !!u.isSuperAdmin);
+/** Executive bench (registry-owned) — a Co-Owner now sees the org-wide tasks
+ *  a GM sees; the old literal list silently dropped Co-Owner (audit F4). */
+const isExec = (u: any) => !!u && (inRoleGroup("EXECUTIVE", u.role) || !!u.isSuperAdmin);
 
 export async function GET(request: NextRequest) {
   try {
@@ -111,12 +116,25 @@ export async function GET(request: NextRequest) {
 
     // ── Linked open items (read-only views over existing systems) ──
     const includeLinked = searchParams.get("includeLinked") !== "0";
-    let linked: any = { auditIssues: [], advisorFollowUps: [], checklist: [], approvals: [], lowStock: [], orders: [], maintenance: [] };
+    let linked: any = {
+      auditIssues: [],
+      advisorFollowUps: [],
+      checklist: [],
+      approvals: [],
+      lowStock: [],
+      orders: [],
+      maintenance: [],
+      // Platform registration requests needing the platform team (Super Admin only).
+      platformRequests: [],
+    };
     if (includeLinked) {
       const linkedScope = role === "WORKER" ? [] : allowedList === null ? null : allowedList;
       linked.auditIssues = await linkedAuditIssues(linkedScope, Number(user.id));
       linked.advisorFollowUps = await linkedAdvisorFollowUps(linkedScope);
       linked.checklist = await linkedChecklistSummary(allowedList, today);
+      // Platform registrations are platform-level records (no tenant scope), so
+      // they are gated on the Super Admin flag — never on a business list.
+      linked.platformRequests = await linkedPlatformRequests(user);
       // R1: approvers see pending gated records beside their other actions.
       if (role !== "WORKER") {
         linked.approvals = await linkedApprovals(user, linkedScope);
@@ -254,6 +272,32 @@ export async function POST(request: NextRequest) {
     let sourceBranch: string | null = body.branchCode ? String(body.branchCode) : null;
     const sourceType = String(body.sourceType || "MANUAL").toUpperCase();
     const sourceId = body.sourceId != null ? Number(body.sourceId) : null;
+    // Platform registration requests are PLATFORM records: only the Super Admin
+    // may mirror one, and the text is derived from the request itself — never
+    // trusted from the client — so a tenant cannot forge a platform action.
+    if (sourceType === "PLATFORM_REQUEST") {
+      if (!user.isSuperAdmin) return FORBIDDEN("Platform registrations are visible to the platform Super Admin only.");
+      if (sourceId == null) return NextResponse.json({ success: false, error: "Which request?" }, { status: 400 });
+      const [req] = await db
+        .select({
+          reference: platformRequests.reference,
+          businessName: platformRequests.businessName,
+          contactName: platformRequests.contactName,
+          purpose: platformRequests.purpose,
+          status: platformRequests.status,
+        })
+        .from(platformRequests)
+        .where(eq(platformRequests.id, sourceId))
+        .limit(1);
+      if (!req) return NextResponse.json({ success: false, error: "That request no longer exists." }, { status: 404 });
+      sourceTitle = `${req.businessName || req.contactName || "Registration"} — platform registration review`;
+      sourceDetail = `${purposeLabel(req.purpose)} · ref ${req.reference} · ${req.status}`;
+      // The linkage is the PLATFORM's identifier: always derived server-side so
+      // a mirrored task cannot point at a request other than the one it names.
+      sourceRef = `platform-request:${req.reference}`;
+      sourceBusinessId = null; // platform-level: belongs to no tenant
+      sourceBranch = null;
+    }
     if (sourceType === "NOTIFICATION" && sourceId != null) {
       const [n] = await db.select().from(notifications).where(eq(notifications.id, sourceId)).limit(1);
       if (!n || Number(n.userId) !== Number(user.id)) {
@@ -269,7 +313,11 @@ export async function POST(request: NextRequest) {
 
     const task = await createTask({
       title: title || sourceTitle || "Follow-up",
-      detail: body.detail ? String(body.detail) : sourceType === "NOTIFICATION" ? sourceDetail : null,
+      detail: body.detail
+        ? String(body.detail)
+        : sourceType === "NOTIFICATION" || sourceType === "PLATFORM_REQUEST"
+          ? sourceDetail
+          : null,
       businessId: sourceBusinessId,
       branchCode: sourceBranch,
       assignedUserId,

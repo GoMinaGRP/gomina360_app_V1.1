@@ -37,11 +37,12 @@ import {
 } from "@/lib/auth";
 import { farmModuleOfBusiness, normalizeSections, sectionCatalog } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
+import { isDelegateUserManager } from "@/lib/roles";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const isGrantManager = (me: any) =>
   me.role === "OWNER" ||
-  (!!me.canManageUsers && ["GENERAL_MANAGER", "BRANCH_MANAGER"].includes(String(me.role)));
+  isDelegateUserManager(me);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

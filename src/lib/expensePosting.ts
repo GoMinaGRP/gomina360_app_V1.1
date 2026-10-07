@@ -48,6 +48,37 @@ export interface PostExpenseResult {
   approvalRequest?: any;
 }
 
+
+/** Money activity → the unit's money watchers, rolled up per business/day. */
+async function notifyExpenseActivity(opts: {
+  businessId: number;
+  branchCode?: string | null;
+  amountGhs: number;
+  category?: string | null;
+  actorName?: string | null;
+  actorUserId?: number | null;
+  recordRef?: string | null;
+  recordId?: number | null;
+}): Promise<void> {
+  try {
+    const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+    await notifyMoneyActivity({
+      businessId: opts.businessId,
+      branchCode: opts.branchCode ?? null,
+      kind: "EXPENSE",
+      amountGhs: opts.amountGhs,
+      actorName: opts.actorName ?? null,
+      actorUserId: opts.actorUserId ?? null,
+      recordRef: opts.recordRef ?? null,
+      recordId: opts.recordId ?? null,
+      recordType: "transactions",
+      label: opts.category || "General",
+    });
+  } catch (e) {
+    console.error("[expense-posting] activity notification failed:", e);
+  }
+}
+
 /**
  * Centralized, secure Expense creation helper for GoMina 360.
  *
@@ -220,6 +251,19 @@ export async function postOrGateExpenseTransaction(
         : "Expense saved as PENDING APPROVAL — the approvers have been notified.",
     };
   }
+
+  // Money activity — an expense that needs no approval still concerns the
+  // OWNER, so the unit's money watchers get the rolled-up line.
+  await notifyExpenseActivity({
+    businessId: bId,
+    branchCode: resolvedBranchCode,
+    amountGhs: amount,
+    category: opts.category,
+    actorName: actor.name,
+    actorUserId: actor.id ? Number(actor.id) : null,
+    recordRef: trxNum,
+    recordId: Number(newTrx.id) || null,
+  });
 
   return {
     success: true,

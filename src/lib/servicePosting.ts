@@ -112,6 +112,22 @@ export async function postServiceSale(opts: PostServiceSaleOptions): Promise<Pos
         recordedByUserId: opts.actor?.id != null ? Number(opts.actor.id) : null,
       })
       .returning();
+    // Money activity → the unit's money watchers (rolled up per day).
+    try {
+      const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+      await notifyMoneyActivity({
+        businessId,
+        branchCode,
+        kind: "SALE",
+        amountGhs: amount,
+        actorName: opts.actor?.name || "Staff",
+        actorUserId: opts.actor?.id ?? null,
+        recordRef: row?.transactionNumber || null,
+        recordId: Number(row?.id) || null,
+        recordType: "transactions",
+        label: opts.category || "Service",
+      });
+    } catch { /* never blocks the sale */ }
     return { success: true, transaction: row, customerId };
   } catch (e: any) {
     console.error("[service-sale] post failed:", e);

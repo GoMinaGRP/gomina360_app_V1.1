@@ -393,6 +393,20 @@ async function applyDecisionEffect(
         ownerId: cust.ownerId ?? Number(request.ownerId) ?? null,
       });
       await db.delete(customers).where(eq(customers.id, cust.id));
+      try {
+        const { notifyRecordDeletion } = await import("@/lib/notifyActivity");
+        await notifyRecordDeletion({
+          module: "CUSTOMERS",
+          recordLabel: cust.name,
+          reason: payload.reason || "Approved for deletion",
+          deletedByName: request.decidedByName || "Approver",
+          deletedByUserId: request.decidedByUserId ?? null,
+          businessId: cust.businessId ?? null,
+          ownerId: cust.ownerId ?? Number(request.ownerId) ?? null,
+        });
+      } catch (e) {
+        console.error("deletion notification warning:", e);
+      }
       return "Customer deleted after approval";
     }
     if (targetType === "BUSINESS_DOCUMENT") {

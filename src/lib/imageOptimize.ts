@@ -606,13 +606,34 @@ export interface PrepareResult {
   notes: string[];
 }
 
-/** True when a file cannot be processed by this browser (see the pipeline). */
+/**
+ * True when a file cannot be processed by this browser (see the pipeline). */
 export function describeRejection(result: PrepareResult): string {
   if (result.rejected.length === 0) return "";
   const first = result.rejected[0];
   const more = result.rejected.length > 1 ? ` (and ${result.rejected.length - 1} more)` : "";
   return `${first.name}: ${first.reason}${more}`;
 }
+
+/**
+ * Aggregate ceiling for ONE submission, in DECODED image bytes.
+ *
+ * WHY (final production audit): on the deployment platform (Vercel) a request
+ * body larger than 4.5 MB is rejected at the edge — HTTP 413
+ * FUNCTION_PAYLOAD_TOO_LARGE — BEFORE any application code runs, so the user
+ * would see a raw platform error with no way to tell which photo was the
+ * problem. Six product photos at their per-image budget (500 KB) plus their
+ * thumbnails would base64-encode to ≈4.5 MB once the JSON around them is
+ * added — i.e. a legal pick list could fail to save. Every picker funnels
+ * through this function, so the batch is capped here with an actionable
+ * message instead: 2.6 MB decoded ⇒ ≈3.5 MB of base64 ⇒ ≈4.0 MB body, which
+ * leaves the margin the platform needs while still fitting six optimised
+ * photos in the overwhelming majority of cases.
+ *
+ * Server-side per-image budgets (mediaValidation.ts) are unchanged: this is a
+ * UX/safety guard, not the security boundary.
+ */
+export const UPLOAD_BATCH_BYTES = 2_600_000;
 
 /**
  * Validate + optimize a batch of picked files for one purpose.
@@ -658,15 +679,37 @@ export async function prepareImages(
   }
 
   const results = await optimizeImages(accepted, purpose);
+  const kept: OptimizedImage[] = [];
+  let batchBytes = 0;
   results.forEach((r, i) => {
     if (r.rejected) {
       rejected.push({ name: nameOf(accepted[i], i), reason: r.rejected });
       return;
     }
+    // Aggregate (per-submission) ceiling — see UPLOAD_BATCH_BYTES above. The
+    // first image is always accepted so a single pick can never be refused
+    // here (per-image budgets already bound it).
+    if (kept.length > 0 && batchBytes + r.bytes > UPLOAD_BATCH_BYTES) {
+      rejected.push({
+        name: nameOf(accepted[i], i),
+        reason:
+          `was not added: this submission already carries ${(batchBytes / 1024 / 1024).toFixed(1)} MB of photos ` +
+          `(limit ${(UPLOAD_BATCH_BYTES / 1024 / 1024).toFixed(1)} MB per save). Save these first, then add it — or use a smaller photo.`,
+      });
+      return;
+    }
+    batchBytes += r.bytes;
     if (r.note) notes.push(r.note);
+    kept.push(r);
   });
 
-  return { images: results.filter((r) => !r.rejected), rejected, notes };
+  if (batchBytes > UPLOAD_BATCH_BYTES * 0.85 && kept.length > 1) {
+    notes.push(
+      `These ${kept.length} photos are close to the ${(UPLOAD_BATCH_BYTES / 1024 / 1024).toFixed(1)} MB per-save limit — fewer or smaller photos keep saving fast.`,
+    );
+  }
+
+  return { images: kept, rejected, notes };
 }
 
 /** Human-readable summary for notices/tests: "3.9 MB → 148 KB (26× smaller)". */

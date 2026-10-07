@@ -119,11 +119,16 @@ export default function NotificationBell({
     };
     syncVisibility();
     const onFocus = () => load();
+    // Another surface changed what the bell should show (e.g. the platform
+    // review queue decided a request and rewrote its row) — refresh at once.
+    const onNudge = () => load();
     window.addEventListener("focus", onFocus);
+    window.addEventListener("gomina:notifications-refresh", onNudge);
     document.addEventListener("visibilitychange", syncVisibility);
     return () => {
       stop();
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("gomina:notifications-refresh", onNudge);
       document.removeEventListener("visibilitychange", syncVisibility);
     };
   }, [load]);
@@ -171,6 +176,13 @@ export default function NotificationBell({
   const targetTag = (n: Notif) => {
     const t = String(n.type || "").toUpperCase();
     const rt = String(n.recordType || "").toLowerCase();
+    // Platform registrations open the Super Admin's review queue — the tag must
+    // say so, instead of the generic "Open Record" the type used to fall through to.
+    if (t.startsWith("PLATFORM_REQUEST")) return "Platform Requests";
+    if (t === "AUDIT_EVENT") return "Audit Trail";
+    if (t === "SALE_RECORDED" || t === "EXPENSE_RECORDED") return t === "SALE_RECORDED" ? "Sales Activity" : "Expense Activity";
+    if (t === "STOCK_LOW" || t === "STOCK_OUT") return t === "STOCK_OUT" ? "Out of Stock" : "Low Stock";
+    if (t === "OPS_NOTE_FLAGGED") return "Daily Notes";
     if (t.startsWith("APPROVAL") || t.includes("EXPENSE") || rt === "approval_requests" || String(n.recordRef || "").startsWith("approval:")) return "Approval Center";
     if (t.startsWith("AUDIT") || rt.startsWith("audit") || n.issueId) return "Audit Review";
     if (t.startsWith("TASK_") || rt === "action_tasks" || String(n.recordRef || "").startsWith("task:")) return "Action Task";

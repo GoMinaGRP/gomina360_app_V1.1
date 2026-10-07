@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Clock, MapPin, AlertTriangle, Loader2, LogIn, LogOut } from "lucide-react";
 import { useClampedDropdown } from "./nav/useClampedDropdown";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * AttendanceClock — the staff Clock In / Clock Out widget living in the
@@ -21,7 +22,8 @@ export default function AttendanceClock({ currentUser }: { currentUser: any }) {
   // Viewport-clamped panel — the clock panel sits mid-navbar, so an
   // absolute `right-0` panel flew off the LEFT edge on phones.
   const { rootRef: pop, panelStyle } = useClampedDropdown(open, 320);
-  const isPrivileged = !["WORKER", "BRANCH_MANAGER", "SUPERVISOR", "ACCOUNTANT"].includes(currentUser?.role);
+  // Registry-owned inverse of the clock-in bench.
+  const isPrivileged = !inRoleGroup("CLOCK_IN", currentUser?.role);
 
   const refresh = useCallback(async () => {
     try {

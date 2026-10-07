@@ -524,7 +524,15 @@ try {
   await uiLogin(pageO, OWNER);
   await pageO.waitForSelector('[data-testid="sidebar-advisor-manage"]', { timeout: 60000 });
   ok("I20 OWNER sidebar has 'Farm Advisors'", true);
-  await pageO.click('[data-testid="sidebar-advisor-manage"]');
+  // The sidebar is a nested scroll container: this row sits below the fold on
+  // a 900px viewport, and a bare click() does not reliably scroll a nested
+  // container across chromium builds. Scroll it into view, then dispatch the
+  // click on the element itself.
+  await pageO.evaluate(() => {
+    const el = document.querySelector('[data-testid="sidebar-advisor-manage"]');
+    el?.scrollIntoView({ block: "center" });
+    el?.click();
+  });
   await pageO.waitForSelector('[data-testid="advisor-console"]', { timeout: 60000 });
   await pageO.waitForSelector('[data-testid="advisor-grant-form"]', { timeout: 60000 });
   ok("I21 OWNER manage console shows the grant form", true);

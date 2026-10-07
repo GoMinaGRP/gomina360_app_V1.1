@@ -73,10 +73,10 @@ say "restore chain…"
 for s in restore-livedata migrate-multiowner seed-recent-demo restore-branding fixtures-e2e fixtures-watermarks-demo; do
   node dev-tooling/$s.mjs >/tmp/preview-$s.log 2>&1 && ok "$s" || { echo "  ✗ $s"; tail -5 /tmp/preview-$s.log; }
 done
-say "demo seeders…"
-for s in seed-benchmark-demo seed-feed-mill-demo seed-fish-benchmark-demo seed-fish-mixing-demo; do
-  npx tsx dev-tooling/$s.mjs >/tmp/preview-$s.log 2>&1 && ok "$s" || { echo "  ✗ $s"; tail -5 /tmp/preview-$s.log; }
-done
+# NOTE: the demo seeders are HTTP clients — they POST to the running app, so
+# they run AFTER the server starts (step 6b below). Running them here failed
+# with ECONNREFUSED on every cold start and silently left the feed-mill / fish /
+# benchmark demo modules empty.
 
 # ── 5) production build (dev mode OOMs this sandbox) ───────────────────────
 if [ ! -f .next/BUILD_ID ]; then
@@ -112,6 +112,12 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login -H 'Content-Type: a
   -d "{\"email\":\"$OWNER_EMAIL\",\"password\":\"$OWNER_PW\"}" | grep -oE '"sessionToken":"[^"]+' | cut -d'"' -f4 || true)
 if [ -z "${TOKEN:-}" ]; then echo "✗ owner login failed — is the seed current?"; exit 1; fi
 node dev-tooling/restore-userdata.mjs "$OWNER_PW" >/tmp/preview-userdata.log 2>&1 && ok "user data restored" || { echo "  ✗ restore-userdata"; tail -5 /tmp/preview-userdata.log; }
+
+# ── 6b) HTTP-based demo seeders (need the server listening) ─────────────────
+say "demo seeders…"
+for s in seed-benchmark-demo seed-feed-mill-demo seed-fish-benchmark-demo seed-fish-mixing-demo; do
+  npx tsx dev-tooling/$s.mjs >/tmp/preview-$s.log 2>&1 && ok "$s" || { echo "  ✗ $s"; tail -5 /tmp/preview-$s.log; }
+done
 
 curl -s http://127.0.0.1:3000/api/init -H "x-gomina-session: $TOKEN" \
   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(\`✅ preview live on :3000 — \${j.businesses?.length} units · \${j.users?.length} users · \${j.employees?.length} employees\`)})"

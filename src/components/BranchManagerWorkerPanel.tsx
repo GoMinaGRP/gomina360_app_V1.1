@@ -17,6 +17,9 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
+import RolePermissionsEditor from "./RolePermissionsEditor";
+import { rolePreset } from "@/lib/roles";
+import { canSeeEnterpriseUsers } from "@/lib/permissions";
 
 interface BranchManagerWorkerPanelProps {
   currentUser: any;
@@ -43,15 +46,14 @@ export default function BranchManagerWorkerPanel({
   const [newName, setNewName] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPhone, setNewPhone] = useState("+233 24 ");
-  const [newCanRecordSales, setNewCanRecordSales] = useState(true);
-  const [newCanRecordExpenses, setNewCanRecordExpenses] = useState(false);
-  const [newCanManageStock, setNewCanManageStock] = useState(false);
+  // ONE capability map per form, seeded from the registry's WORKER preset — the
+  // same preset the Enterprise Users console and the API start from, so all
+  // three creation paths describe a Worker identically (audit finding F3).
+  const [newCaps, setNewCaps] = useState<Record<string, boolean>>(() => rolePreset("WORKER"));
   const [isCreating, setIsCreating] = useState(false);
 
   // Permission edit form
-  const [permRecordSales, setPermRecordSales] = useState(true);
-  const [permRecordExpenses, setPermRecordExpenses] = useState(false);
-  const [permManageStock, setPermManageStock] = useState(false);
+  const [permCaps, setPermCaps] = useState<Record<string, boolean>>(() => rolePreset("WORKER"));
 
   // Escape key handler
   useEffect(() => {
@@ -104,9 +106,8 @@ export default function BranchManagerWorkerPanel({
           phone: newPhone,
           assignedBusinessId: businessInfo?.id,
           createdByUserId: currentUser?.id,
-          canRecordSales: newCanRecordSales,
-          canRecordExpenses: newCanRecordExpenses,
-          canManageStock: newCanManageStock,
+          // The shared editor's toggles map 1:1 onto the capability columns.
+          ...newCaps,
         }),
       });
 
@@ -114,9 +115,7 @@ export default function BranchManagerWorkerPanel({
         setNewName("");
         setNewEmail("");
         setNewPhone("+233 24 ");
-        setNewCanRecordSales(true);
-        setNewCanRecordExpenses(false);
-        setNewCanManageStock(false);
+        setNewCaps(rolePreset("WORKER"));
         setShowCreateModal(false);
         fetchWorkers();
         onRefreshData();
@@ -166,9 +165,14 @@ export default function BranchManagerWorkerPanel({
   };
 
   const openPermissionModal = (worker: any) => {
-    setPermRecordSales(worker.canRecordSales);
-    setPermRecordExpenses(worker.canRecordExpenses);
-    setPermManageStock(worker.canManageStock);
+    // Seed from the row's STORED values (never the preset) so editing can only
+    // change what the manager actually toggles.
+    setPermCaps({
+      canRecordSales: !!worker.canRecordSales,
+      canRecordExpenses: !!worker.canRecordExpenses,
+      canManageStock: !!worker.canManageStock,
+      canExportData: !!worker.canExportData,
+    });
     setShowPermissionModal(worker);
   };
 
@@ -183,9 +187,7 @@ export default function BranchManagerWorkerPanel({
         body: JSON.stringify({
           workerId: showPermissionModal.id,
           action: "UPDATE_PERMISSIONS",
-          canRecordSales: permRecordSales,
-          canRecordExpenses: permRecordExpenses,
-          canManageStock: permManageStock,
+          ...permCaps,
         }),
       });
       if (res.ok) {
@@ -221,7 +223,10 @@ export default function BranchManagerWorkerPanel({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {currentUser?.canManageUsers && onOpenUserAccess && (
+          {/* Same gate as the Enterprise Users destination (src/lib/permissions.ts):
+              OWNER / Super Admin / an explicit canManageUsers grant. The raw flag
+              alone kept the OWNER out of their own staff directory. */}
+          {canSeeEnterpriseUsers(currentUser) && onOpenUserAccess && (
             <button
               onClick={onOpenUserAccess}
               data-testid="open-user-access-bm"
@@ -462,34 +467,14 @@ export default function BranchManagerWorkerPanel({
                 <label className="block text-xs font-semibold text-slate-400 mb-2">
                   Initial Permissions
                 </label>
-                <div className="space-y-2 bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                  <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                    <span>Can Record Sales</span>
-                    <input
-                      type="checkbox"
-                      checked={newCanRecordSales}
-                      onChange={(e) => setNewCanRecordSales(e.target.checked)}
-                      className="accent-emerald-500 w-4 h-4"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                    <span>Can Record Daily Expenses</span>
-                    <input
-                      type="checkbox"
-                      checked={newCanRecordExpenses}
-                      onChange={(e) => setNewCanRecordExpenses(e.target.checked)}
-                      className="accent-amber-500 w-4 h-4"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                    <span>Can Manage Stock Movements</span>
-                    <input
-                      type="checkbox"
-                      checked={newCanManageStock}
-                      onChange={(e) => setNewCanManageStock(e.target.checked)}
-                      className="accent-cyan-500 w-4 h-4"
-                    />
-                  </label>
+                <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+                  <RolePermissionsEditor
+                    role="WORKER"
+                    values={newCaps}
+                    onChange={(key, value) => setNewCaps((c) => ({ ...c, [key]: value }))}
+                    density="compact"
+                    testidPrefix="worker-create"
+                  />
                 </div>
               </div>
 
@@ -541,34 +526,14 @@ export default function BranchManagerWorkerPanel({
             </p>
 
             <form onSubmit={handleUpdatePermissions} className="space-y-3">
-              <div className="space-y-2 bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                  <span>Can Record Sales</span>
-                  <input
-                    type="checkbox"
-                    checked={permRecordSales}
-                    onChange={(e) => setPermRecordSales(e.target.checked)}
-                    className="accent-emerald-500 w-4 h-4"
-                  />
-                </label>
-                <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                  <span>Can Record Daily Expenses</span>
-                  <input
-                    type="checkbox"
-                    checked={permRecordExpenses}
-                    onChange={(e) => setPermRecordExpenses(e.target.checked)}
-                    className="accent-amber-500 w-4 h-4"
-                  />
-                </label>
-                <label className="flex items-center justify-between text-xs text-slate-200 cursor-pointer">
-                  <span>Can Manage Stock Movements</span>
-                  <input
-                    type="checkbox"
-                    checked={permManageStock}
-                    onChange={(e) => setPermManageStock(e.target.checked)}
-                    className="accent-cyan-500 w-4 h-4"
-                  />
-                </label>
+              <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+                <RolePermissionsEditor
+                  role="WORKER"
+                  values={permCaps}
+                  onChange={(key, value) => setPermCaps((c) => ({ ...c, [key]: value }))}
+                  density="compact"
+                  testidPrefix="worker-edit"
+                />
               </div>
 
               <div className="flex justify-end space-x-3 pt-3 border-t border-slate-800">

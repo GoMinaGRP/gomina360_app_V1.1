@@ -28,6 +28,7 @@ import {
   Send,
   X,
 } from "lucide-react";
+import { inRoleGroup } from "@/lib/roles";
 
 const PRI_STYLE: Record<string, string> = {
   CRITICAL: "bg-rose-500/15 text-rose-300 border-rose-500/40",
@@ -264,7 +265,7 @@ export default function AdvisorNotesPanel({
 
   const role = String(currentUser?.role || "").toUpperCase();
   const isAdvisor = role === "FARM_ADVISOR";
-  const canCompose = isAdvisor || ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(role) || currentUser?.canManageRecords === true;
+  const canCompose = isAdvisor || inRoleGroup("UNIT_ADMIN", role) || currentUser?.canManageRecords === true;
   const canWorkFollowUps = canCompose;
 
   const load = useCallback(async () => {

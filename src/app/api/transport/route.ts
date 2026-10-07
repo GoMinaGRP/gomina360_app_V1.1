@@ -42,6 +42,7 @@ import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
 import { validateOptionalImage } from "@/lib/mediaValidation";
 import { slimInventoryRows, stripPhotos, stripReceipts } from "@/lib/imagePayload";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * Transportation & Haulage module API — single route (like the other module
@@ -801,7 +802,13 @@ export async function POST(request: NextRequest) {
 
     // ── DAILY CHECKLIST & CUSTOM TEMPLATES ────────────────────────────────
     if (entity === "CHECKLIST" || entity === "CHECKLIST_TEMPLATE") {
-      const canManageTemplates = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER", "MANAGER", "SUPER_ADMIN", "ADMIN"].includes(String(user.role || "").toUpperCase()) || Boolean(user.isOwner);
+      // Registry-owned (audit finding F4): "MANAGER"/"SUPER_ADMIN"/"ADMIN" were
+      // never database roles, so they matched nobody.
+      const canManageTemplates =
+        Boolean(user.isOwner) ||
+        !!user.isSuperAdmin ||
+        inRoleGroup("EXECUTIVE", user.role) ||
+        inRoleGroup("UNIT_LEAD", user.role);
 
       // Create custom checklist template/task
       if (action === "CREATE_TEMPLATE" || (entity === "CHECKLIST_TEMPLATE" && action === "CREATE")) {

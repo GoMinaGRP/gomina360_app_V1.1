@@ -61,8 +61,9 @@ import {
 } from "@/lib/dailyNotesAi";
 import { aquacultureFeedLogs, aquacultureHarvests, aquacultureWaterQualityLogs, poultryFeedLogs, poultryWeightLogs } from "@/db/schema";
 import { validateOptionalImage } from "@/lib/mediaValidation";
+import { ROLE_GROUPS } from "@/lib/roles";
 
-const STAFF_NOTE_ROLES = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+const STAFF_NOTE_ROLES: readonly string[] = ROLE_GROUPS.UNIT_ADMIN;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const today = () => new Date().toISOString().slice(0, 10);
 

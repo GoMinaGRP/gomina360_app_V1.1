@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
+import { getTableColumns, getTableName } from "drizzle-orm";
+import { db, getPool } from "@/db";
 import {
   businesses,
   businessMetrics,
@@ -140,6 +141,7 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import { managesBusiness } from "@/lib/permissions";
 import { recordDeletedBusiness } from "@/lib/systemMarkers";
 import { apiError } from "@/lib/apiError";
+import { cachedJson } from "@/lib/httpCache";
 
 /** Online-ordering, service-area, pickup & customer-contact fields. These are
  *  the ONLY business fields a non-OWNER may change — and only staff carrying
@@ -205,124 +207,150 @@ async function businessControlLevel(
 
 /** Count every operational record owned by the business — used by the Owner
  *  console to preview exactly what a deletion will remove. */
-async function relatedCounts(businessId: number) {
-  const count = async (table: any, col: any) => {
-    try {
-      const rows = await db.select({ id: table.id }).from(table).where(eq(col, businessId));
-      return rows.length;
-    } catch {
-      return 0;
-    }
-  };
+/**
+ * Every table the unit-reset preview counts, in group order.
+ *
+ * Each entry is (response group, table, business-scoping column). 98 tables —
+ * see relatedCounts() for how they are counted in ONE round trip.
+ */
+const COUNT_PLAN: ReadonlyArray<readonly [string, any, string]> = [
+  ["inventoryItems", inventoryItems, "businessId"],
+  ["stockMovements", stockMovements, "businessId"],
+  ["employees", employees, "businessId"],
+  ["customers", customers, "businessId"],
+  ["assets", assets, "businessId"],
+  ["transactions", transactions, "businessId"],
+  ["salesDocuments", salesDocuments, "businessId"],
+  ["salesDocuments", blockFactoryOrders, "businessId"],
+  ["salesDocuments", blockFactoryDeliveries, "businessId"],
+  ["salesDocuments", electronicsOrders, "businessId"],
+  ["salesDocuments", electronicsSerials, "businessId"],
+  ["salesDocuments", electronicsWarranties, "businessId"],
+  ["salesDocuments", electronicsPurchases, "businessId"],
+  ["salesDocuments", restaurantOrders, "businessId"],
+  ["salesDocuments", hardwareOrders, "businessId"],
+  ["salesDocuments", hardwarePurchases, "businessId"],
+  ["salesDocuments", hardwareDeliveries, "businessId"],
+  ["salesDocuments", carWashServices, "businessId"],
+  ["salesDocuments", carWashBookings, "businessId"],
+  ["salesDocuments", carWashWashes, "businessId"],
+  ["salesDocuments", telecomTxns, "businessId"],
+  ["salesDocuments", telecomVouchers, "businessId"],
+  ["procurementAndPayables", goodsReceipts, "businessId"],
+  ["procurementAndPayables", supplierInvoices, "businessId"],
+  ["procurementAndPayables", supplierPayments, "businessId"],
+  ["procurementAndPayables", supplierOrders, "businessId"],
+  ["procurementAndPayables", supplierQuotes, "businessId"],
+  ["procurementAndPayables", purchaseRequisitions, "businessId"],
+  ["creditAndReceivables", creditSales, "businessId"],
+  ["creditAndReceivables", creditPayments, "businessId"],
+  ["payrollAndHr", payrollRuns, "businessId"],
+  ["payrollAndHr", payrollEntries, "businessId"],
+  ["payrollAndHr", payrollAttendance, "businessId"],
+  ["payrollAndHr", attendanceLogs, "businessId"],
+  ["payrollAndHr", employeeDocuments, "businessId"],
+  ["payrollAndHr", employeeHistory, "businessId"],
+  ["productionAndOps", poultryLogs, "businessId"],
+  ["productionAndOps", poultryFlocks, "businessId"],
+  ["productionAndOps", poultryFeedLogs, "businessId"],
+  ["productionAndOps", poultryWaterLogs, "businessId"],
+  ["productionAndOps", poultryHealthRecords, "businessId"],
+  ["productionAndOps", poultryProduction, "businessId"],
+  ["productionAndOps", poultryWeightLogs, "businessId"],
+  ["productionAndOps", poultryProducts, "businessId"],
+  ["productionAndOps", poultryFeedFormulations, "businessId"],
+  ["productionAndOps", poultryFeedBatches, "businessId"],
+  ["productionAndOps", poultryFeedQcChecks, "businessId"],
+  ["productionAndOps", blockFactoryLogs, "businessId"],
+  ["productionAndOps", blockTypes, "businessId"],
+  ["productionAndOps", blockMixFormulations, "businessId"],
+  ["productionAndOps", blockMixBatches, "businessId"],
+  ["productionAndOps", blockQcChecks, "businessId"],
+  ["productionAndOps", aquacultureLogs, "businessId"],
+  ["productionAndOps", aquaculturePonds, "businessId"],
+  ["productionAndOps", aquacultureBatches, "businessId"],
+  ["productionAndOps", aquacultureFeedLogs, "businessId"],
+  ["productionAndOps", aquacultureWaterQualityLogs, "businessId"],
+  ["productionAndOps", aquacultureHarvests, "businessId"],
+  ["productionAndOps", aquacultureWeightLogs, "businessId"],
+  ["productionAndOps", fishFeedFormulations, "businessId"],
+  ["productionAndOps", fishFeedBatches, "businessId"],
+  ["productionAndOps", fishFeedQcChecks, "businessId"],
+  ["productionAndOps", livestockLogs, "businessId"],
+  ["productionAndOps", restaurantLogs, "businessId"],
+  ["productionAndOps", restaurantMenuItems, "businessId"],
+  ["productionAndOps", restaurantWaste, "businessId"],
+  ["productionAndOps", restaurantPurchases, "businessId"],
+  ["productionAndOps", electronicsLogs, "businessId"],
+  ["productionAndOps", carWashLogs, "businessId"],
+  ["productionAndOps", carWashActivities, "businessId"],
+  ["productionAndOps", hardwareLogs, "businessId"],
+  ["productionAndOps", telecomLines, "businessId"],
+  ["productionAndOps", telecomWifiPackages, "businessId"],
+  ["productionAndOps", telecomActivities, "businessId"],
+  ["auditsAndGovernance", auditReviews, "businessId"],
+  ["auditsAndGovernance", auditAssignments, "businessId"],
+  ["auditsAndGovernance", auditTrail, "businessId"],
+  ["auditsAndGovernance", actionTasks, "businessId"],
+  ["auditsAndGovernance", advisorNotes, "businessId"],
+  ["auditsAndGovernance", advisorAssignments, "businessId"],
+  ["auditsAndGovernance", approvalRequests, "businessId"],
+  ["auditsAndGovernance", approvalPolicies, "scopeBusinessId"],
+  ["transportAndFleet", transportVehicles, "businessId"],
+  ["transportAndFleet", transportTrips, "businessId"],
+  ["transportAndFleet", transportBookings, "businessId"],
+  ["transportAndFleet", transportFuelLogs, "businessId"],
+  ["transportAndFleet", transportMaintenance, "businessId"],
+  ["transportAndFleet", transportVehicleChecklists, "businessId"],
+  ["transportAndFleet", transportGeofences, "businessId"],
+  ["transportAndFleet", transportTrackerViolations, "businessId"],
+  ["checklists", checklistTemplates, "businessId"],
+  ["checklists", checklistEntries, "businessId"],
+  ["checklists", checklistPlanTemplates, "businessId"],
+  ["checklists", checklistFlockPlans, "businessId"],
+  ["metrics", businessMetrics, "businessId"],
+  ["expenseCategories", expenseCategories, "businessId"],
+  ["exports", universalExports, "businessId"],
+  ["userAccessGrants", userBusinessAccess, "businessId"],
+];
 
-  const groups: Record<string, number> = {
-    inventoryItems: await count(inventoryItems, inventoryItems.businessId),
-    stockMovements: await count(stockMovements, stockMovements.businessId),
-    employees: await count(employees, employees.businessId),
-    customers: await count(customers, customers.businessId),
-    assets: await count(assets, assets.businessId),
-    transactions: await count(transactions, transactions.businessId),
-    salesDocuments:
-      (await count(salesDocuments, salesDocuments.businessId)) +
-      (await count(blockFactoryOrders, blockFactoryOrders.businessId)) +
-      (await count(blockFactoryDeliveries, blockFactoryDeliveries.businessId)) +
-      (await count(electronicsOrders, electronicsOrders.businessId)) +
-      (await count(electronicsSerials, electronicsSerials.businessId)) +
-      (await count(electronicsWarranties, electronicsWarranties.businessId)) +
-      (await count(electronicsPurchases, electronicsPurchases.businessId)) +
-      (await count(restaurantOrders, restaurantOrders.businessId)) +
-      (await count(hardwareOrders, hardwareOrders.businessId)) +
-      (await count(hardwarePurchases, hardwarePurchases.businessId)) +
-      (await count(hardwareDeliveries, hardwareDeliveries.businessId)) +
-      (await count(carWashServices, carWashServices.businessId)) +
-      (await count(carWashBookings, carWashBookings.businessId)) +
-      (await count(carWashWashes, carWashWashes.businessId)) +
-      (await count(telecomTxns, telecomTxns.businessId)) +
-      (await count(telecomVouchers, telecomVouchers.businessId)),
-    procurementAndPayables:
-      (await count(goodsReceipts, goodsReceipts.businessId)) +
-      (await count(supplierInvoices, supplierInvoices.businessId)) +
-      (await count(supplierPayments, supplierPayments.businessId)) +
-      (await count(supplierOrders, supplierOrders.businessId)) +
-      (await count(supplierQuotes, supplierQuotes.businessId)) +
-      (await count(purchaseRequisitions, purchaseRequisitions.businessId)),
-    creditAndReceivables:
-      (await count(creditSales, creditSales.businessId)) +
-      (await count(creditPayments, creditPayments.businessId)),
-    payrollAndHr:
-      (await count(payrollRuns, payrollRuns.businessId)) +
-      (await count(payrollEntries, payrollEntries.businessId)) +
-      (await count(payrollAttendance, payrollAttendance.businessId)) +
-      (await count(attendanceLogs, attendanceLogs.businessId)) +
-      (await count(employeeDocuments, employeeDocuments.businessId)) +
-      (await count(employeeHistory, employeeHistory.businessId)),
-    productionAndOps:
-      (await count(poultryLogs, poultryLogs.businessId)) +
-      (await count(poultryFlocks, poultryFlocks.businessId)) +
-      (await count(poultryFeedLogs, poultryFeedLogs.businessId)) +
-      (await count(poultryWaterLogs, poultryWaterLogs.businessId)) +
-      (await count(poultryHealthRecords, poultryHealthRecords.businessId)) +
-      (await count(poultryProduction, poultryProduction.businessId)) +
-      (await count(poultryWeightLogs, poultryWeightLogs.businessId)) +
-      (await count(poultryProducts, poultryProducts.businessId)) +
-      (await count(poultryFeedFormulations, poultryFeedFormulations.businessId)) +
-      (await count(poultryFeedBatches, poultryFeedBatches.businessId)) +
-      (await count(poultryFeedQcChecks, poultryFeedQcChecks.businessId)) +
-      (await count(blockFactoryLogs, blockFactoryLogs.businessId)) +
-      (await count(blockTypes, blockTypes.businessId)) +
-      (await count(blockMixFormulations, blockMixFormulations.businessId)) +
-      (await count(blockMixBatches, blockMixBatches.businessId)) +
-      (await count(blockQcChecks, blockQcChecks.businessId)) +
-      (await count(aquacultureLogs, aquacultureLogs.businessId)) +
-      (await count(aquaculturePonds, aquaculturePonds.businessId)) +
-      (await count(aquacultureBatches, aquacultureBatches.businessId)) +
-      (await count(aquacultureFeedLogs, aquacultureFeedLogs.businessId)) +
-      (await count(aquacultureWaterQualityLogs, aquacultureWaterQualityLogs.businessId)) +
-      (await count(aquacultureHarvests, aquacultureHarvests.businessId)) +
-      (await count(aquacultureWeightLogs, aquacultureWeightLogs.businessId)) +
-      (await count(fishFeedFormulations, fishFeedFormulations.businessId)) +
-      (await count(fishFeedBatches, fishFeedBatches.businessId)) +
-      (await count(fishFeedQcChecks, fishFeedQcChecks.businessId)) +
-      (await count(livestockLogs, livestockLogs.businessId)) +
-      (await count(restaurantLogs, restaurantLogs.businessId)) +
-      (await count(restaurantMenuItems, restaurantMenuItems.businessId)) +
-      (await count(restaurantWaste, restaurantWaste.businessId)) +
-      (await count(restaurantPurchases, restaurantPurchases.businessId)) +
-      (await count(electronicsLogs, electronicsLogs.businessId)) +
-      (await count(carWashLogs, carWashLogs.businessId)) +
-      (await count(carWashActivities, carWashActivities.businessId)) +
-      (await count(hardwareLogs, hardwareLogs.businessId)) +
-      (await count(telecomLines, telecomLines.businessId)) +
-      (await count(telecomWifiPackages, telecomWifiPackages.businessId)) +
-      (await count(telecomActivities, telecomActivities.businessId)),
-    auditsAndGovernance:
-      (await count(auditReviews, auditReviews.businessId)) +
-      (await count(auditAssignments, auditAssignments.businessId)) +
-      (await count(auditTrail, auditTrail.businessId)) +
-      (await count(actionTasks, actionTasks.businessId)) +
-      (await count(advisorNotes, advisorNotes.businessId)) +
-      (await count(advisorAssignments, advisorAssignments.businessId)) +
-      (await count(approvalRequests, approvalRequests.businessId)) +
-      (await count(approvalPolicies, approvalPolicies.scopeBusinessId)),
-    transportAndFleet:
-      (await count(transportVehicles, transportVehicles.businessId)) +
-      (await count(transportTrips, transportTrips.businessId)) +
-      (await count(transportBookings, transportBookings.businessId)) +
-      (await count(transportFuelLogs, transportFuelLogs.businessId)) +
-      (await count(transportMaintenance, transportMaintenance.businessId)) +
-      (await count(transportVehicleChecklists, transportVehicleChecklists.businessId)) +
-      (await count(transportGeofences, transportGeofences.businessId)) +
-      (await count(transportTrackerViolations, transportTrackerViolations.businessId)),
-    checklists:
-      (await count(checklistTemplates, checklistTemplates.businessId)) +
-      (await count(checklistEntries, checklistEntries.businessId)) +
-      (await count(checklistPlanTemplates, checklistPlanTemplates.businessId)) +
-      (await count(checklistFlockPlans, checklistFlockPlans.businessId)),
-    metrics: await count(businessMetrics, businessMetrics.businessId),
-    expenseCategories: await count(expenseCategories, expenseCategories.businessId),
-    exports: await count(universalExports, universalExports.businessId),
-    userAccessGrants: await count(userBusinessAccess, userBusinessAccess.businessId),
-  };
+async function relatedCounts(businessId: number) {
+  const groups: Record<string, number> = {};
+
+  // ONE round trip: Postgres counts all 98 tables (count(*) on an indexed
+  // business_id is cheap) and the whole batch ships as a single
+  // multi-statement simple-protocol query. The previous implementation read
+  // every id row of every table — 98 SEQUENTIAL round trips, which is
+  // ~4.4 s of pure latency against a remote (Neon) database while localhost
+  // hid it. Same numbers, same semantics.
+  try {
+    const stmts = COUNT_PLAN.map(([, table, column]) => {
+      const cols = getTableColumns(table) as Record<string, { name: string }>;
+      return `SELECT count(*)::int8 AS c FROM "${getTableName(table)}" WHERE "${cols[column].name}" = ${Number(businessId) || 0}`;
+    });
+    const results = (await getPool().query(stmts.join(";\n") + ";")) as unknown as Array<{ rows: Array<{ c: string | number }> }>;
+    COUNT_PLAN.forEach(([group], i) => {
+      const value = Number(results?.[i]?.rows?.[0]?.c ?? 0) || 0;
+      groups[group] = (groups[group] || 0) + value;
+    });
+  } catch (batchError) {
+    // Schema drift safety net (a table missing on an older database): fall back
+    // to the original per-table path, which treats a missing table as 0.
+    console.warn("[businesses] batched count failed, falling back:", (batchError as any)?.message || batchError);
+    for (const [group, table, column] of COUNT_PLAN) {
+      const cols = getTableColumns(table) as Record<string, { name: string }>;
+      let n = 0;
+      try {
+        const rows = await db.select({ id: table.id }).from(table).where(eq((table as any)[column], businessId));
+        n = rows.length;
+      } catch {
+        n = 0;
+      }
+      groups[group] = (groups[group] || 0) + n;
+      void column;
+    }
+  }
+
   const totalRecords = Object.values(groups).reduce((a, b) => a + b, 0);
   return { groups, totalRecords };
 }
@@ -640,7 +668,7 @@ export async function GET(
       return NextResponse.json({ success: false, error: "Business not found." }, { status: 404 });
     }
     const counts = await relatedCounts(businessId);
-    return NextResponse.json({ success: true, business: biz, counts });
+    return cachedJson(request, { success: true, business: biz, counts });
   } catch (error: any) {
     return apiError(error);
   }

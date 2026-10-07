@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Building2, RefreshCw, Plus, Ban, CheckCircle2, CheckSquare, Square, Unlock, Trash2, ArchiveRestore } from "lucide-react";
+import PlatformRequestsPanel from "./PlatformRequestsPanel";
 
 type AllowedType = { key: string; label: string };
 
@@ -24,7 +25,16 @@ type Org = {
 /** SUPER ADMIN ONLY — Platform Owners & Organizations console.
  *  Provision new, fully-isolated Owner workspaces; suspend/reactivate them.
  *  Server-side every call is guarded by requireSuperAdmin(). */
-export default function PlatformAdminPanel({ currentUser }: { currentUser: any }) {
+export default function PlatformAdminPanel({
+  currentUser,
+  focusRequestRef = null,
+  onFocusRequestHandled,
+}: {
+  currentUser: any;
+  /** Platform request reference to open + highlight (notification deep link). */
+  focusRequestRef?: string | null;
+  onFocusRequestHandled?: () => void;
+}) {
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -242,6 +252,9 @@ export default function PlatformAdminPanel({ currentUser }: { currentUser: any }
           </button>
         </div>
       )}
+
+      {/* Inbound public registrations/requests — Super-Admin-only queue. */}
+      <PlatformRequestsPanel focusReference={focusRequestRef} onFocusHandled={onFocusRequestHandled} />
 
       {/* Provision form */}
       <form onSubmit={createOrg} className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">

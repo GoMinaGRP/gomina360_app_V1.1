@@ -9,17 +9,18 @@ import { runDailyOps } from "@/lib/dailyOps";
  * operating timezone of every GoMina unit). Authorization, in order:
  *   1. `Authorization: Bearer $CRON_SECRET` when the env is set (Vercel
  *      Cron sends this automatically once CRON_SECRET is configured);
- *   2. the platform's own `x-vercel-cron` invocation header;
- *   3. on Vercel with no CRON_SECRET at all, platform cron calls arrive
- *      unauthenticated — accepted because the pipeline is idempotent,
- *      marker-gated and returns no personal data (counts only);
- *   4. an authenticated OWNER / GENERAL_MANAGER / super-admin session —
- *      the manual "run it now" path (and the self-hosted path, where
- *      setting CRON_SECRET is strongly recommended).
+ *   2. an authenticated OWNER / GENERAL_MANAGER / super-admin session —
+ *      the manual "run it now" path.
  *
- * /api/init additionally runs the same pipeline once per day as a pull-based
- * fallback, so deployments without any scheduler still get digests,
- * escalations and stock alerts — just on the first login of the day.
+ * FAIL CLOSED (final production audit): earlier versions also accepted a
+ * bare `x-vercel-cron` request header — and, on Vercel without CRON_SECRET,
+ * ANY unauthenticated caller. Request headers are client-controlled, so that
+ * was a spoofable trigger for the pipeline: an anonymous visitor could force
+ * digests, escalations and stock alerts on demand. The header is no longer
+ * trusted; configure CRON_SECRET and Vercel Cron authenticates itself.
+ * Deployments with no scheduler are still covered — /api/init runs the same
+ * pipeline once a day as a pull-based fallback (first authenticated request
+ * of the day) — so nothing silently stops working.
  */
 
 export const dynamic = "force-dynamic";
@@ -30,8 +31,6 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     const auth = request.headers.get("authorization") || "";
     let via: string | null = null;
     if (secret && auth === `Bearer ${secret}`) via = "bearer";
-    else if (request.headers.get("x-vercel-cron")) via = "vercel-cron";
-    else if (!secret && process.env.VERCEL) via = "vercel-cron-unsecured";
 
     if (!via) {
       const session = await getSessionInfo(request);
@@ -39,8 +38,12 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       if (session && (role === "OWNER" || role === "GENERAL_MANAGER" || !!session.user?.isSuperAdmin)) {
         via = "session";
       } else {
+        const hint =
+          !secret && process.env.VERCEL
+            ? " Set CRON_SECRET in Vercel → Settings → Environment Variables (Production AND Preview); Vercel Cron then sends it automatically as a Bearer token."
+            : "";
         return NextResponse.json(
-          { success: false, error: "Unauthorized — cron secret or an executive session required." },
+          { success: false, error: `Unauthorized — cron secret or an executive session required.${hint}` },
           { status: 401 },
         );
       }

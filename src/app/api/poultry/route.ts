@@ -29,11 +29,13 @@ import {
   forkFlockPlan,
   applyPlanTemplateToFlock,
   generateEntriesForDate,
+  invalidateChecklistGeneration,
   insertDailyEntries,
   toggleChecklistEntry,
 } from "@/lib/checklistGen";
 import { checklistPlanTemplates } from "@/db/schema";
 import { resolveProfile, BENCHMARK_TEMPLATES } from "@/lib/poultryBenchmarking";
+import { roleGroupMembers } from "@/lib/roles";
 
 // Canonical sellable products for the poultry branch — production stocks these
 // in, sales deduct them, and they appear in every stock picker automatically.
@@ -284,7 +286,7 @@ export async function POST(request: NextRequest) {
       // recommended plan for immediate per-flock customization.
       const role = String(session.user.role || "").toUpperCase();
       const planMode = String(data.checklistPlan?.mode || "").toUpperCase();
-      const MANAGE = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"];
+      const MANAGE = roleGroupMembers("UNIT_ADMIN");
       let checklistPlanApplied: string | null = null;
       if (
         isPoultryCategory(biz?.category) &&
@@ -322,7 +324,12 @@ export async function POST(request: NextRequest) {
               (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
             ).catch(() => {});
           }
-          // Materialize today's entries for the new flock right away.
+          // Materialize today's entries for the new flock right away. The
+          // invalidation first is essential: a business that already generated
+          // today's list in this process (e.g. during /api/init seconds ago)
+          // would otherwise hit the 60 s memo and the flock would silently get
+          // NO checklist for the day (caught by the flock-plans suite).
+          invalidateChecklistGeneration(businessId);
           const todayLocal = new Date().toLocaleDateString("en-CA");
           await generateEntriesForDate(businessId, branchCode, todayLocal, biz?.code, biz?.category);
         } catch (e: any) {
@@ -984,6 +991,10 @@ export async function PATCH(request: NextRequest) {
         ].filter(Boolean).join(" · ") || "flock details updated",
         (await ownerOrgOfBusiness(existingFlock.businessId).catch(() => null)) ?? null
       ).catch((e: any) => console.error("[poultry] audit failed:", e));
+      // A flock's status/bird data decides what today's list must contain
+      // (only ACTIVE flocks materialize stage tasks), so drop the 60 s
+      // generation memo for this business — see the create path above.
+      invalidateChecklistGeneration(existingFlock.businessId);
       return NextResponse.json({ success: true, item: row });
     }
 

@@ -9,7 +9,7 @@ import {
   poultryBenchmarkProfiles,
   notifications,
 } from "@/db/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { tasksForBusiness, type TaskSeed } from "./checklistDefaults";
 import { STAGE_PLAN_TASKS } from "./poultryStageTasks";
 import { stageOfFlock, isStagePlanBirdType, effectivePlanItemsForFlock, type FlockStage } from "./poultryStages";
@@ -100,11 +100,23 @@ export async function ensureTemplates(
  * rows the Owner deactivated… no — deactivation is a deliberate Owner
  * choice, so re-activation happens ONLY on an explicit enable action.
  */
+/** Businesses whose stage plan was already reconciled with this build in this
+ *  process (the scan is a no-op after the first pass unless the build changes,
+ *  and a deploy always starts new processes). */
+const stagePlanSyncedAt = new Map<number, number>();
+const STAGE_PLAN_SYNC_TTL_MS = 5 * 60 * 1000;
+
 export async function ensureStagePlanTemplates(
   businessId: number,
   branchCode: string | null,
   opts?: { reactivate?: boolean }
 ) {
+  const syncedAt = stagePlanSyncedAt.get(businessId);
+  if (!opts?.reactivate && syncedAt !== undefined && Date.now() - syncedAt < STAGE_PLAN_SYNC_TTL_MS) {
+    // Already reconciled in this process — one read instead of a hit-per-task
+    // scan (and avoid the writes entirely, see the change-driven guards below).
+    return db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId));
+  }
   const existing = await db
     .select()
     .from(checklistTemplates)
@@ -120,6 +132,20 @@ export async function ensureStagePlanTemplates(
       if (found.origin === "STAGE_PLAN") {
         // Refresh ONLY system-owned rows, and only metadata the Owner hasn't
         // deliberately changed (activation stays untouched unless reactivate).
+        // CHANGE-DRIVEN: a row whose metadata already matches this build is
+        // NOT written. (The old code issued one UPDATE per task on every read —
+        // ~30 round trips per checklist screen against a remote database.)
+        const alreadyCurrent =
+          found.birdType === t.birdType &&
+          JSON.stringify(found.stageKeys ?? null) === JSON.stringify(t.stageKeys ?? null) &&
+          (found.frequency ?? null) === (t.frequency ?? null) &&
+          (found.priority ?? null) === (t.priority ?? null) &&
+          !!found.houseScoped === !!t.houseScoped &&
+          (!opts?.reactivate || found.isActive !== false);
+        if (alreadyCurrent) {
+          rows.push(found);
+          continue;
+        }
         await db
           .update(checklistTemplates)
           .set({
@@ -140,6 +166,18 @@ export async function ensureStagePlanTemplates(
         // flock-level plan stays complete instead of silently missing
         // critical tasks. Origin becomes STAGE_PLAN so future refreshes keep
         // its metadata in sync — the label stays the Owner's forever.
+        const adoptedAlready =
+          found.origin === "STAGE_PLAN" &&
+          found.birdType === t.birdType &&
+          JSON.stringify(found.stageKeys ?? null) === JSON.stringify(t.stageKeys ?? null) &&
+          (found.frequency ?? null) === (t.frequency ?? null) &&
+          (found.priority ?? null) === (t.priority ?? null) &&
+          !!found.houseScoped === !!t.houseScoped &&
+          (!opts?.reactivate || found.isActive !== false);
+        if (adoptedAlready) {
+          rows.push(found);
+          continue;
+        }
         await db
           .update(checklistTemplates)
           .set({
@@ -193,6 +231,7 @@ export async function ensureStagePlanTemplates(
   }
   if (adopted > 0) {
     console.log(`[checklistGen] stage plan: adopted ${adopted} existing item(s) whose task keys match system stage tasks (Owner labels/assignments kept)`);
+  stagePlanSyncedAt.set(businessId, Date.now());
   }
   return rows;
 }
@@ -277,6 +316,38 @@ function genLockKey(businessId: number, date: string): number {
  *  business+date. With the stage plan enabled, flock-scoped rows are added
  *  per ACTIVE flock at its current production stage, and re-runs only add
  *  what's missing (a flock registered mid-day still gets today's tasks). */
+/**
+ * PROCESS-LEVEL MEMO: "this business's checklist for this date has already been
+ * generated in this process".
+ *
+ * generateEntriesForDate() is idempotent but not free — an advisory lock plus
+ * template and entry reads on EVERY call, and the checklist panel asks for
+ * today's plan on every open. Against a remote database those round trips are
+ * the whole cost of the screen (measured: /api/checklists ≈ 1 s at 40 ms RTT).
+ *
+ * The memo can never hide data: it only skips work that has already run
+ * successfully in this process, it expires after 60 s, and every template
+ * mutation invalidates it explicitly (invalidateChecklistGeneration), so a
+ * newly added item still materialises immediately.
+ */
+const GENERATED_TTL_MS = 60_000;
+const generatedAt = new Map<string, number>();
+
+export function invalidateChecklistGeneration(businessId?: number): void {
+  if (businessId === undefined) {
+    generatedAt.clear();
+    stagePlanSyncedAt.clear();
+    return;
+  }
+  const prefix = `${businessId}:`;
+  for (const k of [...generatedAt.keys()]) if (k.startsWith(prefix)) generatedAt.delete(k);
+  stagePlanSyncedAt.delete(businessId);
+}
+
+function generationKey(businessId: number, branchCode: string | null, date: string): string {
+  return `${businessId}:${branchCode || "-"}:${date}`;
+}
+
 export async function generateEntriesForDate(
   businessId: number,
   branchCode: string | null,
@@ -284,18 +355,51 @@ export async function generateEntriesForDate(
   bizCode?: string | null,
   bizCategory?: string | null
 ) {
+  const genKey = generationKey(businessId, branchCode, date);
+  const lastGenerated = generatedAt.get(genKey);
+  if (lastGenerated !== undefined && Date.now() - lastGenerated < GENERATED_TTL_MS) {
+    // Already generated in this process: skip the advisory lock, the template
+    // read and the insert pass, and just hand back the rows for this date
+    // (ONE round trip instead of five) — same return contract for callers.
+    return db
+      .select()
+      .from(checklistEntries)
+      .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, date)));
+  }
+
   await ensureTemplates(businessId, branchCode, bizCode ?? null, bizCategory ?? null);
 
   const lockKey = genLockKey(businessId, date);
-  await db.execute(sql`select pg_advisory_lock(${lockKey})`);
-  try {
+
+  // ── Concurrency + production-pooler safety (final audit) ────────────────
+  // The whole critical section runs in ONE transaction guarded by a
+  // TRANSACTION-scoped advisory lock:
+  //   • `pg_advisory_xact_lock` is released automatically at COMMIT/ROLLBACK,
+  //     so a crashed or timed-out request can never leave the lock held.
+  //   • It is the ONLY advisory-lock flavour that is safe behind a
+  //     transaction-mode connection pooler (Neon `-pooler` hosts, PgBouncer
+  //     `?pgbouncer=true`): session-level `pg_advisory_lock()` /
+  //     `pg_advisory_unlock()` can execute on DIFFERENT backend connections
+  //     there, which orphaned the lock forever and hung every later
+  //     generation for the same business+date (the checklist route then
+  //     blocked until the function timed out).
+  //   • Every read and insert below shares that single connection, so the
+  //     "already materialized" check and the inserts are atomic — two app
+  //     instances generating the same day concurrently can no longer
+  //     duplicate tasks.
+  // Side effects (push delivery, audit rows) are collected and fired AFTER
+  // the commit: they must never hold the lock open or borrow a second
+  // connection mid-transaction (that is what deadlocks a small pool).
+  const pendingEffects: (() => Promise<unknown>)[] = [];
+  const generated = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
     const templates = (
-      await db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId))
+      await tx.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId))
     )
       .filter((t: any) => t.isActive !== false)
       .sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0));
 
-    const existing = await db
+    const existing = await tx
       .select()
       .from(checklistEntries)
       .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, date)));
@@ -339,7 +443,7 @@ export async function generateEntriesForDate(
 
     // ── 2. Stage-plan generation (poultry businesses with the plan on) ────
     if (stageTemplates.length > 0 || customScoped.length > 0) {
-      const flockRows = await db
+      const flockRows = await tx
         .select()
         .from(poultryFlocks)
         .where(eq(poultryFlocks.businessId, businessId));
@@ -381,18 +485,29 @@ export async function generateEntriesForDate(
         history = freqRows as HistoryRow[];
         // Latest recorded stage per flock (excluding this date — a re-run of
         // today must not "transition" against itself).
-        const stageRows = (await getPool().query(
-          `SELECT DISTINCT ON (flock_id) flock_id, stage_key, checklist_date
-             FROM checklist_entries
-            WHERE business_id = $1 AND flock_id = ANY($2) AND stage_key IS NOT NULL
-              AND checklist_date <> $3
-            ORDER BY flock_id, checklist_date DESC, id DESC`,
-          [businessId, flockIds, date]
-        )) as unknown as { rows: any[] };
-        latestStage = stageRows.rows.map((r: any) => ({
-          flockId: Number(r.flock_id),
-          stageKey: String(r.stage_key),
-          checklistDate: String(r.checklist_date),
+        // Runs on the transaction's connection (tx) — a raw pool query here
+        // would borrow a SECOND connection while the lock transaction is
+        // still open, which starves a small pool under load.
+        const stageRows = await tx
+          .selectDistinctOn([checklistEntries.flockId], {
+            flockId: checklistEntries.flockId,
+            stageKey: checklistEntries.stageKey,
+            checklistDate: checklistEntries.checklistDate,
+          })
+          .from(checklistEntries)
+          .where(
+            and(
+              eq(checklistEntries.businessId, businessId),
+              inArray(checklistEntries.flockId, flockIds),
+              isNotNull(checklistEntries.stageKey),
+              ne(checklistEntries.checklistDate, date)
+            )
+          )
+          .orderBy(checklistEntries.flockId, desc(checklistEntries.checklistDate), desc(checklistEntries.id));
+        latestStage = stageRows.map((r: any) => ({
+          flockId: Number(r.flockId),
+          stageKey: String(r.stageKey),
+          checklistDate: String(r.checklistDate),
         }));
       }
 
@@ -405,7 +520,7 @@ export async function generateEntriesForDate(
       }
 
       if (activeFlocks.length) {
-        const profileRows = await db
+        const profileRows = await tx
           .select()
           .from(poultryBenchmarkProfiles)
           .where(eq(poultryBenchmarkProfiles.businessId, businessId));
@@ -435,28 +550,37 @@ export async function generateEntriesForDate(
                 stage.marketEtaDays != null && stage.marketEtaDays > 0 && stage.phase === "MARKET"
                   ? ` ${stage.marketEtaDays} day(s) to market age.`
                   : "";
-              try {
-                await notifyPoultryStageTransition({
-                  flock: { id: flockId, batchNumber: flock.batchNumber, birdType: flock.birdType },
-                  stage,
-                  businessId,
-                  branchCode: branchCode || flock.branchCode || null,
-                });
-              } catch (e: any) {
-                console.error("[checklistGen] stage transition notify failed:", e?.message || e);
-              }
-              auditLog(
-                { id: 0, name: "Checklist Engine", role: "SYSTEM" },
-                "POULTRY_STAGE_TRANSITION",
-                "Flock",
-                `${flock.batchNumber} → ${stage.label}`,
-                "OPERATION_LOG",
-                flockId,
+              // DEFERRED past the commit (see the transaction note at the top of
+              // this function): push delivery + the audit row use their own DB
+              // connection/network IO and must not run while the advisory-lock
+              // transaction is open.
+              const transition = {
+                flock: { id: flockId, batchNumber: flock.batchNumber, birdType: flock.birdType },
+                stage,
                 businessId,
-                branchCode || flock.branchCode || null,
-                `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age.${etaTxt} ${stage.transitionNote}`.trim(),
-                (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
-              ).catch(() => {});
+                branchCode: branchCode || flock.branchCode || null,
+              };
+              const transitionNote = `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age.${etaTxt} ${stage.transitionNote}`.trim();
+              const transitionLabel = `${flock.batchNumber} → ${stage.label}`;
+              pendingEffects.push(async () => {
+                try {
+                  await notifyPoultryStageTransition(transition as any);
+                } catch (e: any) {
+                  console.error("[checklistGen] stage transition notify failed:", e?.message || e);
+                }
+                auditLog(
+                  { id: 0, name: "Checklist Engine", role: "SYSTEM" },
+                  "POULTRY_STAGE_TRANSITION",
+                  "Flock",
+                  transitionLabel,
+                  "OPERATION_LOG",
+                  flockId,
+                  businessId,
+                  branchCode || flock.branchCode || null,
+                  transitionNote,
+                  (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+                ).catch(() => {});
+              });
             }
           }
 
@@ -514,13 +638,21 @@ export async function generateEntriesForDate(
 
     const inserted: any[] = [];
     for (const row of toInsert) {
-      const [r] = await db.insert(checklistEntries).values(row).returning();
+      const [r] = await tx.insert(checklistEntries).values(row).returning();
       inserted.push(r);
     }
     return [...existing, ...inserted];
-  } finally {
-    await db.execute(sql`select pg_advisory_unlock(${lockKey})`).catch(() => {});
+  }); // COMMIT here — the advisory lock is released by the server immediately.
+
+  generatedAt.set(genKey, Date.now()); // success → skip the lock + reads for the next 60 s
+  for (const effect of pendingEffects) {
+    try {
+      await effect();
+    } catch (e: any) {
+      console.error("[checklistGen] deferred post-commit effect failed:", e?.message || e);
+    }
   }
+  return generated;
 }
 
 // In-process guard so a single server run never re-announces the same
@@ -658,6 +790,9 @@ export async function forkFlockPlan(
     rows.push(row);
   }
   await upsertPlanState(businessId, branchCode, flock, { source: "CUSTOM" }, actor);
+  // A flock's own template rows change what today's plan must contain →
+  // never let the 60 s generation memo hand back the pre-mutation result.
+  invalidateChecklistGeneration(businessId);
   return { created: rows.length, rows };
 }
 
@@ -711,6 +846,7 @@ export async function applyPlanTemplateToFlock(
     { source: "TEMPLATE", planTemplateId: template.id, planTemplateName: template.name },
     actor
   );
+  invalidateChecklistGeneration(businessId); // see forkFlockPlan
   return { created: rows.length, rows };
 }
 
@@ -722,6 +858,7 @@ export async function resetFlockPlan(businessId: number, flock: any, actor: Acto
     .where(and(eq(checklistTemplates.businessId, businessId), eq(checklistTemplates.flockId, Number(flock.id))))
     .returning();
   await upsertPlanState(businessId, flock.branchCode || null, flock, { source: "SYSTEM" }, actor);
+  invalidateChecklistGeneration(businessId); // see forkFlockPlan
   return removed.length;
 }
 

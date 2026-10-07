@@ -371,6 +371,11 @@ async function phaseF(browser, errors, cookies) {
   // owner UI: new business shows in sidebar + page works
   const { ctx, page } = await newContext(browser, "F-owner", errors);
   await loginUi(page, CREDS.owner);
+  // The rail bounds its unit list on first run ("Show all N units"). Expand it,
+  // WAIT for the re-render, then look — a unit created on a large estate is
+  // otherwise invisible to this check.
+  await page.evaluate(() => document.querySelector('[data-testid="nav-biz-show-all"]')?.click());
+  await new Promise((r) => setTimeout(r, 800));
   const bizInSidebar = await page.evaluate((name) => {
     const b = [...document.querySelectorAll('[data-testid="nav-sidebar"] button')].find((x) => (x.textContent || "").includes(name));
     if (b) { b.click(); return true; }

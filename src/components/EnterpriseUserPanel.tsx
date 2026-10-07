@@ -2,7 +2,7 @@
 
 import UnitScopeOptions from "@/components/UnitScopeOptions";
 import { myOrgIdOf } from "@/lib/businessScope";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AdvisorSectionPicker from "./AdvisorSectionPicker";
 import { farmModuleOfBusiness } from "@/lib/advisorSections";
 import {
@@ -25,6 +25,19 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { isFarmBusinessCategory } from "@/lib/businessTypeKeys";
+import RolePermissionsEditor from "./RolePermissionsEditor";
+import {
+  CAPABILITIES,
+  ROLES,
+  roleCategory,
+  roleDef,
+  roleLabel,
+  roleOptionsFor,
+  roleShortLabel,
+  rolePreset,
+  isExternalRole,
+  type CapabilityKey,
+} from "@/lib/roles";
 import LocationSelector, { LocationValue, LocationBadge } from "./LocationSelector";
 import { REGION_NAMES } from "@/lib/ghanaLocations";
 import SignedInStaffPanel from "./SignedInStaffPanel";
@@ -82,10 +95,9 @@ export default function EnterpriseUserPanel({
   const [advisorGrants, setAdvisorGrants] = useState<AdvisorGrants | null>(null);
   const [advisorAccessUser, setAdvisorAccessUser] = useState<any>(null);
   const [newBusinessId, setNewBusinessId] = useState("");
-  const [newCanRecordSales, setNewCanRecordSales] = useState(true);
-  const [newCanRecordExpenses, setNewCanRecordExpenses] = useState(false);
-  const [newCanManageStock, setNewCanManageStock] = useState(false);
-  const [newCanExportData, setNewCanExportData] = useState(false);
+  // ONE capability object per form, seeded from the role registry — the same
+  // model Users & Access uses (docs/ROLES-AND-PERMISSIONS-AUDIT.md §7.3).
+  const [newCaps, setNewCaps] = useState<Record<CapabilityKey, boolean>>(() => rolePreset("WORKER"));
   const [isCreating, setIsCreating] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [newLocation, setNewLocation] = useState<LocationValue>({
@@ -106,10 +118,7 @@ export default function EnterpriseUserPanel({
   const [editPhone, setEditPhone] = useState("");
   const [editRole, setEditRole] = useState("");
   const [editBusinessId, setEditBusinessId] = useState("");
-  const [editCanRecordSales, setEditCanRecordSales] = useState(true);
-  const [editCanRecordExpenses, setEditCanRecordExpenses] = useState(false);
-  const [editCanManageStock, setEditCanManageStock] = useState(false);
-  const [editCanExportData, setEditCanExportData] = useState(false);
+  const [editCaps, setEditCaps] = useState<Record<CapabilityKey, boolean>>(() => rolePreset("WORKER"));
   const [isEditing, setIsEditing] = useState(false);
 
   // Password reset state
@@ -174,8 +183,39 @@ export default function EnterpriseUserPanel({
     return b ? `${b.name} (${b.branchLocation})` : `Branch #${bId}`;
   };
 
+  // Only the OWNER may flip the sensitive/OWNER-only capabilities (the server
+  // enforces this too) — the shared editor hides them for everyone else.
+  const isOwner = currentUser?.role === "OWNER";
+
+  // The roles THIS actor may pick — one registry call, identical to the one
+  // Users & Access uses, so the two surfaces can never disagree again.
+  const assignable = useMemo(() => roleOptionsFor(currentUser), [currentUser]);
+  const staffRoles = useMemo(() => assignable.filter((r: { section: string }) => r.section !== "EXTERNAL"), [assignable]);
+  const externalRoles = useMemo(() => assignable.filter((r: { section: string }) => r.section === "EXTERNAL"), [assignable]);
+  // Editing an existing row must be able to show the role it already holds even
+  // when this actor could not assign it (e.g. a delegate viewing a Supervisor),
+  // otherwise saving the form would silently re-role the account.
+  const editRoleOptions = useMemo(() => {
+    const keys = assignable.map((r: { key: string }) => r.key);
+    return editRole && !keys.includes(editRole) ? [editRole, ...keys] : keys;
+  }, [assignable, editRole]);
+
+  /** Unit-scoped roles cannot be saved without a branch (registry-owned rule). */
+  const roleRequiresUnit = (r: string) => ROLES.find((x) => x.key === r)?.requiresUnit === true;
+
+  // Opening the register modal with a unit-scoped default role must preselect a
+  // unit — otherwise the picker displays the first branch while the form state
+  // is still empty, and saving would walk into the API's 400 (audit F10).
+  useEffect(() => {
+    if (!showCreateModal) return;
+    if (roleRequiresUnit(newRole) === false) return;
+    if (newBusinessId) return;
+    const first = businesses?.[0]?.id;
+    if (first != null) setNewBusinessId(String(first));
+  }, [showCreateModal, newRole, newBusinessId, businesses, roleRequiresUnit]);
+
   const mayManageAdvisors =
-    currentUser?.role === "OWNER" ||
+    isOwner ||
     currentUser?.role === "GENERAL_MANAGER" ||
     currentUser?.canManageUsers === true;
 
@@ -232,14 +272,16 @@ export default function EnterpriseUserPanel({
           email: newEmail,
           phone: newPhone,
           role: newRole,
-          assignedBusinessId: newBusinessId ? Number(newBusinessId) : null,
+          // Belt and braces: an EXTERNAL role never carries a primary unit, no
+          // matter what the form state still holds (the API rejects it).
+          assignedBusinessId:
+            roleDef(newRole)?.forbidsUnit || !newBusinessId ? null : Number(newBusinessId),
           region: newLocation.region,
           district: newLocation.district,
           town: newLocation.town,
-          canRecordSales: newCanRecordSales,
-          canRecordExpenses: newCanRecordExpenses,
-          canManageStock: newCanManageStock,
-          canExportData: newCanExportData,
+          // Spreading the object keeps the payload shape identical while making
+          // the registry (not this component) the source of the values.
+          ...newCaps,
           // Advisors only: the OWNER-chosen initial password (server generates
           // a random one when blank and returns it exactly once).
           ...(newRole === "FARM_ADVISOR" ? { password: newPassword.trim() || undefined } : {}),
@@ -354,14 +396,12 @@ export default function EnterpriseUserPanel({
           email: editEmail,
           phone: editPhone,
           role: editRole,
-          assignedBusinessId: editBusinessId ? Number(editBusinessId) : null,
+          assignedBusinessId:
+          roleDef(editRole)?.forbidsUnit || !editBusinessId ? null : Number(editBusinessId),
           region: editLocation.region,
           district: editLocation.district,
           town: editLocation.town,
-          canRecordSales: editCanRecordSales,
-          canRecordExpenses: editCanRecordExpenses,
-          canManageStock: editCanManageStock,
-          canExportData: editCanExportData,
+          ...editCaps,
         }),
       });
 
@@ -438,10 +478,10 @@ export default function EnterpriseUserPanel({
     setEditPhone(user.phone || "");
     setEditRole(user.role);
     setEditBusinessId(user.assignedBusinessId ? String(user.assignedBusinessId) : "");
-    setEditCanRecordSales(user.canRecordSales !== false);
-    setEditCanRecordExpenses(user.canRecordExpenses === true);
-    setEditCanManageStock(user.canManageStock === true);
-    setEditCanExportData(user.canExportData === true);
+    // Stored capability values are the truth when editing an existing account.
+    setEditCaps(
+      Object.fromEntries(CAPABILITIES.map((c) => [c.key, user[c.key] === true])) as Record<CapabilityKey, boolean>,
+    );
     setEditLocation({
       region: user.region || "",
       district: user.district || "",
@@ -571,11 +611,11 @@ export default function EnterpriseUserPanel({
             className="px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none"
           >
             <option value="ALL">All Roles</option>
-            <option value="OWNER">Owner</option>
-            <option value="GENERAL_MANAGER">General Manager</option>
-            <option value="FARM_ADVISOR">Farm Advisor</option>
-            <option value="BRANCH_MANAGER">Branch Manager</option>
-            <option value="WORKER">Worker (Sales Person)</option>
+            {/* Every role in the registry, so Co-Owner / Accountant /
+                Supervisor rows are filterable too (audit finding F5). */}
+            {ROLES.map((r) => (
+              <option key={r.key} value={r.key}>{r.label}</option>
+            ))}
           </select>
         </div>
       </div>
@@ -630,19 +670,24 @@ export default function EnterpriseUserPanel({
                     </td>
                     <td className="px-4 py-3.5">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                        // Colour by registry CATEGORY, label by registry
+                        // short label — no role literal left in the badge, so a
+                        // new role renders correctly the day it is registered.
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
                           user.role === "OWNER"
                             ? "bg-purple-500/20 text-purple-300 border border-purple-500/30"
-                            : user.role === "GENERAL_MANAGER"
+                            : roleCategory(user.role) === "ORG_EXEC"
                             ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
-                            : user.role === "BRANCH_MANAGER"
-                            ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
-                            : user.role === "FARM_ADVISOR"
+                            : roleCategory(user.role) === "EXTERNAL"
                             ? "bg-teal-500/20 text-teal-300 border border-teal-500/30"
-                            : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                            : roleCategory(user.role) === "SHOP_FLOOR"
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                            : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
                         }`}
                       >
-                        {user.role === "FARM_ADVISOR" ? "FARM ADVISOR" : user.role}
+                        {/* Badge chips read in caps (the established look) and the
+                            word comes from the registry — never a raw enum. */}
+                        {roleShortLabel(user.role).toUpperCase()}
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-slate-300">
@@ -901,13 +946,39 @@ export default function EnterpriseUserPanel({
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Role *</label>
                   <select
                     value={newRole}
-                    onChange={(e) => setNewRole(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setNewRole(next);
+                      // Apply the new role's preset so the capabilities below
+                      // always describe the role on screen (audit finding F3).
+                      setNewCaps(rolePreset(next));
+                      // A unit-scoped role with no unit is a guaranteed API 400
+                      // — pick the first available unit instead of letting the
+                      // user walk into a dead end (audit finding F10).
+                      if (roleRequiresUnit(next) && !newBusinessId && businesses?.length) {
+                        setNewBusinessId(String(businesses[0].id));
+                      }
+                      // External roles must NOT carry a unit — the API rejects
+                      // that combination, so drop any preselected branch.
+                      if (roleDef(next)?.forbidsUnit) setNewBusinessId("");
+                    }}
+                    data-testid="usr-create-role"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <option value="GENERAL_MANAGER">General Manager</option>
-                    <option value="BRANCH_MANAGER">Branch Manager</option>
-                    <option value="WORKER">Worker (Sales Person)</option>
-                    <option value="FARM_ADVISOR">Farm Advisor (external, read-only)</option>
+                    {/* ONE registry-driven list (src/lib/roles.ts) — the same
+                        roles Users & Access offers, filtered by THIS actor's
+                        authority. Externals are separated so an advisor never
+                        reads as staff. */}
+                    {staffRoles.map((r: { key: string; label: string }) => (
+                      <option key={r.key} value={r.key}>{r.label}</option>
+                    ))}
+                    {externalRoles.length > 0 && (
+                      <optgroup label="External">
+                        {externalRoles.map((r: { key: string; label: string }) => (
+                          <option key={r.key} value={r.key}>{r.label}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   {newRole === "FARM_ADVISOR" && (
                     <p className="text-[10px] text-teal-300 mt-1 leading-snug">
@@ -923,8 +994,21 @@ export default function EnterpriseUserPanel({
                     onChange={(e) => setNewBusinessId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allLabel="None (HQ / Executive)" />
+                    <UnitScopeOptions
+                      units={businesses}
+                      myOrgId={myOrgIdOf(currentUser)}
+                      // Unit-scoped roles MUST have a unit (the API returns 400
+                      // otherwise) — never offer them "None" (audit finding F10).
+                      includeAll={!roleRequiresUnit(newRole)}
+                      allValue=""
+                      allLabel="None (HQ / Executive)"
+                    />
                   </select>
+                  {roleRequiresUnit(newRole) && !newBusinessId && (
+                    <p className="text-[11px] text-amber-400 mt-1">
+                      {ROLES.find((x) => x.key === newRole)?.label} must be assigned to a branch.
+                    </p>
+                  )}
                 </div>
                 )}
               </div>
@@ -1048,30 +1132,19 @@ export default function EnterpriseUserPanel({
                 />
               </div>
 
-              {/* Detailed permissions for Workers and Branch Managers */}
-              {(newRole === "WORKER" || newRole === "BRANCH_MANAGER") && (
-                <div className="space-y-2 bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
-                  <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                    {newRole === "WORKER" ? "Worker Permissions" : "Branch Manager Permissions"}
-                  </div>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Record Sales</span>
-                    <input type="checkbox" checked={newCanRecordSales} onChange={(e) => setNewCanRecordSales(e.target.checked)} className="accent-emerald-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Record Expenses</span>
-                    <input type="checkbox" checked={newCanRecordExpenses} onChange={(e) => setNewCanRecordExpenses(e.target.checked)} className="accent-amber-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Manage Stock</span>
-                    <input type="checkbox" checked={newCanManageStock} onChange={(e) => setNewCanManageStock(e.target.checked)} className="accent-cyan-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Export Data / Reports</span>
-                    <input type="checkbox" checked={newCanExportData} onChange={(e) => setNewCanExportData(e.target.checked)} className="accent-indigo-500" />
-                  </label>
-                </div>
-              )}
+              {/* THE shared permissions editor — the same component (and the
+                  same registry presets) Users & Access uses, so the same role
+                  offers the same capabilities on every surface. */}
+              <div className="bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
+                <RolePermissionsEditor
+                  role={newRole}
+                  values={newCaps}
+                  onChange={(key, value) => setNewCaps((c) => ({ ...c, [key]: value }))}
+                  isOwner={isOwner}
+                  density="compact"
+                  testidPrefix="usr-create"
+                />
+              </div>
 
               {newRole !== "FARM_ADVISOR" && (
               <div className="pt-2 border-t border-slate-800">
@@ -1148,13 +1221,23 @@ export default function EnterpriseUserPanel({
                   <label className="block text-xs font-semibold text-slate-400 mb-1">Role</label>
                   <select
                     value={editRole}
-                    onChange={(e) => setEditRole(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setEditRole(next);
+                      setEditCaps(rolePreset(next));
+                      // External roles must NOT carry a unit (the API rejects it).
+                      if (roleDef(next)?.forbidsUnit) setEditBusinessId("");
+                    }}
+                    data-testid="usr-edit-role"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <option value="GENERAL_MANAGER">General Manager</option>
-                    <option value="FARM_ADVISOR">Farm Advisor (external, read-only)</option>
-                    <option value="BRANCH_MANAGER">Branch Manager</option>
-                    <option value="WORKER">Worker (Sales Person)</option>
+                    {editRoleOptions.map((r: string) => {
+                      // The row's CURRENT role is always listed, even if this
+                      // actor could not assign it — otherwise saving an
+                      // unchanged form would silently re-role the account.
+                      const def = ROLES.find((x) => x.key === r);
+                      return <option key={r} value={r}>{def ? def.label : r}</option>;
+                    })}
                   </select>
                   {editRole === "FARM_ADVISOR" && (
                     <div className="mt-1.5 rounded-lg border border-teal-500/30 bg-teal-500/5 px-3 py-2 space-y-1.5">
@@ -1186,7 +1269,13 @@ export default function EnterpriseUserPanel({
                     onChange={(e) => setEditBusinessId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none"
                   >
-                    <UnitScopeOptions units={businesses} myOrgId={myOrgIdOf(currentUser)} allLabel="None (HQ / Executive)" />
+                    <UnitScopeOptions
+                      units={businesses}
+                      myOrgId={myOrgIdOf(currentUser)}
+                      includeAll={!roleRequiresUnit(editRole)}
+                      allValue=""
+                      allLabel="None (HQ / Executive)"
+                    />
                   </select>
                 </div>
               </div>
@@ -1201,29 +1290,16 @@ export default function EnterpriseUserPanel({
                 />
               </div>
 
-              {(editRole === "WORKER" || editRole === "BRANCH_MANAGER") && (
-                <div className="space-y-2 bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
-                  <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                    {editRole === "WORKER" ? "Worker Permissions" : "Branch Manager Permissions"}
-                  </div>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Record Sales</span>
-                    <input type="checkbox" checked={editCanRecordSales} onChange={(e) => setEditCanRecordSales(e.target.checked)} className="accent-emerald-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Record Expenses</span>
-                    <input type="checkbox" checked={editCanRecordExpenses} onChange={(e) => setEditCanRecordExpenses(e.target.checked)} className="accent-amber-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Manage Stock</span>
-                    <input type="checkbox" checked={editCanManageStock} onChange={(e) => setEditCanManageStock(e.target.checked)} className="accent-cyan-500" />
-                  </label>
-                  <label className="flex items-center justify-between text-xs cursor-pointer">
-                    <span>Can Export Data / Reports</span>
-                    <input type="checkbox" checked={editCanExportData} onChange={(e) => setEditCanExportData(e.target.checked)} className="accent-indigo-500" />
-                  </label>
-                </div>
-              )}
+              <div className="bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
+                <RolePermissionsEditor
+                  role={editRole}
+                  values={editCaps}
+                  onChange={(key, value) => setEditCaps((c) => ({ ...c, [key]: value }))}
+                  isOwner={isOwner}
+                  density="compact"
+                  testidPrefix="usr-edit"
+                />
+              </div>
 
               <div className="pt-2 border-t border-slate-800">
                 <LocationSelector

@@ -48,6 +48,16 @@ import {
   Shirt,
 } from "lucide-react";
 
+import { canSeeEnterpriseUsers as canSeeEnterpriseUsersOf, canSeeFinancials as canSeeFinancialsOf } from "./permissions";
+import {
+  isOrgexecRole,
+  normaliseRole,
+  roleCategory,
+  roleDef,
+  inRoleGroup,
+  type RoleCategory,
+} from "./roles";
+
 /* ───────────────────────── groups ───────────────────────── */
 
 export type NavGroupKey =
@@ -147,7 +157,21 @@ export const groupByKey = (key: NavGroupKey): NavGroup =>
 
 export interface NavCtx {
   role?: string;
+  /** Registry fields. These are DERIVED from src/lib/roles.ts, never hand-listed,
+   *  so adding a role updates navigation in the same commit as its permissions. */
+  roleCategory: RoleCategory | null;
+  /** Org executive bench (registry EXECUTIVE group). */
   isExecutive: boolean;
+  /** Works a single unit and leads it (BRANCH_MANAGER / SUPERVISOR). */
+  isUnitLead: boolean;
+  /** Works a single unit as a specialist (SUPERVISOR / ACCOUNTANT). */
+  isUnitSpecialist: boolean;
+  /** Shop-floor staff (WORKER). */
+  isShopFloor: boolean;
+  /** Anyone whose whole workspace is the unit (lead + specialist + shop floor). */
+  isUnitScoped: boolean;
+  /** May review/approve the unit's attendance (registry ATTENDANCE_REVIEW). */
+  canReviewAttendance: boolean;
   isWorker: boolean;
   isFarmAdvisor: boolean;
   isBranchManager: boolean;
@@ -155,6 +179,15 @@ export interface NavCtx {
   /** Owner-delegated "Manage Business/Unit" manager (businessManageIds). */
   isUnitManager: boolean;
   canViewFinance: boolean;
+  /** OWNER-delegated Enterprise Users console access (users.canManageUsers). */
+  canManageUsers: boolean;
+  /**
+   * Resolved sensitive-surface flags: NEVER implied by a role. OWNER (and the
+   * platform Super Admin) qualify; everybody else only through the OWNER's
+   * explicit grant. See src/lib/permissions.ts.
+   */
+  canSeeEnterpriseUsers: boolean;
+  canSeeFinancials: boolean;
   canManageSupport: boolean;
   canManageCctv: boolean;
   canManageAuditors: boolean;
@@ -172,16 +205,31 @@ export interface NavCtx {
 }
 
 export function navCtx(currentUser: any, extra: Partial<NavCtx> = {}): NavCtx {
-  const role = currentUser?.role || "OWNER";
+  const role = normaliseRole(currentUser?.role) || "OWNER";
+  const canSeeEnterpriseUsers = canSeeEnterpriseUsersOf(currentUser);
+  const canSeeFinancials = canSeeFinancialsOf(currentUser);
+  const category = roleCategory(role); // "EXTERNAL" for the Farm Advisor
+  const isUnitLead = category === "UNIT_LEAD";
+  const isUnitSpecialist = category === "UNIT_SPECIALIST";
+  const isShopFloor = category === "SHOP_FLOOR";
   return {
     role,
-    isExecutive: role === "OWNER" || role === "GENERAL_MANAGER",
-    isWorker: role === "WORKER",
+    roleCategory: category,
+    isExecutive: isOrgexecRole(role),
+    isUnitLead,
+    isUnitSpecialist,
+    isShopFloor,
+    isUnitScoped: isUnitLead || isUnitSpecialist || isShopFloor,
+    canReviewAttendance: inRoleGroup("ATTENDANCE_REVIEW", role),
+    isWorker: isShopFloor,
     isFarmAdvisor: role === "FARM_ADVISOR",
     isBranchManager: role === "BRANCH_MANAGER",
     isSuperAdmin: !!currentUser?.isSuperAdmin,
     isUnitManager: !!extra.isUnitManager,
     canViewFinance: !!currentUser?.canViewFinance,
+    canManageUsers: !!currentUser?.canManageUsers,
+    canSeeEnterpriseUsers,
+    canSeeFinancials,
     canManageSupport: !!currentUser?.canManageSupport,
     canManageCctv: !!currentUser?.canManageCctv,
     canManageAuditors: !!currentUser?.canManageAuditors,
@@ -293,7 +341,8 @@ export const NAV_ENTRIES: NavEntry[] = [
     chip: "LIVE",
     ink: "text-cyan-400/90",
     hub: { key: "ORDERS", label: "Orders & Fulfilment", Icon: Truck },
-    eligible: (c) => execOrUnitManager(c) || c.isBranchManager,
+    // A unit tracks ITS OWN orders — the list is scoped to the unit server-side.
+    eligible: (c) => execOrUnitManager(c) || c.isBranchManager || c.isUnitSpecialist,
   },
   {
     id: "PREORDERS",
@@ -333,7 +382,10 @@ export const NAV_ENTRIES: NavEntry[] = [
     testid: "sidebar-tab-finance",
     chip: "ALL",
     ink: "text-cyan-400",
-    eligible: (c) => execOrUnitManager(c) || c.canViewFinance,
+    // FINANCIAL SURFACE: role alone never opens it. OWNER / Super Admin, or an
+    // explicit OWNER-issued `canViewFinance` grant (Central Financial Report,
+    // budgets, cash-flow, payroll money).
+    eligible: (c) => c.canSeeFinancials,
   },
   {
     id: "TRANSACTIONS",
@@ -344,7 +396,9 @@ export const NAV_ENTRIES: NavEntry[] = [
     Icon: CreditCard,
     keywords: ["transactions", "momo", "mobile money", "ledger", "income", "expense", "payments"],
     ink: "text-emerald-400/80",
-    eligible: execOrUnitManager,
+    // The OWNER's explicit finance grant now reaches the ledger it reconciles —
+    // this is what makes the Accountant preset's `canViewFinance` real.
+    eligible: (c) => execOrUnitManager(c) || c.canViewFinance,
   },
 
   /* ── Records ────────────────────────────────────────────── */
@@ -406,7 +460,9 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["branch sales", "till", "payments", "pos"],
     chip: "SALES",
     ink: "text-cyan-400",
-    eligible: (c) => c.isBranchManager,
+    // Every unit-scoped staff role that is not shop-floor runs this register
+    // (SUPERVISOR / ACCOUNTANT used to have no workspace at all — audit F7).
+    eligible: (c) => c.isBranchManager || c.isUnitSpecialist,
   },
   {
     id: "BRANCH_ASSETS",
@@ -417,7 +473,8 @@ export const NAV_ENTRIES: NavEntry[] = [
     Icon: Wrench,
     keywords: ["assets", "equipment", "branch", "maintenance"],
     ink: "text-purple-400",
-    eligible: (c) => c.isBranchManager,
+    // The unit's asset register — the unit bench, not just its manager (D2).
+    eligible: (c) => c.isBranchManager || c.isUnitSpecialist,
   },
   {
     id: "WORKERS_MANAGE",
@@ -428,7 +485,9 @@ export const NAV_ENTRIES: NavEntry[] = [
     Icon: ShieldCheck,
     keywords: ["workers", "sales persons", "staff", "team", "attendance"],
     ink: "text-cyan-400",
-    eligible: (c) => c.isBranchManager,
+    // Attendance review is a registry capability: whoever may review the unit's
+    // attendance reaches the roster (Supervisor / Accountant included).
+    eligible: (c) => c.isBranchManager || c.canReviewAttendance,
   },
 
   /* ── Insights & Decisions ───────────────────────────────── */
@@ -525,7 +584,10 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["users", "access", "roles", "permissions", "assignments", "staff accounts"],
     chip: "HQ",
     ink: "text-cyan-400",
-    eligible: (c) => c.isExecutive,
+    // ENTERPRISE USERS SURFACE: OWNER / Super Admin, or an explicit
+    // OWNER-issued `canManageUsers` grant. A General Manager role alone does
+    // NOT open the staff directory.
+    eligible: (c) => c.canSeeEnterpriseUsers,
   },
   {
     id: "PLATFORM_ADMIN",
@@ -739,12 +801,33 @@ export function canOpenBusiness(
   biz: any,
   opts: { currentUser: any; accessibleBusinessIds?: number[] | null },
 ): boolean {
-  const role = opts.currentUser?.role;
-  if (role !== "BRANCH_MANAGER" && role !== "WORKER") return true;
+  const role = normaliseRole(opts.currentUser?.role);
+  const scope = roleDef(role)?.scope;
+  // ORG-scoped roles reach every unit of their organisation (the server scopes
+  // the list itself). This used to be a DENY-list — "anything that is not a
+  // branch manager or a worker sees everything" — so every future or unknown
+  // role silently became organisation-wide (audit finding F9). It is now an
+  // ALLOW-list: unknown role ⇒ only explicitly granted units.
+  if (scope === "ORG" || scope === "ORG_OR_UNITS") return true;
   const assigned = opts.currentUser?.assignedBusinessId;
   if (assigned != null && Number(biz?.id) === Number(assigned)) return true;
   if (Array.isArray(opts.accessibleBusinessIds)) {
     return opts.accessibleBusinessIds.map(Number).includes(Number(biz?.id));
   }
   return false;
+}
+
+/**
+ * The tab a signed-in user lands on. Registry-driven so a role can never land
+ * on a surface it is not allowed to open (a Supervisor used to sign in on the
+ * executive Command Center and read "Access Restricted" — audit finding F7).
+ */
+export function defaultTabFor(user: any): string {
+  const role = normaliseRole(user?.role);
+  const category = roleCategory(role);
+  if (category === "EXTERNAL") return "ADVISOR";
+  if (category === "ORG_EXEC") return "COMMAND_CENTER";
+  // Unit bench: the unit sales & payments register is their home row.
+  if (category === "UNIT_LEAD" || category === "UNIT_SPECIALIST") return "BRANCH_SALES";
+  return "COMMAND_CENTER"; // shop floor — WorkerDashboard owns the view
 }

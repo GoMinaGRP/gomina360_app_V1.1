@@ -50,6 +50,7 @@ import VariantStockEditor, {
 } from "./VariantStockEditor";
 import QrRecordModal from "./QrRecordModal";
 import PayrollCenter from "./PayrollCenter";
+import { canSeeFinancials } from "@/lib/permissions";
 import { EmployeeRegistration, EmployeeProfile } from "./EmployeeCenter";
 import { Landmark } from "lucide-react";
 import { buildInventoryQr } from "@/lib/qrRegistry";
@@ -90,6 +91,9 @@ export default function SharedEnterpriseModule({
   currentUser,
   lockedBusinessId = null,
 }: SharedEnterpriseModuleProps) {
+  // FINANCIAL SURFACE — payroll (salary money) is restricted to the OWNER and
+  // the users the OWNER authorises for Finance & Reports.
+  const mayOpenPayroll = canSeeFinancials(currentUser);
   const [searchTerm, setSearchTerm] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [showEmpReg, setShowEmpReg] = useState(false); // Employee Registration modal
@@ -1682,7 +1686,9 @@ export default function SharedEnterpriseModule({
               </button>
             </div>
           )}
-          {moduleType === "EMPLOYEES" && (
+          {/* Payroll is a FINANCIAL SURFACE: only the OWNER / Super Admin or an
+              OWNER-authorised (`canViewFinance`) viewer may open it. */}
+          {moduleType === "EMPLOYEES" && mayOpenPayroll && (
             <button
               onClick={() => setShowPayroll(true)}
               className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs sm:text-sm shadow-lg transition"
@@ -4147,7 +4153,7 @@ export default function SharedEnterpriseModule({
       )}
 
       {/* Payroll Command Center (Employees & Payroll module) */}
-      {moduleType === "EMPLOYEES" && showPayroll && (
+      {moduleType === "EMPLOYEES" && showPayroll && mayOpenPayroll && (
         <PayrollCenter
           currentUser={currentUser}
           businesses={businesses}

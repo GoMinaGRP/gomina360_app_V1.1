@@ -5,10 +5,12 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { batchReads } from "@/lib/batchRead";
 import { auditReviews, notifications } from "@/db/schema";
 import { getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { businesses } from "@/db/schema";
+import { cachedJson } from "@/lib/httpCache";
 
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];
 const OPEN_STATUSES = ["FLAGGED", "CORRECTION_REQUIRED", "OPEN"];
@@ -18,7 +20,11 @@ export async function GET(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
-    const rows = await db.select().from(notifications).where(eq(notifications.userId, user.id)).orderBy(desc(notifications.id)).limit(60);
+    // ONE round trip (see src/lib/batchRead.ts) — same filter, same cap.
+    const NOTIF = await batchReads([
+      { key: "rows", table: notifications, order: "id", limit: 60, whereField: "userId", whereValue: Number(user.id) },
+    ]);
+    const rows = NOTIF.rows;
     const unreadCount = rows.filter((n) => !n.isRead).length;
     // Issues still waiting on ME (flagged or correction required) — two indexed
     // COUNT queries and no row transfer. This used to read the whole
@@ -55,7 +61,7 @@ export async function GET(request: Request) {
         : Promise.resolve([{ c: 0 } as { c: number }]),
     ]);
     const openAssignedCount = Number(mineRows[0]?.c || 0) + Number(legacyRows[0]?.c || 0);
-    return NextResponse.json({ success: true, notifications: rows, unreadCount, openAssignedCount });
+    return cachedJson(request, { success: true, notifications: rows, unreadCount, openAssignedCount });
   } catch (error: any) {
     return apiError(error);
   }

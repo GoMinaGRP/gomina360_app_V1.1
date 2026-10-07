@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
+import { batchReads } from "@/lib/batchRead";
 import {
   auditTrail,
   customerTrackings,
@@ -50,13 +51,22 @@ export async function GET(request: NextRequest) {
     const allowed = await accessibleBusinessIds(me);
     // Suppliers for the Raise-PO dropdown — org-scoped like everything else.
     const myOrgIds: number[] = Array.isArray(me.organizationIds) ? me.organizationIds.map(Number) : [];
-    let supplierRows = await db.select().from(suppliers);
+    // ONE round trip for the whole page (see src/lib/batchRead.ts).
+    const PR = await batchReads([
+      { key: "suppliers", table: suppliers, scope: "none" },
+      { key: "orders", table: supplierOrders, scope: "none" },
+      { key: "requisitions", table: purchaseRequisitions, scope: "none" },
+      { key: "quotes", table: supplierQuotes, scope: "none" },
+      { key: "invoices", table: supplierInvoices, scope: "none" },
+      { key: "payments", table: supplierPayments, scope: "none" },
+    ]);
+    let supplierRows = PR.suppliers;
     if (!me.isSuperAdmin) supplierRows = supplierRows.filter((sp) => myOrgIds.includes(Number(sp.ownerId ?? (myOrgIds.includes(1) ? 1 : -1))));
     const suppliersOut = supplierRows.map((sp) => ({
       id: sp.id, name: sp.name, category: sp.category,
       contactPhone: sp.phone, contactPerson: sp.contactPerson, paymentTerms: sp.paymentTerms,
     }));
-    let rows = filterByAccess(await db.select().from(supplierOrders), allowed);
+    let rows = filterByAccess(PR.orders, allowed);
     if (bizFilter) rows = rows.filter((r) => Number(r.businessId) === bizFilter);
     if (statusFilter) rows = rows.filter((r) => r.status === statusFilter);
     rows.sort((a: any, b: any) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
@@ -73,10 +83,10 @@ export async function GET(request: NextRequest) {
 
     // R2 chain registers — requisitions, quotes, invoices (+payments) and
     // supplier performance, all scoped to the caller's accessible units.
-    let requisitions = await db.select().from(purchaseRequisitions);
-    let quotes = await db.select().from(supplierQuotes);
-    let invoices = await db.select().from(supplierInvoices);
-    let payments = await db.select().from(supplierPayments);
+    let requisitions = PR.requisitions;
+    let quotes = PR.quotes;
+    let invoices = PR.invoices;
+    let payments = PR.payments;
     if (allowed !== null) {
       const scope = new Set((allowed || []).map(Number));
       const inScope = (bizId: any) => scope.has(Number(bizId));

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { businesses } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { canSeeFinancials } from "@/lib/permissions";
 import { exportBusinessBackup, BACKUP_CONTENT_TYPE } from "@/lib/businessBackup";
 import { apiError } from "@/lib/apiError";
 
@@ -53,13 +54,25 @@ export async function GET(request: Request) {
     if (!allowed) {
       return FORBIDDEN("You do not have access to this business.");
     }
+    // ── Download authorisation ──────────────────────────────────────────
+    // A business backup is a full-fidelity, RESTORABLE copy of an entire unit:
+    // every record, ledger, salary, supplier directory and setting. That is an
+    // OWNER-level capability, so it takes an OWNER-issued authorisation —
+    // NOT the day-to-day `canExportData` toggle (which a Branch Manager may
+    // switch on for a shop worker, and which is meant for list/report exports
+    // through the Export Center's request flow).
     const canExport =
+      user.isSuperAdmin ||
       isOwner ||
-      user.canExportData === true ||
-      user.canCreateBusiness === true ||
-      user.businessManageIds?.includes(businessId);
+      // Owner-equivalent power over THIS unit (OWNER-granted).
+      (user.businessManageIds || []).map(Number).includes(Number(businessId)) ||
+      // Trusted to create units AND authorised for the financial data a backup
+      // contains (both OWNER-granted).
+      (user.canCreateBusiness === true && canSeeFinancials(user));
     if (!canExport) {
-      return FORBIDDEN("You need an export/backup permission to download business backups.");
+      return FORBIDDEN(
+        "Downloading a full business backup requires the OWNER (or an account the OWNER authorised to manage this unit).",
+      );
     }
 
     const { zip, fileName } = await exportBusinessBackup({

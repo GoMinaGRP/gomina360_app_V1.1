@@ -13,16 +13,19 @@ import {
   Users,
   X,
 } from "lucide-react";
+import RolePermissionsEditor, { type CapabilityValues } from "./RolePermissionsEditor";
+import {
+  CAPABILITIES,
+  isDelegateUserManager,
+  roleDef,
+  roleLabel,
+  roleOptionsFor,
+  roleShortLabel,
+  rolePreset,
+  type CapabilityKey,
+  type RoleKey,
+} from "@/lib/roles";
 
-const ROLES = ["GENERAL_MANAGER", "BRANCH_MANAGER", "ACCOUNTANT", "SUPERVISOR", "WORKER"];
-const ROLE_LABEL: Record<string, string> = {
-  OWNER: "Owner",
-  GENERAL_MANAGER: "General Manager",
-  BRANCH_MANAGER: "Branch Manager",
-  ACCOUNTANT: "Accountant",
-  SUPERVISOR: "Supervisor",
-  WORKER: "Worker",
-};
 
 interface Props {
   isOpen: boolean;
@@ -43,7 +46,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   // branches they themselves can access.
   const isDelegated =
     !isOwner && !!currentUser?.canManageUsers &&
-    ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(currentUser?.role);
+    isDelegateUserManager(currentUser);
   const [users, setUsers] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -56,25 +59,16 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   const [role, setRole] = useState("WORKER");
   const [assignedBusinessId, setAssignedBusinessId] = useState<number | "">("");
   const [password, setPassword] = useState("");
-  const [canRecordSales, setCanRecordSales] = useState(true);
-  const [canRecordExpenses, setCanRecordExpenses] = useState(false);
-  const [canManageStock, setCanManageStock] = useState(false);
-  const [canExportData, setCanExportData] = useState(false);
-  const [canManageRecords, setCanManageRecords] = useState(false);
-  const [canDeleteInventory, setCanDeleteInventory] = useState(false);
-  const [canManageExpenses, setCanManageExpenses] = useState(false);
-  const [canManageCctv, setCanManageCctv] = useState(false);
-  const [canManageAuditors, setCanManageAuditors] = useState(false);
-  const [canManageOnline, setCanManageOnline] = useState(false);
-  const [canCreateBusiness, setCanCreateBusiness] = useState(false);
-  const [canViewFinance, setCanViewFinance] = useState(false);
-  const [canManageSupport, setCanManageSupport] = useState(false);
+  // ONE capability object, seeded from the role registry. Every create/edit
+  // surface shares RolePermissionsEditor + these presets, so a role always
+  // means the same thing (docs/ROLES-AND-PERMISSIONS-AUDIT.md §7.3).
+  const [caps, setCaps] = useState<Record<CapabilityKey, boolean>>(() => rolePreset("WORKER"));
+  const setCap = (key: CapabilityKey, value: boolean) => setCaps((c) => ({ ...c, [key]: value }));
   const [extraAccess, setExtraAccess] = useState<number[]>([]);
   // Business / Unit ids the user may MANAGE with owner-equivalent power
   // (strictly those units — everything else stays out of reach).
   const [manageAccess, setManageAccess] = useState<number[]>([]);
   const [isActive, setIsActive] = useState(true);
-  const [canDelegateUsers, setCanDelegateUsers] = useState(false);
 
   const sortedBiz = useMemo(() => [...businesses].sort((a, b) => a.id - b.id), [businesses]);
 
@@ -92,14 +86,15 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   );
   // Branch picks offered to a delegated caller are capped at their scope.
   const visibleBiz = isOwner ? sortedBiz : sortedBiz.filter((b) => scopeIds.has(b.id));
-  const roleOptions = isOwner ? ROLES : ["BRANCH_MANAGER", "WORKER"];
+  // ONE source of truth for what this actor may pick (src/lib/roles.ts).
+  const roleOptions = useMemo(() => roleOptionsFor(currentUser), [currentUser]);
   // A delegated manager may act on a row only if that user works inside the
   // branches they manage (and never on themselves or executives).
   const canManageRow = (u: any) =>
     isOwner ||
     (isDelegated &&
       u.id !== currentUser?.id &&
-      ["WORKER", "BRANCH_MANAGER"].includes(u.role) &&
+      roleDef(u.role)?.assignableBy === "OWNER_OR_DELEGATE" &&
       u.assignedBusinessId != null &&
       scopeIds.has(Number(u.assignedBusinessId)));
 
@@ -156,22 +151,13 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
 
   const openCreate = () => {
     setEditing(null);
+    const startRole: RoleKey = "WORKER";
     setName("");
     setEmail("");
-    setRole("WORKER");
+    setRole(startRole);
     setAssignedBusinessId(visibleBiz[0]?.id ?? "");
-    setCanDelegateUsers(false);
     setPassword("");
-    setCanRecordSales(true);
-    setCanRecordExpenses(false);
-    setCanManageStock(false);
-    setCanExportData(false);
-    setCanManageRecords(false);
-    setCanDeleteInventory(false);
-    setCanManageExpenses(false);
-    setCanManageCctv(false);
-    setCanManageAuditors(false);
-    setCanManageSupport(false);
+    setCaps(rolePreset(startRole)); // role preset, not a hard-coded toggle list
     setExtraAccess([]);
     setManageAccess([]);
     setIsActive(true);
@@ -183,25 +169,18 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
   const openEdit = (u: any) => {
     if (!canManageRow(u)) return;
     setEditing(u);
-    setCanDelegateUsers(Boolean(u.canManageUsers));
     setName(u.name);
     setEmail(u.email);
     setRole(u.role);
     setAssignedBusinessId(u.assignedBusinessId ?? "");
     setPassword("");
-    setCanRecordSales(Boolean(u.canRecordSales));
-    setCanRecordExpenses(Boolean(u.canRecordExpenses));
-    setCanManageStock(Boolean(u.canManageStock));
-    setCanExportData(Boolean(u.canExportData));
-    setCanManageRecords(Boolean(u.canManageRecords));
-    setCanDeleteInventory(Boolean(u.canDeleteInventory));
-    setCanManageExpenses(Boolean(u.canManageExpenses));
-    setCanManageCctv(Boolean(u.canManageCctv));
-    setCanManageAuditors(Boolean(u.canManageAuditors));
-    setCanManageOnline(Boolean(u.canManageOnline));
-    setCanCreateBusiness(Boolean(u.canCreateBusiness));
-    setCanViewFinance(Boolean(u.canViewFinance));
-    setCanManageSupport(Boolean(u.canManageSupport));
+    // The STORED values are the truth when editing — the preset is only the
+    // starting point for new accounts (and for a role change, below).
+    setCaps(
+      Object.fromEntries(
+        CAPABILITIES.map((c) => [c.key, u[c.key] === true]),
+      ) as Record<CapabilityKey, boolean>,
+    );
     setExtraAccess(u.extraAccessIds || []);
     setManageAccess(Array.isArray(u.businessManageIds) ? u.businessManageIds.map(Number) : []);
     setIsActive(u.isActive !== false);
@@ -222,16 +201,16 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           name, email, role,
           assignedBusinessId: assignedBusinessId === "" ? null : assignedBusinessId,
           password: password || undefined,
-          canRecordSales, canRecordExpenses, canManageStock, canExportData, canManageRecords,
-          canDeleteInventory: isOwner ? canDeleteInventory : undefined,
-          canManageExpenses: isOwner ? canManageExpenses : undefined,
-          canManageCctv: isOwner ? canManageCctv : undefined,
-          canManageAuditors: isOwner ? canManageAuditors : undefined,
-          canManageOnline: isOwner ? canManageOnline : undefined,
-          canCreateBusiness: isOwner ? canCreateBusiness : undefined,
-          canViewFinance: isOwner ? canViewFinance : undefined,
-          canManageSupport: isOwner ? canManageSupport : undefined,
-          canManageUsers: isOwner ? canDelegateUsers : undefined,
+          // Capabilities come straight from the shared editor. OWNER-only flags
+          // are omitted for delegates (the server rejects them anyway).
+          ...(isOwner
+            ? caps
+            : {
+                canRecordSales: caps.canRecordSales,
+                canRecordExpenses: caps.canRecordExpenses,
+                canManageStock: caps.canManageStock,
+                canExportData: caps.canExportData,
+              }),
           extraAccessIds: extraAccess,
           businessManageIds: isOwner ? manageAccess : undefined,
         }),
@@ -241,7 +220,7 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
         await loadUsers();
         await onChanged();
         setNotice(
-          `Account created for ${d.user.name} (${ROLE_LABEL[d.user.role] || d.user.role}). ` +
+          `Account created for ${d.user.name} (${roleLabel(d.user.role)}). ` +
           `Initial password: ${d.initialPassword} — share it privately; it is shown only once.`
         );
         setView("list");
@@ -269,16 +248,14 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
           name, email, role,
           assignedBusinessId: assignedBusinessId === "" ? null : assignedBusinessId,
           isActive,
-          canRecordSales, canRecordExpenses, canManageStock, canExportData, canManageRecords,
-          canDeleteInventory: isOwner ? canDeleteInventory : undefined,
-          canManageExpenses: isOwner ? canManageExpenses : undefined,
-          canManageCctv: isOwner ? canManageCctv : undefined,
-          canManageAuditors: isOwner ? canManageAuditors : undefined,
-          canManageOnline: isOwner ? canManageOnline : undefined,
-          canCreateBusiness: isOwner ? canCreateBusiness : undefined,
-          canViewFinance: isOwner ? canViewFinance : undefined,
-          canManageSupport: isOwner ? canManageSupport : undefined,
-          canManageUsers: isOwner ? canDelegateUsers : undefined,
+          ...(isOwner
+            ? caps
+            : {
+                canRecordSales: caps.canRecordSales,
+                canRecordExpenses: caps.canRecordExpenses,
+                canManageStock: caps.canManageStock,
+                canExportData: caps.canExportData,
+              }),
           extraAccessIds: extraAccess,
           businessManageIds: isOwner ? manageAccess : undefined,
           newPassword: isOwner && password ? password : undefined,
@@ -324,27 +301,6 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
     }
   };
 
-  const Toggle = ({ label, value, onChange, testid, tint = "emerald" }: any) => (
-    <label className="flex items-center justify-between text-xs text-slate-300 py-1 cursor-pointer">
-      <span>{label}</span>
-      <button
-        type="button"
-        onClick={() => onChange(!value)}
-        data-testid={testid}
-        className={`px-2.5 py-1 rounded-md text-[10px] font-black border transition ${
-          value
-            ? tint === "cyan"
-              ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40"
-              : tint === "teal"
-              ? "bg-teal-500/20 text-teal-300 border-teal-500/40"
-              : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-            : "bg-slate-700/70 text-slate-400 border-slate-600"
-        }`}
-      >
-        {value ? "ON" : "OFF"}
-      </button>
-    </label>
-  );
 
   const formBody = (isEdit: boolean) => (
     <>
@@ -363,10 +319,18 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
         </div>
         <div>
           <label className="block text-xs font-semibold text-slate-400 mb-1">Role *</label>
-          <select value={role} onChange={(e) => setRole(e.target.value)}
+          <select
+            value={role}
+            onChange={(e) => {
+              const next = e.target.value as RoleKey;
+              setRole(next);
+              // Changing the role re-applies that role's preset, so the toggles
+              // below always describe the role on screen (audit finding F3).
+              setCaps(rolePreset(next));
+            }}
             data-testid="user-form-role"
             className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm">
-            {roleOptions.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+            {roleOptions.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
         </div>
         <div>
@@ -405,71 +369,13 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 bg-slate-800/40 border border-slate-700 rounded-xl p-3">
         <div>
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Permissions</div>
-          <Toggle label="Record sales" value={canRecordSales} onChange={setCanRecordSales} testid="perm-sales" />
-          <Toggle label="Record expenses" value={canRecordExpenses} onChange={setCanRecordExpenses} testid="perm-expenses" />
-          <Toggle label="Manage stock" value={canManageStock} onChange={setCanManageStock} testid="perm-stock" />
-          <Toggle label="Export data" value={canExportData} onChange={setCanExportData} testid="perm-export" />
-          {isOwner && (
-            <Toggle label="Manage & delete shared records" value={canManageRecords} onChange={setCanManageRecords} testid="perm-records" tint="cyan" />
-          )}
-          {isOwner && (
-            <Toggle label="Manage, edit & delete inventory entries" value={canDeleteInventory} onChange={setCanDeleteInventory} testid="perm-inventory" tint="cyan" />
-          )}
-          {isOwner && (
-            <Toggle label="Manage, edit & delete expenses" value={canManageExpenses} onChange={setCanManageExpenses} testid="perm-expense-manage" tint="cyan" />
-          )}
-          {isOwner && (
-            <Toggle label="Manage CCTV cameras" value={canManageCctv} onChange={setCanManageCctv} testid="perm-cctv" tint="cyan" />
-          )}
-          {isOwner && (
-            <Toggle
-              label="Online storefront & delivery areas (switches, service areas, pickup points, help & MoMo)"
-              value={canManageOnline}
-              onChange={setCanManageOnline}
-              testid="perm-online"
-              tint="cyan"
-            />
-          )}
-          {isOwner && (
-            <Toggle
-              label="New Branch/Unit (create business units)"
-              value={canCreateBusiness}
-              onChange={setCanCreateBusiness}
-              testid="perm-create-business"
-              tint="cyan"
-            />
-          )}
-          {isOwner && (
-            <Toggle
-              label="Finance & Reports — enterprise users (view Finance & Reports, scoped to their units)"
-              value={canViewFinance}
-              onChange={setCanViewFinance}
-              testid="perm-finance"
-              tint="cyan"
-            />
-          )}
-          {isOwner && (
-            <Toggle
-              label="Customer Support — storefront HELP (add/edit support contact, hours & location)"
-              value={canManageSupport}
-              onChange={setCanManageSupport}
-              testid="perm-support-info"
-              tint="cyan"
-            />
-          )}
-          {isOwner && (role === "BRANCH_MANAGER" || role === "GENERAL_MANAGER") && (
-            <Toggle label="Manage auditor access (Audit & Review)" value={canManageAuditors} onChange={setCanManageAuditors} testid="perm-auditors" tint="teal" />
-          )}
-          {isOwner && (role === "BRANCH_MANAGER" || role === "GENERAL_MANAGER") && (
-            <Toggle
-              label="Delegate user & access management"
-              value={canDelegateUsers}
-              onChange={setCanDelegateUsers}
-              testid="perm-delegate"
-              tint="cyan"
-            />
-          )}
+          <RolePermissionsEditor
+            role={role}
+            values={caps}
+            onChange={setCap}
+            isOwner={isOwner}
+            testidPrefix="perm"
+          />
         </div>
         <div>
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">
@@ -616,8 +522,11 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-bold text-white">{u.name}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300">
-                            {u.role}
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-700 text-cyan-300 uppercase tracking-wide">
+                            {/* ONE label source: the raw enum used to be printed
+                                here (“BRANCH_MANAGER” next to “Branch Manager”
+                                elsewhere). */}
+                            {roleShortLabel(u.role).toUpperCase()}
                           </span>
                           {u.isActive === false && (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">

@@ -383,6 +383,38 @@ export async function applyVariantDelta(opts: {
 
   const item = opts.sync === false ? null : await syncItemAggregate(Number(row.inventoryId));
 
+  // Threshold crossing on the combination itself (the variant rows are the
+  // truth for size/colour products) — same once-per-item-per-day rule. The
+  // alert names the PARENT product plus the combination, which is how the team
+  // knows the item.
+  {
+    const nextStatus = String(computeStockStatus(target, threshold));
+    if (applied < 0 && String(row.status || "") !== nextStatus) {
+      const [parent] = await db
+        .select({ name: inventoryItems.name, sku: inventoryItems.sku, unit: inventoryItems.unit, branchCode: inventoryItems.branchCode })
+        .from(inventoryItems)
+        .where(eq(inventoryItems.id, Number(row.inventoryId)));
+      const combo = [row.size, row.color].filter(Boolean).join("/") || row.sku || `#${row.id}`;
+      const { notifyStockThresholdCrossing } = await import("@/lib/notifyActivity");
+      await notifyStockThresholdCrossing({
+        businessId,
+        branchCode: opts.trail?.branchCode ?? parent?.branchCode ?? null,
+        inventoryId: Number(row.inventoryId),
+        variantId: Number(row.id),
+        itemName: String(`${parent?.name || "Stock item"} — ${combo}`),
+        sku: parent?.sku || row.sku || null,
+        unit: parent?.unit || null,
+        quantityAfter: target,
+        fromStatus: row.status || null,
+        toStatus: nextStatus,
+        threshold,
+        actorName: opts.trail?.actor?.name || null,
+        actorUserId: opts.trail?.actor?.id ?? null,
+        reason: opts.trail?.reason || "ADJUSTMENT",
+      });
+    }
+  }
+
   if (applied !== 0) {
     const [item2] = await db
       .select({ sku: inventoryItems.sku, name: inventoryItems.name, branchCode: inventoryItems.branchCode })

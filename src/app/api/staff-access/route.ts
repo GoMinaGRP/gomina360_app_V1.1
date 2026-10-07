@@ -5,6 +5,7 @@ import { users, userSessions, businesses, userBusinessAccess, organizationMember
 import { desc, eq, inArray } from "drizzle-orm";
 import { getSessionInfo, accessibleBusinessIds, endAllSessionsForUser, sharesOrganization, resolveUserOrgIds, UNAUTHENTICATED } from "@/lib/auth";
 import { auditLog } from "@/lib/audit";
+import { isDelegateUserManager, roleDef } from "@/lib/roles";
 
 /**
  * Signed-In Staff console — who is signed in right now, from where, since
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
 
     const isOwner = me.role === "OWNER";
     const isDelegatedMgr =
-      !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
+      isDelegateUserManager(me);
     const canView = isOwner || isDelegatedMgr;
     if (!canView) {
       return NextResponse.json({
@@ -346,7 +347,7 @@ export async function POST(request: NextRequest) {
 
     const isOwner = me.role === "OWNER";
     const isDelegatedMgr =
-      !!me.canManageUsers && ["BRANCH_MANAGER", "GENERAL_MANAGER"].includes(me.role);
+      isDelegateUserManager(me);
     if (!isOwner && !isDelegatedMgr) {
       return FORBID("Only the OWNER — or a manager the OWNER authorized for user management — can manage staff access.");
     }
@@ -372,7 +373,7 @@ export async function POST(request: NextRequest) {
 
     if (!isOwner) {
       // Delegated managers: Workers & Branch Managers inside their scope only.
-      if (!["WORKER", "BRANCH_MANAGER"].includes(target.role)) {
+      if (roleDef(target.role)?.assignableBy !== "OWNER_OR_DELEGATE") {
         return FORBID("You can only manage Workers and Branch Managers inside your scope.");
       }
       const allowed = await accessibleBusinessIds(me);

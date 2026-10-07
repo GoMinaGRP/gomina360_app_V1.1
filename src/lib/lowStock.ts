@@ -155,6 +155,22 @@ async function notifyLowStock(
   const recordRef = `low-stock:${Number(businessId)}:${date}`;
   const recipients = await orderNotificationRecipients(Number(businessId));
   if (!recipients.length) return 0;
+
+  // De-duplicate against the real-time crossing alerts: an item the team was
+  // already told about today (the moment it fell below its reorder point) does
+  // not need to reappear in the end-of-day summary.
+  const { stockAlertedToday } = await import("@/lib/notifyActivity");
+  const fresh: LowStockItem[] = [];
+  for (const i of items) {
+    if (!(await stockAlertedToday(Number(i.id), date))) fresh.push(i);
+  }
+  if (fresh.length) items = fresh;
+  else {
+    // Every low item was already reported by its own threshold crossing today:
+    // the digest would be a second, identical story, so it stays quiet (the
+    // crossings' rows already name each item and open Inventory).
+    return 0;
+  }
   const anyOut = items.some(
     (i) => i.severity === "OUT" || (i.variantAlerts || []).some((v) => v.severity === "OUT"),
   );

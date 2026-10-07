@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { businesses, businessMetrics, creditSales, payrollEntries, supplierOrders, transactions } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { canSeeFinancials } from "@/lib/permissions";
 
 /**
  * Cash-flow FORECAST (P4, part 2) — the forward-looking complement to the
@@ -39,7 +40,11 @@ export async function GET(request: NextRequest) {
     if (!session) return UNAUTHENTICATED();
     const user = session.user;
     const role = String(user.role || "").toUpperCase();
-    if (role === "WORKER") return FORBIDDEN("The cash-flow forecast is a management view.");
+    // FINANCIAL SURFACE — the forecast projects money in/out: OWNER,
+    // Super Admin or an OWNER-authorised (`canViewFinance`) viewer only.
+    if (!canSeeFinancials(user)) {
+      return FORBIDDEN("The cash-flow forecast is restricted to the OWNER and the users the OWNER authorises for Finance & Reports.");
+    }
 
     const { searchParams } = new URL(request.url);
     const allowed = await accessibleBusinessIds(user);

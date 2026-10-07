@@ -14,6 +14,7 @@ import {
   Trash,
   TrendingUp,
 } from "lucide-react";
+import { inRoleGroup } from "@/lib/roles";
 
 /**
  * DailyNotesPanel — the Daily Notes section that lives UNDER the Daily
@@ -117,7 +118,7 @@ export default function DailyNotesPanel({
   };
 
   const myRole = String(currentUser?.role || "").toUpperCase();
-  const canModerate = ["OWNER", "GENERAL_MANAGER", "BRANCH_MANAGER"].includes(myRole);
+  const canModerate = inRoleGroup("UNIT_ADMIN", myRole);
   const sortedNotes = [...notes].sort((a, b) => (a.id < b.id ? 1 : -1));
 
   return (

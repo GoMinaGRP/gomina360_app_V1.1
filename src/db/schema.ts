@@ -17,7 +17,11 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  role: text("role").notNull(), // 'OWNER', 'GENERAL_MANAGER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'SUPERVISOR', 'WORKER', 'FARM_ADVISOR' (external read-only farm monitor — access flows exclusively through advisor_assignments)
+  // Role token. THE list of valid values lives in src/lib/roles.ts (RoleKey) and
+  // every writer validates against it — this column stores whatever that
+  // registry calls a role, including 'FARM_ADVISOR' (external read-only farm
+  // monitor; access flows exclusively through advisor_assignments).
+  role: text("role").notNull(),
   assignedBusinessId: integer("assigned_business_id"), // null = All businesses (Owner/Executive); required for WORKER & BRANCH_MANAGER
   phone: text("phone").notNull(),
   avatarUrl: text("avatar_url"),
@@ -423,8 +427,95 @@ export const customerSupportInfo = pgTable("customer_support_info", {
   updatedByName: text("updated_by_name"),
   updatedByRole: text("updated_by_role"),
   organizationId: integer("organization_id"), // one support-info row per organization
+  /**
+   * PLATFORM SCOPE. The public storefront (`/order`) is a centralized
+   * marketplace that sells every ACTIVE organization's stock, so the HELP
+   * panel it shows is the PLATFORM's helpdesk — not any single tenant's.
+   * Exactly ONE row carries is_platform = TRUE: that row is what shoppers see
+   * and what the Super Admin edits. A tenant's own row (organizationId set,
+   * is_platform false) stays reserved for future per-owner storefronts and is
+   * read back through `GET /api/support-info?org=<id>`.
+   *
+   * Before this flag existed the platform row was "whichever row happens to
+   * have organization_id = 1" — an accident of seeding, not a model.
+   */
+  isPlatform: boolean("is_platform").default(false),
+  // ── Platform registration / "Join GoMina 360" config (PLATFORM row only) ──
+  // Super-Admin-only: these control the public recruitment CTA rendered in the
+  // storefront HELP panel, the footer and the /join page. Editable ONLY by the
+  // Super Admin (canEditRegistration), never by a tenant-scoped grant.
+  registrationEnabled: boolean("registration_enabled").default(true),
+  registrationHeadline: text("registration_headline"),
+  registrationNote: text("registration_note"),
+  /**
+   * THE LOGIN-PAGE SWITCH — the "Want your business on GoMina 360? Register
+   * it" entry on the staff sign-in gate. Independent of the order-page config
+   * above: the storefront HELP invite, the footer line and `/join` read
+   * `registration_enabled` and are never affected by this column.
+   *
+   * Default HIDDEN: the sign-in page is an authentication surface, so the
+   * recruitment line is opt-in for the platform owner. The value is read at
+   * BUILD / background-revalidation time by `src/app/page.tsx` (ISR) and
+   * passed to the client as a prop — the login page therefore performs no
+   * extra request and keeps its static prerender.
+   *
+   * Fail-closed: a missing row, a read error or a NULL column ⇒ hidden
+   * (`=== true` on the server, see `loginRegistrationInviteEnabled`).
+   */
+  loginRegistrationEnabled: boolean("login_registration_enabled").default(false),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ─── Platform requests — "Join / Register on the Platform" leads ───────────
+/**
+ * Inbound requests from the public storefront's Help/Contact panel and the
+ * /join page: a business that wants to run on GoMina 360, wants a demo,
+ * a partnership, pricing, or support.
+ *
+ * PRIVACY MODEL — this table deliberately has NO ownerId and NO businessId.
+ * It is PLATFORM-level, not tenant-level. A tenant has no column to match on,
+ * so no tenant-scoped query can ever surface these rows, and every read path
+ * is gated on requireSuperAdmin(). Nothing here is joined into /api/init,
+ * business exports or tenant backups.
+ *
+ * The anonymous submitter never gets the row back — only `reference`, an
+ * opaque code they can quote by phone/WhatsApp.
+ */
+export const platformRequests = pgTable("platform_requests", {
+  id: serial("id").primaryKey(),
+  /** Opaque requester-facing code (e.g. GMR-7F3K2Q) — the ONLY value the
+   *  public POST returns, and the label used in the audit trail. */
+  reference: text("reference").notNull().unique(),
+  /** PLATFORM_REQUEST_PURPOSES key — validated against the allowlist. */
+  purpose: text("purpose").notNull(),
+  /** PENDING | IN_REVIEW | NEEDS_INFO | APPROVED | REJECTED | CLOSED */
+  status: text("status").notNull().default("PENDING"),
+  businessName: text("business_name"),
+  contactName: text("contact_name").notNull(),
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  /** BUSINESS_TYPES key (lib/businessTypes.ts) when the requester picked one. */
+  businessType: text("business_type"),
+  location: text("location"),
+  message: text("message"),
+  // ── Decision provenance (Super Admin only) ──────────────────────────────
+  decidedByUserId: integer("decided_by_user_id"),
+  decidedByName: text("decided_by_name"),
+  decidedByRole: text("decided_by_role"),
+  decidedAt: timestamp("decided_at"),
+  decisionReason: text("decision_reason"),
+  /** Set when APPROVE → PROVISION actually created an organization/owner. */
+  createdOrganizationId: integer("created_organization_id"),
+  createdOwnerUserId: integer("created_owner_user_id"),
+  /** Non-PII submission context (source page, agent, hashed IP). */
+  meta: jsonb("meta").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+},
+  (t) => [
+    index("platform_requests_status_id_idx").on(t.status, t.id),
+    index("platform_requests_email_idx").on(t.contactEmail),
+  ]);
 
 // 3. Overall Financial Performance & Performance Metrics per Business
 export const businessMetrics = pgTable("business_metrics", {

@@ -10,4 +10,12 @@ if [ ! -x /tmp/al2023/chromium ]; then
   node dev-tooling/extract-chromium.mjs >/dev/null
 fi
 export LD_LIBRARY_PATH=/tmp/al2023/lib
-exec node "$@"
+case "$1" in
+  *.mts)
+    # TypeScript suites import app modules the way the bundler does
+    # (extensionless: "../src/lib/roles"), which plain Node's ESM resolver
+    # cannot follow — run those through tsx instead.
+    exec npx --yes tsx "$@" ;;
+  *)
+    exec node "$@" ;;
+esac

@@ -1,19 +1,46 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { customerSupportInfo } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import { getSessionInfo, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import {
+  PLATFORM_ORG_ID,
+  getPlatformSupportRow,
+  getSupportRowForOrg,
+  publicSupportInfo,
+  supportScopeFor,
+  canEditSupport,
+  canEditRegistration,
+  SUPPORT_FORBIDDEN_MESSAGE,
+  type SupportRow,
+} from "@/lib/supportInfo";
 
 /**
- * Group-wide CUSTOMER SUPPORT information — the content of the storefront's
- * HELP panel (contact name, phone, WhatsApp, email, business address /
- * location, opening hours, and any other important support notes).
+ * Group-wide CUSTOMER SUPPORT / platform Help-Contact information — the
+ * content of the storefront's HELP panel (contact name, phone, WhatsApp,
+ * email, business address / location, opening hours, extra notes) plus the
+ * public "Join GoMina 360" registration CTA configuration.
  *
  * GET  — PUBLIC (no login): shoppers read it when they tap HELP on the
- *        customer order page.
- * POST — OWNER, or a user the OWNER explicitly granted the "Customer
- *        Support — storefront HELP" permission (can_manage_support):
- *        creates or updates the single live row.
+ *        customer order page. Without `?org=` this serves the PLATFORM row —
+ *        the storefront is a centralized marketplace, so its HELP panel is the
+ *        platform helpdesk. `?org=<id>` returns that organisation's own row
+ *        (reserved for future per-owner storefronts / the multi-owner suite).
+ *
+ *        When a session is present the response also carries `edit` — the row
+ *        THIS caller would actually write, its scope, and their capabilities.
+ *        That removes the old read/write asymmetry where the editor loaded one
+ *        row and Save overwrote a different one.
+ *
+ * POST — the caller's own scoped row:
+ *          · Super Admin, or a member of the platform organisation holding
+ *            OWNER / the OWNER-granted `canManageSupport`  → the PLATFORM row
+ *            (what customers see; this is the tested delegation model);
+ *          · anyone else (a tenant's OWNER / granted user) → their own
+ *            organisation's row.
+ *        The `registration*` fields are Super-Admin-only and are preserved
+ *        untouched when anyone else saves.
  */
 
 const LIMITS: Record<string, number> = {
@@ -24,6 +51,8 @@ const LIMITS: Record<string, number> = {
   address: 300,
   openingHours: 200,
   extraInfo: 1000,
+  registrationHeadline: 140,
+  registrationNote: 600,
 };
 
 function clean(value: any, max: number): string | null {
@@ -34,32 +63,36 @@ function clean(value: any, max: number): string | null {
 
 export async function GET(request: Request) {
   try {
-    // Centralized marketplace ⇒ organization #1 (GoMina Group) runs platform
-    // support. ?org=<id> resolves a specific Owner's support row (reserved
-    // for future per-owner storefronts / org-scoped HELP panels).
     const orgParam = new URL(request.url).searchParams.get("org");
-    const orgId = orgParam ? Number(orgParam) : 1;
-    const [row] = await db
-      .select()
-      .from(customerSupportInfo)
-      .where(eq(customerSupportInfo.organizationId, orgId));
+
+    // Public read: platform row by default, an organisation's own row when
+    // explicitly addressed (unchanged `?org=` contract).
+    const info = orgParam
+      ? publicSupportInfo(await getSupportRowForOrg(Number(orgParam)))
+      : publicSupportInfo(await getPlatformSupportRow());
+
+    // Session-aware editing context. Public callers simply get `edit: null`.
+    let edit: any = null;
+    const session = await getSessionInfo(request).catch(() => null);
+    if (session) {
+      const scope = supportScopeFor(session as any);
+      const allowed = canEditSupport(session.user, scope);
+      const row: SupportRow | null =
+        scope === "PLATFORM"
+          ? await getPlatformSupportRow()
+          : session.orgId != null
+            ? await getSupportRowForOrg(session.orgId)
+            : null;
+      edit = {
+        scope,
+        canEdit: allowed,
+        canEditRegistration: canEditRegistration(session.user),
+        row: publicSupportInfo(row),
+      };
+    }
+
     return NextResponse.json(
-      {
-        success: true,
-        info: row
-          ? {
-              contactName: row.contactName,
-              phone: row.phone,
-              whatsapp: row.whatsapp,
-              email: row.email,
-              address: row.address,
-              openingHours: row.openingHours,
-              extraInfo: row.extraInfo,
-              updatedByName: row.updatedByName,
-              updatedAt: row.updatedAt,
-            }
-          : null,
-      },
+      { success: true, info, edit },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error: any) {
@@ -76,15 +109,16 @@ export async function POST(request: Request) {
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
     const { user } = session;
-    const isOwner = user.role === "OWNER";
-    if (!isOwner && !user.canManageSupport) {
-      return FORBIDDEN(
-        "Only the OWNER — or a user the OWNER granted Customer Support access — can edit the storefront HELP information.",
-      );
+
+    const scope = supportScopeFor(session as any);
+    if (!canEditSupport(user, scope)) {
+      return FORBIDDEN(SUPPORT_FORBIDDEN_MESSAGE);
     }
 
     const body = await request.json().catch(() => ({}));
-    const values = {
+    const mayEditRegistration = canEditRegistration(user);
+
+    const values: Partial<SupportRow> = {
       contactName: clean(body.contactName, LIMITS.contactName),
       phone: clean(body.phone, LIMITS.phone),
       whatsapp: clean(body.whatsapp, LIMITS.whatsapp),
@@ -97,45 +131,85 @@ export async function POST(request: Request) {
       updatedByRole: user.role,
       updatedAt: new Date(),
     };
-    if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) {
+    if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(values.email))) {
       return NextResponse.json(
         { success: false, error: "That email address does not look valid." },
         { status: 400 },
       );
     }
 
-    // Each organization edits its OWN support row.
-    const orgId = session.orgId ?? 1;
-    const [existing] = await db
-      .select({ id: customerSupportInfo.id })
-      .from(customerSupportInfo)
-      .where(eq(customerSupportInfo.organizationId, orgId));
-    let row;
-    if (existing) {
-      [row] = await db
-        .update(customerSupportInfo)
-        .set(values)
-        .where(eq(customerSupportInfo.organizationId, orgId))
-        .returning();
+    // Registration config is platform recruitment policy → Super Admin only.
+    // Everyone else's save leaves the published CTA exactly as it was.
+    if (mayEditRegistration && body.registration != null) {
+      values.registrationEnabled = body.registration.enabled !== false;
+      values.registrationHeadline = clean(body.registration.headline, LIMITS.registrationHeadline);
+      values.registrationNote = clean(body.registration.note, LIMITS.registrationNote);
+      // The login-page switch is stored on the same row but consumed by a
+      // DIFFERENT surface (`/`, the staff sign-in gate). It changes nothing
+      // about the order-page invite or `/join`.
+      if (body.registration.loginEnabled !== undefined) {
+        values.loginRegistrationEnabled = body.registration.loginEnabled === true;
+      }
+    }
+
+    let row: SupportRow;
+    if (scope === "PLATFORM") {
+      // The storefront row. Prefer the explicitly flagged platform row; on a
+      // legacy deployment fall back to organisation #1's row and PROMOTE it,
+      // so the published helpdesk text is never orphaned behind the new flag.
+      const existing = await getPlatformSupportRow();
+      row = existing
+        ? (await db
+            .update(customerSupportInfo)
+            .set({ ...values, isPlatform: true, organizationId: existing.organizationId ?? PLATFORM_ORG_ID })
+            .where(eq(customerSupportInfo.id, existing.id))
+            .returning())[0]
+        : (await db
+            .insert(customerSupportInfo)
+            .values({ ...values, isPlatform: true, organizationId: PLATFORM_ORG_ID })
+            .returning())[0];
     } else {
-      [row] = await db
-        .insert(customerSupportInfo)
-        .values({ organizationId: orgId, ...values })
-        .returning();
+      const orgId = session.orgId ?? PLATFORM_ORG_ID;
+      const [existing] = await db
+        .select({ id: customerSupportInfo.id })
+        .from(customerSupportInfo)
+        .where(eq(customerSupportInfo.organizationId, orgId));
+      row = existing
+        ? (await db
+            .update(customerSupportInfo)
+            .set({ ...values, isPlatform: false, organizationId: orgId })
+            .where(eq(customerSupportInfo.id, existing.id))
+            .returning())[0]
+        : (await db
+            .insert(customerSupportInfo)
+            .values({ ...values, isPlatform: false, organizationId: orgId })
+            .returning())[0];
+    }
+
+    // ── Refresh the prerendered sign-in shell ──────────────────────────────
+    // `/` is static (ISR, revalidate 60) and receives the login-page switch as
+    // a prop at build / background-revalidation time. Revalidating HERE makes
+    // the owner's flip take effect on the very next page load instead of
+    // waiting out the 60 s window — with no per-request cost and no client
+    // fetch on the login page. Best-effort: a failure here can only delay the
+    // change, never fail the save.
+    if (values.loginRegistrationEnabled !== undefined || row?.isPlatform) {
+      try {
+        revalidatePath("/");
+      } catch (e) {
+        console.error("revalidatePath(/) warning:", e);
+      }
     }
 
     return NextResponse.json({
       success: true,
-      info: {
-        contactName: row.contactName,
-        phone: row.phone,
-        whatsapp: row.whatsapp,
-        email: row.email,
-        address: row.address,
-        openingHours: row.openingHours,
-        extraInfo: row.extraInfo,
-        updatedByName: row.updatedByName,
-        updatedAt: row.updatedAt,
+      scope,
+      info: publicSupportInfo(row),
+      edit: {
+        scope,
+        canEdit: true,
+        canEditRegistration: mayEditRegistration,
+        row: publicSupportInfo(row),
       },
     });
   } catch (error: any) {
