@@ -1,4 +1,4 @@
-import { db } from "./index"
+import { db, getPool } from "./index"
 import { computeScenarioBaseline, computeScenarioImpacts } from "../lib/scenarioEngine";
 import {
   users,
@@ -451,13 +451,70 @@ export async function seedDatabase() {
 
   // Serialize concurrent seeding (two racing requests on a fresh database
   // used to interleave serial ids and leave the fixture ids off-by-one).
-  const { sql: seedSql } = await import("drizzle-orm");
-  await db.execute(seedSql`select pg_advisory_lock(731948)`);
+  //
+  // PRODUCTION-POOLER SAFE (final audit). The previous session-level
+  // `pg_advisory_lock(...)` + separate `pg_advisory_unlock(...)` pair is
+  // unusable behind a transaction-mode connection pooler (Neon `-pooler`
+  // hosts, PgBouncer `?pgbouncer=true`): the two statements can be routed to
+  // DIFFERENT backend connections, so the unlock silently orphans the lock
+  // and every later seed of an empty database would block until the
+  // serverless function times out — hanging /api/init for the operator.
+  //
+  // This version takes a NON-BLOCKING lock on ONE pinned client (so acquire
+  // and release always run in the same Postgres session) and never waits
+  // server-side:
+  //   • acquired → we own the seed; release on the same client afterwards;
+  //   • not acquired → another instance is seeding (or an orphaned lock from
+  //     an older run exists): poll until the database is non-empty, then
+  //     skip. A stale lock can therefore never wedge a fresh deployment.
+  const SEED_LOCK_KEY = 731948;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const client = await getPool().connect();
+  let acquired = false;
+  let lockSupported = true;
   try {
-    return await seedDatabaseInner();
-  } finally {
-    await db.execute(seedSql`select pg_advisory_unlock(731948)`).catch(() => {});
+    for (let attempt = 0; attempt < 60 && !acquired; attempt++) {
+      const res = await client.query("select pg_try_advisory_lock($1) as ok", [SEED_LOCK_KEY]);
+      acquired = res.rows[0]?.ok === true;
+      if (!acquired) await sleep(500);
+    }
+  } catch (e: any) {
+    // A pooler that refuses advisory locks must not block provisioning.
+    lockSupported = false;
+    console.warn("[seed] advisory lock unavailable — seeding without serialisation:", e?.message || e);
   }
+
+  if (acquired) {
+    try {
+      // Another instance may have completed the seed while we waited.
+      const [row] = await db.select({ id: businesses.id }).from(businesses).limit(1);
+      if (row) {
+        console.log("Database already seeded with GoMina 360 data.");
+        return;
+      }
+      return await seedDatabaseInner();
+    } finally {
+      await client.query("select pg_advisory_unlock($1)", [SEED_LOCK_KEY]).catch(() => {});
+      client.release();
+    }
+  }
+
+  client.release();
+
+  if (lockSupported) {
+    // The lock is held by another instance. Wait (bounded) for its work to
+    // land, then return — a caller must never be blocked forever by a lock
+    // that cannot be verified as live.
+    console.log("[seed] another instance holds the seed lock — waiting for data…");
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await sleep(500);
+      const [row] = await db.select({ id: businesses.id }).from(businesses).limit(1);
+      if (row) return;
+    }
+    console.log("[seed] still empty after 30s — seeding without the advisory lock (last resort).");
+  }
+  return await seedDatabaseInner();
 }
 
 async function seedDatabaseInner() {

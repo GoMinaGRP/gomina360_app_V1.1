@@ -9,7 +9,7 @@ import {
   poultryBenchmarkProfiles,
   notifications,
 } from "@/db/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { tasksForBusiness, type TaskSeed } from "./checklistDefaults";
 import { STAGE_PLAN_TASKS } from "./poultryStageTasks";
 import { stageOfFlock, isStagePlanBirdType, effectivePlanItemsForFlock, type FlockStage } from "./poultryStages";
@@ -370,15 +370,36 @@ export async function generateEntriesForDate(
   await ensureTemplates(businessId, branchCode, bizCode ?? null, bizCategory ?? null);
 
   const lockKey = genLockKey(businessId, date);
-  await db.execute(sql`select pg_advisory_lock(${lockKey})`);
-  try {
+
+  // ── Concurrency + production-pooler safety (final audit) ────────────────
+  // The whole critical section runs in ONE transaction guarded by a
+  // TRANSACTION-scoped advisory lock:
+  //   • `pg_advisory_xact_lock` is released automatically at COMMIT/ROLLBACK,
+  //     so a crashed or timed-out request can never leave the lock held.
+  //   • It is the ONLY advisory-lock flavour that is safe behind a
+  //     transaction-mode connection pooler (Neon `-pooler` hosts, PgBouncer
+  //     `?pgbouncer=true`): session-level `pg_advisory_lock()` /
+  //     `pg_advisory_unlock()` can execute on DIFFERENT backend connections
+  //     there, which orphaned the lock forever and hung every later
+  //     generation for the same business+date (the checklist route then
+  //     blocked until the function timed out).
+  //   • Every read and insert below shares that single connection, so the
+  //     "already materialized" check and the inserts are atomic — two app
+  //     instances generating the same day concurrently can no longer
+  //     duplicate tasks.
+  // Side effects (push delivery, audit rows) are collected and fired AFTER
+  // the commit: they must never hold the lock open or borrow a second
+  // connection mid-transaction (that is what deadlocks a small pool).
+  const pendingEffects: (() => Promise<unknown>)[] = [];
+  const generated = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${lockKey})`);
     const templates = (
-      await db.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId))
+      await tx.select().from(checklistTemplates).where(eq(checklistTemplates.businessId, businessId))
     )
       .filter((t: any) => t.isActive !== false)
       .sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0));
 
-    const existing = await db
+    const existing = await tx
       .select()
       .from(checklistEntries)
       .where(and(eq(checklistEntries.businessId, businessId), eq(checklistEntries.checklistDate, date)));
@@ -422,7 +443,7 @@ export async function generateEntriesForDate(
 
     // ── 2. Stage-plan generation (poultry businesses with the plan on) ────
     if (stageTemplates.length > 0 || customScoped.length > 0) {
-      const flockRows = await db
+      const flockRows = await tx
         .select()
         .from(poultryFlocks)
         .where(eq(poultryFlocks.businessId, businessId));
@@ -464,18 +485,29 @@ export async function generateEntriesForDate(
         history = freqRows as HistoryRow[];
         // Latest recorded stage per flock (excluding this date — a re-run of
         // today must not "transition" against itself).
-        const stageRows = (await getPool().query(
-          `SELECT DISTINCT ON (flock_id) flock_id, stage_key, checklist_date
-             FROM checklist_entries
-            WHERE business_id = $1 AND flock_id = ANY($2) AND stage_key IS NOT NULL
-              AND checklist_date <> $3
-            ORDER BY flock_id, checklist_date DESC, id DESC`,
-          [businessId, flockIds, date]
-        )) as unknown as { rows: any[] };
-        latestStage = stageRows.rows.map((r: any) => ({
-          flockId: Number(r.flock_id),
-          stageKey: String(r.stage_key),
-          checklistDate: String(r.checklist_date),
+        // Runs on the transaction's connection (tx) — a raw pool query here
+        // would borrow a SECOND connection while the lock transaction is
+        // still open, which starves a small pool under load.
+        const stageRows = await tx
+          .selectDistinctOn([checklistEntries.flockId], {
+            flockId: checklistEntries.flockId,
+            stageKey: checklistEntries.stageKey,
+            checklistDate: checklistEntries.checklistDate,
+          })
+          .from(checklistEntries)
+          .where(
+            and(
+              eq(checklistEntries.businessId, businessId),
+              inArray(checklistEntries.flockId, flockIds),
+              isNotNull(checklistEntries.stageKey),
+              ne(checklistEntries.checklistDate, date)
+            )
+          )
+          .orderBy(checklistEntries.flockId, desc(checklistEntries.checklistDate), desc(checklistEntries.id));
+        latestStage = stageRows.map((r: any) => ({
+          flockId: Number(r.flockId),
+          stageKey: String(r.stageKey),
+          checklistDate: String(r.checklistDate),
         }));
       }
 
@@ -488,7 +520,7 @@ export async function generateEntriesForDate(
       }
 
       if (activeFlocks.length) {
-        const profileRows = await db
+        const profileRows = await tx
           .select()
           .from(poultryBenchmarkProfiles)
           .where(eq(poultryBenchmarkProfiles.businessId, businessId));
@@ -518,28 +550,37 @@ export async function generateEntriesForDate(
                 stage.marketEtaDays != null && stage.marketEtaDays > 0 && stage.phase === "MARKET"
                   ? ` ${stage.marketEtaDays} day(s) to market age.`
                   : "";
-              try {
-                await notifyPoultryStageTransition({
-                  flock: { id: flockId, batchNumber: flock.batchNumber, birdType: flock.birdType },
-                  stage,
-                  businessId,
-                  branchCode: branchCode || flock.branchCode || null,
-                });
-              } catch (e: any) {
-                console.error("[checklistGen] stage transition notify failed:", e?.message || e);
-              }
-              auditLog(
-                { id: 0, name: "Checklist Engine", role: "SYSTEM" },
-                "POULTRY_STAGE_TRANSITION",
-                "Flock",
-                `${flock.batchNumber} → ${stage.label}`,
-                "OPERATION_LOG",
-                flockId,
+              // DEFERRED past the commit (see the transaction note at the top of
+              // this function): push delivery + the audit row use their own DB
+              // connection/network IO and must not run while the advisory-lock
+              // transaction is open.
+              const transition = {
+                flock: { id: flockId, batchNumber: flock.batchNumber, birdType: flock.birdType },
+                stage,
                 businessId,
-                branchCode || flock.branchCode || null,
-                `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age.${etaTxt} ${stage.transitionNote}`.trim(),
-                (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
-              ).catch(() => {});
+                branchCode: branchCode || flock.branchCode || null,
+              };
+              const transitionNote = `${flock.batchNumber} (${flock.birdType}) entered ${stage.label} at ${ageTxt} of age.${etaTxt} ${stage.transitionNote}`.trim();
+              const transitionLabel = `${flock.batchNumber} → ${stage.label}`;
+              pendingEffects.push(async () => {
+                try {
+                  await notifyPoultryStageTransition(transition as any);
+                } catch (e: any) {
+                  console.error("[checklistGen] stage transition notify failed:", e?.message || e);
+                }
+                auditLog(
+                  { id: 0, name: "Checklist Engine", role: "SYSTEM" },
+                  "POULTRY_STAGE_TRANSITION",
+                  "Flock",
+                  transitionLabel,
+                  "OPERATION_LOG",
+                  flockId,
+                  businessId,
+                  branchCode || flock.branchCode || null,
+                  transitionNote,
+                  (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
+                ).catch(() => {});
+              });
             }
           }
 
@@ -597,14 +638,21 @@ export async function generateEntriesForDate(
 
     const inserted: any[] = [];
     for (const row of toInsert) {
-      const [r] = await db.insert(checklistEntries).values(row).returning();
+      const [r] = await tx.insert(checklistEntries).values(row).returning();
       inserted.push(r);
     }
-    generatedAt.set(genKey, Date.now()); // success → skip the lock + reads for the next 60 s
     return [...existing, ...inserted];
-  } finally {
-    await db.execute(sql`select pg_advisory_unlock(${lockKey})`).catch(() => {});
+  }); // COMMIT here — the advisory lock is released by the server immediately.
+
+  generatedAt.set(genKey, Date.now()); // success → skip the lock + reads for the next 60 s
+  for (const effect of pendingEffects) {
+    try {
+      await effect();
+    } catch (e: any) {
+      console.error("[checklistGen] deferred post-commit effect failed:", e?.message || e);
+    }
   }
+  return generated;
 }
 
 // In-process guard so a single server run never re-announces the same
@@ -742,6 +790,9 @@ export async function forkFlockPlan(
     rows.push(row);
   }
   await upsertPlanState(businessId, branchCode, flock, { source: "CUSTOM" }, actor);
+  // A flock's own template rows change what today's plan must contain →
+  // never let the 60 s generation memo hand back the pre-mutation result.
+  invalidateChecklistGeneration(businessId);
   return { created: rows.length, rows };
 }
 
@@ -795,6 +846,7 @@ export async function applyPlanTemplateToFlock(
     { source: "TEMPLATE", planTemplateId: template.id, planTemplateName: template.name },
     actor
   );
+  invalidateChecklistGeneration(businessId); // see forkFlockPlan
   return { created: rows.length, rows };
 }
 
@@ -806,6 +858,7 @@ export async function resetFlockPlan(businessId: number, flock: any, actor: Acto
     .where(and(eq(checklistTemplates.businessId, businessId), eq(checklistTemplates.flockId, Number(flock.id))))
     .returning();
   await upsertPlanState(businessId, flock.branchCode || null, flock, { source: "SYSTEM" }, actor);
+  invalidateChecklistGeneration(businessId); // see forkFlockPlan
   return removed.length;
 }
 

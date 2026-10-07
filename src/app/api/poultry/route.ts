@@ -29,6 +29,7 @@ import {
   forkFlockPlan,
   applyPlanTemplateToFlock,
   generateEntriesForDate,
+  invalidateChecklistGeneration,
   insertDailyEntries,
   toggleChecklistEntry,
 } from "@/lib/checklistGen";
@@ -323,7 +324,12 @@ export async function POST(request: NextRequest) {
               (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null
             ).catch(() => {});
           }
-          // Materialize today's entries for the new flock right away.
+          // Materialize today's entries for the new flock right away. The
+          // invalidation first is essential: a business that already generated
+          // today's list in this process (e.g. during /api/init seconds ago)
+          // would otherwise hit the 60 s memo and the flock would silently get
+          // NO checklist for the day (caught by the flock-plans suite).
+          invalidateChecklistGeneration(businessId);
           const todayLocal = new Date().toLocaleDateString("en-CA");
           await generateEntriesForDate(businessId, branchCode, todayLocal, biz?.code, biz?.category);
         } catch (e: any) {
@@ -985,6 +991,10 @@ export async function PATCH(request: NextRequest) {
         ].filter(Boolean).join(" · ") || "flock details updated",
         (await ownerOrgOfBusiness(existingFlock.businessId).catch(() => null)) ?? null
       ).catch((e: any) => console.error("[poultry] audit failed:", e));
+      // A flock's status/bird data decides what today's list must contain
+      // (only ACTIVE flocks materialize stage tasks), so drop the 60 s
+      // generation memo for this business — see the create path above.
+      invalidateChecklistGeneration(existingFlock.businessId);
       return NextResponse.json({ success: true, item: row });
     }
 

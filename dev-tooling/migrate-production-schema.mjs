@@ -37,7 +37,32 @@ import fs from "node:fs";
 import pg from "pg";
 import { is, SQL } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import * as appSchema from "../src/db/schema.ts";
+import { fileURLToPath } from "node:url";
+
+/**
+ * The schema — the ONE source of truth — is a TypeScript file, and this
+ * migration runs as plain `node` inside `npm run build` (i.e. on Vercel).
+ * Node strips TS types natively from 22.18 (and behind the
+ * `--experimental-strip-types` flag from 22.6); a pinned older patch would
+ * otherwise kill the entire deployment with "Unknown file extension .ts".
+ * So the import is dynamic and, if the runtime lacks that support, this
+ * script re-executes itself ONCE with the flag and adopts its exit code.
+ */
+let appSchema;
+try {
+  appSchema = await import("../src/db/schema.ts");
+} catch (err) {
+  const msg = String(err?.message || err);
+  if (!/Unknown file extension|strip-types|typescript/i.test(msg)) throw err;
+  console.warn("[db:migrate] this Node build needs --experimental-strip-types — re-running with it.");
+  const { spawnSync } = await import("node:child_process");
+  const retry = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", fileURLToPath(import.meta.url)],
+    { stdio: "inherit", env: process.env },
+  );
+  process.exit(retry.status ?? 1);
+}
 
 const { Client } = pg;
 

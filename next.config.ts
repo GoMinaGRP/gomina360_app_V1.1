@@ -62,6 +62,11 @@ const securityHeaders = [
 const imageLockdownCsp = "default-src 'none'; sandbox; img-src 'none'";
 
 const nextConfig: NextConfig = {
+  // Deployment probes (e.g. "does this commit still BUILD with no database
+  // env at all?", the Vercel Preview case) can target a throwaway output
+  // directory so a probe build never clobbers the bundle the live server is
+  // serving. Unset in every normal build — .next stays the default.
+  ...(process.env.GOMINA_DIST_DIR ? { distDir: process.env.GOMINA_DIST_DIR } : {}),
   allowedDevOrigins: [
     "*.e2b.app",
     "127.0.0.1",
