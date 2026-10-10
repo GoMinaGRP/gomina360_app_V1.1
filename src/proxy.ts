@@ -62,20 +62,56 @@ const ADVISOR_API_ALLOWLIST: AdvisorApiRule[] = [
   { prefix: "/api/push", methods: null }, // own push subscriptions
 ];
 
+/**
+ * Does this (path, method) pair pass the advisor policy on its own?
+ *
+ * A pure string comparison — no session, no database. Kept separate from the
+ * proxy so the cheap question can be answered FIRST (see below).
+ *
+ * Exported for dev-tooling/verify-proxy-fast-path.mjs, which asserts the
+ * classification directly rather than inferring it from timings.
+ */
+export function advisorAllows(pathname: string, method: string): boolean {
+  for (const rule of ADVISOR_API_ALLOWLIST) {
+    if (pathname === rule.prefix || pathname.startsWith(`${rule.prefix}/`)) {
+      return !rule.methods || rule.methods.includes(method);
+    }
+  }
+  return false;
+}
+
+/**
+ * PERF · the session lookup moved OFF the hot path.
+ *
+ * This used to resolve the session FIRST and only then consult the allowlist —
+ * so every single /api/* call paid a database round trip to learn a role that
+ * the path+method already decided. On Vercel the proxy and the route handler
+ * run as SEPARATE invocations, so getSessionInfo()'s 5 s micro-cache is not
+ * shared between them: the token was resolved from Postgres TWICE per
+ * authenticated request. Against a REMOTE Neon database that is a second full
+ * round trip on every call — invisible locally, very expensive in production.
+ *
+ * Reordering is PROVABLY equivalent, not a relaxation:
+ *   • allowed (path, method) → the advisor passed anyway, so EVERYONE passes;
+ *     the resolved role could not have changed the outcome. The lookup was
+ *     pure waste → skip it.
+ *   • not allowed → the advisor is refused and everyone else passes, which is
+ *     the only case that genuinely needs the role, so resolve it there.
+ * The 403 body, the fail-open catch and the per-route authorization backstop
+ * are all unchanged; the policy decides exactly what it decided before.
+ */
 export async function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const method = (request.method || "GET").toUpperCase();
+
+  // Fast path — allowlisted for advisors, so no role lookup can change this.
+  if (advisorAllows(pathname, method)) return NextResponse.next();
+
   try {
     const info = await getSessionInfo(request);
     // Only FARM_ADVISOR sessions are policy-checked; everyone else passes.
     if (!info || !isFarmAdvisor(info.user)) return NextResponse.next();
 
-    const { pathname } = request.nextUrl;
-    const method = (request.method || "GET").toUpperCase();
-    for (const rule of ADVISOR_API_ALLOWLIST) {
-      if (pathname === rule.prefix || pathname.startsWith(`${rule.prefix}/`)) {
-        if (!rule.methods || rule.methods.includes(method)) return NextResponse.next();
-        break; // right path, wrong verb → read-only violation → 403 below
-      }
-    }
     return NextResponse.json(
       {
         success: false,

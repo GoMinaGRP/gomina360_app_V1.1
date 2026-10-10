@@ -22,6 +22,12 @@
 | 8 | Verify | `/api/health`, then the smoke list in §6 | `{"ok":true}`. |
 
 **Region pairing is the single most common self-inflicted performance problem.**
+
+> **Now checked automatically.** `/api/health` reports `dbRegion`,
+> `vercelRegion` and a plain-English `regionNote` that names exactly what to
+> change when the two disagree, and every cold start logs the pairing with a
+> `(CHECK PAIRING)` marker. Open `/api/health` on the deployed URL rather than
+> assuming the pairing is right. See `docs/PERFORMANCE-AND-DEPLOYMENT-AUDIT.md`.
 `vercel.json` pins the functions to `fra1`; keep the Neon project in the same
 continent (`eu-central-1`). If your users are mostly in West Africa and you
 prefer a different Vercel region, change **both** together (e.g. `lhr1` +

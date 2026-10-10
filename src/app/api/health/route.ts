@@ -59,6 +59,61 @@ function hintFor(root: any): string | null {
 }
 
 // Sanitized snapshot of where the app THINKS the database lives (no creds).
+/**
+ * PERF · report whether the database and the functions are in the SAME region.
+ *
+ * `vercel.json` pins the serverless functions to one region, and the database
+ * lives wherever its provider was created. When those two disagree, every
+ * single query crosses an ocean, and the tax is invisible in local development
+ * because everything is on loopback. This is the single most common cause of
+ * "the deployed app is slow" — and until now nothing in the app said so.
+ *
+ * Neon encodes the region in the hostname, e.g.
+ *   ep-name-abc123-pooler.eu-central-1.aws.neon.tech
+ * so the pairing can be checked without any extra configuration. A host that
+ * does not announce a region simply reports `unknown` — never a false alarm.
+ */
+const VERCEL_REGION_TO_AWS: Record<string, string> = {
+  fra1: "eu-central-1",
+  ams1: "eu-west-1",
+  lhr1: "eu-west-2",
+  dub1: "eu-west-1",
+  iad1: "us-east-1",
+  sfo1: "us-west-1",
+  ord1: "us-east-2",
+  pdx1: "us-west-2",
+  gru1: "sa-east-1",
+  syd1: "ap-southeast-2",
+  sin1: "ap-southeast-1",
+};
+
+function regionDiag(hostname: string): Record<string, unknown> {
+  const dbRegion = hostname.match(/\.([a-z]{2}-[a-z]+-\d)\./)?.[1] ?? null;
+  const vercelRegion = process.env.VERCEL_REGION || null;
+  if (!dbRegion || !vercelRegion) {
+    return {
+      dbRegion,
+      vercelRegion,
+      regionNote: dbRegion
+        ? "Set VERCEL_REGION awareness by checking the Vercel project region against the Neon region in vercel.json."
+        : "This database hostname does not advertise a region; confirm it matches vercel.json by hand.",
+    };
+  }
+  const expected = VERCEL_REGION_TO_AWS[vercelRegion] ?? null;
+  const matched = expected ? expected === dbRegion : null;
+  return {
+    dbRegion,
+    vercelRegion,
+    regionMatched: matched,
+    regionNote: matched
+      ? `Database and functions are both in ${dbRegion}.`
+      : expected
+        ? `MISMATCH — functions run in ${vercelRegion} (${expected}) but the database is in ${dbRegion}. Every query pays an extra ocean crossing. Move the database to ${expected}, or change "regions" in vercel.json to a region near ${dbRegion}.`
+        : `Functions run in ${vercelRegion}; database is in ${dbRegion}. Compare them manually — no built-in mapping for ${vercelRegion}.`,
+  };
+}
+
+// Sanitized snapshot of where the app THINKS the database lives (no creds).
 function connectionDiag(): Record<string, unknown> | null {
   const viaEnv = resolvedDbEnvName();
   const url = viaEnv ? process.env[viaEnv] : undefined;
@@ -82,6 +137,7 @@ function connectionDiag(): Record<string, unknown> | null {
       user: u.username ? `${u.username.slice(0, 2)}…` : null,
       loopbackHost: LOCAL_HOST_PATTERN.test(u.hostname),
       sslmode: u.searchParams.get("sslmode"),
+      ...regionDiag(u.hostname),
     };
   } catch {
     return { ...base, host: "<unparsable DATABASE_URL>" };

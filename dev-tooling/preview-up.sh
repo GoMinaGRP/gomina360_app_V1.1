@@ -96,10 +96,12 @@ else
 fi
 
 # ── 5) production build (dev mode OOMs this sandbox) ───────────────────────
+REBUILT=0
 if [ ! -f .next/BUILD_ID ]; then
   say "building production bundle…"
   npm run build >/tmp/preview-build.log 2>&1 || { tail -15 /tmp/preview-build.log; exit 1; }
   ok "build complete"
+  REBUILT=1
 else
   ok "build present"
 fi
@@ -110,6 +112,19 @@ fi
 if [ ! -s /tmp/pushsrv.pem ]; then
   openssl req -x509 -newkey rsa:2048 -keyout /tmp/pushsrv-key.pem -out /tmp/pushsrv.pem \
     -days 2 -nodes -subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1 || true
+fi
+# A freshly built bundle MUST be served by a freshly started process. Reusing
+# the already-listening server after a rebuild left it serving the PREVIOUS
+# bundle: every check below passed, and every suite silently measured stale
+# code. That is the worst possible failure mode for a verification tool, so a
+# rebuild always forces a restart and the old process is actually killed.
+if [ "$REBUILT" = "1" ] && app_up; then
+  say "restarting the app onto the new build…"
+  pkill -f "next-server" 2>/dev/null || true
+  pkill -f "next start" 2>/dev/null || true
+  for _ in $(seq 1 30); do app_up || break; sleep 1; done
+  app_up && { echo "✗ old server still holding :3000"; exit 1; }
+  ok "previous server stopped"
 fi
 if app_up; then
   ok "app already listening on :3000"

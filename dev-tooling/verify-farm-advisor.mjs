@@ -402,9 +402,18 @@ const insights = (await pg.query(`SELECT * FROM business_insights WHERE business
 const snapIns = insightsSnap.find((x) => x.business_id === poultry.id);
 ok("G1 insights row exists for the unit", !!insights);
 if (insights) {
-  ok("G2 notesAnalyzed grew (advisor notes fold in)",
-    insights.notes_analyzed > (snapIns?.notes_analyzed ?? 0),
-    `${snapIns?.notes_analyzed ?? 0} → ${insights.notes_analyzed}`);
+  // The counter is DERIVED from the note rows (never accumulated), so the
+  // honest assertion is that it equals the number of notes that exist and now
+  // covers ours — comparing against a previously-stored value would just be
+  // comparing the counter against its own history.
+  const actualNotes = (await pg.query(
+    `SELECT (SELECT COUNT(*)::int FROM daily_notes WHERE business_id = $1)
+          + (SELECT COUNT(*)::int FROM advisor_notes WHERE business_id = $1) AS n`,
+    [poultry.id],
+  )).rows[0].n;
+  ok("G2 notesAnalyzed counts the notes that actually exist",
+    insights.notes_analyzed === actualNotes && actualNotes > 0,
+    `stored ${insights.notes_analyzed}, actual notes ${actualNotes} (snapshot was ${snapIns?.notes_analyzed ?? 0})`);
   ok("G3 lastNoteDate = our note's day", insights.last_note_date === day(0), String(insights.last_note_date));
   ok("G4 history non-empty with a summary", (insights.history || []).length >= 1 && String((insights.history || [])[0]?.summary || "").length > 0);
 }
@@ -1058,13 +1067,25 @@ try {
   await pg.query(`DELETE FROM poultry_weight_logs WHERE avg_weight_g = 1200 AND sample_size = 30 AND business_id = $1`, [poultry.id]);
   await pg.query(`DELETE FROM poultry_benchmark_profiles WHERE name = 'SEC-Cobb500-Target' AND business_id = $1`, [poultry.id]);
 
-  // business_insights: byte-for-byte restore of the snapshotted rows.
+  // business_insights: restore of the snapshotted rows — EXCEPT notes_analyzed,
+  // which is re-derived from the notes that actually survive cleanup.
+  //
+  // Restoring the snapshot's counter verbatim resurrected a number whose notes
+  // this very cleanup had just deleted, re-creating exactly the drift the app
+  // now prevents by deriving the count (see upsertInsights in /api/advisor-notes
+  // and /api/daily-notes). That stale restore then made G2 below fail on the
+  // NEXT run for a reason that had nothing to do with the feature under test.
   await pg.query(`DELETE FROM business_insights WHERE business_id = ANY($1)`, [[poultry.id, aqua.id]]);
   for (const row of insightsSnap) {
+    const surviving = (await pg.query(
+      `SELECT (SELECT COUNT(*)::int FROM daily_notes WHERE business_id = $1)
+            + (SELECT COUNT(*)::int FROM advisor_notes WHERE business_id = $1) AS n`,
+      [row.business_id],
+    )).rows[0].n;
     await pg.query(
       `INSERT INTO business_insights (business_id, notes_analyzed, last_note_date, rolling_summary, issue_register, category_trends, history, updated_at, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [row.business_id, row.notes_analyzed, row.last_note_date, row.rolling_summary,
+      [row.business_id, surviving, row.last_note_date, row.rolling_summary,
        JSON.stringify(row.issue_register), JSON.stringify(row.category_trends), JSON.stringify(row.history), row.updated_at, row.created_at],
     );
   }

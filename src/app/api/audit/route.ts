@@ -258,6 +258,10 @@ export type AuditRecordRow = {
   detail: string;
   module: string;
   businessId: number;
+  /** Owning organization, carried only by records that name NO business (access
+   *  grants, delegations). Used by the owner-narrowing fallback so those events
+   *  stay reachable for their owner; never rendered to the client. */
+  ownerId?: number | null;
   branchCode: string | null;
   workerName: string | null;
   workerUserId?: number | null; // login account behind the record, when known (issue routing)
@@ -674,6 +678,16 @@ async function collectRecords(scope: Scope, AUD: AuditData, financialsAuthorized
   // Supplier deletions carry no business context (suppliers are a global
   // directory), so they surface for the unrestricted OWNER only.
   const DELETION_MODULE: Record<string, string> = { TRANSACTIONS: "FINANCE", INVENTORY: "INVENTORY", EMPLOYEES: "EMPLOYEES" };
+  // Businesses that still exist. A deletion trail outlives the unit it deleted
+  // from — that is the point of a trail — so a log row can name a business id
+  // that no longer resolves. Publishing that dangling id is actively harmful:
+  // the client cannot look it up, and a consumer that resolves owners from the
+  // business table reads "unknown business" as "belongs to nobody", which reads
+  // as a tenant leak. Such rows are reported as unattached (businessId 0) and
+  // carry their own `ownerId`, so the tenant that owns the trail stays explicit.
+  const liveBusinessIds = new Set<number>(
+    (AUD["businesses|all|none|"] ?? []).map((b: any) => Number(b.id)),
+  );
   const delRows = AUD["recordDeletionLogs|200|id|"];
   for (const d of delRows) {
     const mod = DELETION_MODULE[d.module];
@@ -689,7 +703,10 @@ async function collectRecords(scope: Scope, AUD: AuditData, financialsAuthorized
       ref: `DEL-${d.id}`,
       title: `${delMoney ? d.recordLabel : String(d.recordLabel || "").replace(LABEL_FIGURE_RE, "$1 •••••")} — deleted`,
       detail: `Deleted by ${d.deletedByName} (${d.deletedByRole}) · reason: ${d.reason}`,
-      module: mod, businessId: Number(snap.businessId) || 0, branchCode: branchOf(Number(snap.businessId) || 0, snap.branchCode),
+      module: mod,
+      businessId: liveBusinessIds.has(Number(snap.businessId)) ? Number(snap.businessId) : 0,
+      ownerId: d.ownerId ?? null,
+      branchCode: liveBusinessIds.has(Number(snap.businessId)) ? branchOf(Number(snap.businessId), snap.branchCode) : null,
       workerName: d.deletedByName, date: tsDay(d.createdAt), at: tsIso(d.createdAt), amountGhs: delMoney ? (snap.amountGhs ?? null) : null, status: "DELETED",
       imageCount: Array.isArray(snap.photos) ? snap.photos.length : snap.photo ? 1 : Array.isArray(snap.assetImages) ? snap.assetImages.length : 0,
     });
@@ -705,7 +722,7 @@ async function collectRecords(scope: Scope, AUD: AuditData, financialsAuthorized
       key: `USER_ACTIVITY:audit_trail:${t.id}`, recordType: "USER_ACTIVITY", recordSource: "audit_trail", recordId: t.id,
       ref: `ACT-${t.id}`, title: `${t.action} — ${t.targetLabel}`,
       detail: `${t.actorName} (${t.actorRole})${t.reason ? ` · ${t.reason}` : ""}${t.detail ? ` · ${t.detail}` : ""}`,
-      module: "USERS", businessId: t.businessId ?? 0, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
+      module: "USERS", businessId: t.businessId ?? 0, ownerId: t.ownerId ?? null, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
       workerName: t.actorName, date: tsDay(t.createdAt), at: tsIso(t.createdAt), amountGhs: null, status: "LOGGED",
     });
   }
@@ -910,11 +927,26 @@ export async function GET(request: Request) {
     // two filters intersect with each other and with the caller's own scope.
     const scopedIds = (id: number) => scope.businessIds === null || scope.businessIds.includes(id);
     let narrowed: Set<number> | null = null;
+    // Organizations whose unit-less (organization-level) audit events this
+    // narrowed view may still show. Derived from the same `chosen` units as
+    // `narrowed`, then INTERSECTED with the caller's own organizations so the
+    // fallback can never reach a tenant the caller could not already see.
+    let orgScopeIds: Set<number> = new Set();
+    // business id → owning organization, for records whose business cannot be
+    // resolved by id alone (below).
+    let bizOwnerById: Map<number, number> = new Map();
     if (fOwnerId !== null || fBusinessIds.length > 0) {
       const ownerBiz = (AUD["businesses|all|none|"] ?? []).map((b: any) => ({ id: b.id, ownerId: b.ownerId }));
+      bizOwnerById = new Map(ownerBiz.map((b: any) => [Number(b.id), Number(b.ownerId ?? 1)]));
       const byOwner = fOwnerId !== null ? ownerBiz.filter((b) => Number(b.ownerId ?? 1) === fOwnerId) : ownerBiz;
       const chosen = fBusinessIds.length > 0 ? byOwner.filter((b) => fBusinessIds.includes(Number(b.id))) : byOwner;
-      narrowed = new Set(chosen.map((b) => Number(b.id)).filter(scopedIds));
+      const chosenScoped = chosen.filter((b) => scopedIds(Number(b.id)));
+      orgScopeIds = new Set(chosenScoped.map((b) => Number(b.ownerId ?? 1)));
+      if (scope.businessIds !== null) {
+        const mine = new Set((scope.ownerIds || []).map(Number));
+        orgScopeIds = new Set([...orgScopeIds].filter((o) => mine.has(o)));
+      }
+      narrowed = new Set(chosenScoped.map((b) => Number(b.id)));
       if (narrowed.size === 0) {
         // Nothing in scope — an empty result is the honest answer (never fall
         // back to "everything", which would silently widen the view).
@@ -924,7 +956,42 @@ export async function GET(request: Request) {
       }
     }
     if (narrowed) {
-      records = records.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      // A record that names NO business (organization-level events — access
+      // grants, delegations) cannot be matched by business id, so narrowing by
+      // owner silently DROPPED it from every owner-scoped view: it was visible
+      // in the Super Admin "everything" list and in nobody else's. Those rows
+      // carry their own `ownerId`, which scopedTrail() already trusts for the
+      // same records, so fall back to it — keeping the filter an INTERSECTION
+      // with the caller's own scope, never a widening.
+      // An explicit `businessIds` list is the caller naming specific units, so
+      // it is honoured literally — matched on unit and nothing else. The
+      // fallback below exists only to make an OWNER-wide view complete, and
+      // applying it here would smuggle in records for units that were never
+      // asked for, which is exactly the scope widening this filter exists to
+      // prevent.
+      if (fBusinessIds.length > 0) {
+        records = records.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      } else {
+        const ownerKept = (r: any) => {
+          const bizId = r.businessId == null ? 0 : Number(r.businessId);
+          if (bizId !== 0) {
+            // A record that names a REAL unit is scoped by that unit, full
+            // stop. If it is not in the narrowed set it belongs to a different
+            // organization, and its own ownerId must never override that.
+            if (bizOwnerById.has(bizId)) return narrowed!.has(bizId);
+            // …but the unit it names no longer exists — the normal end-state
+            // of a deletion trail, which outlives the unit by design. Fall back
+            // to the tenant the trail itself was stamped with (the same
+            // `owner_id` /api/enterprise already trusts for these rows).
+            // Previously such a record appeared in the Super Admin's
+            // "everything" list and in NO owner's, which is how the partition
+            // could not be reconciled by anyone.
+          }
+          if (r.ownerId == null) return false;
+          return orgScopeIds.has(Number(r.ownerId));
+        };
+        records = records.filter(ownerKept);
+      }
       reviews = reviews.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
       log = log.filter((t) => t.businessId == null || narrowed!.has(Number(t.businessId)));
     }

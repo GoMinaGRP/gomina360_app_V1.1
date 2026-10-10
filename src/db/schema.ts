@@ -119,7 +119,22 @@ export const users = pgTable("users", {
   // membership rows in organization_members are authoritative.
   primaryOrgId: integer("primary_org_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    // PERF. Access scoping reads users by their ASSIGNED unit constantly:
+    // /api/init narrows the directory with
+    //   `WHERE id = $1 OR assigned_business_id IN (…)`
+    // and `accessibleBusinessIds()` drives the same column for every
+    // role-checked route. Only `email` was indexed, so that predicate fell
+    // back to a sequential scan of the whole user table — which grows with
+    // the platform, not with any one business, and is therefore the one scan
+    // that never stops getting worse as the app is adopted.
+    index("users_assigned_business_id_idx").on(t.assignedBusinessId),
+    // Multi-owner tenancy: /api/init resolves a user's org memberships by
+    // primary_org_id on the users row itself.
+    index("users_primary_org_id_idx").on(t.primaryOrgId),
+  ]
+);
 
 // Server-side login sessions. Only the SHA-256 hash of the bearer token is
 // stored, so a database leak never exposes usable tokens.
@@ -234,7 +249,16 @@ export const recordDeletionLogs = pgTable("record_deletion_logs", {
   deletedByRole: text("deleted_by_role").notNull(),
   ownerId: integer("owner_id"), // tenant scope (organizations.id); backfilled per org
   createdAt: timestamp("created_at").defaultNow(),
-});
+},
+  (t) => [
+    // PERF. The deletion audit trail is append-only and never pruned, and it is
+    // read on every module's audit panel (`WHERE module = ?` scoped to the
+    // viewer's organizations) and folded into /api/audit's DELETION records.
+    // It had NO index at all, so every read was a full scan of a table that
+    // only ever grows. Column order mirrors the route's own access pattern:
+    // tenant first, then module, then newest first.
+    index("record_deletion_logs_owner_module_created_idx").on(t.ownerId, t.module, t.createdAt),
+  ]);
 
 // 2. Businesses / Branches / Locations
 export const businesses = pgTable("businesses", {
@@ -315,7 +339,7 @@ export const businesses = pgTable("businesses", {
   // Tenant-scoped uniqueness: (organization, code). NULL ownerId (legacy
   // pre-multi-owner rows) falls back to the shared legacy namespace.
   uniqueIndex("businesses_owner_code_unique").on(t.ownerId, t.code),
-]);
+  ]);
 
 // Service areas / localities a Business (branch unit) delivers to. Every
 // unit defines its OWN list — different branches serve different areas. An
@@ -3157,6 +3181,14 @@ export const notifications = pgTable("notifications", {
     index("notifications_business_id_idx").on(t.businessId),
     index("notifications_user_id_id_idx").on(t.userId, t.id),
     index("notifications_owner_id_idx").on(t.ownerId),
+    // PERF. The bell's unread badge is computed on every page load with
+    //   `WHERE user_id = ? AND is_read = false`
+    // The only user-facing index was (user_id, id), which finds the user's
+    // rows and then has to discard every READ one. notifications is the
+    // app's fastest-growing table (every audit event writes a row, forever),
+    // so that discard grew without bound while the badge got slower.
+    // This composite makes the count touch only the unread rows.
+    index("notifications_user_id_is_read_idx").on(t.userId, t.isRead),
   ]);
 
 // ── Web Push (phone/laptop notifications) ─────────────────────────────

@@ -152,7 +152,19 @@ function describeConnection(databaseUrl: string): string {
         : process.env.PGSSLMODE === "disable"
         ? "disabled(PGSSLMODE override)"
         : u.searchParams.get("sslmode") || (u.searchParams.has("ssl") ? u.searchParams.get("ssl")! : "provider-default");
-    return `host=${u.hostname} port=${u.port || 5432} database=${u.pathname.replace(/^\//, "")} sslmode=${sslMode}`;
+    // The database's cloud region, when the hostname advertises one (Neon does).
+    // Printed on every cold start so a cross-region pairing — the usual reason a
+    // deployment feels slow while local development does not — is visible in the
+    // Runtime Logs without anyone having to guess.
+    const dbRegion = u.hostname.match(/\.([a-z]{2}-[a-z]+-\d)\./)?.[1];
+    const fnRegion = process.env.VERCEL_REGION;
+    const regionTag =
+      dbRegion && fnRegion
+        ? ` dbRegion=${dbRegion} fnRegion=${fnRegion}${dbRegion === fnRegion ? "" : " (CHECK PAIRING)"}`
+        : dbRegion
+          ? ` dbRegion=${dbRegion}`
+          : "";
+    return `host=${u.hostname} port=${u.port || 5432} database=${u.pathname.replace(/^\//, "")} sslmode=${sslMode}${regionTag}`;
   } catch {
     return "host=<unparsable DATABASE_URL>";
   }
