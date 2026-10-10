@@ -145,7 +145,6 @@ export default function ProductLightbox({
         return z2;
       });
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 

@@ -236,7 +236,11 @@ export default function TransportModule(props: Props) {
   useEffect(() => { setLoading(true); load(); }, [load]);
   useEffect(() => {
     if (tab !== "GPS") return;
-    const t = setInterval(load, 30000);
+    // Visibility-aware: skip GPS refreshes while the tab is hidden.
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    }, 30000);
     return () => clearInterval(t);
   }, [tab, load]);
 

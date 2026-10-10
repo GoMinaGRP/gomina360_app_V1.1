@@ -117,7 +117,6 @@ export default function UserAccessConsole({ isOpen, onClose, businesses, current
       setNotice("");
       loadUsers();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // Escape key handler

@@ -575,7 +575,6 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
     setCurrentUser(null);
     setActiveTab("COMMAND_CENTER");
     setLoginNotice("You were signed out automatically after 24 hours of inactivity. Sign in again to continue.");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleLogout = async () => {

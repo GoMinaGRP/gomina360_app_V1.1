@@ -141,7 +141,6 @@ export function useLayerFailover(lane: string, layers: readonly TileLayerDef[]) 
       exhausted: false,
       stuckNotice: null,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lane, layer.key, layer.url]);
 
   useEffect(() => {

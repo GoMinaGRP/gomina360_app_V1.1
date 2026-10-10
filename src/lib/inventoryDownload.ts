@@ -156,7 +156,8 @@ async function generateExcel(
   currency: CurrencyCode,
   businesses: any[]
 ): Promise<Blob> {
-  const XLSX = await import('xlsx');
+  // exceljs (already a dependency) replaces the vulnerable xlsx/SheetJS build.
+  const ExcelJS = await import('exceljs');
 
   const headers = [
     'SKU',
@@ -206,11 +207,10 @@ async function generateExcel(
     ];
   });
 
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-
-  const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Inventory');
+  ws.addRows([headers, ...rows]);
+  const excelBuffer = await wb.xlsx.writeBuffer();
   return new Blob([excelBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   });

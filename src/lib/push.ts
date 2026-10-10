@@ -65,10 +65,20 @@ export async function getVapidKeys(): Promise<{ publicKey: string; privateKey: s
     cachedVapid = { publicKey: row.vapidPublic, privateKey: row.vapidPrivate };
     return cachedVapid;
   }
+  // Concurrent first callers (parallel serverless cold starts on a fresh
+  // database) must converge on ONE keypair. ON CONFLICT DO NOTHING lets the
+  // losing insert succeed silently, then we re-read the stored row so every
+  // instance uses the persisted keys — never a locally generated pair that
+  // differs from the database (which would break push subscriptions).
   const keys = webpush.generateVAPIDKeys();
-  await db.insert(pushConfig).values({ id: 1, vapidPublic: keys.publicKey, vapidPrivate: keys.privateKey });
-  cachedVapid = keys;
-  return keys;
+  await db
+    .insert(pushConfig)
+    .values({ id: 1, vapidPublic: keys.publicKey, vapidPrivate: keys.privateKey })
+    .onConflictDoNothing({ target: pushConfig.id });
+  const [stored] = await db.select().from(pushConfig).where(eq(pushConfig.id, 1));
+  if (!stored) throw new Error("VAPID keypair could not be persisted or read back");
+  cachedVapid = { publicKey: stored.vapidPublic, privateKey: stored.vapidPrivate };
+  return cachedVapid;
 }
 
 export interface PushPayload {
