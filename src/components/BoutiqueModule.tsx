@@ -347,9 +347,6 @@ export default function BoutiqueModule({
               ...(picked ? { variantId: picked.id } : {}),
             },
           ],
-          createdByUserId: currentUser?.id,
-          createdByName: currentUser?.name,
-          createdByRole: currentUser?.role,
         }),
       });
       const body = await res.json().catch(() => null);
@@ -900,6 +897,7 @@ export default function BoutiqueModule({
               </button>
             </div>
             <FinancialReportSection
+            currentUser={currentUser}
               mode="business"
               businessInfo={businessInfo}
               businessMetric={businessMetrics}

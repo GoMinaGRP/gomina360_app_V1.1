@@ -90,6 +90,7 @@ async function notifyTaskUser(
     title: string;
     body: string;
     recordRef: string;
+    recordId?: number | null;
     businessId?: number | null;
     branchCode?: string | null;
     actorName?: string | null;
@@ -117,8 +118,11 @@ async function notifyTaskUser(
       type: n.type,
       title: n.title.slice(0, 240),
       body: n.body.slice(0, 600) || null,
-      recordType: "ACTION_TASK",
-      recordId: null,
+      recordType: "action_tasks",
+      // Carrying the task id is what lets the bell focus the exact action. It
+      // was `null` here, so clicking any task notification opened the Action
+      // Center with nothing selected.
+      recordId: n.recordId ?? null,
       recordRef: n.recordRef,
       businessId: n.businessId ?? null,
       branchCode: n.branchCode ?? null,
@@ -188,19 +192,222 @@ export async function createTask(input: CreateTaskInput): Promise<any> {
       dueDate: input.dueDate || null,
     })
     .returning();
-  if (Number(input.assignedUserId) !== Number(input.createdByUserId)) {
-    await notifyTaskUser(Number(input.assignedUserId), {
-      type: "TASK_ASSIGNED",
-      title: `Action assigned: ${title}`,
-      body: `${input.createdByName || "A manager"} assigned you an action${input.dueDate ? ` due ${input.dueDate}` : ""} — ${normTaskPriority(input.priority)} priority.${input.sourceLabel ? ` From: ${input.sourceLabel}.` : ""} Open it in the Action Center.`,
-      recordRef: taskNumber,
+  // Every state change routes through ONE transition table (see
+  // notifyTaskTransition) instead of a chain of `if (status === …)` blocks.
+  // The previous chain knew only about DONE, so CANCELLED and reopen were
+  // silent, and its two "don't tell them about their own work" subtractions
+  // cancelled each other out — a task with no explicit assignee (which defaults
+  // the assignee to the creator) produced ZERO bell rows for anybody.
+  await notifyTaskTransition({
+    event: "raised",
+    task: {
+      id: task.id,
+      taskNumber: task.taskNumber,
+      title: task.title,
       businessId: input.businessId ?? null,
       branchCode: input.branchCode ?? null,
-      actorName: input.createdByName ?? null,
+      assignedUserId: Number(input.assignedUserId),
+      assignedUserName: input.assignedUserName ?? null,
+      createdByUserId: input.createdByUserId != null ? Number(input.createdByUserId) : null,
+      createdByName: input.createdByName ?? null,
       priority: normTaskPriority(input.priority),
-    });
-  }
+      dueDate: input.dueDate || null,
+      sourceLabel: input.sourceLabel ?? null,
+    },
+    actorName: input.createdByName ?? null,
+    actorUserId: input.createdByUserId != null ? Number(input.createdByUserId) : null,
+  });
+
   return task;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE ACTION CENTER TRANSITION TABLE
+ *
+ * Every notification the Action Center emits is declared here, once, as
+ * `(event → recipients)`. Nothing else in the app decides who hears about a
+ * task — before this table, that decision lived as a chain of
+ * `if (status === "DONE")` blocks in `api/tasks/route.ts` and two
+ * `continue`-on-the-assignee guards in `createTask()`, and every transition
+ * without a branch was silent.
+ *
+ *   raised     → assignee + workspace principals        (F-02: was zero rows
+ *                 when the assignee defaulted to the creator)
+ *   started    → assignee + creator + principals
+ *   done       → creator + assignee + principals        (was: creator only)
+ *   cancelled  → assignee + creator + principals        (F-03: was silent)
+ *   reopened   → assignee + creator + principals        (F-04: was silent)
+ *   overdue    → assignee + principals                  (was: assignee + a
+ *                 SEPARATE ":watch" row for the same event — F-05)
+ *
+ * Two invariants hold for every row:
+ *   • a user appears at most once per event (dedupe is on the EVENT's
+ *     `recordRef`, which is `task:<id>:<event>` — identical for everyone);
+ *   • workspace principals are resolved through `bellAudience.ts`, never by a
+ *     hand-rolled membership read, so a platform Super Admin and a
+ *     manage-delegated manager hear about the action exactly as they hear about
+ *     every other event in their My Workspace.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export type TaskEvent = "raised" | "started" | "done" | "cancelled" | "reopened" | "overdue";
+
+interface TaskEventDef {
+  type: string;
+  /** Who hears about it, relative to the task. */
+  to: ("assignee" | "creator" | "principals")[];
+  title: (t: TaskBellShape) => string;
+  body: (t: TaskBellShape) => string;
+  /** Push only the assignee — the rest are context, not urgency. */
+  pushAssigneeOnly?: boolean;
+  priority?: string | null;
+}
+
+export interface TaskBellShape {
+  id: number;
+  taskNumber: string;
+  title: string;
+  businessId: number | null;
+  branchCode: string | null;
+  assignedUserId: number | null;
+  assignedUserName: string | null;
+  createdByUserId: number | null;
+  createdByName: string | null;
+  priority: string | null;
+  dueDate: string | null;
+  sourceLabel?: string | null;
+  daysOverdue?: number;
+}
+
+const who = (t: TaskBellShape) => t.assignedUserName || "the assignee";
+const creator = (t: TaskBellShape) => t.createdByName || "a manager";
+const due = (t: TaskBellShape) => (t.dueDate ? `, due ${t.dueDate}` : "");
+
+export const TASK_EVENTS: Record<TaskEvent, TaskEventDef> = {
+  raised: {
+    type: "TASK_ASSIGNED",
+    to: ["assignee", "principals"],
+    title: (t) => `Action raised: ${t.title}`,
+    body: (t) =>
+      `${creator(t)} raised ${t.priority || "NORMAL"} priority for ${who(t)}${due(t)}.` +
+      (t.sourceLabel ? ` From: ${t.sourceLabel}.` : "") +
+      ` Open it in the Action Center.`,
+    pushAssigneeOnly: true,
+  },
+  started: {
+    type: "TASK_STARTED",
+    to: ["assignee", "creator", "principals"],
+    title: (t) => `Action started: ${t.title}`,
+    body: (t) => `${who(t)} picked up ${t.taskNumber}${due(t)}.`,
+  },
+  done: {
+    type: "TASK_COMPLETED",
+    to: ["assignee", "creator", "principals"],
+    title: (t) => `Action done: ${t.title}`,
+    body: (t) => `${who(t)} completed ${t.taskNumber}.`,
+  },
+  cancelled: {
+    type: "TASK_CANCELLED",
+    to: ["assignee", "creator", "principals"],
+    title: (t) => `Action cancelled: ${t.title}`,
+    body: (t) => `${t.taskNumber} was cancelled — it is no longer required.`,
+    priority: "HIGH",
+    pushAssigneeOnly: true,
+  },
+  reopened: {
+    type: "TASK_REOPENED",
+    to: ["assignee", "creator", "principals"],
+    title: (t) => `Action reopened: ${t.title}`,
+    body: (t) => `${t.taskNumber} is back on the plate${due(t)} — it was reopened and still needs to be done.`,
+    priority: "HIGH",
+    pushAssigneeOnly: true,
+  },
+  overdue: {
+    type: "TASK_OVERDUE",
+    to: ["assignee", "principals"],
+    title: (t) => `Overdue action: ${t.title}`,
+    body: (t) =>
+      `${t.taskNumber} (${t.priority || "NORMAL"}) is ${t.daysOverdue ?? 1} day${(t.daysOverdue ?? 1) === 1 ? "" : "s"} past its ${t.dueDate} deadline.` +
+      ` Assigned to ${who(t)}. Open the Action Center to complete or re-plan it.`,
+    pushAssigneeOnly: true,
+  },
+};
+
+/**
+ * Emit one event's notification to its audience. The recipient set is computed
+ * once, deduped, and every recipient gets the SAME `recordRef` — so the row is
+ * identified by the event rather than by the recipient's role in it.
+ *
+ * Never throws: a bell failure must never block the state change.
+ */
+export async function notifyTaskTransition(input: {
+  event: TaskEvent;
+  task: TaskBellShape;
+  actorName?: string | null;
+  actorUserId?: number | null;
+  /** Suppress the push entirely (used by the daily sweep). */
+  push?: boolean;
+  completionNote?: string | null;
+  /**
+   * Override the event identity. Used by the overdue escalation, whose
+   * `d1` / `w3` window keeps the event distinct across escalation stages while
+   * STILL being identical for every recipient.
+   */
+  recordRef?: string;
+}): Promise<number> {
+  const def = TASK_EVENTS[input.event];
+  if (!def) return 0;
+  const t = input.task;
+  try {
+    const audience = new Map<number, "assignee" | "other">();
+    if (def.to.includes("assignee") && t.assignedUserId != null) {
+      audience.set(Number(t.assignedUserId), "assignee");
+    }
+    if (def.to.includes("creator") && t.createdByUserId != null) {
+      if (!audience.has(Number(t.createdByUserId))) audience.set(Number(t.createdByUserId), "other");
+    }
+    if (def.to.includes("principals") && t.businessId != null) {
+      // Canonical resolver — the Owner's bell is the record of their workspace,
+      // so principals are ADDED, never subtracted, not even when they are the
+      // actor or the assignee.
+      const { workspacePrincipals } = await import("@/lib/bellAudience");
+      for (const p of await workspacePrincipals(Number(t.businessId))) {
+        if (!audience.has(Number(p.id))) audience.set(Number(p.id), "other");
+      }
+    }
+    if (!audience.size) return 0;
+
+    const recordRef = input.recordRef || `task:${t.id}:${input.event}`;
+    const title = def.title(t).slice(0, 240);
+    const rawBody = def.body(t) + (input.completionNote ? ` — ${String(input.completionNote).slice(0, 200)}` : "");
+    let sent = 0;
+    for (const [userId, role] of audience) {
+      await notifyTaskUser(
+        userId,
+        {
+          type: def.type,
+          title: role === "assignee" && input.event !== "raised" ? title : title,
+          body: rawBody.slice(0, 600),
+          recordRef,
+          recordId: t.id,
+          businessId: t.businessId,
+          branchCode: t.branchCode,
+          actorName: input.actorName ?? null,
+          priority: def.priority ?? t.priority ?? null,
+        },
+        // Only the assignee's push carries urgency; the rest are context.
+        input.push === false || def.pushAssigneeOnly
+          ? role === "assignee"
+            ? { push: input.push !== false }
+            : { push: false }
+          : {},
+      );
+      sent++;
+    }
+    return sent;
+  } catch (e) {
+    console.error("[actionCenter] notifyTaskTransition failed:", e);
+    return 0;
+  }
 }
 
 /** The organization(s) a user belongs to (first one, for org-wide tasks). */
@@ -248,22 +455,26 @@ export async function completeLinkedTasksForSource(
       })
       .where(eq(actionTasks.id, t.id));
     completed++;
-    if (Number(t.createdByUserId) && Number(t.createdByUserId) !== Number(t.assignedUserId)) {
-      await notifyTaskUser(
-        Number(t.createdByUserId),
-        {
-          type: "TASK_COMPLETED",
-          title: `Action done: ${t.title}`,
-          body: `${t.assignedUserName || "The assignee"} completed ${t.taskNumber} automatically — its linked item was resolved.`,
-          recordRef: `${t.taskNumber}:done`,
-          businessId: t.businessId,
-          branchCode: t.branchCode,
-          actorName: byName || "GoMina 360",
-          priority: t.priority,
-        },
-        { push: false },
-      );
-    }
+    // Same transition table as a human-driven completion, so an auto-completed
+    // action reaches the same audience a manual one does.
+    await notifyTaskTransition({
+      event: "done",
+      push: false,
+      actorName: byName || "GoMina 360",
+      task: {
+        id: Number(t.id),
+        taskNumber: t.taskNumber,
+        title: t.title,
+        businessId: t.businessId ?? null,
+        branchCode: t.branchCode ?? null,
+        assignedUserId: t.assignedUserId == null ? null : Number(t.assignedUserId),
+        assignedUserName: t.assignedUserName ?? null,
+        createdByUserId: t.createdByUserId == null ? null : Number(t.createdByUserId),
+        createdByName: t.createdByName ?? null,
+        priority: t.priority ?? null,
+        dueDate: t.dueDate ?? null,
+      },
+    });
   }
   return completed;
 }
@@ -671,7 +882,6 @@ export async function escalateOverdueTasks(opts?: { businessIds?: number[] | nul
     )
     .limit(500);
   let notified = 0;
-  const { auditEscalationRecipients } = await import("@/lib/notify");
   for (const t of rows) {
     if (opts?.businessIds != null && opts.businessIds.length === 0) continue;
     if (
@@ -681,44 +891,37 @@ export async function escalateOverdueTasks(opts?: { businessIds?: number[] | nul
     )
       continue;
     const daysOverdue = Math.max(1, Math.round((Date.parse(today) - Date.parse(String(t.dueDate))) / 86400000));
+    // The escalation WINDOW (first day out, then weekly) — part of the event's
+    // identity, so a long-overdue action escalates once per window, not daily.
     const step = daysOverdue <= 7 ? "d1" : `w${Math.floor(daysOverdue / 7)}`;
-    const recordRef = `task-overdue:${t.id}:${step}`;
-    const [assignee] = await db.select().from(users).where(eq(users.id, t.assignedUserId)).limit(1);
-    const body = `${t.taskNumber} (${t.priority}) is ${daysOverdue} day${daysOverdue === 1 ? "" : "s"} past its ${t.dueDate} deadline. Assigned to ${t.assignedUserName || "staff"}. Open the Action Center to complete or re-plan it.`;
-    if (assignee?.isActive !== false) {
-      await notifyTaskUser(t.assignedUserId, {
-        type: "TASK_OVERDUE",
-        title: `Overdue action: ${t.title}`,
-        body,
-        recordRef,
-        businessId: t.businessId,
-        branchCode: t.branchCode,
-        actorName: "GoMina 360",
-        priority: t.priority === "CRITICAL" ? "CRITICAL" : "HIGH",
-      });
-      notified++;
-    }
-    if (t.businessId != null) {
-      const watchers = await auditEscalationRecipients(Number(t.businessId), t.priority, {
-        excludeIds: [t.assignedUserId],
-      });
-      for (const w of watchers) {
-        await notifyTaskUser(
-          Number(w.id),
-          {
-            type: "TASK_OVERDUE",
-            title: `Overdue action watch: ${t.title}`,
-            body,
-            recordRef: `${recordRef}:watch`,
-            businessId: t.businessId,
-            branchCode: t.branchCode,
-            actorName: "GoMina 360",
-            priority: t.priority === "CRITICAL" ? "CRITICAL" : "HIGH",
-          },
-          { push: false },
-        );
-      }
-    }
+    // One event, one `recordRef` (`task:<id>:overdue`) for EVERY recipient.
+    // The previous code gave the assignee `task-overdue:<id>:<step>` and every
+    // other watcher `…:<step>:watch` — a per-recipient suffix that existed only
+    // to defeat the dedupe key, so an Owner who assigned an overdue action to
+    // themselves received BOTH rows for one event (two unread badge counts).
+    // The step (`d1` / `w3`) is retained inside the event identity so the
+    // escalation still only fires once per escalation window.
+    await notifyTaskTransition({
+      event: "overdue",
+      push: false,
+      recordRef: `task:${t.id}:overdue:${step}`,
+      actorName: "GoMina 360",
+      task: {
+        id: Number(t.id),
+        taskNumber: t.taskNumber,
+        title: t.title,
+        businessId: t.businessId ?? null,
+        branchCode: t.branchCode ?? null,
+        assignedUserId: t.assignedUserId == null ? null : Number(t.assignedUserId),
+        assignedUserName: t.assignedUserName ?? null,
+        createdByUserId: t.createdByUserId == null ? null : Number(t.createdByUserId),
+        createdByName: t.createdByName ?? null,
+        priority: t.priority ?? null,
+        dueDate: t.dueDate ? String(t.dueDate) : null,
+        daysOverdue,
+      },
+    });
+    notified++;
   }
   return notified;
 }

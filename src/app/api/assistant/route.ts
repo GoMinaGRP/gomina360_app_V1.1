@@ -3,6 +3,7 @@ import { getSessionInfo, accessibleBusinessIds, UNAUTHENTICATED, FORBIDDEN } fro
 import { apiError } from "@/lib/apiError";
 import { buildAssistantFeed, answerQuestion } from "@/lib/biAssistant";
 import { roleGroupMembers } from "@/lib/roles";
+import { canSeeFinancials } from "@/lib/permissions";
 
 /**
  * /api/assistant — R5 Unified BI Assistant.
@@ -13,6 +14,11 @@ import { roleGroupMembers } from "@/lib/roles";
  *
  * Executives only: OWNER, GENERAL_MANAGER, BRANCH_MANAGER (or super admin).
  * Every number is computed inside the caller's accessible-business scope.
+ *
+ * Role opens the Assistant; it does NOT open the books. The finance grant is a
+ * separate OWNER authorisation, so `canSeeFinancials` is passed into the feed
+ * and the Q&A builder — without it a Branch Manager could ask the assistant for
+ * this month's income and net and be answered from the real ledger.
  */
 export const dynamic = "force-dynamic";
 
@@ -31,11 +37,11 @@ export async function GET(request: NextRequest) {
     const question = (url.searchParams.get("q") || "").trim().slice(0, 400);
 
     if (question) {
-      const answer = await answerQuestion(question, { businessIds: allowed });
+      const answer = await answerQuestion(question, { businessIds: allowed, financialsAuthorized: canSeeFinancials(me) });
       return NextResponse.json({ success: true, ...answer, scope: allowed === null ? "ALL" : allowed }, { headers: { "Cache-Control": "no-store" } });
     }
 
-    const feed = await buildAssistantFeed({ businessIds: allowed });
+    const feed = await buildAssistantFeed({ businessIds: allowed, financialsAuthorized: canSeeFinancials(me) });
     return NextResponse.json(
       { success: true, feed, scope: allowed === null ? "ALL" : allowed },
       { headers: { "Cache-Control": "no-store" } },
@@ -59,7 +65,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const question = String(body?.question || "").trim().slice(0, 400);
     if (!question) return NextResponse.json({ success: false, error: "Ask a question first." }, { status: 400 });
-    const answer = await answerQuestion(question, { businessIds: allowed });
+    const answer = await answerQuestion(question, { businessIds: allowed, financialsAuthorized: canSeeFinancials(me) });
     return NextResponse.json({ success: true, ...answer, scope: allowed === null ? "ALL" : allowed }, { headers: { "Cache-Control": "no-store" } });
   } catch (error: any) {
     return apiError(error);

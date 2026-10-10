@@ -153,10 +153,12 @@ try {
   // ══ B. Module renders in the real UI ═══════════════════════════════════
   console.log("── B. Dedicated module UI ──");
   await login(OWNER);
-  await page.evaluate((t) => {
-    const el = [...document.querySelectorAll("button, a")].find((b) => (b.textContent || "").replace(/\s+/g, " ").trim().includes(t));
-    if (el) el.click();
-  }, "TEST Telecom Hub");
+  // Open the unit by CODE, not by scraping the sidebar for its display name.
+  // The sidebar renders asynchronously after `/api/init` resolves, so the
+  // click below races it: when the unit list has not painted yet the search
+  // finds nothing, clicks nothing, and the wait then times out on a module
+  // that was never going to open. The code is already known, so navigate.
+  await page.goto(`${BASE}/?tab=${expectedCode}`, { waitUntil: "networkidle0", timeout: 45000 });
   await waitSel('[data-testid="telecom-module"]');
   ok("B1 telecom module mounts for the new unit", true);
   ok("B2 header brands Telecom & Digital Services", await innerHas('[data-testid="telecom-module"]', "TELECOM & DIGITAL SERVICES"));

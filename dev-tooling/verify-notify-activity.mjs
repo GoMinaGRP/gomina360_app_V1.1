@@ -33,6 +33,7 @@
  */
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
+import { readFile } from "node:fs/promises";
 const { Client } = require("pg");
 
 const BASE = process.env.BASE || "http://127.0.0.1:3000";
@@ -61,6 +62,14 @@ async function call(path, method = "GET", body = null, token = null) {
   return { status: res.status, json, text };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The app's real cap, read from source so this suite cannot drift from it. */
+async function readDailyCap() {
+  const src = await readFile(new URL("../src/lib/notifyActivity.ts", import.meta.url), "utf8");
+  const m = src.match(/AUDIT_EVENT_DAILY_CAP\s*=\s*(\d+)/);
+  if (!m) throw new Error("AUDIT_EVENT_DAILY_CAP not found in src/lib/notifyActivity.ts");
+  return Number(m[1]);
+}
 
 /** Active expense gates are silenced for this run (restored in Z) so the plain
  *  recording paths can be observed; the approval path is exercised in E. */
@@ -355,11 +364,17 @@ section("C · Audit events — deletions & permission changes ring the bell");
   ok("record deletion accepted", del.status === 200, `status=${del.status} ${String(del.text).slice(0, 140)}`);
   await sleep(1500);
   const rows = await newRows(t.owner, before, ["AUDIT_EVENT"]);
-  // The actor is the OWNER — excluded — so the OWNER's own delete produces no
-  // self-notification; the deletion log is the evidence. Assert the trail row.
   const log = await pg.query("SELECT count(*)::int AS c FROM record_deletion_logs WHERE reason LIKE $1", [`${TAG}%`]);
   ok("deletion written to the immutable deletion log", Number(log.rows[0].c) === 1, `rows=${log.rows[0].c}`);
-  ok("the actor is not notified about their own deletion", rows.length === 0, JSON.stringify(rows.map((r) => r.title)));
+  // The actor here IS the OWNER, and the OWNER's bell is the complete record of
+  // their workspace — so a deletion they performed MUST ring it. Only
+  // non-principals are spared their own actions (asserted further down, with a
+  // staff actor). Silencing the Owner about their own destructive action was
+  // the exact hole this audit closed.
+  ok("the OWNER is told about a deletion they performed themselves", rows.length === 1,
+    JSON.stringify(rows.map((r) => r.title)));
+  ok("…and that row names the record, so it is actionable",
+    rows.length === 1 && /Record deleted/.test(rows[0].title || ""), rows[0]?.title || "no row");
 
   // A permission flip by the OWNER must write a trail row (and never notify the
   // actor; a CO_OWNER would receive it).
@@ -539,13 +554,20 @@ section("G · A unit manager's deletion rings the OWNER's bell (audit events)");
   const mgrEditAlerts = await newRows(mgrToken, mgrEditBefore, ["AUDIT_EVENT"]);
   ok("the editor is not notified about their own edit", mgrEditAlerts.length === 0, JSON.stringify(mgrEditAlerts.map((r) => r.title)));
 
-  // The 24 h cap: no user may be buried by a bulk operation.
+  // The 24 h cap: no user may be buried by a bulk operation. The bound is read
+  // from the source rather than hardcoded — a literal here silently keeps
+  // checking a ceiling the app no longer has, which is how a cap regression
+  // hides. The roll-up row is excluded for the same reason the app excludes it:
+  // it summarises the overflow, it is not itself an event.
+  const CAP = await readDailyCap();
   const capped = await pg.query(
     `SELECT user_id, count(*)::int AS c FROM notifications
-      WHERE type='AUDIT_EVENT' AND created_at > now() - interval '24 hours'
-      GROUP BY 1 HAVING count(*) > 12`,
+      WHERE type='AUDIT_EVENT' AND record_ref <> 'audit-event:cap:' || to_char(now() - interval '24 hours', 'YYYY-MM-DD')
+        AND created_at > now() - interval '24 hours'
+      GROUP BY 1 HAVING count(*) > $1`,
+    [CAP],
   );
-  ok("no user exceeded the audit-event cap in 24 h", capped.rows.length === 0, JSON.stringify(capped.rows));
+  ok(`no user exceeded the audit-event cap in 24 h (${CAP})`, capped.rows.length === 0, JSON.stringify(capped.rows));
 }
 
 /* ══ F · LINKS & TENANT HYGIENE ═════════════════════════════════════════ */

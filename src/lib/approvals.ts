@@ -41,6 +41,7 @@ import {
 import { auditLog } from "@/lib/audit";
 import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { notifyApprovalDecision, notifyApprovalRequest, ownerOrgOfBusiness } from "@/lib/notify";
+import { orgRecipientUserIds } from "@/lib/bellAudience";
 import { ttlInvalidate } from "@/lib/ttlCache";
 
 export { APPROVAL_ACTIONS, type ApprovalAction } from "@/db/schema";
@@ -154,11 +155,10 @@ export async function canUserDecide(user: GateUser, policy: ApprovalPolicy): Pro
 /** All users entitled to decide requests under `policy` for `businessId`. */
 export async function resolveApprovers(policy: ApprovalPolicy, businessId?: number | null) {
   const orgId = Number(policy.ownerId);
-  const memberRows = await db
-    .select({ userId: organizationMembers.userId })
-    .from(organizationMembers)
-    .where(eq(organizationMembers.organizationId, orgId));
-  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
+  // Membership rows PLUS the tenant's recorded owner. An OWNER account with no
+  // organization_members row used to drop out of the approver list entirely,
+  // which left a gated expense with nobody able to decide it.
+  const memberIds = await orgRecipientUserIds(orgId);
   if (!memberIds.size) return [];
   const staff = await db
     .select({
@@ -170,7 +170,7 @@ export async function resolveApprovers(policy: ApprovalPolicy, businessId?: numb
       businessManageIds: users.businessManageIds,
     })
     .from(users)
-    .where(inArray(users.id, Array.from(memberIds)));
+    .where(inArray(users.id, [...memberIds]));
   const bizId = businessId != null ? Number(businessId) : null;
   return staff.filter((u: any) => {
     if (u.isActive === false) return false;

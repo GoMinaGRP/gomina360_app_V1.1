@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import UnitScopeOptions from "@/components/UnitScopeOptions";
+import FinancialGate from "./FinancialGate";
 import {
   Sliders,
   TrendingUp,
@@ -23,6 +24,9 @@ interface ScenarioPlannerViewProps {
   myOrgId?: number;
   currentCurrency: CurrencyCode;
   onRefreshScenarios: () => void;
+  /** The signed-in user — the live revenue/profit figures below are money and
+   *  follow the same authorisation as every other financial surface. */
+  currentUser?: any;
 }
 
 export default function ScenarioPlannerView({
@@ -31,6 +35,7 @@ export default function ScenarioPlannerView({
   myOrgId,
   currentCurrency,
   onRefreshScenarios,
+  currentUser,
 }: ScenarioPlannerViewProps) {
   const [showModal, setShowModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -232,6 +237,16 @@ export default function ScenarioPlannerView({
           </div>
         </div>
 
+        {/* Revenue and net profit are financial figures: they are withheld from
+            a viewer the OWNER has not authorised, exactly like the P&L tiles
+            they are derived from. The scenario controls above stay available so
+            the surface remains useful for what it legitimately shows. */}
+        <FinancialGate
+          user={currentUser}
+          title="Projected revenue and profit — restricted"
+          subtitle="Model inputs stay available; the money output needs the Finance & Reports authorisation"
+          testid="scen-money-restricted"
+        >
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
           <div className="bg-slate-900/90 border border-slate-700/80 p-4 rounded-xl">
             <div className="text-xs text-slate-400 font-semibold">
@@ -317,6 +332,7 @@ export default function ScenarioPlannerView({
             <span className="text-teal-300/80">Loading the real financial baseline…</span>
           )}
         </div>
+        </FinancialGate>
       </div>
 
       {/* Pre-Computed Executive Scenarios Grid */}

@@ -263,7 +263,7 @@ export default function DailyChecklistPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           entity: "GENERATE",
-          data: { businessId, branchCode, checklistDate: date, createdByName: currentUser?.name, createdByRole: currentUser?.role },
+          data: { businessId, branchCode, checklistDate: date },
         }),
       });
       const d = await res.json();
@@ -355,8 +355,6 @@ export default function DailyChecklistPanel({
             assignedToUserId: assignee?.id || null,
             assignedToName: assignee?.name || null,
             assignedToRole: assignee?.role || null,
-            createdByName: currentUser?.name,
-            createdByRole: currentUser?.role,
             ...(supportsStages && newItem.birdType
               ? {
                   birdType: newItem.birdType,

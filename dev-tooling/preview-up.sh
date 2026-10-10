@@ -55,8 +55,13 @@ else
 fi
 
 # ── 3) schema + canonical seed (only when the database is empty) ────────────
+# The old test was `[ -z "$SEEDED" ]` — an EMPTY result means "could not query",
+# but a database that came back with 0 users (a partial reset: organizations and
+# businesses survived, users did not) produced "0", which is non-empty and was
+# therefore read as "already seeded". Every downstream step then ran against an
+# empty user table and the owner login failed. Seed when the count is 0.
 SEEDED=$(node dev-tooling/q.mjs "select count(*) c from users" 2>/dev/null | grep -oE '"[0-9]+"' | head -1 | tr -d '"' || echo "")
-if [ -z "${SEEDED:-}" ]; then
+if [ -z "${SEEDED:-}" ] || [ "$SEEDED" = "0" ]; then
   say "applying schema (drizzle-kit push)…"
   printf 'y\n' | npx drizzle-kit push >/tmp/preview-push.log 2>&1 || true
   node dev-tooling/q.mjs "select count(*) from users" >/dev/null 2>&1 || { echo "✗ schema push failed"; tail -15 /tmp/preview-push.log; exit 1; }
@@ -77,6 +82,18 @@ done
 # they run AFTER the server starts (step 6b below). Running them here failed
 # with ECONNREFUSED on every cold start and silently left the feed-mill / fish /
 # benchmark demo modules empty.
+
+# Sweep leftover suite fixtures so a suite that aborted before its cleanup
+# cannot poison every later run. A single stray test business is enough to make
+# the owner-grouping and record-count assertions in verify-business-scope fail
+# with an off-by-one that looks like an application bug. This runs AFTER the
+# restore chain on purpose — the restore replays the backup, so purging first
+# would simply be undone.
+if node dev-tooling/purge-test-rows.mjs >/tmp/preview-purge.log 2>&1; then
+  ok "fixture purge"
+else
+  echo "  – fixture purge skipped (see /tmp/preview-purge.log)"
+fi
 
 # ── 5) production build (dev mode OOMs this sandbox) ───────────────────────
 if [ ! -f .next/BUILD_ID ]; then

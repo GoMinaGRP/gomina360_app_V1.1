@@ -476,7 +476,16 @@ export async function POST(request: Request) {
 }
 
 /** Record the payroll expense in the central ledger (keeps Finance, Reports
- *  and every business dashboard in sync automatically). */
+ *  and every business dashboard in sync automatically).
+ *
+ *  NOTIFICATION: paying a salary is the single biggest recurring money event
+ *  most months, and this writer used to be the only expense path that posted
+ *  to the ledger in silence — so the Owner's "today's expenses" roll-up never
+ *  reflected payroll, while Finance, the reports and every dashboard did. The
+ *  bell event is fired here, through the SAME `notifyMoneyActivity` choke point
+ *  every other writer uses, so payroll inherits its roll-up/no-spam/dedupe,
+ *  its tenant scoping and its finance-visibility split unchanged. Fire-and-
+ *  forget: a notification can never fail a payment. */
 async function postPayrollTransaction(user: any, entry: any, run: any, method: string) {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
@@ -506,6 +515,27 @@ async function postPayrollTransaction(user: any, entry: any, run: any, method: s
       recordedByUserId: user.id,
     })
     .returning();
+
+  // Money activity → the unit's money watchers (rolled up per business/day,
+  // exactly like every other expense). Never blocks the payment.
+  try {
+    const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+    await notifyMoneyActivity({
+      businessId: entry.businessId,
+      branchCode: entry.branchCode || null,
+      kind: "EXPENSE",
+      amountGhs: Number(entry.netPayGhs) || 0,
+      actorName: user.name || "Payroll",
+      actorUserId: user.id ?? null,
+      recordRef: trx?.transactionNumber || null,
+      recordId: Number(trx?.id) || null,
+      recordType: "transactions",
+      label: `Payroll ${run.period} — ${entry.employeeName}`,
+    });
+  } catch (e) {
+    console.error("[payroll] money-activity notification failed:", e);
+  }
+
   return trx;
 }
 

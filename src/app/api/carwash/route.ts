@@ -201,7 +201,7 @@ export async function POST(request: NextRequest) {
 
     const today = new Date().toISOString().split("T")[0];
     const stamp = Date.now().toString().slice(-5);
-    const actor = { a: data.createdByName || null, r: data.createdByRole || null };
+    const actor = { a: __authSession.user?.name || null, r: __authSession.user?.role || null };
 
     // ── SERVICE: create a priced wash offer ─────────────────────────────
     if (entity === "SERVICE") {

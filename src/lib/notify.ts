@@ -23,11 +23,13 @@ import {
   hardwarePurchases,
   notifications,
   organizationMembers,
+  organizations,
   restaurantPurchases,
   userBusinessAccess,
   users,
 } from "@/db/schema";
 import { inRoleGroup } from "@/lib/roles";
+import { isWorkspacePrincipal, workspaceAudience, workspacePrincipals, withoutSelf } from "@/lib/bellAudience";
 
 /** Statuses meaning "this order no longer needs anyone's attention". */
 const CLOSED_ORDER_STATUSES = ["DELIVERED", "COMPLETED", "CANCELLED"];
@@ -47,46 +49,28 @@ export async function ownerOrgOfBusiness(businessId: number): Promise<number | n
 }
 
 /**
- * All users who must see events for `businessId` in their bell:
- * the business's organization OWNER(s) + assigned staff +
- * user_business_access grantees — strictly members of the business's own
- * organization. A notification can never cross to another Owner's users.
+ * All users who must see events for `businessId` in their bell.
+ *
+ * This is now literally "everyone whose My Workspace contains this business",
+ * resolved by `workspaceAudience()` — the same reachability the sidebar, the
+ * dashboards and every API scope gate use. Previously this function carried its
+ * own copy of the rule and it was WRONG in two ways that made a user's
+ * workspace and their bell disagree:
+ *
+ *   • it ignored manage-delegation, so a manager the OWNER had delegated a
+ *     unit could open that unit everywhere in the app and received no purchase,
+ *     order, checklist, stock or dunning bell for it;
+ *   • it required an `organization_members` row, so a platform Super Admin —
+ *     whose workspace is every business — had a platform-wide scope and a
+ *     platform-silent bell.
+ *
+ * Tenant isolation is unchanged and still structural: an advisor reaches a unit
+ * only through a live advisor grant, and every non-principal reach is
+ * intersected with the user's own organizations, so a grant can never reach a
+ * sibling tenant. See `src/lib/bellAudience.ts`.
  */
 export async function orderNotificationRecipients(businessId: number) {
-  const orgId = await ownerOrgOfBusiness(businessId);
-  const memberRows = orgId
-    ? await db
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(eq(organizationMembers.organizationId, orgId))
-    : [];
-  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
-  const [staffAll, grants] = await Promise.all([
-    memberIds.size
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            role: users.role,
-            assignedBusinessId: users.assignedBusinessId,
-            isActive: users.isActive,
-          })
-          .from(users)
-      : Promise.resolve([]),
-    db
-      .select({ userId: userBusinessAccess.userId })
-      .from(userBusinessAccess)
-      .where(eq(userBusinessAccess.businessId, Number(businessId))),
-  ]);
-  const granted = new Set(grants.map((g: { userId: number }) => Number(g.userId)));
-  return staffAll.filter(
-    (u) =>
-      u.isActive !== false &&
-      memberIds.has(Number(u.id)) &&
-      (u.role === "OWNER" ||
-        Number(u.assignedBusinessId) === Number(businessId) ||
-        granted.has(Number(u.id))),
-  );
+  return workspaceAudience(businessId);
 }
 
 /** Insert one notification per recipient, skipping exact duplicates —
@@ -316,44 +300,31 @@ export async function auditEscalationRecipients(
   businessId: number,
   priority: string,
   opts: { unassigned?: boolean; excludeIds?: (number | null)[] } = {},
-): Promise<{ id: number; name: string | null; role: string | null }[]> {
-  const orgId = await ownerOrgOfBusiness(businessId);
-  const memberRows = orgId
-    ? await db
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(eq(organizationMembers.organizationId, orgId))
-    : [];
-  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
-  const [staffAll, grants] = await Promise.all([
-    memberIds.size
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            role: users.role,
-            assignedBusinessId: users.assignedBusinessId,
-            isActive: users.isActive,
-          })
-          .from(users)
-      : Promise.resolve([]),
-    db
-      .select({ userId: userBusinessAccess.userId })
-      .from(userBusinessAccess)
-      .where(eq(userBusinessAccess.businessId, Number(businessId))),
-  ]);
-  const granted = new Set(grants.map((g: { userId: number }) => Number(g.userId)));
+): Promise<{ id: number; name: string | null; role: string | null; isSuperAdmin: boolean }[]> {
+  // Same canonical workspace rule as every other producer (see bellAudience.ts):
+  // an escalation is about a business, so it goes to whoever can act on that
+  // business — including a manage-delegated manager, who used to be invisible
+  // here, and the OWNER / Super Admin, who is always a watcher now rather than
+  // only on HIGH/CRITICAL. Their bell is the accountable record, and the
+  // per-step recordRef still caps how often anything repeats.
+  const staffAll = await workspaceAudience(businessId);
   const excluded = new Set((opts.excludeIds || []).filter((x): x is number => x != null).map(Number));
-  const sev = String(priority || "MEDIUM").toUpperCase();
-  const wantOwner = sev === "HIGH" || sev === "CRITICAL" || !!opts.unassigned;
-  // Registry-owned unit-lead bench — the phantom "MANAGER" role this used to
-  // match never existed in the database.
   const isManagerRole = (r: string | null | undefined) => inRoleGroup("UNIT_LEAD", r);
   return staffAll.filter((u: any) => {
-    if (u.isActive === false || !memberIds.has(Number(u.id)) || excluded.has(Number(u.id))) return false;
-    if (String(u.role).toUpperCase() === "OWNER") return wantOwner;
+    // OWNER / Super Admin: always watched, and `excludeIds` does not apply to
+    // them. An escalation about their own workspace is precisely the thing their
+    // bell exists to carry; "you raised it, so we won't bother you" is how the
+    // accountable party ends up unaware. Registry-owned unit-lead bench below —
+    // the phantom "MANAGER" role this used to match never existed.
+    if (isWorkspacePrincipal(u)) return u.isActive !== false;
+    if (excluded.has(Number(u.id))) return false;
+    const role = String(u.role || "").toUpperCase();
     if (!isManagerRole(u.role)) return false;
-    return Number(u.assignedBusinessId) === Number(businessId) || granted.has(Number(u.id));
+    // A manager only watches the unit they actually reach.
+    return (
+      Number(u.assignedBusinessId) === Number(businessId) ||
+      (Array.isArray(u.businessManageIds) && u.businessManageIds.map(Number).includes(Number(businessId)))
+    );
   });
 }
 

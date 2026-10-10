@@ -29,11 +29,13 @@
  *    24-hour rate cap so a bulk operation cannot storm the bell).
  *  • Flagged notes   → the unit's managers (and the OWNER for an URGENT note).
  */
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { canSeeFinancials } from "@/lib/permissions";
 import { notifications, organizationMembers, userBusinessAccess, users } from "@/db/schema";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
+import { orgRecipientUserIds } from "@/lib/bellAudience";
+import { isWorkspacePrincipal, withoutSelf, workspaceAudience, workspacePrincipals, type BellRecipient } from "@/lib/bellAudience";
 import { pushAfterBell } from "@/lib/push";
 import { inRoleGroup } from "@/lib/roles";
 
@@ -57,56 +59,19 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
  * their organization; a unit-level assignment/grant is additionally honoured
  * so the helper stays correct if executives gain narrower scopes.
  */
-export async function moneyActivityRecipients(businessId: number): Promise<{ id: number; name: string | null }[]> {
-  const bizId = Number(businessId);
-  const orgId = await ownerOrgOfBusiness(bizId);
-  if (!orgId) return [];
-  const memberRows = await db
-    .select({ userId: organizationMembers.userId })
-    .from(organizationMembers)
-    .where(eq(organizationMembers.organizationId, orgId));
-  const memberIds = memberRows.map((m) => Number(m.userId));
-  if (!memberIds.length) return [];
-  const [staff, grants] = await Promise.all([
-    db
-      .select({
-        id: users.id,
-        name: users.name,
-        role: users.role,
-        isActive: users.isActive,
-        isSuperAdmin: users.isSuperAdmin,
-        canViewFinance: users.canViewFinance,
-        assignedBusinessId: users.assignedBusinessId,
-        businessManageIds: users.businessManageIds,
-      })
-      .from(users)
-      .where(inArray(users.id, memberIds)),
-    db
-      .select({ userId: userBusinessAccess.userId })
-      .from(userBusinessAccess)
-      .where(eq(userBusinessAccess.businessId, bizId)),
-  ]);
-  const granted = new Set(grants.map((g) => Number(g.userId)));
-  return staff
-    .filter((u) => {
-      if (u.isActive === false) return false;
-      const role = String(u.role || "").toUpperCase();
-      if (!inRoleGroup("MONEY_WATCHER", role)) return false;
-      // OWNER: every unit of their own organization.
-      if (role === "OWNER") return true;
-      // Everyone else needs the financial-visibility grant: a money roll-up
-      // carries GH₵ figures (same rule as the Central Financial Report).
-      if (!canSeeFinancials(u)) return false;
-      // Everyone else: the same reach as accessibleBusinessIds() — the unit
-      // they are assigned to, one the OWNER delegated to them, or a grant.
-      const manageIds = Array.isArray(u.businessManageIds) ? u.businessManageIds.map(Number) : [];
-      return (
-        Number(u.assignedBusinessId) === bizId ||
-        manageIds.includes(bizId) ||
-        granted.has(Number(u.id))
-      );
-    })
-    .map((u) => ({ id: Number(u.id), name: u.name }));
+export async function moneyActivityRecipients(businessId: number): Promise<BellRecipient[]> {
+  // Reachability is the canonical workspace rule (bellAudience.ts); this adds
+  // exactly ONE policy on top — the roll-up carries GH₵ figures, so it also
+  // requires financial visibility (an OWNER is always finance-visible). It used
+  // to re-derive reachability by hand, which is how this copy drifted away
+  // from the scoping the rest of the app obeys.
+  const audience = await workspaceAudience(businessId);
+  return audience.filter((u) => {
+    const role = String(u.role || "").toUpperCase();
+    if (!inRoleGroup("MONEY_WATCHER", role)) return false;
+    if (role === "OWNER" || role === "CO_OWNER" || u.isSuperAdmin) return true;
+    return canSeeFinancials(u as any);
+  });
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -150,9 +115,11 @@ export async function notifyMoneyActivity(input: {
     const label = kind === "SALE" ? "sales" : "expenses";
     const where = input.label ? ` — ${input.label}` : "";
 
-    const recipients = (await moneyActivityRecipients(businessId)).filter(
-      (r) => Number(r.id) !== Number(input.actorUserId ?? -1),
-    );
+    // withoutSelf keeps the OWNER / Super Admin in: their bell is the
+    // complete record of their workspace, so "you did not see this because you
+    // were the one who did it" is exactly the silent hole this closes. Everyone
+    // else is still spared their own keystrokes.
+    const recipients = withoutSelf(await moneyActivityRecipients(businessId), input.actorUserId);
     if (!recipients.length) return 0;
 
     let inserted = 0;
@@ -215,9 +182,7 @@ export async function notifyMoneyActivity(input: {
     // per unit/day/kind, never carrying an amount.
     let opsSent = 0;
     try {
-      const leads = (await unitActivityRecipients(businessId)).filter(
-        (r) => Number(r.id) !== Number(input.actorUserId ?? -1),
-      );
+      const leads = withoutSelf(await unitActivityRecipients(businessId), input.actorUserId);
       if (leads.length) {
         const opsRef = `ops-money-day:${businessId}:${kind}:${day}`;
         const unitTag = input.branchCode ? ` — ${input.branchCode}` : "";
@@ -350,9 +315,7 @@ export async function notifyStockThresholdCrossing(input: {
     const recordRef = `stock-alert:${Number(input.inventoryId)}${variantPart}:${day}`;
     const type = to === "OUT_OF_STOCK" ? "STOCK_OUT" : "STOCK_LOW";
 
-    const recipients = (await orderNotificationRecipients(businessId)).filter(
-      (u: any) => Number(u.id) !== Number(input.actorUserId ?? -1),
-    );
+    const recipients = withoutSelf(await orderNotificationRecipients(businessId), input.actorUserId);
     if (!recipients.length) return 0;
 
     const qty = Number(input.quantityAfter) || 0;
@@ -530,26 +493,35 @@ export async function notifyAuditEvent(input: {
     if (!isHighSignalAuditEvent(action, input.targetType, input.recordType)) return 0;
     const businessId = input.businessId != null ? Number(input.businessId) : null;
 
-    // Audience: the org OWNER / CO_OWNER (never the actor). Falls back to the
-    // business's org; with no business there is no tenant to alert.
-    const orgId = input.ownerId ?? (businessId != null ? await ownerOrgOfBusiness(businessId) : null);
-    if (!orgId) return 0;
-    const memberRows = await db
-      .select({ userId: organizationMembers.userId })
-      .from(organizationMembers)
-      .where(eq(organizationMembers.organizationId, Number(orgId)));
-    const memberIds = memberRows.map((m) => Number(m.userId));
-    if (!memberIds.length) return 0;
-    const staff = await db
-      .select({ id: users.id, name: users.name, role: users.role, isActive: users.isActive })
-      .from(users)
-      .where(inArray(users.id, memberIds));
-    const recipients = staff.filter(
-      (u) =>
-        u.isActive !== false &&
-        ["OWNER", "CO_OWNER"].includes(String(u.role || "").toUpperCase()) &&
-        Number(u.id) !== Number(input.actorUserId ?? -1),
-    );
+    // Audience: the principals of the business's own workspace (OWNER /
+    // CO_OWNER / platform Super Admin) — resolved through the canonical
+    // workspace rule rather than a hand-rolled membership read.
+    let recipients: { id: number; name: string | null; role: string | null; isSuperAdmin: boolean }[];
+    let orgId: number | null = input.ownerId != null ? Number(input.ownerId) : null;
+    if (businessId != null) {
+      orgId = (await ownerOrgOfBusiness(businessId)) ?? orgId;
+      recipients = await workspacePrincipals(businessId);
+    } else {
+      // Platform-level rows (permission flips, delegations, approval-policy
+      // edits) carry no business, so fall back to the tenant they name. With
+      // neither there is no tenant to alert.
+      if (!orgId) return 0;
+      const memberIds = [...(await orgRecipientUserIds(orgId))];
+      if (!memberIds.length) return 0;
+      const staff = await db
+        .select({
+          id: users.id, name: users.name, role: users.role,
+          isActive: users.isActive, isSuperAdmin: users.isSuperAdmin,
+        })
+        .from(users)
+        .where(inArray(users.id, memberIds));
+      recipients = staff
+        .filter((u) => u.isActive !== false && isWorkspacePrincipal(u))
+        .map((u) => ({ id: Number(u.id), name: u.name, role: u.role, isSuperAdmin: u.isSuperAdmin === true }));
+    }
+    // The Owner is NOT excluded from their own audit trail: a deletion or a
+    // permission change they performed is still the single most important row
+    // their workspace has to show them.
     if (!recipients.length) return 0;
 
     const recordPart = `${input.recordType || input.targetType || "record"}:${input.recordId ?? input.targetLabel ?? "-"}`;
@@ -563,13 +535,21 @@ export async function notifyAuditEvent(input: {
       `Open Audit & Review to see the trail entry.`;
 
     let sent = 0;
+    // Rows the cap held back, per recipient. Silently dropping them is how an
+    // Owner loses sight of a deletion with no trace anywhere in the bell — the
+    // one thing this bell exists to prevent — so they are summarised below.
+    const held = new Map<number, number>();
+    // The roll-up row's ref, computed up front because the CAP COUNT below must
+    // be able to exclude it.
+    const capRef = `audit-event:cap:${new Date(since.getTime()).toISOString().slice(0, 10)}`;
     for (const r of recipients) {
+      const uid = Number(r.id);
       const [dupe] = await db
         .select({ id: notifications.id })
         .from(notifications)
         .where(
           and(
-            eq(notifications.userId, Number(r.id)),
+            eq(notifications.userId, uid),
             eq(notifications.type, "AUDIT_EVENT"),
             eq(notifications.recordRef, recordRef),
           ),
@@ -577,19 +557,32 @@ export async function notifyAuditEvent(input: {
         .limit(1);
       if (dupe) continue;
       // Rate cap: a bulk operation must not storm the bell.
+      //
+      // The cap-summary row is EXCLUDED. It used to be counted like any other
+      // event, which made the cap self-sustaining: once a recipient reached the
+      // ceiling, every suppressed event wrote or refreshed the summary row, and
+      // that row kept the 24 h count at or above the ceiling on its own. The
+      // Owner could then be permanently silenced about deletions and permission
+      // changes — the exact events this bell exists to carry — until the window
+      // rolled over on its own. A roll-up is not an event and must not consume
+      // the budget it reports on.
       const [{ c }] = await db
         .select({ c: sql<number>`count(*)::int` })
         .from(notifications)
         .where(
           and(
-            eq(notifications.userId, Number(r.id)),
+            eq(notifications.userId, uid),
             eq(notifications.type, "AUDIT_EVENT"),
             gte(notifications.createdAt, since),
+            ne(notifications.recordRef, capRef),
           ),
         );
-      if (Number(c) >= AUDIT_EVENT_DAILY_CAP) continue;
+      if (Number(c) >= AUDIT_EVENT_DAILY_CAP) {
+        held.set(uid, (held.get(uid) || 0) + 1);
+        continue;
+      }
       await db.insert(notifications).values({
-        userId: Number(r.id),
+        userId: uid,
         type: "AUDIT_EVENT",
         title: title.slice(0, 240),
         body: body.slice(0, 600),
@@ -604,7 +597,46 @@ export async function notifyAuditEvent(input: {
       });
       sent++;
     }
-    if (sent) {
+    // One summary row per recipient per day, carrying the running total — so a
+    // capped recipient always knows there is more to read in the trail, and
+    // never more than one extra row to read.
+    for (const [uid, n] of held) {
+      const capTitle = `${n} more audited change${n === 1 ? "" : "s"} not itemised`;
+      const [existing] = await db
+        .select({ id: notifications.id, body: notifications.body })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.userId, uid),
+            eq(notifications.type, "AUDIT_EVENT"),
+            eq(notifications.recordRef, capRef),
+          ),
+        )
+        .limit(1);
+      if (existing) {
+        const prev = Number(String(existing.body || "").split(" ")[0]) || 0;
+        await db
+          .update(notifications)
+          .set({ body: `${prev + n} further audited changes were not itemised. Open Audit & Review to see the trail.` })
+          .where(eq(notifications.id, existing.id));
+      } else {
+        await db.insert(notifications).values({
+          userId: uid,
+          type: "AUDIT_EVENT",
+          title: capTitle,
+          body: `${n} further audited changes were not itemised. Open Audit & Review to see the trail.`,
+          recordType: null,
+          recordId: null,
+          recordRef: capRef,
+          businessId,
+          branchCode: input.branchCode ?? null,
+          actorName: null,
+          priority: "MEDIUM",
+          ownerId: orgId == null ? null : Number(orgId),
+        });
+      }
+    }
+    if (sent || held.size) {
       pushAfterBell(
         recipients.map((r) => Number(r.id)),
         {
@@ -622,8 +654,18 @@ export async function notifyAuditEvent(input: {
   }
 }
 
-/** Max AUDIT_EVENT rows per recipient per 24 h (the trail keeps the rest). */
-export const AUDIT_EVENT_DAILY_CAP = 12;
+/**
+ * Max itemised AUDIT_EVENT rows per recipient per 24 h (the trail keeps the
+ * rest, and the roll-up row counts toward nothing).
+ *
+ * This was 12, which a single busy workspace exhausts on ordinary activity —
+ * the seeded demo alone produces enough block-mix and flock events to reach it
+ * before a single deletion happens. A cap that routinely silences deletions,
+ * salary edits and permission changes is worse than no cap: the bell looks
+ * healthy while the events that matter are being dropped. The roll-up row is
+ * what actually bounds the bell, so the ceiling can afford to be generous.
+ */
+export const AUDIT_EVENT_DAILY_CAP = 40;
 
 const auditEventVerb = (action: string) => {
   const a = action.toUpperCase();
@@ -767,51 +809,18 @@ export async function notifyRecordDeletion(input: {
  * amount-free "records were entered" heads-up. Deliberately tighter than
  * orderNotificationRecipients() — workers are not money recipients at all.
  */
-export async function unitActivityRecipients(businessId: number): Promise<{ id: number; name: string | null }[]> {
-  const bizId = Number(businessId);
-  const orgId = await ownerOrgOfBusiness(bizId);
-  if (!orgId) return [];
-  const memberRows = await db
-    .select({ userId: organizationMembers.userId })
-    .from(organizationMembers)
-    .where(eq(organizationMembers.organizationId, orgId));
-  const memberIds = memberRows.map((m) => Number(m.userId));
-  if (!memberIds.length) return [];
-  const [staff, grants] = await Promise.all([
-    db
-      .select({
-        id: users.id,
-        name: users.name,
-        role: users.role,
-        isActive: users.isActive,
-        isSuperAdmin: users.isSuperAdmin,
-        canViewFinance: users.canViewFinance,
-        assignedBusinessId: users.assignedBusinessId,
-        businessManageIds: users.businessManageIds,
-      })
-      .from(users)
-      .where(inArray(users.id, memberIds)),
-    db
-      .select({ userId: userBusinessAccess.userId })
-      .from(userBusinessAccess)
-      .where(eq(userBusinessAccess.businessId, bizId)),
-  ]);
-  const granted = new Set(grants.map((g) => Number(g.userId)));
-  return staff
-    .filter((u) => {
-      if (u.isActive === false) return false;
-      const role = String(u.role || "").toUpperCase();
-      if (!inRoleGroup("UNIT_LEAD", role)) return false;
-      if (role === "OWNER") return false; // the OWNER gets the full roll-up
-      if (canSeeFinancials(u)) return false; // …and so does finance staff
-      const manageIds = Array.isArray(u.businessManageIds) ? u.businessManageIds.map(Number) : [];
-      return (
-        Number(u.assignedBusinessId) === bizId ||
-        manageIds.includes(bizId) ||
-        granted.has(Number(u.id))
-      );
-    })
-    .map((u) => ({ id: Number(u.id), name: u.name }));
+export async function unitActivityRecipients(businessId: number): Promise<BellRecipient[]> {
+  // Deliberately tighter than moneyActivityRecipients: these leads may NOT see
+  // money figures, so workers are not recipients at all, and anyone who
+  // already gets the real roll-up must not also get an amount-free stub.
+  const audience = await workspaceAudience(businessId);
+  return audience.filter((u) => {
+    const role = String(u.role || "").toUpperCase();
+    if (!inRoleGroup("UNIT_LEAD", role)) return false;
+    if (role === "OWNER" || role === "CO_OWNER" || u.isSuperAdmin) return false;
+    if (canSeeFinancials(u as any)) return false;
+    return true;
+  });
 }
 
 /** Every type this module emits — exported for the UI contract + the suite. */

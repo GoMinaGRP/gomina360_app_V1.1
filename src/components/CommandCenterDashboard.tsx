@@ -1296,6 +1296,7 @@ export default function CommandCenterDashboard({
 
       {/* ══════════ ENTERPRISE FINANCIAL REPORT — all businesses & branches ══════════ */}
       <FinancialReportSection
+            currentUser={currentUser}
         mode="enterprise"
         businesses={businesses}
         metrics={metrics}

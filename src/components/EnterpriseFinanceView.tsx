@@ -253,6 +253,7 @@ export default function EnterpriseFinanceView({
 
       {/* ── The complete central report (all filters, trends, tables) ── */}
       <FinancialReportSection
+            currentUser={currentUser}
         mode="enterprise"
         myOrgId={myOrgIdOf(currentUser)}
         businesses={businesses}

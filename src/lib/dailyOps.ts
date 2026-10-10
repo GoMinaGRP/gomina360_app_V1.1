@@ -34,7 +34,7 @@ import {
   userBusinessAccess,
   users,
 } from "@/db/schema";
-import { getSystemMarker, setSystemMarker } from "@/lib/systemMarkers";
+import { getSystemMarker, setSystemMarker, latestMarkerWithPrefix } from "@/lib/systemMarkers";
 import { ensureTodayFor } from "@/lib/checklistGen";
 import { sweepLowStock, lowStockItemsForBusiness } from "@/lib/lowStock";
 import { draftLowStockRequisitions } from "@/lib/procurement";
@@ -360,4 +360,40 @@ export async function runDailyOps(opts: { source: "cron" | "init" | "manual" }):
 }
 
 /** Re-export for the on-demand inventory check endpoint. */
+/**
+ * F-14 · when did the scheduler last COMPLETE a sweep?
+ *
+ * Vercel neither retries a failed cron nor alerts on one, so the only
+ * evidence that overdue Action Center activities were processed is the
+ * `daily-ops:<date>` marker, written solely on a fully successful run.
+ * Surfacing it turns a silently stalled sweep into a readable fact.
+ *
+ * `ageHours` is the useful number: > 26h means yesterday's sweep never
+ * finished (or CRON_SECRET is unset, so the fire 401s and the only thing
+ * keeping the app alive is the /api/init pull fallback).
+ */
+export async function lastDailyOps(): Promise<{
+  ranAt: string | null;
+  date: string | null;
+  source: string | null;
+  ageHours: number | null;
+  stale: boolean;
+}> {
+  const [row] = await latestMarkerWithPrefix("daily-ops:", 1);
+  if (!row) return { ranAt: null, date: null, source: null, ageHours: null, stale: true };
+  const ranAt = row.createdAt ? new Date(row.createdAt).toISOString() : null;
+  const m = /^daily-ops:(\d{4}-\d{2}-\d{2})$/.exec(row.key);
+  // marker value is "<source>@<iso>"; setSystemMarker never overwrites, and
+  // each day has its own key, so this row's value is that run's source.
+  const source = String(row.value || "").split("@")[0] || null;
+  const ageHours = row.createdAt ? (Date.now() - new Date(row.createdAt).getTime()) / 3600000 : null;
+  return {
+    ranAt,
+    date: m ? m[1] : null,
+    source,
+    ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
+    stale: ageHours == null ? true : ageHours > 26,
+  };
+}
+
 export { lowStockItemsForBusiness };

@@ -160,9 +160,6 @@ export default function AquacultureModule({
               sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined,
               customPriceReason: data.customPriceReason,
             }],
-            createdByUserId: currentUser?.id,
-            createdByName: currentUser?.name,
-            createdByRole: currentUser?.role,
           }),
         });
         const d = await res.json();
@@ -180,11 +177,6 @@ export default function AquacultureModule({
             businessId: bizId,
             branchCode: businessInfo?.code,
             branchName: businessInfo?.name,
-            createdByName: currentUser?.name,
-            createdByRole: currentUser?.role,
-            recordedByName: currentUser?.name,
-            recordedByRole: currentUser?.role,
-            recordedByUserId: currentUser?.id,
           },
         }),
       });
@@ -760,6 +752,7 @@ export default function AquacultureModule({
       {tab === "FINANCE" && (
         <div className="space-y-4">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

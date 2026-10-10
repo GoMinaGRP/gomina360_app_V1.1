@@ -184,15 +184,15 @@ export async function POST(request: NextRequest) {
           status: ["PENDING", "READY", "DELIVERED", "CANCELLED"].includes(data.status) ? data.status : "PENDING",
           dueDate: data.dueDate || null,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
       // Orders created straight as DELIVERED complete their sale immediately
       // (stock deduction + finance + serial lifecycle).
       let stockWarning: string | null = null;
       if (row.status === "DELIVERED") {
-        const posted = await fulfillElectronicsOrder(row, businessId, branchCode, data.createdByName, data.createdByRole, data.createdByUserId, data.paymentMethod);
+        const posted = await fulfillElectronicsOrder(row, businessId, branchCode, __authSession.user?.name, __authSession.user?.role, __authSession.user?.id, data.paymentMethod);
         stockWarning = (posted as any).stockWarning || null;
         row.fulfilledDate = today;
         row.transactionId = posted.transaction?.id ?? null;
@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
           warrantyMonths: wMonths,
           warrantyEnd,
           priceGhs: Number(data.priceGhs) || 0,
-          createdByName: data.createdByName || null,
+          createdByName: __authSession.user?.name || null,
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -257,8 +257,8 @@ export async function POST(request: NextRequest) {
           description: data.description || null,
           costGhs: Number(data.costGhs) || 0,
           loggedDate: data.loggedDate || today,
-          handledByName: data.createdByName || null,
-          handledByRole: data.createdByRole || null,
+          handledByName: __authSession.user?.name || null,
+          handledByRole: __authSession.user?.role || null,
         })
         .returning();
       // If the claim references a tracked serial, mark the unit accordingly
@@ -291,8 +291,8 @@ export async function POST(request: NextRequest) {
           orderDate: data.orderDate || today,
           receivedDate: status === "RECEIVED" ? data.receivedDate || today : data.receivedDate || null,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
 
@@ -307,7 +307,7 @@ export async function POST(request: NextRequest) {
         totalGhs: row.totalGhs,
         status: row.status,
         recordId: row.id,
-        actorName: data.createdByName || null,
+        actorName: __authSession.user?.name || null,
       });
 
       // Supplier ledger link (shared helper): the shared Suppliers module now

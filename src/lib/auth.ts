@@ -172,6 +172,77 @@ export async function businessIdsOfOrgs(orgIds: number[]): Promise<number[]> {
 
 export const isSuperAdmin = (user: any): boolean => !!user?.isSuperAdmin;
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * THE ACTOR — who is performing this request.
+ *
+ * F-15 (final notification audit): several write routes read the acting
+ * user's id / name / role out of the REQUEST BODY and persisted them. The
+ * session was used only as an authentication gate. Any authenticated caller
+ * could therefore attribute their work to somebody else — falsifying the
+ * finance ledger (`transactions.recorded_by`), the issuer of a sales
+ * document, who provisioned a user account, the audit trail itself, and
+ * even the `actor` written onto bell notifications. It also defeats
+ * `withoutSelf` self-exclusion, because "exclude me" was evaluated against
+ * a value the caller chose.
+ *
+ * The identity of the actor is a PROPERTY OF THE CONNECTION, never of the
+ * payload. `actorFrom` is the single sanctioned way to obtain it, so there
+ * is exactly one correct spelling and a future route cannot reinvent the bug
+ * by accident.
+ *
+ * The returned object is the SESSION USER ROW itself, so every capability
+ * flag (`canRecordExpenses`, `canManageStock`, `isSuperAdmin`, …) travels
+ * with it and downstream permission gates keep working unchanged.
+ * ───────────────────────────────────────────────────────────────────────── */
+export interface Actor {
+  id: number;
+  name: string;
+  role: string;
+  [capability: string]: any;
+}
+
+/** Build the acting user from a resolved session. Null-safe. */
+export function actorFrom(session: SessionInfo | null | undefined): Actor | null {
+  const user = session?.user;
+  if (!user || user.id == null) return null;
+  return { ...user, id: Number(user.id), name: String(user.name ?? ""), role: String(user.role ?? "") };
+}
+
+/** Build the acting user from a session USER row (routes that hold only `user`). */
+export function actorFromUser(user: any): Actor | null {
+  if (!user || user.id == null) return null;
+  return { ...user, id: Number(user.id), name: String(user.name ?? ""), role: String(user.role ?? "") };
+}
+
+/** Resolve the session and return its actor in one step. */
+export async function actorFromRequest(request: Request): Promise<Actor | null> {
+  return actorFrom(await getSessionInfo(request));
+}
+
+/** Body keys a client may use to CLAIM an identity. The server never trusts
+ *  them; this list exists so a route can strip them from a forwarded payload
+ *  and so the regression guard can name them. */
+export const ACTOR_CLAIM_KEYS = [
+  "createdByUserId", "createdByName", "createdByRole",
+  "actorUserId", "actorName", "actorRole", "actorId",
+  "currentUserId", "currentUserName", "currentUserRole",
+  "recordedBy", "recordedByRole", "recordedByUserId",
+  "performedBy", "performedByRole",
+  "grantedBy", "grantedByUserId", "grantedByName", "grantedByRole",
+  "approvedBy", "approvedByUserId", "approvedByName",
+  "reviewedBy", "reviewedById",
+  "deletedBy", "deletedByUserId", "deletedByName",
+  "submittedBy", "handledBy", "processedBy",
+] as const;
+
+/** Remove every client-supplied identity claim from an outgoing/re-forwarded
+ *  payload. Used where a route forwards a client body into a producer. */
+export function stripActorClaims<T extends Record<string, any>>(body: T): T {
+  const out: Record<string, any> = { ...body };
+  for (const k of ACTOR_CLAIM_KEYS) delete out[k];
+  return out as T;
+}
+
 /** External Farm Advisor / Resource Person: an invited professional with
  *  READ-ONLY farm-operations access. Their business scope comes exclusively
  *  from active, unexpired advisor_assignments (OWNER-granted) — the staff

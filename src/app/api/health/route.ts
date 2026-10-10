@@ -105,7 +105,21 @@ export async function GET() {
     await db.select().from(userSessions).limit(1);
     await db.select().from(userBusinessAccess).limit(1);
 
-    return Response.json({ ok: true });
+    // F-14 · scheduler visibility. Vercel does not retry a failed cron and
+    // does not alert on one, so "overdue activities quietly stopped being
+    // processed" was invisible until someone noticed a missing escalation.
+    // The last successful sweep is the single number that answers it, and it
+    // must never turn THIS endpoint red — a stale sweep is a reportable
+    // condition, not an outage of the app.
+    let dailyOps: Record<string, unknown> | null = null;
+    try {
+      const { lastDailyOps } = await import("@/lib/dailyOps");
+      dailyOps = await lastDailyOps();
+    } catch {
+      dailyOps = { error: "daily-ops status unavailable" };
+    }
+
+    return Response.json({ ok: true, dailyOps });
   } catch (e: any) {
     // Operators: this is THE one-stop diagnosis for any DB outage. Drizzle
     // wraps driver errors in "Failed query", so unwrap `cause` to surface the

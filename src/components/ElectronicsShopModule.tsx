@@ -304,7 +304,6 @@ export default function ElectronicsShopModule({
             discount: Number(data.discount) || 0,
             discountPercent: data.discountPct ? Number(data.discountPct) : undefined,
             cartItems: [{ inventoryId: Number(data.inventoryId), quantity: Number(data.quantity), sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, originalPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, customPriceReason: data.customPriceReason }],
-            createdByUserId: currentUser?.id, createdByName: currentUser?.name, createdByRole: currentUser?.role,
           }),
         });
         d = await res.json();
@@ -322,7 +321,6 @@ export default function ElectronicsShopModule({
             type: "EXPENSE", category: data.category, amountGhs: Number(data.amountGhs) || 0,
             paymentMethod: data.paymentMethod || "CASH", description: data.description || data.category,
             date: data.date || today,
-            recordedBy: currentUser?.name || "Staff", recordedByRole: currentUser?.role || "STAFF", recordedByUserId: currentUser?.id || null,
             status: "COMPLETED",
           }),
         });
@@ -345,7 +343,6 @@ export default function ElectronicsShopModule({
             entity,
             data: {
               ...data, businessId: bizId, branchCode: businessInfo?.code,
-              createdByName: currentUser?.name, createdByRole: currentUser?.role, createdByUserId: currentUser?.id,
             },
           }),
         });
@@ -757,6 +754,7 @@ export default function ElectronicsShopModule({
       {tab === "FINANCE" && (
         <div className="space-y-4">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

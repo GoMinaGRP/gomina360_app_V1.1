@@ -392,43 +392,40 @@ export async function PATCH(request: NextRequest) {
     }
     const [updated] = await db.update(actionTasks).set(updates).where(eq(actionTasks.id, id)).returning();
 
-    // Tell the creator when someone else completes their task.
-    if (
-      nextStatus === "DONE" &&
-      task.createdByUserId != null &&
-      Number(task.createdByUserId) !== Number(user.id) &&
-      String(task.status) !== "DONE"
-    ) {
-      const [dupe] = await db
-        .select({ id: notifications.id })
-        .from(notifications)
-        .where(
-          and(
-            eq(notifications.userId, Number(task.createdByUserId)),
-            eq(notifications.type, "TASK_COMPLETED"),
-            eq(notifications.recordRef, `${task.taskNumber}:done`),
-          ),
-        )
-        .limit(1);
-      if (!dupe) {
-        await db.insert(notifications).values({
-          userId: Number(task.createdByUserId),
-          type: "TASK_COMPLETED",
-          title: `Action done: ${task.title}`,
-          body: `${user.name} completed ${task.taskNumber}${body.completionNote ? ` — ${String(body.completionNote).slice(0, 200)}` : ""}.`,
-          recordType: "ACTION_TASK",
-          recordRef: `${task.taskNumber}:done`,
-          businessId: task.businessId,
-          branchCode: task.branchCode,
+    // Every status change routes through the Action Center transition table
+    // (`notifyTaskTransition`), which owns BOTH the audience and the copy. This
+    // used to be a bespoke block that only understood `status === "DONE"`, was
+    // gated on a non-null creator (so a task without one notified nobody at
+    // all), and emitted two hand-maintained variants of the same row.
+    if (nextStatus && nextStatus !== String(task.status)) {
+      const evt =
+        nextStatus === "DONE" ? "done"
+        : nextStatus === "CANCELLED" ? "cancelled"
+        // Anything terminal → an open status is a REOPEN: the work silently
+        // coming back was the other missing transition.
+        : ["DONE", "CANCELLED"].includes(String(task.status)) ? "reopened"
+        : nextStatus === "IN_PROGRESS" ? "started"
+        : null;
+      if (evt) {
+        const { notifyTaskTransition } = await import("@/lib/actionCenter");
+        await notifyTaskTransition({
+          event: evt as any,
           actorName: user.name,
-          priority: task.priority,
-          ownerId: task.ownerId,
-        });
-        pushAfterBell([Number(task.createdByUserId)], {
-          type: "TASK_COMPLETED",
-          title: `Action done: ${task.title}`,
-          body: `${user.name} completed ${task.taskNumber}.`,
-          url: "/?tab=ACTION_CENTER",
+          actorUserId: Number(user.id),
+          completionNote: body.completionNote ? String(body.completionNote) : null,
+          task: {
+            id: Number(task.id),
+            taskNumber: task.taskNumber,
+            title: task.title,
+            businessId: task.businessId ?? null,
+            branchCode: task.branchCode ?? null,
+            assignedUserId: task.assignedUserId == null ? null : Number(task.assignedUserId),
+            assignedUserName: task.assignedUserName ?? null,
+            createdByUserId: task.createdByUserId == null ? null : Number(task.createdByUserId),
+            createdByName: task.createdByName ?? null,
+            priority: task.priority ?? null,
+            dueDate: task.dueDate ?? null,
+          },
         });
       }
     }

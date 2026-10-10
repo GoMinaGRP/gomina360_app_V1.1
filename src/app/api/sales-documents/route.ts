@@ -3,7 +3,7 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { salesDocuments, businesses } from "@/db/schema";
 import { eq, desc, and } from "drizzle-orm";
-import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, actorFrom, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { nextSalesDocumentNumber } from "@/lib/documentNumbers";
 import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
@@ -64,7 +64,13 @@ export async function GET(request: NextRequest) {
  * POST /api/sales-documents
  * Body: { documentType, businessId, customerName, customerPhone, customerEmail,
  *         customerAddress, lineItems, taxRate, discount, notes, terms, validUntil,
- *         dueDate, createdByUserId, createdByName }
+ *         dueDate }
+ *
+ * F-15: `createdByUserId` / `createdByName` / `createdByRole` are NOT read
+ * from the body. They were, and they let any user with business access
+ * issue an invoice attributed to somebody else — and, on PATCH, REWRITE the
+ * issuer of an existing document. The issuer is now always the session user.
+ * The body keys are accepted and ignored, so older clients keep working.
  * Creates a new invoice or quotation with auto-generated document number
  */
 export async function POST(request: NextRequest) {
@@ -92,14 +98,15 @@ export async function POST(request: NextRequest) {
       terms,
       validUntil,
       dueDate,
-      createdByUserId,
-      createdByName,
-      createdByRole,
     } = body;
 
     if (!documentType || !businessId || !customerName || !lineItems || !Array.isArray(lineItems)) {
       return NextResponse.json({ success: false, error: "Missing required fields" }, { status: 400 });
     }
+    // F-15: the issuer is the session user, never the payload.
+    const actor = actorFrom(__authSession);
+    if (!actor) return UNAUTHENTICATED();
+
     if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
       return FORBIDDEN("You do not have access to that business.");
     }
@@ -195,9 +202,9 @@ export async function POST(request: NextRequest) {
       terms: terms || null,
       validUntil: validUntil || null,
       dueDate: dueDate || null,
-      createdByUserId: createdByUserId ? Number(createdByUserId) : null,
-      createdByName: String(createdByName || "Sales Center User"),
-      createdByRole: createdByRole || null,
+      createdByUserId: actor.id,
+      createdByName: actor.name || "Sales Center User",
+      createdByRole: actor.role || null,
     }).returning();
 
     if (discountGate.gated) {
@@ -243,7 +250,13 @@ export async function PATCH(request: NextRequest) {
     const __authSession = await getSessionInfo(request);
     if (!__authSession) return UNAUTHENTICATED();
     const body = await request.json();
-    const { documentId, status, paymentMethod, linkedTransactionId, convertToInvoice, currentUserName, currentUserId } = body;
+    const { documentId, status, paymentMethod, linkedTransactionId, convertToInvoice } = body;
+    // F-15: `currentUserId` / `currentUserName` / `currentUserRole` used to be
+    // taken from this body and used to OVERWRITE the issuer of a converted
+    // invoice — so the original provenance of a quotation could be rewritten
+    // by anyone who could convert it. The converter is now the issuer.
+    const actor = actorFrom(__authSession);
+    if (!actor) return UNAUTHENTICATED();
 
     if (!documentId) {
       return NextResponse.json({ success: false, error: "documentId is required" }, { status: 400 });
@@ -299,9 +312,9 @@ export async function PATCH(request: NextRequest) {
         terms: existing.terms,
         dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
         linkedQuotationId: existing.id,
-        createdByUserId: currentUserId || existing.createdByUserId,
-        createdByName: currentUserName || existing.createdByName,
-        createdByRole: body.currentUserRole || existing.createdByRole || null,
+        createdByUserId: actor.id,
+        createdByName: actor.name || existing.createdByName,
+        createdByRole: actor.role || existing.createdByRole || null,
       }).returning();
 
       // Mark quotation as CONVERTED

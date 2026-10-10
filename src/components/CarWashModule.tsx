@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import FinancialGate from "./FinancialGate";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
@@ -243,9 +244,6 @@ export default function CarWashModule({
           data: {
             ...data,
             businessId: bizId,
-            createdByName: currentUser?.name,
-            createdByRole: currentUser?.role,
-            createdByUserId: currentUser?.id,
           },
         }),
       });
@@ -275,7 +273,7 @@ export default function CarWashModule({
         body: JSON.stringify({
           entity,
           id,
-          data: { ...data, actorName: currentUser?.name, actorRole: currentUser?.role, actorUserId: currentUser?.id },
+          data: { ...data },
         }),
       });
       const d = await res.json();
@@ -696,10 +694,21 @@ export default function CarWashModule({
         </div>
       )}
 
-      {/* ══════════════ FINANCE & REPORTS — complete Financial Report ══════════════ */}
+      {/* ══════════════ FINANCE & REPORTS — complete Financial Report ══════════════
+          The revenue/expense/net-profit strip below renders ABOVE the report, so
+          the report's own gate does not cover it — without this wrapper a
+          denied viewer read "Revenue GH₵ 2.48k · Net Profit GH₵ 2.48k · 100.0%
+          margin" while the report beside them was correctly locked. */}
       {tab === "REPORTS" && (
+        <FinancialGate
+          user={currentUser}
+          title="Financial Report — restricted"
+          subtitle={`${businessInfo?.name || "This unit"} · revenue, expenses and margin`}
+          testid="cw-reports-restricted"
+        >
         <div className="space-y-5">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}
@@ -796,6 +805,7 @@ export default function CarWashModule({
             <p className="px-4 pb-3 pt-1 text-[10px] text-slate-500">Everything in this module — bookings, check-ins, completions, service changes, expenses — is written here for audit, and the full finance trail is exportable from the shared Export Center.</p>
           </Card>
         </div>
+        </FinancialGate>
       )}
 
       {/* ══════════════ DAILY CHECKLIST ══════════════ */}

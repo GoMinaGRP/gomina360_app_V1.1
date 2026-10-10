@@ -4,7 +4,7 @@
 // transportation scope resolution, alert fan-out (bell + push), and the
 // AI-insight feed that flags maintenance/comppliance/fuel/behaviour risks.
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   aiInsights,
@@ -18,7 +18,9 @@ import {
 } from "@/db/schema";
 import { accessibleBusinessIds } from "@/lib/auth";
 import { ownerOrgOfBusiness, orderNotificationRecipients } from "@/lib/notify";
-import { pushAfterBell } from "@/lib/push";
+import { isWorkspacePrincipal, workspaceAudience } from "@/lib/bellAudience";
+import { inRoleGroup } from "@/lib/roles";
+import { pushAfterBell, urlForNotification } from "@/lib/push";
 
 // ── Static vocab ────────────────────────────────────────────────────────────
 export const VEHICLE_TYPES = ["TRUCK", "VAN", "PICKUP", "TRAILER", "BUS", "BIKE", "CAR"] as const;
@@ -200,20 +202,40 @@ export async function writeTransportTrail(actor: any, entry: { action: string; t
   });
 }
 
-/** Bell + push fan-out to the OWNER and reachable managers of a business. */
+/**
+ * Bell + push fan-out for transport events (geofence, tracker offline,
+ * unauthorized movement, maintenance, violations).
+ *
+ * AUDIENCE — this was the LAST producer still deriving its audience by hand
+ * from `organization_members` instead of the canonical resolver, which made it
+ * the one place where the Owner's-bell rule silently failed: a platform Super
+ * Admin — whose "My Workspace" is every business by definition — received
+ * nothing, and neither did the unit's own workers. Proven against the live app:
+ * `notifyTransport(1, { type: "TRANSPORT_UNAUTHORIZED_MOVEMENT" })` returned
+ * `inserted: 3` for the org bench `[2,1,3]` while the canonical audience was
+ * `[1,2,3,10,11]`. It now resolves through `workspaceAudience()` — the same
+ * rule every other producer obeys — and layers ONE policy on top: a transport
+ * alert is operational, so it goes to the business's leads (`UNIT_LEAD`) plus
+ * the always-watched principals. `extraUserIds` are additive (a vehicle's
+ * nominated driver), deduped against the resolved set.
+ *
+ * DEDUPE — keyed on `(user, type, recordRef)`, like every other producer. The
+ * old key ignored `recordRef` and matched on `(user, type, recordType,
+ * recordId, isRead=false)`, so two distinct geofence events that happened to
+ * share a record id collapsed into one.
+ *
+ * ROUTING — the push URL used to be hardcoded to `/?tab=AUDIT`, so a
+ * "vehicle moving without authorisation" banner opened the Audit console. It is
+ * now resolved from the `bellTypes` registry like every other type.
+ */
 export async function notifyTransport(businessId: number, input: { type: string; title: string; body?: string | null; recordType?: string | null; recordId?: number | null; recordRef?: string | null; branchCode?: string | null; actorName?: string | null; priority?: string | null; issueId?: number | null; extraUserIds?: number[] }) {
   const orgId = await ownerOrgOfBusiness(Number(businessId));
-  const memberRows = await db.select({ userId: organizationMembers.userId }).from(organizationMembers).where(eq(organizationMembers.organizationId, Number(orgId ?? -1)));
-  const memberIds = new Set(memberRows.map((m) => Number(m.userId)));
-  let usersRows: any[] = [];
-  if (memberIds.size > 0) {
-    usersRows = await db
-      .select({ id: users.id, name: users.name, role: users.role, isActive: users.isActive, assignedBusinessId: users.assignedBusinessId })
-      .from(users)
-      .where(inArray(users.id, [...memberIds]));
-  }
-  const candidates = usersRows.filter(
-    (u) => u.isActive !== false && (u.role === "OWNER" || u.role === "GENERAL_MANAGER" || (u.role === "BRANCH_MANAGER" && Number(u.assignedBusinessId) === Number(businessId))),
+  const audience = await workspaceAudience(Number(businessId));
+  // `workspaceAudience()` already drops deactivated accounts, so this is the
+  // only policy layered on top: transport is operational, so it goes to the
+  // unit's leads — and to the always-watched principals.
+  const candidates = audience.filter((u) =>
+    isWorkspacePrincipal(u as any) ? true : inRoleGroup("UNIT_LEAD", u.role),
   );
   const pushedIds = new Set<number>();
   const rows = [...candidates, ...(input.extraUserIds ?? []).map((id) => ({ id: Number(id) }))];
@@ -227,7 +249,8 @@ export async function notifyTransport(businessId: number, input: { type: string;
   let inserted = 0;
   const pushIds: number[] = [];
   for (const t of targets) {
-    // own dup-guard: identical unread bell already open for this record/type
+    // Dedupe on the EVENT, not on the recipient's unread state: one row per
+    // (user, type, event).
     const dup = await db
       .select({ id: notifications.id })
       .from(notifications)
@@ -235,9 +258,7 @@ export async function notifyTransport(businessId: number, input: { type: string;
         and(
           eq(notifications.userId, Number(t.id)),
           eq(notifications.type, input.type),
-          eq(notifications.recordType, input.recordType ?? null as any),
-          eq(notifications.recordId, input.recordId ?? null as any),
-          eq(notifications.isRead, false),
+          eq(notifications.recordRef, input.recordRef ?? "" as any),
         ),
       )
       .limit(1);
@@ -261,7 +282,13 @@ export async function notifyTransport(businessId: number, input: { type: string;
     pushIds.push(Number(t.id));
   }
   if (pushIds.length > 0) {
-    pushAfterBell(pushIds, { type: input.type, title: input.title.slice(0, 240), body: (input.body || "").slice(0, 600), url: "/?tab=AUDIT" });
+    // Destination comes from the `bellTypes` registry, not a hardcoded tab.
+    pushAfterBell(pushIds, {
+      type: input.type,
+      title: input.title.slice(0, 240),
+      body: (input.body || "").slice(0, 600),
+      url: urlForNotification(input.type, { branchCode: input.branchCode ?? null, issueId: input.issueId ?? null }),
+    });
   }
   return { inserted };
 }

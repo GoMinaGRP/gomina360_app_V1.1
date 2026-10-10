@@ -74,6 +74,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
     currentCurrency,
     transactions = [],
     inventory = [],
+    currentUser,
   } = props;
   const [showExpense, setShowExpense] = useState(false);
   const [tab, setTab] = useState<Tab>("OVERVIEW");
@@ -323,6 +324,7 @@ export default function LivestockModule(props: LivestockModuleProps) {
       {/* ═══ FINANCE — complete live Financial Report tab ═══ */}
       {tab === "FINANCE" && (
         <FinancialReportSection
+            currentUser={currentUser}
           mode="business"
           businessInfo={businessInfo}
           businessMetric={businessMetrics}

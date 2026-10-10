@@ -15,7 +15,7 @@ import {
 } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { stockOut, stockIn, ensureInventoryItem } from "@/lib/stock";
-import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN, isFarmAdvisor, advisorSectionsForBusiness } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, actorFrom, UNAUTHENTICATED, FORBIDDEN, isFarmAdvisor, advisorSectionsForBusiness } from "@/lib/auth";
 import { anySectionAllowed, farmModuleOfBusiness } from "@/lib/advisorSections";
 import { apiError } from "@/lib/apiError";
 import { postOrGateExpenseTransaction } from "@/lib/expensePosting";
@@ -137,6 +137,11 @@ export async function POST(
     // out-of-scope caller could otherwise poison another unit's books.
     const session = await getSessionInfo(request);
     if (!session) return UNAUTHENTICATED();
+    // F-15: the acting user for every Finance / Inventory / audit row this
+    // insert produces. Always the session — never `body.recordedByUserId` and
+    // friends, which let any logged-in user file a log under another name.
+    const actor = actorFrom(session);
+    if (!actor) return UNAUTHENTICATED();
     const { businessCode } = await params;
     const upperCode = businessCode.toUpperCase();
     const body = await request.json();
@@ -308,11 +313,10 @@ export async function POST(
           receipt: false,
           tracking: false,
           linkCustomer: false,
-          actor: {
-            id: body.recordedByUserId ? Number(body.recordedByUserId) : null,
-            name: body.recordedBy || body.createdByName || "Auto Wash Supervisor",
-            role: body.recordedByRole || body.createdByRole || null,
-          },
+          // F-15: the actor is the session user. This used to prefer
+          // `body.recordedByUserId`, so any logged-in user could book car-wash
+          // revenue against somebody else's name in the ledger and audit trail.
+          actor,
         }).catch((e) => console.error("wash revenue txn warning:", e));
       }
 
@@ -378,7 +382,7 @@ export async function POST(
           unit: body.unit || "Units",
           unitCostGhs: unitCost,
           condition: ["GOOD", "PARTIAL", "DAMAGED"].includes(body.condition) ? body.condition : "GOOD",
-          receivedBy: body.receivedBy || body.createdByName || null,
+          receivedBy: body.receivedBy || session.user.name || null,
           recordedDate: today,
         })
         .returning();
@@ -448,11 +452,9 @@ export async function POST(
           paymentMethod: body.paymentMethod || "BANK_TRANSFER",
           description: `GRN ${inserted.receiveNoteNumber}: ${qty} ${inserted.unit} ${inserted.itemName} from ${inserted.supplierName}`,
           date: today,
-          actor: {
-            id: body.recordedByUserId ? Number(body.recordedByUserId) : session.user.id,
-            name: body.receivedBy || body.createdByName || session.user.name || "Hardware Depot",
-            role: body.recordedByRole || body.createdByRole || session.user.role || null,
-          },
+          // F-15: same — the body preferred `recordedByUserId`, letting the
+          // expense (and its audit row) be attributed to any user.
+          actor,
           targetLabel: `GRN Receipt (${qty} ${inserted.unit} ${inserted.itemName}) — GH₵ ${(qty * unitCost).toFixed(2)}`,
           metadata: { receiveNoteNumber: inserted.receiveNoteNumber, supplierName: inserted.supplierName },
         }).catch((e) => console.error("hardware receipt txn warning:", e));

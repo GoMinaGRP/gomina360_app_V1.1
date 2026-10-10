@@ -146,9 +146,9 @@ export async function POST(request: NextRequest) {
           date: data.date || today,
           createdAt: new Date(),
           status: "COMPLETED",
-          recordedBy: data.recordedBy || "Branch Staff",
-          recordedByRole: data.recordedByRole || null,
-          recordedByUserId: data.recordedByUserId ? Number(data.recordedByUserId) : null,
+          recordedBy: __authSession.user?.name || "Branch Staff",
+          recordedByRole: __authSession.user?.role || null,
+          recordedByUserId: __authSession.user?.id != null ? Number(__authSession.user.id) : null,
         })
         .returning();
       return NextResponse.json({ success: true, item: row });

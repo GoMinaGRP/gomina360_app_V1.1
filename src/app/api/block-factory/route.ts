@@ -368,8 +368,8 @@ export async function POST(request: NextRequest) {
         defaultUnitPriceGhs: unitPrice || null,
         sku: linkedSku,
         isActive: true,
-        createdByName: data.createdByName || null,
-        createdByRole: data.createdByRole || null,
+        createdByName: __authSession.user?.name || null,
+        createdByRole: __authSession.user?.role || null,
       }).returning();
       return NextResponse.json({ success: true, item: row });
     }
@@ -500,8 +500,8 @@ export async function POST(request: NextRequest) {
         status: data.status || "PENDING",
         dueDate: data.dueDate || null,
         notes: data.notes || null,
-        createdByName: data.createdByName || "Block Factory User",
-        createdByRole: data.createdByRole || null,
+        createdByName: __authSession.user?.name || "Block Factory User",
+        createdByRole: __authSession.user?.role || null,
       }).returning();
       return NextResponse.json({ success: true, item: row });
     }
@@ -519,7 +519,7 @@ export async function POST(request: NextRequest) {
         status: data.status || "SCHEDULED",
         deliveryDate: data.deliveryDate || today,
         notes: data.notes || null,
-        createdByName: data.createdByName || "Block Factory User",
+        createdByName: __authSession.user?.name || "Block Factory User",
       }).returning();
       return NextResponse.json({ success: true, item: row });
     }
@@ -669,8 +669,8 @@ export async function POST(request: NextRequest) {
         testedAt: data.testedAt ? new Date(data.testedAt) : new Date(),
         testerName: data.testerName || __authSession.user?.name || null,
         testerRole: data.testerRole || __authSession.user?.role || null,
-        recordedByName: data.recordedByName || __authSession.user?.name || null,
-        recordedByRole: data.recordedByRole || __authSession.user?.role || null,
+        recordedByName: __authSession.user?.name || __authSession.user?.name || null,
+        recordedByRole: __authSession.user?.role || __authSession.user?.role || null,
       }).returning();
       return NextResponse.json({ success: true, item: row });
     }

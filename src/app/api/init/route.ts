@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { db } from "@/db";
 import { readInitSnapshot, brandingVersionOf } from "@/lib/initSnapshot";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
@@ -172,14 +172,29 @@ export async function GET(request: Request) {
           console.error("[checklistGen] overdue sweep failed (continuing):", (e as any)?.message || e);
         });
       }
+      // F-14 · this is the PULL-BASED FALLBACK for deployments with no
+      // scheduler, and it was the weakest link in the chain: a bare
+      // `import().then()` leaves the promise floating, so once the response
+      // is sent the serverless instance may freeze or discard it. The sweep
+      // would "usually" appear to work — which is precisely what makes a bad
+      // safety net dangerous, because the days it silently misses are the
+      // quiet days nobody logs into.
+      //
+      // `after()` is the framework primitive for exactly this: the response
+      // still returns immediately, but the function is held alive until the
+      // work finishes. The `daily-ops:<date>` marker keeps this idempotent,
+      // so a scheduler fire and this fallback can never double-run.
       const dailyOpsKey = `init:daily-ops-scheduled:${todayLocal}`;
       if (ttlGet<boolean>(dailyOpsKey) === undefined) {
         ttlSet(dailyOpsKey, true, DAILY_OPS_TTL_MS);
-        import("@/lib/dailyOps")
-          .then((m) => m.runDailyOps({ source: "init" }))
-          .catch((e) => {
+        after(async () => {
+          try {
+            const m = await import("@/lib/dailyOps");
+            await m.runDailyOps({ source: "init" });
+          } catch (e) {
             console.error("[dailyOps] init fallback failed (continuing):", (e as any)?.message || e);
-          });
+          }
+        });
       }
     }
 

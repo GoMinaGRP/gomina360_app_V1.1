@@ -290,14 +290,27 @@ try {
 
   // ══ I. Legacy regression: pre-statutory paid data untouched ════════════
   console.log("── I. Legacy data regression ──");
-  const legacy = await q1("SELECT e.net_pay_ghs n, e.gross_pay_ghs g, r.status s FROM payroll_entries e JOIN payroll_runs r ON r.id=e.run_id WHERE e.id=1");
-  ok("I1 legacy entry untouched (net 4,697.36, gross null)", num(legacy.n) === 4697.36 && legacy.g === null, JSON.stringify(legacy));
+  // Resolve the seeded baseline entry BY IDENTITY, never by a literal id=1.
+  // Row ids move whenever the payroll sequence advances (a reseed, a restored
+  // run, any suite that creates runs), and a hard-coded id makes this
+  // regression check fail for a reason that has nothing to do with payroll.
+  const legacyRow = await q1(
+    `SELECT e.id, e.net_pay_ghs n, e.gross_pay_ghs g, r.status s
+       FROM payroll_entries e JOIN payroll_runs r ON r.id = e.run_id
+      WHERE e.business_id = 1 AND e.employee_name = 'Doris Ansah' AND r.period = '2026-08'
+      ORDER BY e.id LIMIT 1`);
+  const LEGACY_ID = legacyRow?.id;
+  const LEGACY_RUN_ID = (await q1(
+    `SELECT r.id FROM payroll_runs r WHERE r.period = '2026-08' AND r.business_id = 1 ORDER BY r.id LIMIT 1`))?.id;
+  ok("I0 the seeded baseline payroll entry exists", !!LEGACY_ID, `entry ${LEGACY_ID}`);
+  ok("I1 legacy entry untouched (net 4,697.36, gross null)",
+    !!legacyRow && num(legacyRow.n) === 4697.36 && legacyRow.g === null, JSON.stringify(legacyRow));
   await clickTid("prl-tab-RUNS");
   await clickTid("prl-refresh");
   await sleep(1000);
-  await clickTid("prl-run-toggle-1");
-  await waitSel('[data-testid="prl-entry-slip-1"]');
-  await clickTid("prl-entry-slip-1");
+  await clickTid(`prl-run-toggle-${LEGACY_RUN_ID}`);
+  await waitSel(`[data-testid="prl-entry-slip-${LEGACY_ID}"]`);
+  await clickTid(`prl-entry-slip-${LEGACY_ID}`);
   await waitSel('[data-testid="prl-slip"]');
   ok("I2 legacy payslip renders old style", !(await exists('[data-testid="prl-slip-gross"]')) && (await innerHas('[data-testid="prl-slip-net"]', "4,697.36")));
   await page.screenshot({ path: SHOT("7-legacy-payslip") });

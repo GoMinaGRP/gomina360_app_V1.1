@@ -128,8 +128,6 @@ export default function PoultryGrowthAnalytics({
             avgWeightG: Number(weighAvgG),
             recordedDate: weighDate,
             notes: weighNotes || undefined,
-            recordedByName: currentUserName,
-            recordedByRole: currentUserRole,
           },
         }),
       });

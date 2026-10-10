@@ -62,7 +62,7 @@ const apiFor = (cookie) => async (path, opts = {}) => {
 const pg = new Client({ connectionString: "postgresql://postgres:postgres@127.0.0.1:5432/app_db" });
 
 const created = {
-  creditSaleIds: [], paymentIds: [], trxIds: [], docIds: [], trackingIds: [], customerIds: [],
+  creditSaleIds: [], paymentIds: [], trxIds: [], docIds: [], trackingIds: [], customerIds: [], userIds: [],
 };
 const invBaseline = []; // [{id, quantity, status}]
 let browser = null;
@@ -77,6 +77,12 @@ async function cleanup() {
     for (const id of created.docIds) await pg.query(`DELETE FROM sales_documents WHERE id=$1`, [id]);
     for (const id of created.trxIds) await pg.query(`DELETE FROM transactions WHERE id=$1`, [id]);
     for (const id of created.customerIds) await pg.query(`DELETE FROM customers WHERE id=$1`, [id]);
+    for (const id of created.userIds || []) {
+      for (const t of ["user_sessions", "user_business_access", "organization_members"]) {
+        await pg.query(`DELETE FROM ${t} WHERE user_id=$1`, [id]);
+      }
+      await pg.query(`DELETE FROM users WHERE id=$1`, [id]);
+    }
     for (const inv of invBaseline) {
       await pg.query(`UPDATE inventory_items SET quantity=$2::double precision, status=$3 WHERE id=$1`, [inv.id, inv.quantity, inv.status]);
     }
@@ -225,6 +231,34 @@ async function cleanup() {
       if (l.status === 200 && Array.isArray(scope) && !scope.includes(BIZ)) {
         iso = { ...cand, cookie: l.cookie, scope, label: cand.role.replace(/_/g, " ").toLowerCase() };
         break;
+      }
+    }
+    // A seeded user only serves as the negative control if they are assigned to
+    // a business OTHER than BIZ. Businesses can exist with no staff at all, so
+    // when no seeded account qualifies, mint a throwaway one in a different
+    // organization rather than skipping the check.
+    let mintId = null;
+    if (!iso) {
+      const other = (await pg.query(
+        `SELECT b.id FROM businesses b
+          WHERE b.owner_id IS DISTINCT FROM (SELECT owner_id FROM businesses WHERE id=$1)
+            AND NOT EXISTS (SELECT 1 FROM users u WHERE u.assigned_business_id = b.id)
+          ORDER BY b.id LIMIT 1`, [BIZ])).rows[0];
+      if (other) {
+        const [pw] = (await pg.query(`SELECT password_hash FROM users WHERE id=3`)).rows;
+        const email = `creditiso.${SUFFIX}@gomina360.test`;
+        mintId = Number((await pg.query(
+          `INSERT INTO users (name, email, role, assigned_business_id, phone, password_hash, can_record_sales)
+           VALUES ($1, $2, 'BRANCH_MANAGER', $3, '+23355000999', $4, true) RETURNING id`,
+          [`Credit Iso Probe ${SUFFIX}`, email, other.id, pw.password_hash])).rows[0].id);
+        created.userIds.push(mintId);
+        await pg.query(`INSERT INTO organization_members (organization_id, user_id, role_in_org)
+                        SELECT owner_id, $1, 'MEMBER' FROM businesses WHERE id=$2`, [mintId, other.id]);
+        const l = await apiLogin(email, `GoMina@User3`);
+        const scope = l.json?.accessibleBusinessIds;
+        if (l.status === 200 && Array.isArray(scope) && !scope.includes(BIZ)) {
+          iso = { id: mintId, email, role: 'BRANCH_MANAGER', cookie: l.cookie, scope, label: "out-of-tenant probe account" };
+        }
       }
     }
     if (iso) {

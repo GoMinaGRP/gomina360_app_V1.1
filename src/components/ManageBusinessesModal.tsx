@@ -395,7 +395,6 @@ export default function ManageBusinessesModal({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          actorUserId: currentUser?.id ?? null,
           ...(canFullyManage(selected) ? { preOrderEnabled: onlPreorder } : {}),
           onlineOrderingEnabled: onlEnabled,
           pickupEnabled: onlPickup,
@@ -444,7 +443,6 @@ export default function ManageBusinessesModal({
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              actorUserId: currentUser?.id ?? null,
               gpsLat: Number(pos.coords.latitude.toFixed(7)),
               gpsLng: Number(pos.coords.longitude.toFixed(7)),
             }),
@@ -719,7 +717,7 @@ export default function ManageBusinessesModal({
       const res = await fetch("/api/logos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actorUserId: currentUser?.id ?? null, ...payload }),
+        body: JSON.stringify({ ...payload }),
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.success) {
@@ -788,7 +786,6 @@ export default function ManageBusinessesModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          actorUserId: currentUser?.id ?? null,
           confirmCode: confirmText.trim(),
           resetMasterLists: resetMasters,
           // Un-assigning staff users stays OWNER-only (re-checked server-side).
@@ -831,7 +828,6 @@ export default function ManageBusinessesModal({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          actorUserId: currentUser?.id ?? null,
           name,
           category,
           region: location.region,
@@ -879,7 +875,7 @@ export default function ManageBusinessesModal({
       const res = await fetch(`/api/businesses/${biz.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next, actorUserId: currentUser?.id ?? null }),
+        body: JSON.stringify({ status: next }),
       });
       const d = await res.json().catch(() => null);
       if (res.ok && d?.success) {
@@ -914,7 +910,7 @@ export default function ManageBusinessesModal({
       const res = await fetch(`/api/businesses/${biz.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isArchived: !biz.isArchived, actorUserId: currentUser?.id ?? null }),
+        body: JSON.stringify({ isArchived: !biz.isArchived }),
       });
       const d = await res.json().catch(() => null);
       if (res.ok && d?.success) {
@@ -942,7 +938,7 @@ export default function ManageBusinessesModal({
       const res = await fetch(`/api/businesses/${selected.id}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmCode: confirmText.trim(), actorUserId: currentUser?.id ?? null }),
+        body: JSON.stringify({ confirmCode: confirmText.trim() }),
       });
       const d = await res.json().catch(() => null);
       if (res.ok && d?.success) {
