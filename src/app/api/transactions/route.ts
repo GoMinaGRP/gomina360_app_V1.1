@@ -116,9 +116,6 @@ export async function POST(request: Request) {
       paymentMethod,
       description,
       date,
-      recordedBy,
-      recordedByRole,
-      recordedByUserId,
       customerId,
       supplierId,
       status,
@@ -214,8 +211,11 @@ export async function POST(request: Request) {
         date: dateStr,
         createdAt: now,
         status: status || "COMPLETED",
-        recordedBy: session.user.name || recordedBy || "Command Center User",
-        recordedByRole: session.user.role || recordedByRole || null,
+        // F-15: session-only. The `|| recordedBy || …` fallbacks looked safe
+        // because `session.user.name` is always truthy, but they kept a
+        // client-supplied identity one careless edit away from being live.
+        recordedBy: session.user.name || "Command Center User",
+        recordedByRole: session.user.role || null,
         recordedByUserId: session.user.id,
         receiptImage: body?.receiptImage || null,
         receiptImages: body?.receiptImages || null,
@@ -260,7 +260,9 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, data, actorUserId } = body || {};
+    // F-15: `actorUserId` was destructured and never used — `updates` is an
+    // explicit allowlist and the audit row below takes the session actor.
+    const { id, data } = body || {};
     const recordId = Number(id);
     if (!Number.isFinite(recordId)) {
       return NextResponse.json(
@@ -400,7 +402,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { id, reason, actorUserId } = body || {};
+    const { id, reason } = body || {};
     const recordId = Number(id);
     if (!Number.isFinite(recordId)) {
       return NextResponse.json(

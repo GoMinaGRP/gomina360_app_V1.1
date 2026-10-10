@@ -291,6 +291,13 @@ async function main() {
     await call(owner.token, "DELETE", "/api/transactions", { id: r.id, reason: "test cleanup" });
   }
   await q(`DELETE FROM record_deletion_logs WHERE record_label LIKE '%${TAG}%'`);
+  // …and the AUDIT_EVENT bells those deletions rang. Section E deletes one
+  // transaction per business, each of which legitimately notifies the Owner —
+  // and AUDIT_EVENT is rate-capped per recipient per 24 h. Left behind, these
+  // rows silently starve the Owner's budget and make the *next* suite's audit
+  // assertions fail for a reason that has nothing to do with it.
+  await q(`DELETE FROM notifications WHERE type='AUDIT_EVENT' AND record_ref LIKE '%${TAG}%'`);
+  await q(`DELETE FROM notifications WHERE type='AUDIT_EVENT' AND record_ref LIKE '%ALLTYPES (%'`);
   const leftoverBiz = (await q(`SELECT id FROM businesses WHERE name LIKE '%${TAG}%'`)).rows;
   for (const b of leftoverBiz) {
     const biz = (await q(`SELECT code FROM businesses WHERE id=$1`, [b.id])).rows[0];

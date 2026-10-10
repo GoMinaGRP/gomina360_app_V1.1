@@ -67,6 +67,7 @@ import {
   AUDIT_MODULES,
 } from "@/db/schema";
 import { getSessionInfo, accessibleBusinessIds, sharesOrganization, FORBIDDEN, UNAUTHENTICATED } from "@/lib/auth";
+import { canSeeFinancials } from "@/lib/permissions";
 import { auditEscalationRecipients, ownerOrgOfBusiness } from "@/lib/notify";
 import { businessManageIdsOf } from "@/lib/permissions";
 import { pushAfterBell } from "@/lib/push";
@@ -89,6 +90,14 @@ const REVIEW_TO_TRAIL: Record<string, string> = {
  *  VERIFIED. "OPEN" is the first-release legacy value for FLAGGED. */
 const ISSUE_ACTIONS = ["FLAGGED", "CORRECTION_REQUESTED"];
 const OPEN_STATUSES = ["FLAGGED", "UNDER_REVIEW", "CORRECTION_REQUIRED"]; // actively awaiting work/verification
+/** Default and ceiling for the audit record payload. The default fits a full
+ *  portfolio; the ceiling bounds what a client can ask for. */
+/** A currency figure inside a stored label: keeps the text, drops the number. */
+const LABEL_FIGURE_RE = /(GH₵|GHS|₵)\s*[\d,]+(?:\.\d+)?/g;
+
+const DEFAULT_RECORDS = 2000;
+const MAX_RECORDS = 10000;
+
 const normStatus = (s: string | null | undefined) => (s === "OPEN" ? "FLAGGED" : s || "INFO");
 const isIssue = (r: any) => ISSUE_ACTIONS.includes(r.action);
 const isOpenIssue = (r: any) => isIssue(r) && OPEN_STATUSES.includes(normStatus(r.status));
@@ -249,6 +258,10 @@ export type AuditRecordRow = {
   detail: string;
   module: string;
   businessId: number;
+  /** Owning organization, carried only by records that name NO business (access
+   *  grants, delegations). Used by the owner-narrowing fallback so those events
+   *  stay reachable for their owner; never rendered to the client. */
+  ownerId?: number | null;
   branchCode: string | null;
   workerName: string | null;
   workerUserId?: number | null; // login account behind the record, when known (issue routing)
@@ -426,7 +439,7 @@ async function loadAuditData(scope: Scope): Promise<AuditData> {
   }
 }
 
-async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecordRow[]> {
+async function collectRecords(scope: Scope, AUD: AuditData, financialsAuthorized: boolean): Promise<AuditRecordRow[]> {
   const codeMap = await codeOf();
   const keep = (businessId: number, module: string, branchCode?: string | null) => scope.businessIds === null || canSeeRecord(scope, businessId, module, branchCode);
   const rows: AuditRecordRow[] = [];
@@ -466,9 +479,16 @@ async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecord
     push({
       key: `EMPLOYEE:employees:${e.id}`, recordType: "EMPLOYEE", recordSource: "employees", recordId: e.id,
       ref: `EMP-${e.id}`, title: `${e.name} — ${e.role}`,
-      detail: `Salary GH₵ ${Number(e.salaryGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · hired ${e.hireDate} · ${e.branch}`,
+      // A salary is money: the audit timeline is reachable by any OWNER-granted
+      // auditor, who is NOT automatically granted financial access. Without this
+      // redaction the timeline printed every employee's monthly salary to a
+      // viewer the policy deliberately withholds it from.
+      detail: financialsAuthorized
+        ? `Salary GH₵ ${Number(e.salaryGhs).toLocaleString("en-US", { minimumFractionDigits: 2 })} · hired ${e.hireDate} · ${e.branch}`
+        : `Salary withheld · hired ${e.hireDate} · ${e.branch}`,
       module: "EMPLOYEES", businessId: e.businessId, branchCode: codeMap.get(e.businessId) || null,
-      workerName: e.name, date: day10(e.hireDate), at: "", amountGhs: e.salaryGhs, status: e.status || "ACTIVE",
+      workerName: e.name, date: day10(e.hireDate), at: "",
+      amountGhs: financialsAuthorized ? e.salaryGhs : null, status: e.status || "ACTIVE",
       imageCount: e.photo ? 1 : 0,
     });
   }
@@ -486,12 +506,15 @@ async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecord
     const agg = byRun.get(r.id) || { count: 0, net: 0 };
     push({
       key: `PAYROLL_RUN:payroll_runs:${r.id}`, recordType: "PAYROLL_RUN", recordSource: "payroll_runs", recordId: r.id,
-      ref: `PR-${r.id} · ${r.period}`, title: `Payroll ${r.period} — ${agg.count} employee(s), net GH₵ ${agg.net.toLocaleString("en-US", { minimumFractionDigits: 2 })}`,
+      ref: `PR-${r.id} · ${r.period}`,
+      title: financialsAuthorized
+        ? `Payroll ${r.period} — ${agg.count} employee(s), net GH₵ ${agg.net.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+        : `Payroll ${r.period} — ${agg.count} employee(s), net withheld`,
       detail: r.notes || `Created by ${r.createdByName}`,
       module: "PAYROLL", businessId: r.businessId, branchCode: branchOf(r.businessId, r.branchCode),
       workerName: r.createdByName, date: day10(r.createdAt ? (r.createdAt as any).toISOString?.() ?? r.createdAt : r.period + "-01"),
       at: r.createdAt ? tsIso(r.createdAt) : "",
-      amountGhs: agg.net, status: r.status,
+      amountGhs: financialsAuthorized ? agg.net : null, status: r.status,
     });
   }
 
@@ -513,9 +536,13 @@ async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecord
     push({
       key: `ASSET:assets:${a.id}`, recordType: "ASSET", recordSource: "assets", recordId: a.id,
       ref: a.assetCode || `AST-${a.id}`, title: `${a.name} — ${a.assetType} · ${a.condition}`,
-      detail: `Purchased GH₵ ${Number(a.purchasePriceGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ${a.location} · next maintenance ${a.nextMaintenanceDate}${a.description ? ` · ${a.description}` : ""}${Array.isArray(a.assetImages) && a.assetImages.length ? ` · ${a.assetImages.length} image(s)` : ""}`,
+      // `/api/init` already treats purchase/current value as capex data and
+      // drops it for a viewer the policy does not authorise for asset valuation.
+      // The audit timeline rendered it anyway, so the same figure was hidden in
+      // one surface and published in another. Same rule here, for consistency.
+      detail: `${financialsAuthorized ? `Purchased GH₵ ${Number(a.purchasePriceGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · value GH₵ ${Number(a.currentValueGhs || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} · ` : "Valuation restricted · "}${a.location} · next maintenance ${a.nextMaintenanceDate}${a.description ? ` · ${a.description}` : ""}${Array.isArray(a.assetImages) && a.assetImages.length ? ` · ${a.assetImages.length} image(s)` : ""}`,
       module: "ASSETS", businessId: a.businessId, branchCode: branchOf(a.businessId, a.branchCode),
-      workerName: a.recorderName, date: tsDay(a.recordedAt), at: tsIso(a.recordedAt), amountGhs: a.currentValueGhs, status: a.condition,
+      workerName: a.recorderName, date: tsDay(a.recordedAt), at: tsIso(a.recordedAt), amountGhs: financialsAuthorized ? a.currentValueGhs : null, status: a.condition,
       imageCount: Array.isArray(a.assetImages) ? a.assetImages.length : 0,
     });
   }
@@ -651,17 +678,36 @@ async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecord
   // Supplier deletions carry no business context (suppliers are a global
   // directory), so they surface for the unrestricted OWNER only.
   const DELETION_MODULE: Record<string, string> = { TRANSACTIONS: "FINANCE", INVENTORY: "INVENTORY", EMPLOYEES: "EMPLOYEES" };
+  // Businesses that still exist. A deletion trail outlives the unit it deleted
+  // from — that is the point of a trail — so a log row can name a business id
+  // that no longer resolves. Publishing that dangling id is actively harmful:
+  // the client cannot look it up, and a consumer that resolves owners from the
+  // business table reads "unknown business" as "belongs to nobody", which reads
+  // as a tenant leak. Such rows are reported as unattached (businessId 0) and
+  // carry their own `ownerId`, so the tenant that owns the trail stays explicit.
+  const liveBusinessIds = new Set<number>(
+    (AUD["businesses|all|none|"] ?? []).map((b: any) => Number(b.id)),
+  );
   const delRows = AUD["recordDeletionLogs|200|id|"];
   for (const d of delRows) {
     const mod = DELETION_MODULE[d.module];
     if (!mod) continue;
     const snap: any = d.recordSnapshot || {};
+    // The deletion trail is admissible evidence, so it stays complete for an
+    // authorised viewer. For everyone else the record stays NAMED — the label a
+    // money-module deletion stores carries its amount — while the figure itself
+    // is withheld, exactly as it is in the module's own deletion panel.
+    const delMoney = financialsAuthorized;
     push({
       key: `DELETION:record_deletion_logs:${d.id}`, recordType: "DELETION", recordSource: "record_deletion_logs", recordId: d.id,
-      ref: `DEL-${d.id}`, title: `${d.recordLabel} — deleted`,
+      ref: `DEL-${d.id}`,
+      title: `${delMoney ? d.recordLabel : String(d.recordLabel || "").replace(LABEL_FIGURE_RE, "$1 •••••")} — deleted`,
       detail: `Deleted by ${d.deletedByName} (${d.deletedByRole}) · reason: ${d.reason}`,
-      module: mod, businessId: Number(snap.businessId) || 0, branchCode: branchOf(Number(snap.businessId) || 0, snap.branchCode),
-      workerName: d.deletedByName, date: tsDay(d.createdAt), at: tsIso(d.createdAt), amountGhs: snap.amountGhs ?? null, status: "DELETED",
+      module: mod,
+      businessId: liveBusinessIds.has(Number(snap.businessId)) ? Number(snap.businessId) : 0,
+      ownerId: d.ownerId ?? null,
+      branchCode: liveBusinessIds.has(Number(snap.businessId)) ? branchOf(Number(snap.businessId), snap.branchCode) : null,
+      workerName: d.deletedByName, date: tsDay(d.createdAt), at: tsIso(d.createdAt), amountGhs: delMoney ? (snap.amountGhs ?? null) : null, status: "DELETED",
       imageCount: Array.isArray(snap.photos) ? snap.photos.length : snap.photo ? 1 : Array.isArray(snap.assetImages) ? snap.assetImages.length : 0,
     });
   }
@@ -676,7 +722,7 @@ async function collectRecords(scope: Scope, AUD: AuditData): Promise<AuditRecord
       key: `USER_ACTIVITY:audit_trail:${t.id}`, recordType: "USER_ACTIVITY", recordSource: "audit_trail", recordId: t.id,
       ref: `ACT-${t.id}`, title: `${t.action} — ${t.targetLabel}`,
       detail: `${t.actorName} (${t.actorRole})${t.reason ? ` · ${t.reason}` : ""}${t.detail ? ` · ${t.detail}` : ""}`,
-      module: "USERS", businessId: t.businessId ?? 0, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
+      module: "USERS", businessId: t.businessId ?? 0, ownerId: t.ownerId ?? null, branchCode: t.branchCode || (t.businessId ? codeMap.get(t.businessId) || null : null),
       workerName: t.actorName, date: tsDay(t.createdAt), at: tsIso(t.createdAt), amountGhs: null, status: "LOGGED",
     });
   }
@@ -873,7 +919,7 @@ export async function GET(request: Request) {
     const to = url.searchParams.get("to") || "";
 
     const AUD = await loadAuditData(scope);
-    let records = await collectRecords(scope, AUD);
+    let records = await collectRecords(scope, AUD, canSeeFinancials(user));
     let reviews = scopedReviews(scope, AUD).map((r) => ({ ...r, status: normStatus(r.status) }));
     let log = scopedTrail(scope, AUD);
 
@@ -881,11 +927,26 @@ export async function GET(request: Request) {
     // two filters intersect with each other and with the caller's own scope.
     const scopedIds = (id: number) => scope.businessIds === null || scope.businessIds.includes(id);
     let narrowed: Set<number> | null = null;
+    // Organizations whose unit-less (organization-level) audit events this
+    // narrowed view may still show. Derived from the same `chosen` units as
+    // `narrowed`, then INTERSECTED with the caller's own organizations so the
+    // fallback can never reach a tenant the caller could not already see.
+    let orgScopeIds: Set<number> = new Set();
+    // business id → owning organization, for records whose business cannot be
+    // resolved by id alone (below).
+    let bizOwnerById: Map<number, number> = new Map();
     if (fOwnerId !== null || fBusinessIds.length > 0) {
       const ownerBiz = (AUD["businesses|all|none|"] ?? []).map((b: any) => ({ id: b.id, ownerId: b.ownerId }));
+      bizOwnerById = new Map(ownerBiz.map((b: any) => [Number(b.id), Number(b.ownerId ?? 1)]));
       const byOwner = fOwnerId !== null ? ownerBiz.filter((b) => Number(b.ownerId ?? 1) === fOwnerId) : ownerBiz;
       const chosen = fBusinessIds.length > 0 ? byOwner.filter((b) => fBusinessIds.includes(Number(b.id))) : byOwner;
-      narrowed = new Set(chosen.map((b) => Number(b.id)).filter(scopedIds));
+      const chosenScoped = chosen.filter((b) => scopedIds(Number(b.id)));
+      orgScopeIds = new Set(chosenScoped.map((b) => Number(b.ownerId ?? 1)));
+      if (scope.businessIds !== null) {
+        const mine = new Set((scope.ownerIds || []).map(Number));
+        orgScopeIds = new Set([...orgScopeIds].filter((o) => mine.has(o)));
+      }
+      narrowed = new Set(chosenScoped.map((b) => Number(b.id)));
       if (narrowed.size === 0) {
         // Nothing in scope — an empty result is the honest answer (never fall
         // back to "everything", which would silently widen the view).
@@ -895,7 +956,42 @@ export async function GET(request: Request) {
       }
     }
     if (narrowed) {
-      records = records.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      // A record that names NO business (organization-level events — access
+      // grants, delegations) cannot be matched by business id, so narrowing by
+      // owner silently DROPPED it from every owner-scoped view: it was visible
+      // in the Super Admin "everything" list and in nobody else's. Those rows
+      // carry their own `ownerId`, which scopedTrail() already trusts for the
+      // same records, so fall back to it — keeping the filter an INTERSECTION
+      // with the caller's own scope, never a widening.
+      // An explicit `businessIds` list is the caller naming specific units, so
+      // it is honoured literally — matched on unit and nothing else. The
+      // fallback below exists only to make an OWNER-wide view complete, and
+      // applying it here would smuggle in records for units that were never
+      // asked for, which is exactly the scope widening this filter exists to
+      // prevent.
+      if (fBusinessIds.length > 0) {
+        records = records.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
+      } else {
+        const ownerKept = (r: any) => {
+          const bizId = r.businessId == null ? 0 : Number(r.businessId);
+          if (bizId !== 0) {
+            // A record that names a REAL unit is scoped by that unit, full
+            // stop. If it is not in the narrowed set it belongs to a different
+            // organization, and its own ownerId must never override that.
+            if (bizOwnerById.has(bizId)) return narrowed!.has(bizId);
+            // …but the unit it names no longer exists — the normal end-state
+            // of a deletion trail, which outlives the unit by design. Fall back
+            // to the tenant the trail itself was stamped with (the same
+            // `owner_id` /api/enterprise already trusts for these rows).
+            // Previously such a record appeared in the Super Admin's
+            // "everything" list and in NO owner's, which is how the partition
+            // could not be reconciled by anyone.
+          }
+          if (r.ownerId == null) return false;
+          return orgScopeIds.has(Number(r.ownerId));
+        };
+        records = records.filter(ownerKept);
+      }
       reviews = reviews.filter((r) => r.businessId != null && narrowed!.has(Number(r.businessId)));
       log = log.filter((t) => t.businessId == null || narrowed!.has(Number(t.businessId)));
     }
@@ -929,7 +1025,24 @@ export async function GET(request: Request) {
     let recordsOut = records.map((r) => ({ ...r, reviewState: stateOf.get(r.key) || "UNREVIEWED" }));
     if (fStatus) recordsOut = recordsOut.filter((r) => r.reviewState === fStatus);
     recordsOut.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.at || "").localeCompare(a.at || "") || b.recordId - a.recordId);
-    recordsOut = recordsOut.slice(0, 250);
+    // ── Payload bound ──────────────────────────────────────────────────────
+    // This used to be a hard `.slice(0, 250)` applied AFTER the scope filters,
+    // which quietly broke the partition the Audit & Review screen depends on:
+    // "every owner" returned fewer records than the sum of "my units" plus
+    // "each other owner", so a Super Admin reviewing the whole platform could
+    // silently miss rows. An audit surface that drops rows without saying so is
+    // the wrong failure mode — it looks like compliance coverage it cannot prove.
+    //
+    // The bound is now (a) generous enough that a real portfolio fits, (b)
+    // caller-adjustable, and (c) REPORTED, so a truncated response is visible
+    // as such instead of masquerading as the complete set.
+    const requestedLimit = Number(url.searchParams.get("limit") || "");
+    const recordLimit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(Math.trunc(requestedLimit), MAX_RECORDS)
+      : DEFAULT_RECORDS;
+    const totalRecords = recordsOut.length;
+    recordsOut = recordsOut.slice(0, recordLimit);
+    const truncated = totalRecords > recordsOut.length;
 
     let grants: any[] = [];
     let grantUsers: any[] = [];
@@ -993,7 +1106,7 @@ export async function GET(request: Request) {
     }
 
     const report = buildReport(records, reviews);
-    return cachedJson(request, { success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList: bizOut, records: recordsOut, reviews, threads, log, grants, grantUsers, report });
+    return cachedJson(request, { success: true, scope: { eligible: true, level: scope.level, canGrant: scope.canGrant, businessIds: scope.businessIds, moduleByBusiness: scope.moduleByBusiness, branchByBusiness: scope.branchByBusiness, grantBusinessIds: scope.grantBusinessIds }, bizList: bizOut, records: recordsOut, totalRecords, truncated, reviews, threads, log, grants, grantUsers, report });
   } catch (error: any) {
     return apiError(error);
   }

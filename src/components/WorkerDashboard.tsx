@@ -218,9 +218,6 @@ export default function WorkerDashboard({
           })),
           notes: saleNotes,
           discount: saleDiscount,
-          createdByUserId: currentUser?.id,
-          createdByName: currentUser?.name,
-          createdByRole: currentUser?.role,
         }),
       });
       const data = await res.json();

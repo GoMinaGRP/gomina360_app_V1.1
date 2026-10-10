@@ -735,6 +735,7 @@ export default function SpecializedBusinessView({
       {/* ══════════ FINANCIAL REPORT — complete, live-linked ══════════ */}
       {!hideFinanceReport && (
         <FinancialReportSection
+            currentUser={currentUser}
           mode="business"
           businessInfo={businessInfo}
           businessMetric={businessMetrics}

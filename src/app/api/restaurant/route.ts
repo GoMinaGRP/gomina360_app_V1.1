@@ -86,12 +86,13 @@ async function receiveStock(businessId: number, branchCode: string | null, data:
 }
 
 // Book the purchase expense into the shared Finance ledger.
+//
+// F-15: the actor is a REQUIRED argument supplied by the calling handler from
+// the SESSION. It used to fall back to `data.createdByName` /
+// `data.createdByRole` / `data.createdByUserId`, which let any user who could
+// receive a kitchen delivery book the expense against somebody else's name.
 async function bookExpense(businessId: number, biz: any, branchCode: string | null, data: any, purchaseNumber: string, total: number, date: string, actorObj?: any) {
-  const actor = actorObj || {
-    id: data.createdByUserId ? Number(data.createdByUserId) : null,
-    name: data.createdByName || "Kitchen Staff",
-    role: data.createdByRole || null,
-  };
+  const actor = actorObj || { id: null, name: "Kitchen Staff", role: null };
   return postOrGateExpenseTransaction({
     businessId,
     branchCode,
@@ -189,8 +190,8 @@ export async function POST(request: NextRequest) {
           status: ["QUEUED", "COOKING", "READY", "SERVED", "CANCELLED"].includes(data.status) ? data.status : "QUEUED",
           orderedDate: data.orderedDate || today,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -235,8 +236,8 @@ export async function POST(request: NextRequest) {
           reason: ["SPOILAGE", "EXPIRED", "OVERCOOKED", "PREP_LOSS", "CUSTOMER_RETURN"].includes(data.reason) ? data.reason : "SPOILAGE",
           costGhs: Number(data.costGhs) || 0,
           loggedDate: data.loggedDate || today,
-          recordedByName: data.createdByName || null,
-          recordedByRole: data.createdByRole || null,
+          recordedByName: __authSession.user?.name || null,
+          recordedByRole: __authSession.user?.role || null,
           notes: data.notes || null,
         })
         .returning();
@@ -285,8 +286,8 @@ export async function POST(request: NextRequest) {
           orderDate: data.orderDate || today,
           receivedDate: status === "RECEIVED" ? data.receivedDate || today : null,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
 
@@ -302,14 +303,14 @@ export async function POST(request: NextRequest) {
         totalGhs: row.totalGhs,
         status: row.status,
         recordId: row.id,
-        actorName: data.createdByName || null,
+        actorName: __authSession.user?.name || null,
       });
 
       if (status === "RECEIVED") {
         const refusal = await receiveStock(businessId, branchCode, data, qty, cost);
         if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         if (data.recordExpense !== false) {
-          await bookExpense(businessId, biz, branchCode, { ...data, quantity: qty }, row.purchaseNumber, qty * cost, data.receivedDate || today);
+          await bookExpense(businessId, biz, branchCode, { ...data, quantity: qty }, row.purchaseNumber, qty * cost, data.receivedDate || today, __authSession.user);
         }
       }
       return NextResponse.json({ success: true, item: row });
@@ -480,11 +481,11 @@ export async function PATCH(request: NextRequest) {
           totalGhs: existing.totalGhs,
           status: "RECEIVED",
           recordId: existing.id,
-          actorName: data?.createdByName || null,
+          actorName: __authSession.user?.name || null,
           type: "PURCHASE_RECEIVED",
         });
         if (data?.recordExpense !== false) {
-          await bookExpense(existing.businessId, biz, existing.branchCode, { ...existing, createdByName: data?.createdByName, createdByRole: data?.createdByRole, createdByUserId: data?.createdByUserId, paymentMethod: data?.paymentMethod }, existing.purchaseNumber, existing.totalGhs, today);
+          await bookExpense(existing.businessId, biz, existing.branchCode, { ...existing, paymentMethod: data?.paymentMethod }, existing.purchaseNumber, existing.totalGhs, today, __authSession.user);
         }
       }
       return NextResponse.json({ success: true, item: row });

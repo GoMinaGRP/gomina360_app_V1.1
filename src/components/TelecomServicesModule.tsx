@@ -15,6 +15,7 @@ import {
 import { CurrencyCode, formatMoney } from "@/lib/currency";
 import DailyChecklistPanel from "./DailyChecklistPanel";
 import FinancialReportSection from "./FinancialReportSection";
+import FinancialGate from "./FinancialGate";
 import ExpenseEntryForm from "./ExpenseEntryForm";
 import ConfirmActionModal from "./ConfirmActionModal";
 import { classifyEntry, confirmMeta } from "@/lib/entryConfirm";
@@ -151,7 +152,7 @@ export default function TelecomServicesModule({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           entity: entityMap[String(type)],
-          data: { ...data, businessId: bizId, createdByName: currentUser?.name, createdByRole: currentUser?.role, createdByUserId: currentUser?.id },
+          data: { ...data, businessId: bizId },
         }),
       });
       const d = await res.json();
@@ -177,7 +178,7 @@ export default function TelecomServicesModule({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           entity, id,
-          data: { ...data, actorName: currentUser?.name, actorRole: currentUser?.role, actorUserId: currentUser?.id },
+          data: { ...data },
         }),
       });
       const d = await res.json();
@@ -602,8 +603,17 @@ export default function TelecomServicesModule({
         </div>
       )}
 
-      {/* ══════════════ FINANCE ══════════════ */}
+      {/* ══════════════ FINANCE ══════════════
+          This tab is its own P&L — ledger income, expenses, net profit and
+          working capital — and has no <FinancialReportSection> beside it, so
+          nothing was gating it. Wrap the whole tab in the shared gate. */}
       {tab === "FINANCE" && (
+        <FinancialGate
+          user={currentUser}
+          title="Finance — restricted"
+          subtitle={`${businessInfo?.name || "This unit"} · ledger income, expenses and working capital`}
+          testid="tel-finance-restricted"
+        >
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <Stat testid="tel-fin-income" label="Income (Ledger)" value={money(ledgerIncome, currentCurrency)} sub="sales + commissions + fees" color="emerald" icon={TrendingUp} />
@@ -640,6 +650,7 @@ export default function TelecomServicesModule({
           </div>
           <p className="text-[10px] text-slate-500">Income = customer payments (airtime/data sales, Wi-Fi vouchers) + MoMo commissions + service fees. Expenses = wholesale airtime/data costs (paid from float) + logged branch expenses. Float top-ups move money between the business and the tills — they are tracked per line, never double-counted as profit.</p>
         </div>
+        </FinancialGate>
       )}
 
       {/* ══════════════ CUSTOMERS ══════════════ */}
@@ -667,6 +678,7 @@ export default function TelecomServicesModule({
       {tab === "REPORTS" && (
         <div className="space-y-4">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

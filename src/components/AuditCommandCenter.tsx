@@ -308,6 +308,11 @@ export default function AuditCommandCenter({
 
   const scope = data?.scope;
   const records: Rec[] = data?.records || [];
+  // The server reports whether it bounded the payload. Guessing from
+  // `records.length >= PAGE` was wrong the moment the bound moved, and an audit
+  // view that silently shows a partial trail is worse than one that admits it.
+  const payloadTruncated = data?.truncated === true;
+  const totalRecords: number | null = typeof data?.totalRecords === "number" ? data.totalRecords : null;
   // ── Day grouping: the most recent 7 days (Today, Yesterday, then dated
   //    groups, newest first; within a day the newest activity first), and
   //    everything older than 7 days in the collapsible History section.
@@ -360,9 +365,9 @@ export default function AuditCommandCenter({
     const t = new Date(r.at);
     return isNaN(t.getTime()) ? d : `${d} · ${t.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
   };
-  // The API pages at 250 records — when the payload is full there may be
-  // more history behind it. Each click walks one 250-page further back.
-  const moreHistoryAvailable = records.length >= 250 && !olderDone;
+  // History behind the payload is a SERVER decision now, not a guess from a
+  // magic page size: ask whether the response was truncated.
+  const moreHistoryAvailable = payloadTruncated && !olderDone;
   const loadOlderRecords = useCallback(async () => {
     const oldest = [...historyRecords].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))[0];
     if (!oldest?.date) { setOlderDone(true); return; }
@@ -970,8 +975,18 @@ export default function AuditCommandCenter({
                     className="w-full py-2.5 rounded-xl border border-teal-500/40 bg-teal-500/10 hover:bg-teal-500/20 text-teal-200 text-xs font-bold disabled:opacity-50 transition"
                     data-testid="aud-history-load-more"
                   >
-                    {olderLoading ? "Loading older records…" : "Load older records (previous 250)"}
+                    {olderLoading ? "Loading older records…" : "Load older records"}
                   </button>
+                )}
+                {/* A bounded payload must SAY so. An auditor who cannot tell a
+                    complete trail from a clipped one cannot certify it. */}
+                {payloadTruncated && totalRecords != null && (
+                  <p
+                    className="text-center text-[10px] text-amber-300/90"
+                    data-testid="aud-history-truncated"
+                  >
+                    Showing the {records.length} most recent of {totalRecords} records in this view.
+                  </p>
                 )}
                 {!moreHistoryAvailable && historyRecords.length > 0 && (
                   <p className="text-center text-[10px] text-slate-500" data-testid="aud-history-end">

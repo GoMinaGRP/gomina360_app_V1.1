@@ -167,7 +167,7 @@ export async function POST(request: NextRequest) {
         currentBiomassKg: Number(data.currentBiomassKg) || 0,
         status: data.status || "ACTIVE",
         notes: data.notes || null,
-        createdByName: data.createdByName || "Aquaculture User",
+        createdByName: __authSession.user?.name || "Aquaculture User",
       }).returning();
       await auditLog(me, "AQUA_POND_CREATE", "RECORD", `Pond ${row.name} (${row.pondId})`,
         "OPERATION_LOG", row.id, businessId, branchCode,
@@ -217,7 +217,7 @@ export async function POST(request: NextRequest) {
         benchmarkProfileId,
         costPerFingerlingGhs,
         notes: data.notes || null,
-        createdByName: data.createdByName || "Aquaculture User",
+        createdByName: __authSession.user?.name || "Aquaculture User",
       }).returning();
 
       // Update pond biomass (pond already ownership-validated above)
@@ -264,7 +264,7 @@ export async function POST(request: NextRequest) {
         totalCostGhs: totalCost,
         entryType: data.entryType || "CONSUMPTION",
         recordedDate: data.recordedDate || today,
-        recordedByName: data.recordedByName || "Farm Operator",
+        recordedByName: __authSession.user?.name || "Farm Operator",
       }).returning();
 
       // Expense for PURCHASE entries
@@ -324,7 +324,7 @@ export async function POST(request: NextRequest) {
         avgWeightG,
         recordedDate: data.recordedDate || today,
         notes: data.notes || null,
-        recordedByName: data.recordedByName || __authSession.user?.name || "Aquaculture User",
+        recordedByName: __authSession.user?.name || __authSession.user?.name || "Aquaculture User",
       }).returning();
       // Auto-connection: keep the batch's current average weight live.
       await db.update(aquacultureBatches)
@@ -361,7 +361,7 @@ export async function POST(request: NextRequest) {
         turbidity: data.turbidity || "CLEAR",
         nitrateMgL: Number(data.nitrateMgL) || 0,
         treatmentUsed: data.treatmentUsed || null,
-        publishedByName: data.publishedByName || data.recordedByName || "Water Technician",
+        publishedByName: __authSession.user?.name || __authSession.user?.name || "Water Technician",
       }).returning();
       return NextResponse.json({ success: true, item: row });
     }
@@ -402,7 +402,7 @@ export async function POST(request: NextRequest) {
         revenueGhs: revenue,
         saleDate: data.saleDate || today,
         buyerName: data.buyerName || null,
-        recordedByName: data.recordedByName || "Farm Operator",
+        recordedByName: __authSession.user?.name || "Farm Operator",
       }).returning();
 
       // ── Stock linkage: harvest stocks fresh fish (Kg) into Inventory; a
@@ -443,9 +443,9 @@ export async function POST(request: NextRequest) {
           tracking: false,
           linkCustomer: false,
           actor: {
-            id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-            name: data.recordedByName || "Aquaculture User",
-            role: data.recordedByRole || null,
+            id: __authSession.user?.id != null ? Number(__authSession.user.id) : null,
+            name: __authSession.user?.name || "Aquaculture User",
+            role: __authSession.user?.role || null,
           },
         });
       }

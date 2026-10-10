@@ -126,7 +126,13 @@ const mkUser = async (who, role, extra = {}) =>
 
 const fx = {};
 for (const [who, role] of [["gmplain", "GENERAL_MANAGER"], ["coowner", "CO_OWNER"], ["supervisor", "SUPERVISOR"]]) {
-  const created = await mkUser(who, role, role === "SUPERVISOR" ? { extraAccessIds: [BIZ1] } : {});
+  // SUPERVISOR is a unit-scoped role (`requiresUnit` in the role registry — an
+  // earlier audit finding), so the API refuses to create one without
+  // `assignedBusinessId`. This fixture predates that rule and was passing
+  // `extraAccessIds`, which the create handler does not read, so the user was
+  // rejected with 400 and every export assertion that depended on it was
+  // starved. The APP is right here; the fixture was stale.
+  const created = await mkUser(who, role, role === "SUPERVISOR" ? { assignedBusinessId: BIZ1 } : {});
   fx[who] = { id: created.json?.user?.id ?? null, role };
   ok(`fixture created: ${who} (${role})`, !!fx[who].id, `${created.status} ${JSON.stringify(created.json).slice(0, 120)}`);
   // The delegated manager gets the OWNER's explicit unit delegation + export toggle.

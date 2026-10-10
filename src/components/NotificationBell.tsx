@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, CheckCheck, Flag, Inbox, ListPlus, Loader2, Settings } from "lucide-react";
 import { useClampedDropdown } from "./nav/useClampedDropdown";
+import { lookupBellType } from "@/lib/bellTypes";
 
 type Notif = any;
 
@@ -173,25 +174,15 @@ export default function NotificationBell({
     return `${Math.floor(s / 86400)}d ago`;
   };
 
+  // The chip label is declared ONCE, in the `bellTypes` registry. This used to
+  // be a second copy of that knowledge with a catch-all of "Open Record", which
+  // left 12 real types (document expiry, every purchase, every feed-mill and
+  // block-factory batch) untriageable in a full bell.
   const targetTag = (n: Notif) => {
-    const t = String(n.type || "").toUpperCase();
-    const rt = String(n.recordType || "").toLowerCase();
-    // Platform registrations open the Super Admin's review queue — the tag must
-    // say so, instead of the generic "Open Record" the type used to fall through to.
-    if (t.startsWith("PLATFORM_REQUEST")) return "Platform Requests";
-    if (t === "AUDIT_EVENT") return "Audit Trail";
-    if (t === "SALE_RECORDED" || t === "EXPENSE_RECORDED") return t === "SALE_RECORDED" ? "Sales Activity" : "Expense Activity";
-    if (t === "STOCK_LOW" || t === "STOCK_OUT") return t === "STOCK_OUT" ? "Out of Stock" : "Low Stock";
-    if (t === "OPS_NOTE_FLAGGED") return "Daily Notes";
-    if (t.startsWith("APPROVAL") || t.includes("EXPENSE") || rt === "approval_requests" || String(n.recordRef || "").startsWith("approval:")) return "Approval Center";
-    if (t.startsWith("AUDIT") || rt.startsWith("audit") || n.issueId) return "Audit Review";
-    if (t.startsWith("TASK_") || rt === "action_tasks" || String(n.recordRef || "").startsWith("task:")) return "Action Task";
-    if (t.startsWith("ADVISOR") || rt === "advisor_notes") return "Farm Advisor";
-    if (t.includes("ORDER") || t.includes("TRACKING") || rt === "customer_trackings" || rt === "orders") return "Order & Dispatch";
-    if (t.includes("LOW_STOCK") || t.includes("INVENTORY") || rt === "inventory_items") return "Inventory Alert";
-    if (t.includes("CREDIT") || t.includes("DUNNING") || rt === "credit_sales") return "Credit & Sales";
-    if (t.includes("CHECKLIST") || t.includes("STAGE") || rt === "checklists") return "Checklist & Stage";
-    if (t.startsWith("TRANSPORT") || rt === "transport_vehicles") return "Transport Log";
+    const def = lookupBellType(n.type);
+    if (def?.label) return def.label;
+    // Unregistered type: fall back to the record's branch, never a bare
+    // "Open Record" when we actually know which unit this concerns.
     if (n.branchCode) return n.branchCode;
     return "Open Record";
   };

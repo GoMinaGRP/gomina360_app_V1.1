@@ -175,7 +175,6 @@ export default function FishGrowthAnalytics({
             avgWeightG: Number(weighAvgG),
             recordedDate: weighDate,
             notes: weighNotes || undefined,
-            recordedByName: currentUserName,
           },
         }),
       });

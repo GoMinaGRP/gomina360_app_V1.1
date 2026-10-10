@@ -119,7 +119,10 @@ main > div,
   min-width: 0;
 }
 
-/* Media and canvases never spill: charts (recharts), photos, QR images. */
+/* Media and canvases never spill: charts (recharts), photos, QR images.
+   NOTE: recharts' own plot surface is sized `width:100%` of `.recharts-wrapper`,
+   so this stays a no-op for charts — but the rule must NOT reach the wrapper
+   (see the chart layer below). */
 main img,
 main svg,
 main canvas,
@@ -127,12 +130,47 @@ main video {
   max-width: 100%;
 }
 
-/* Chart wrappers: recharts measures its parent, so the parent must be able to
-   shrink and keep a real height. */
-.recharts-responsive-container,
-.recharts-wrapper {
+/* ── Chart layer (recharts) — DO NOT CLAMP THE WRAPPER ───────────────────
+   recharts 3 measures the OUTER box (`.recharts-responsive-container`) with a
+   ResizeObserver and then renders this structure:
+
+     <div class="recharts-responsive-container" style="width:100%;height:…">
+       <div style="width:0;height:0;overflow:visible">   ← deliberate 0×0
+         <div class="recharts-wrapper" style="width:866px">  ← real chart
+           <svg style="width:100%;height:100%">
+
+   That zero-size, overflow-visible middle div is the documented auto-sizer
+   trick (react-virtualized AutoSizer): it stops the chart from feeding its own
+   size back into the observer, and the chart paints by OVERFLOWING it.
+
+   A `max-width: 100%` on `.recharts-wrapper` therefore resolves 100% against
+   that 0-wide middle div and clamps every chart in the app to 0 px wide. The
+   surface `<svg>` is `width:100%` of the wrapper, so it collapses too: the DOM
+   still holds bars, axes and legend, but NOTHING is painted — charts silently
+   vanish on every dashboard, module and role. This single rule was the global
+   root cause of "charts/graphs/figures are not displaying".
+
+   Correct rule set:
+     • the OUTER container keeps the anti-spill clamp (its containing block is
+       a real box, so 100% is the right ceiling) and `min-width:0` so a chart
+       inside a flex/grid cell may shrink;
+     • the INNER wrapper is left at the pixel width recharts measured from the
+       container — it can never exceed that container, so it needs no clamp;
+     • the media rule above must skip the wrapper's descendants too, because
+       their containing block is the wrapper, not the page.
+   Chart width is therefore bounded by the container, exactly as before the
+   regression — only the 0 px clamp is gone. */
+.recharts-responsive-container {
   min-width: 0 !important;
   max-width: 100%;
+}
+.recharts-wrapper {
+  max-width: none;
+}
+/* The auto-sizer div is 0×0 on purpose — never let a "helpful" rule give it a
+   size, and never hide the overflow the chart relies on to be visible. */
+.recharts-responsive-container > div {
+  max-width: none;
 }
 
 /* Action/toolbar rows: any flex row inside a page that carries two or more

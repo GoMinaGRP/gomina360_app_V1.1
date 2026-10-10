@@ -3,7 +3,7 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, actorFrom, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { rolePreset, type RoleKey } from "@/lib/roles";
 import { inRoleGroup } from "@/lib/roles";
@@ -83,7 +83,6 @@ export async function POST(request: Request) {
       region,
       district,
       town,
-      createdByUserId,
       canRecordSales,
       canRecordExpenses,
       canManageStock,
@@ -103,6 +102,13 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // F-15: `createdByUserId` used to come from the request body, so a branch
+    // manager could mint a worker account attributed to the Owner. Account
+    // provisioning is an audited act; who did it is a property of the
+    // connection, so it comes from the session.
+    const actor = actorFrom(__authSession);
+    if (!actor) return UNAUTHENTICATED();
 
     // Mirror the Users & Access creation matrix: only the OWNER or a
     // GENERAL_MANAGER / BRANCH_MANAGER scope-managing that business may mint
@@ -128,7 +134,7 @@ export async function POST(request: Request) {
         town: town || null,
         isActive: true,
         isWorkerEnabled: true,
-        createdByUserId: createdByUserId ? Number(createdByUserId) : null,
+        createdByUserId: actor.id,
         // Unspecified capability ⇒ the registry's WORKER preset, so the unit
         // roster and the access console apply the same default (audit F3).
         canRecordSales: canRecordSales ?? workerPreset.canRecordSales === true,

@@ -24,6 +24,7 @@ import { isSeededBaselineTxn } from "@/lib/financeReport";
 import { getOfflineQueue } from "@/lib/offlineSync";
 import { installSessionBridge, setSessionToken, clearSessionToken } from "@/lib/sessionBridge";
 import { businessManageIdsOf, canSeeEnterpriseUsers, canSeeFinancials } from "@/lib/permissions";
+import { lookupBellType, FALLBACK_TAB } from "@/lib/bellTypes";
 import { Loader2 } from "lucide-react";
 import { setCompanyLogo } from "@/lib/logos";
 import { readCachedBranding, fetchBranding, withBranding } from "@/lib/brandingCache";
@@ -1698,6 +1699,7 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
           businesses={scopedBusinesses}
           currentCurrency={currentCurrency}
           onRefreshScenarios={refreshAllData}
+          currentUser={currentUser}
         />
       );
     }
@@ -1995,13 +1997,25 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
                 }
               }
 
-              // 12. Fallback: if branchCode is specified, open that branch dashboard
-              if (n?.branchCode && businesses.some((b: any) => b?.code === n.branchCode)) {
-                handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+              // 12. Registry fallback. Every type the app emits is declared in
+              // `bellTypes.ts` (label, category, destination, whether the unit
+              // dashboard wins). The branches above are an ENRICHMENT layer —
+              // they add focus/selection state for consoles that need it — but
+              // the destination for anything they do not handle comes from the
+              // registry. Previously anything unhandled fell through to the
+              // Command Center regardless of what the type was about, and the
+              // push URL for the same rows opened Customer Order & Tracking.
+              const bellDef = lookupBellType(t);
+              if (bellDef) {
+                if (n?.branchCode && bellDef.unitScoped && businesses.some((b: any) => b?.code === n.branchCode)) {
+                  handleSelectTab(n.branchCode as ActiveTab, n.businessId);
+                  return;
+                }
+                setActiveTab(bellDef.tab as ActiveTab);
                 return;
               }
 
-              setActiveTab("COMMAND_CENTER");
+              setActiveTab(FALLBACK_TAB as ActiveTab);
             }}
             onOpenIssue={(n) => {
               // Responses / resolutions go to the reviewer's Audit Center;

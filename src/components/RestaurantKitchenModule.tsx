@@ -251,7 +251,6 @@ export default function RestaurantKitchenModule({
             paymentMethod: data.paymentMethod, notes: data.notes, discount: Number(data.discount) || 0,
             discountPercent: data.discountPct ? Number(data.discountPct) : undefined,
             cartItems: [{ inventoryId: Number(data.inventoryId), quantity: Number(data.quantity), sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, originalPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, customPriceReason: data.customPriceReason }],
-            createdByUserId: currentUser?.id, createdByName: currentUser?.name, createdByRole: currentUser?.role,
           }),
         });
         d = await res.json();
@@ -269,7 +268,6 @@ export default function RestaurantKitchenModule({
             type: "EXPENSE", category: data.category, amountGhs: Number(data.amountGhs) || 0,
             paymentMethod: data.paymentMethod || "CASH", description: data.description || data.category,
             date: data.date || today,
-            recordedBy: currentUser?.name || "Staff", recordedByRole: currentUser?.role || "STAFF", recordedByUserId: currentUser?.id || null,
             status: "COMPLETED",
           }),
         });
@@ -290,7 +288,7 @@ export default function RestaurantKitchenModule({
       } else {
         const res = await fetch("/api/restaurant", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entity, data: { ...data, businessId: bizId, branchCode: businessInfo?.code, createdByName: currentUser?.name, createdByRole: currentUser?.role, createdByUserId: currentUser?.id } }),
+          body: JSON.stringify({ entity, data: { ...data, businessId: bizId, branchCode: businessInfo?.code } }),
         });
         d = await res.json();
       }
@@ -309,7 +307,7 @@ export default function RestaurantKitchenModule({
     try {
       const res = await fetch("/api/restaurant", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entity, id, data: { ...data, createdByName: currentUser?.name, createdByRole: currentUser?.role, createdByUserId: currentUser?.id } }),
+        body: JSON.stringify({ entity, id, data: { ...data } }),
       });
       const d = await res.json();
       if (!d.success) throw new Error(d.error);
@@ -629,6 +627,7 @@ export default function RestaurantKitchenModule({
       {tab === "FINANCE" && (
         <div className="space-y-4">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

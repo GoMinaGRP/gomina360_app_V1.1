@@ -315,7 +315,6 @@ export default function AssetRegistrationModal({
             requestingUserRole: currentUser?.role,
             requestingUserBusinessId: currentUser?.assignedBusinessId,
             recorderName: currentUser?.name || "Unknown Recorder",
-            requestedByName: currentUser?.name || "Unknown Recorder",
             assetImages,
             // POSITIONAL parallel array: index i is the thumbnail of image i
             // (null where missing) so indices can never shift.

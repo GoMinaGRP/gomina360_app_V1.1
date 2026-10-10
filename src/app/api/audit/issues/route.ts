@@ -9,8 +9,8 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { db } from "@/db";
-import { businesses, auditIssueUpdates, auditReviews, auditTrail, notifications } from "@/db/schema";
-import { pushAfterBell } from "@/lib/push";
+import { businesses, auditIssueUpdates, auditReviews, auditTrail, notifications, users } from "@/db/schema";
+import { pushAfterBell, urlForNotification } from "@/lib/push";
 import { getSessionInfo, resolveUserOrgIds, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -151,23 +151,74 @@ export async function POST(request: Request) {
     const issueNotifType = action === "RESPOND" ? "AUDIT_ISSUE_RESPONSE" : "AUDIT_ISSUE_RESOLVED";
     const prio = String(row.priority || "MEDIUM").toUpperCase();
     const issueNotifTitle = `${action === "RESPOND" ? "Response ready for review" : "Marked resolved"} [${prio}]: ${row.issueTitle || row.recordRef}`;
-    await db.insert(notifications).values({
-      userId: row.reviewerUserId,
-      type: issueNotifType,
-      title: issueNotifTitle,
-      body: `${note.slice(0, 520)}\nRequired action: open the Audit Command Center and verify to close (or request another correction).`,
-      issueId: row.id, recordType: row.recordType, recordId: row.recordId, recordRef: row.recordRef,
-      businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
-      // M1: carry the issue's severity so the bell's triage chip lights up.
-      priority: prio,
-      ownerId: row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : (user.orgId ?? null),
-    });
-    pushAfterBell([Number(row.reviewerUserId)], {
-      type: issueNotifType,
-      title: issueNotifTitle,
-      body: note.slice(0, 600),
-      url: "/?tab=AUDIT",
-    });
+    const issueOwnerId = row.businessId != null ? await ownerOrgOfBusiness(Number(row.businessId)) : (user.orgId ?? null);
+    const issueBody = `${note.slice(0, 520)}\nRequired action: open the Audit Command Center and verify to close (or request another correction).`;
+
+    // ── Audience ──────────────────────────────────────────────────────────
+    // The reviewer is the person who must act, so they are told first. But a
+    // single addressee meant that when the reviewer was a non-principal, was
+    // deactivated, or simply never acted, a HIGH/CRITICAL issue awaiting
+    // verification never reached the Owner — even though the Owner's bell is
+    // meant to be the accountable record of their workspace. The sibling route
+    // `api/audit/route.ts` already escalates; this one did not.
+    //
+    // Resolution: the reviewer, PLUS the workspace principals for a
+    // HIGH/CRITICAL issue, PLUS the workspace principals whenever the reviewer
+    // is inactive. Dedupe is per (user, type, recordRef) so nobody gets two.
+    const recipients = new Set<number>([Number(row.reviewerUserId)]);
+    let principals: { id: number }[] = [];
+    if (row.businessId != null) {
+      const { workspacePrincipals } = await import("@/lib/bellAudience");
+      // Already excludes deactivated accounts.
+      principals = (await workspacePrincipals(Number(row.businessId))).map((p) => ({ id: Number(p.id) }));
+    }
+    const reviewer = await db.select({ isActive: users.isActive }).from(users).where(eq(users.id, Number(row.reviewerUserId))).limit(1);
+    const reviewerInactive = reviewer[0]?.isActive === false;
+    const severe = prio === "HIGH" || prio === "CRITICAL";
+    // F-16: detecting the inactive reviewer was only ever used to ADD the
+    // principals — the reviewer itself stayed in the set and was written a
+    // bell row it can never read and can never clear. `workspacePrincipals`
+    // already excludes deactivated accounts, which is exactly the rule the
+    // explicit reviewer insert was bypassing. Drop them, then escalate.
+    if (reviewerInactive) recipients.delete(Number(row.reviewerUserId));
+    if (severe || reviewerInactive) for (const p of principals) recipients.add(Number(p.id));
+
+    const inserted: number[] = [];
+    for (const uid of recipients) {
+      const dupe = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.userId, uid),
+            eq(notifications.type, issueNotifType),
+            eq(notifications.recordRef, `${row.recordRef || `issue:${row.id}`}:${issueNotifType}`),
+          ),
+        )
+        .limit(1);
+      if (dupe[0]) continue;
+      await db.insert(notifications).values({
+        userId: uid,
+        type: issueNotifType,
+        title: issueNotifTitle,
+        body: issueBody,
+        issueId: row.id, recordType: row.recordType, recordId: row.recordId,
+        recordRef: `${row.recordRef || `issue:${row.id}`}:${issueNotifType}`,
+        businessId: row.businessId, branchCode: row.branchCode, actorName: user.name,
+        // M1: carry the issue's severity so the bell's triage chip lights up.
+        priority: prio,
+        ownerId: issueOwnerId,
+      });
+      inserted.push(uid);
+    }
+    if (inserted.length) {
+      pushAfterBell(inserted, {
+        type: issueNotifType,
+        title: issueNotifTitle,
+        body: note.slice(0, 600),
+        url: urlForNotification(issueNotifType, { branchCode: row.branchCode ?? null, issueId: row.id }),
+      });
+    }
     return NextResponse.json({ success: true, review: updated });
   } catch (error: any) {
     return apiError(error);

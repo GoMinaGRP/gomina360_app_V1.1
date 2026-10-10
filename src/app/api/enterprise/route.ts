@@ -27,6 +27,7 @@ import { applyStockChange, computeStockStatus } from "@/lib/stock";
 import { adjustVariantStock, setVariantsForItem, variantsForItem } from "@/lib/boutique";
 import { normalizeVariantMatrix } from "@/lib/boutiqueSizes";
 import { canManageSharedRecords, canDeleteInventory, canManageBusinessUnit } from "@/lib/recordPermissions";
+import { canSeeFinancials } from "@/lib/permissions";
 import { getSessionInfo, canAccessBusiness, accessibleBusinessIds, resolveUserOrgIds, businessIdsOfOrgs, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { ownerOrgOfBusiness } from "@/lib/notify";
 import { apiError } from "@/lib/apiError";
@@ -34,6 +35,9 @@ import { approvalGateCheck, createApprovalRequest } from "@/lib/approvals";
 import { auditEvent } from "@/lib/audit";
 import { approvalRequests } from "@/db/schema";
 import { validateImageArray, validateOptionalImage, THUMB_BUDGET_BYTES } from "@/lib/mediaValidation";
+
+/** A currency figure inside a stored label: keeps the text, drops the number. */
+const GHS_FIGURE_RE = /(GH₵|GHS|₵)\s*[\d,]+(?:\.\d+)?/g;
 
 // Which enterprise entity a deletion-log row refers to.
 const MODULE_TABLE: Record<string, any> = {
@@ -120,6 +124,20 @@ export async function GET(request: Request) {
       const myOrgs = new Set(session.user.organizationIds || []);
       rows = rows.filter((r) => r.ownerId != null && myOrgs.has(Number(r.ownerId)));
     }
+
+    // A deletion log must stay ACTIONABLE for everyone who can see it — the
+    // record, who, when and why are the whole point of the trail — but the
+    // label a money-module deletion stores carries the amount with it
+    // ("TRX-2026-49170696 — GH₵ 123 (ProbeCat)"). That made the immutable
+    // deletion trail a way around the financial gate for any manager who can
+    // open a module's audit panel. Strip the figure, keep the record.
+    if (!canSeeFinancials(session.user)) {
+      rows = rows.map((r: any) => ({
+        ...r,
+        recordLabel: r.recordLabel ? String(r.recordLabel).replace(GHS_FIGURE_RE, "$1 •••••") : r.recordLabel,
+      }));
+    }
+
     return NextResponse.json({ success: true, logs: rows });
   } catch (error: any) {
     return apiError(error);
@@ -179,7 +197,10 @@ export async function PATCH(request: Request) {
   ttlInvalidate("init");
   try {
     const body = await request.json();
-    const { entityType, id, data, actorUserId } = body || {};
+    // F-15: `actorUserId` was destructured here and never used — every audit
+    // write below takes the session actor (`actor`). Deleted so the binding
+    // cannot be re-wired by a later edit; the guard fails if it returns.
+    const { entityType, id, data } = body || {};
     const moduleKey = String(entityType || "").toUpperCase();
     const table = MODULE_TABLE[moduleKey];
     if (!table) {
@@ -588,7 +609,7 @@ export async function DELETE(request: Request) {
   ttlInvalidate("init");
   try {
     const body = await request.json().catch(() => ({}));
-    const { entityType, id, reason, actorUserId } = body || {};
+    const { entityType, id, reason } = body || {};
     const moduleKey = String(entityType || "").toUpperCase();
     const table = MODULE_TABLE[moduleKey];
     if (!table) {

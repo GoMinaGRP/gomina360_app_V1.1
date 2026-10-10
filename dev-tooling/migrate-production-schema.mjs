@@ -93,6 +93,23 @@ if (!dbUrlEnv) {
   process.exit(0);
 }
 
+// ── Preview deployments must not migrate the production schema ──────────────
+// This script runs from `npm run build`, so it ran on EVERY Vercel build —
+// including Preview builds, which share the Production DATABASE_URL. A throwaway
+// branch therefore had the authority to add columns, backfill rows and create
+// indexes on the live database, and every preview build paid for the migration
+// before it could finish.
+//
+// Production deployments keep migrating (that self-healing is the point of the
+// step, and it is how schema drift gets closed), but Preview must not. A
+// preview shares the production database, so production's most recent deploy has
+// already applied the schema it needs. Opt back in with
+// GOMINA_MIGRATE_ON_PREVIEW=1 if you ever want a preview to reconcile.
+if (process.env.VERCEL && process.env.VERCEL_ENV === "preview" && process.env.GOMINA_MIGRATE_ON_PREVIEW !== "1") {
+  console.log("[db:migrate] skipped: Vercel Preview build (production schema is left to the Production deploy; set GOMINA_MIGRATE_ON_PREVIEW=1 to override)");
+  process.exit(0);
+}
+
 const connectionString = process.env[dbUrlEnv].trim();
 const describeTarget = () => {
   try {
@@ -506,6 +523,14 @@ try {
     ["transport_maintenance", "business_id"],
     ["user_business_access", "user_id"],
     ["user_business_access", "business_id"],
+    // ── Hot-path indexes for queries that previously fell back to a scan ──
+    // `users` was indexed only by `email`, yet access scoping filters on
+    // assigned_business_id on every role-checked route and in /api/init.
+    ["users", "assigned_business_id"],
+    ["users", "primary_org_id"],
+    // The bell's unread badge counts `user_id + is_read`; without this it had
+    // to walk every notification the user has ever received.
+    ["notifications", "is_read"],
   ];
   for (const [tbl, col] of perfIndexes) {
     const t = await client.query("select to_regclass($1) as name", [`public.${tbl}`]);
@@ -518,6 +543,20 @@ try {
 
   // Composite multi-column performance accelerator for checklist date queries
   await client.query(`create index if not exists checklist_entries_date_biz_idx on public.checklist_entries (checklist_date, business_id)`);
+
+  // Composites whose COLUMN ORDER matters, so they cannot be expressed in the
+  // single-column loop above. Both mirror the exact predicate their route uses.
+  //   • the bell counts unread notifications for one user → (user_id, is_read)
+  //   • the deletion trail is read per tenant, per module, newest first
+  for (const [name, tbl, cols] of [
+    ["notifications_user_id_is_read_idx", "notifications", "(user_id, is_read)"],
+    ["record_deletion_logs_owner_module_created_idx", "record_deletion_logs", "(owner_id, module, created_at)"],
+  ]) {
+    const t = await client.query("select to_regclass($1) as name", [`public.${tbl}`]);
+    if (t.rows[0]?.name) {
+      await client.query(`create index if not exists ${name} on public.${tbl} ${cols}`);
+    }
+  }
 
   // ── Backfill: single existing Owner ⇒ org #1 owns everything it does today ──
   await client.query(`insert into public.organizations (id, name, slug, status, contact_email, owner_user_id, created_by_user_id)

@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { businessInsights, businesses, dailyNotes, advisorNotes } from "@/db/schema";
-import { asc, eq } from "drizzle-orm";
+import { asc, count, eq } from "drizzle-orm";
 import { canAccessBusiness, getSessionInfo, UNAUTHENTICATED } from "@/lib/auth";
 import {
   analyzeNote,
@@ -44,10 +44,32 @@ function toInsights(row: any): InsightsState {
   };
 }
 
+/**
+ * `notesAnalyzed` is DERIVED, never accumulated.
+ *
+ * It used to be `prev.notesAnalyzed + 1`, a counter maintained independently of
+ * the notes themselves — so deleting or editing a note left it untouched, and
+ * the AI panel could report "12 notes analysed" for a unit with two (or, in the
+ * state that exposed this, zero). The two writers also disagreed: the POST
+ * path incremented while the PATCH path rebuilt from the actual rows, so the
+ * same unit reported different totals depending on which operation ran last.
+ *
+ * Counting the real rows at write time makes the number self-healing: any later
+ * write corrects it, and it can no longer drift away from the data it counts.
+ * This is a write path that runs once per note edit — two cheap counts.
+ */
+async function trueNotesAnalyzed(businessId: number): Promise<number> {
+  const [[d], [a]] = await Promise.all([
+    db.select({ n: count() }).from(dailyNotes).where(eq(dailyNotes.businessId, businessId)),
+    db.select({ n: count() }).from(advisorNotes).where(eq(advisorNotes.businessId, businessId)),
+  ]);
+  return Number(d?.n ?? 0) + Number(a?.n ?? 0);
+}
+
 async function upsertInsights(businessId: number, state: InsightsState) {
   const [existing] = await db.select().from(businessInsights).where(eq(businessInsights.businessId, businessId));
   const payload = {
-    notesAnalyzed: state.notesAnalyzed,
+    notesAnalyzed: await trueNotesAnalyzed(businessId),
     lastNoteDate: state.lastNoteDate,
     rollingSummary: state.rollingSummary,
     issueRegister: state.issueRegister,

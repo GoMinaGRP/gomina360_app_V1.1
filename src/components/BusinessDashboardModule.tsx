@@ -672,6 +672,7 @@ export default function BusinessDashboardModule({
             </div>
           )}
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

@@ -189,9 +189,66 @@ async function linkCustomer(
 }
 
 /**
+ * Turn money RECEIVED on a credit sale into the same bell event every other
+ * revenue writer emits.
+ *
+ * Why this is its own helper (and not a one-line call inside postInstallment):
+ * a credit receipt is the one revenue path that carries a customer identity
+ * and a credit-sale reference, so the OWNER's daily roll-up should say so —
+ * "3 sales · GH₵ 760 … credit installment from TEST Credit Buyer" — while the
+ * roll-up key, dedupe, no-spam rules, tenant scoping and the
+ * finance-visibility split all stay exactly the ones `notifyMoneyActivity`
+ * already enforces for every other writer. Called with `void` (not awaited)
+ * so a notification failure can never fail the installment.
+ */
+function notifyCreditPayment(input: {
+  credit: any;
+  amount: number;
+  tag: string;
+  paymentNumber: string;
+  transactionId: number;
+  receivedByUserId: number | null;
+  receivedByName: string | null;
+  settled: boolean;
+}): void {
+  const { credit, amount, tag, paymentNumber, transactionId, receivedByUserId, receivedByName, settled } = input;
+  void (async () => {
+    try {
+      const { notifyMoneyActivity } = await import("@/lib/notifyActivity");
+      await notifyMoneyActivity({
+        businessId: Number(credit.businessId),
+        branchCode: credit.branchCode || null,
+        kind: "SALE",
+        amountGhs: amount,
+        actorName: receivedByName || "Sales Center",
+        actorUserId: receivedByUserId,
+        recordRef: paymentNumber,
+        recordId: Number(transactionId) || null,
+        recordType: "transactions",
+        label:
+          `${tag.toLowerCase()}${credit.customerName ? ` from ${credit.customerName}` : ""}` +
+          `${settled ? " — credit fully settled" : ""}`,
+      });
+    } catch (e) {
+      // Never block the installment on a notification.
+      console.error("[credit-sales] money-activity notification failed:", e);
+    }
+  })();
+}
+
+/**
  * Post one installment across Credit + Finance + Receipts and (when the
  * balance settles) flip the order/invoice to PAID. Shared by create-deposit
  * and the standalone pay action. Assumes access + amounts already validated.
+ *
+ * NOTIFICATION: the INCOME row this writes is REAL money received (an opening
+ * deposit on the create action, an installment afterwards). It used to be the
+ * one revenue path in the app that posted to the ledger without telling the
+ * unit's money watchers, so the Owner's daily revenue figure silently
+ * under-counted every credit sale while the ledger, Finance report and
+ * dashboards all showed it. `notifyCreditPayment` (above) is now the single
+ * place that turns a credit receipt into a bell event, and it is fire-and-
+ * forget: a notification can never fail an installment.
  */
 async function postInstallment({
   credit,
@@ -316,7 +373,20 @@ async function postInstallment({
     .where(eq(creditSales.id, credit.id))
     .returning();
 
-  // 5. Settled → the whole chain flips to PAID (Tracking + Invoice).
+  // 5. Money received → the unit's money watchers (bell + one push per day).
+  //    Fire-and-forget: never let a notification fail an installment.
+  void notifyCreditPayment({
+    credit,
+    amount,
+    tag: descriptionTag,
+    paymentNumber: payNum,
+    transactionId: trx.id,
+    receivedByUserId,
+    receivedByName,
+    settled,
+  });
+
+  // 6. Settled → the whole chain flips to PAID (Tracking + Invoice).
   if (settled) {
     if (credit.trackingId) {
       await db

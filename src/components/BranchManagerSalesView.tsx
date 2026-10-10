@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import UnitScopeOptions from "@/components/UnitScopeOptions";
+import { canSeeFinancials } from "@/lib/permissions";
 import { myOrgIdOf } from "@/lib/businessScope";
 import AiSectionGuide from "./AiSectionGuide";
 import {
@@ -128,6 +129,10 @@ export default function BranchManagerSalesView({
     (cs: any) => cs.businessId === activeBiz?.id
   );
   const r2c = (n: number) => Math.round(n * 100) / 100;
+  // Money totals follow the OWNER's finance grant; the credit RECORDS below
+  // stay operational so a branch manager can still work the collection list.
+  const maySeeMoney = canSeeFinancials(currentUser);
+  const MASKED = "•••••";
   const creditTotals = {
     salesGhs: r2c(branchCreditSales.reduce((a: number, c: any) => a + (Number(c.totalGhs) || 0), 0)),
     paidGhs: r2c(branchCreditSales.reduce((a: number, c: any) => a + (Number(c.amountPaidGhs) || 0), 0)),
@@ -317,8 +322,6 @@ export default function BranchManagerSalesView({
         body: JSON.stringify({
           documentId: doc.id,
           convertToInvoice: true,
-          currentUserId: currentUser?.id,
-          currentUserName: currentUser?.name,
         }),
       });
       const data = await res.json();
@@ -554,9 +557,6 @@ export default function BranchManagerSalesView({
               notes: saleNotes,
               discount: saleDiscountPct > 0 ? undefined : saleDiscount,
               discountPercent: saleDiscountPct > 0 ? saleDiscountPct : undefined,
-              createdByUserId: currentUser?.id,
-              createdByName: currentUser?.name,
-              createdByRole: currentUser?.role,
             }),
           });
 
@@ -1021,7 +1021,12 @@ export default function BranchManagerSalesView({
         ))}
       </div>
 
-      {/* ────── Credit Sales dashboard — always-visible branch totals ────── */}
+      {/* ────── Credit Sales dashboard — always-visible branch totals ──────
+          These three cards are ROLL-UPS: credit sales = revenue, amount paid =
+          cash in, outstanding = money owed. A viewer without the finance grant
+          still collects credit, so the individual records below stay visible —
+          but the totals are financial figures and are masked to `•••••`, the
+          same contract the Command Center KPI tiles use. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="bm-credit-summary">
         <div className="bg-slate-800/90 border border-cyan-500/30 rounded-2xl p-4 shadow-xl" data-testid="bm-credit-card-sales">
           <div className="flex items-center justify-between">
@@ -1029,7 +1034,7 @@ export default function BranchManagerSalesView({
             <HandCoins className="w-4 h-4 text-cyan-300" />
           </div>
           <p className="mt-1 text-xl font-black text-white" data-testid="bm-credit-total-sales">
-            {formatMoney(creditTotals.salesGhs, currentCurrency)}
+            {maySeeMoney ? formatMoney(creditTotals.salesGhs, currentCurrency) : MASKED}
           </p>
           <p className="text-[10px] text-slate-400">
             {creditTotals.count} credit sale{creditTotals.count === 1 ? "" : "s"} · {creditTotals.activeCount} active
@@ -1041,7 +1046,7 @@ export default function BranchManagerSalesView({
             <CheckCircle className="w-4 h-4 text-emerald-300" />
           </div>
           <p className="mt-1 text-xl font-black text-emerald-300" data-testid="bm-credit-total-paid">
-            {formatMoney(creditTotals.paidGhs, currentCurrency)}
+            {maySeeMoney ? formatMoney(creditTotals.paidGhs, currentCurrency) : MASKED}
           </p>
           <p className="text-[10px] text-slate-400">deposits + installments received</p>
         </div>
@@ -1051,7 +1056,7 @@ export default function BranchManagerSalesView({
             <DollarSign className="w-4 h-4 text-amber-300" />
           </div>
           <p className="mt-1 text-xl font-black text-amber-300" data-testid="bm-credit-outstanding">
-            {formatMoney(creditTotals.outstandingGhs, currentCurrency)}
+            {maySeeMoney ? formatMoney(creditTotals.outstandingGhs, currentCurrency) : MASKED}
           </p>
           <p className="text-[10px] text-slate-400">owed by credit customers</p>
         </div>

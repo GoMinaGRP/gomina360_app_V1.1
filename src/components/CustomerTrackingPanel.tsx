@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { canSeeFinancials } from "@/lib/permissions";
 import {
   Ban,
   Banknote,
@@ -1033,8 +1034,13 @@ export default function CustomerTrackingPanel({
               <X className="w-3 h-3" /> Reset filters
             </button>
           )}
+          {/* The individual order amounts stay visible — recording and
+              fulfilling a sale is role-scoped, and a dispatcher needs to know
+              what an order is worth. The "active value" ROLL-UP is an
+              analytics aggregate, so it follows the finance grant. */}
           <span className="ml-auto text-[10px] text-slate-500 font-semibold" data-testid="ct-orders-summary">
-            {orderRows.length} order{orderRows.length === 1 ? "" : "s"} · active value {fmt(ordersActiveValue)}
+            {orderRows.length} order{orderRows.length === 1 ? "" : "s"} · active value{" "}
+            {canSeeFinancials(currentUser) ? fmt(ordersActiveValue) : "•••••"}
           </span>
         </div>
       )}

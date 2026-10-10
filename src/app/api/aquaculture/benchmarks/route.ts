@@ -187,8 +187,8 @@ export async function POST(request: NextRequest) {
         toleranceCritPct: numOrNull(data.toleranceCritPct, 10) ?? 10,
         curves: curves as FishBenchmarkCurves,
         notes: data.notes || null,
-        createdByName: data.createdByName || session.user?.name || "Farm Staff",
-        createdByRole: data.createdByRole || session.user?.role || null,
+        createdByName: session.user?.name || session.user?.name || "Farm Staff",
+        createdByRole: session.user?.role || session.user?.role || null,
         createdByUserId: session.user?.id ?? null,
         updatedAt: new Date(),
       })

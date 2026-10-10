@@ -105,7 +105,6 @@ export default function BranchManagerWorkerPanel({
           email: newEmail,
           phone: newPhone,
           assignedBusinessId: businessInfo?.id,
-          createdByUserId: currentUser?.id,
           // The shared editor's toggles map 1:1 onto the capability columns.
           ...newCaps,
         }),

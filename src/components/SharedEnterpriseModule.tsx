@@ -600,8 +600,8 @@ export default function SharedEnterpriseModule({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           isTrx
-            ? { id: deletingRecord.id, reason: deleteReason.trim(), actorUserId: currentUser?.id }
-            : { entityType: moduleType, id: deletingRecord.id, reason: deleteReason.trim(), actorUserId: currentUser?.id }
+            ? { id: deletingRecord.id, reason: deleteReason.trim() }
+            : { entityType: moduleType, id: deletingRecord.id, reason: deleteReason.trim() }
         ),
       });
       const d = await res.json();
@@ -1328,9 +1328,6 @@ export default function SharedEnterpriseModule({
         body: JSON.stringify({
           assetId: asset.id,
           requestedAction,
-          requestedByUserId: currentUser?.id,
-          requestedByName: currentUser?.name,
-          requestedByRole: currentUser?.role,
           detailsJson: { reason: note, branchCode: asset.branchCode },
         }),
       });
@@ -1351,8 +1348,6 @@ export default function SharedEnterpriseModule({
         body: JSON.stringify({
           auditId,
           decision,
-          approvedByUserId: currentUser?.id,
-          approvedByName: currentUser?.name,
         }),
       });
       if (res.ok) await refreshAssetAuditLogs();
@@ -1369,9 +1364,6 @@ export default function SharedEnterpriseModule({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assetId: asset.id,
-          actorUserId: currentUser?.id,
-          actorName: currentUser?.name,
-          actorRole: currentUser?.role,
           updates: { currentValueGhs: numeric },
         }),
       });
@@ -1412,9 +1404,6 @@ export default function SharedEnterpriseModule({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assetId: asset.id,
-          actorUserId: currentUser?.id,
-          actorName: currentUser?.name,
-          actorRole: currentUser?.role,
           updates: {
             businessId: targetBiz.id,
             branchCode: targetBiz.code,

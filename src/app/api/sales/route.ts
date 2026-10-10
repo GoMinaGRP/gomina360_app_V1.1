@@ -4,7 +4,7 @@ import { ttlInvalidate } from "@/lib/ttlCache";
 import { db } from "@/db";
 import { inventoryItems } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getSessionInfo, canAccessBusiness, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
+import { getSessionInfo, canAccessBusiness, actorFrom, UNAUTHENTICATED, FORBIDDEN } from "@/lib/auth";
 import { apiError } from "@/lib/apiError";
 import { deductVariantQty, resolveVariantForLine, syncItemAggregate } from "@/lib/boutique";
 import { variantSuffix } from "@/lib/boutiqueSizes";
@@ -27,8 +27,13 @@ import { computeSaleTotals, normalizeSaleLines, postSale } from "@/lib/salePosti
  *   paymentMethod,
  *   cartItems: [{ inventoryId, sku, name, quantity, originalPrice, sellingPrice, customPriceReason? }],
  *   notes,
- *   createdByUserId, createdByName, createdByRole,
  *   discount?
+ *
+ * F-15: the actor is NOT part of the contract. `createdByUserId` /
+ * `createdByName` / `createdByRole` used to be read from this body and
+ * written straight into the ledger, the stock movements and the bell rows.
+ * A branch manager could post a sale attributed to the Owner. Identity now
+ * comes from the session only (`actorFrom`), and the body fields are gone.
  * }
  */
 export async function POST(request: NextRequest) {
@@ -45,9 +50,6 @@ export async function POST(request: NextRequest) {
       paymentMethod,
       cartItems,
       notes,
-      createdByUserId,
-      createdByName,
-      createdByRole,
       discount,
       discountPercent,
     } = body;
@@ -60,6 +62,10 @@ export async function POST(request: NextRequest) {
     }
     // A sale deducts stock and posts revenue — only inside businesses the
     // signed-in user can actually access.
+    // F-15: the ONLY source of who is performing this request.
+    const actor = actorFrom(__authSession);
+    if (!actor) return UNAUTHENTICATED();
+
     if (!(await canAccessBusiness(__authSession.user, Number(businessId)))) {
       return FORBIDDEN("You do not have access to that business.");
     }
@@ -180,8 +186,8 @@ export async function POST(request: NextRequest) {
           customPrice: effectivePrice,
           difference: effectivePrice - inv.sellingPriceGhs,
           reason: customPriceReason || "No reason provided",
-          changedBy: createdByName || "Unknown",
-          changedByRole: createdByRole || "Staff",
+          changedBy: actor.name || "Unknown",
+          changedByRole: actor.role || "Staff",
         });
       }
     }
@@ -213,7 +219,7 @@ export async function POST(request: NextRequest) {
         reason: "SALE",
         refType: "SALES_CENTER",
         note: vu.label,
-        actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+        actor,
       });
       if (!ok) variantFailures.push(`"${vu.label || "variant"}" just sold out — refresh and try again.`);
     }
@@ -236,7 +242,7 @@ export async function POST(request: NextRequest) {
         delta: -update.qty,
         reason: "SALE",
         refType: "SALES_CENTER",
-        actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+        actor,
       });
     }
 
@@ -257,7 +263,7 @@ export async function POST(request: NextRequest) {
       discount,
       discountPercent,
       tag: "INV",
-      actor: { id: createdByUserId, name: createdByName, role: createdByRole },
+      actor,
     });
     if (!posted.success) {
       return NextResponse.json({ success: false, error: posted.error }, { status: 400 });

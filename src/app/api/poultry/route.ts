@@ -270,8 +270,8 @@ export async function POST(request: NextRequest) {
           status: data.status || "ACTIVE",
           benchmarkProfileId,
           notes: data.notes || null,
-          createdByName: data.createdByName || "Farm Staff",
-          createdByRole: data.createdByRole || null,
+          createdByName: session.user?.name || "Farm Staff",
+          createdByRole: session.user?.role || null,
         })
         .returning();
       await auditLog(session.user, "POULTRY_FLOCK_CREATE", "RECORD", `Flock ${row.flockName || row.batchNumber} stocked`,
@@ -383,8 +383,8 @@ export async function POST(request: NextRequest) {
           totalCostGhs: totalCost,
           entryType: data.entryType || "CONSUMPTION",
           recordedDate: data.recordedDate || today,
-          recordedByName: data.recordedByName || "Farm Staff",
-          recordedByRole: data.recordedByRole || null,
+          recordedByName: session.user?.name || "Farm Staff",
+          recordedByRole: session.user?.role || null,
         })
         .returning();
 
@@ -429,7 +429,7 @@ export async function POST(request: NextRequest) {
           isTreated: Boolean(data.isTreated),
           treatmentUsed: data.treatmentUsed || null,
           recordedDate: data.recordedDate || today,
-          recordedByName: data.recordedByName || "Farm Staff",
+          recordedByName: session.user?.name || "Farm Staff",
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -469,8 +469,8 @@ export async function POST(request: NextRequest) {
           avgWeightG,
           recordedDate: data.recordedDate || today,
           notes: data.notes || null,
-          recordedByName: data.recordedByName || session.user?.name || "Farm Staff",
-          recordedByRole: data.recordedByRole || session.user?.role || "WORKER",
+          recordedByName: session.user?.name || "Farm Staff",
+          recordedByRole: session.user?.role || "WORKER",
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -504,7 +504,7 @@ export async function POST(request: NextRequest) {
           outcome: data.outcome || "MONITORING",
           notes: data.notes || null,
           recordedDate: data.recordedDate || today,
-          recordedByName: data.recordedByName || "Farm Staff",
+          recordedByName: session.user?.name || "Farm Staff",
         })
         .returning();
 
@@ -696,7 +696,7 @@ export async function POST(request: NextRequest) {
             unit: product.unit,
             revenueGhs: revenue,
             recordedDate: data.recordedDate || today,
-            recordedByName: data.recordedByName || "Farm Staff",
+            recordedByName: session.user?.name || "Farm Staff",
           })
           .returning();
 
@@ -749,9 +749,9 @@ export async function POST(request: NextRequest) {
             tracking: false,
             linkCustomer: false,
             actor: {
-              id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-              name: data.recordedByName || "Poultry Farm User",
-              role: data.recordedByRole || null,
+              id: session.user?.id != null ? Number(session.user.id) : null,
+              name: session.user?.name || "Poultry Farm User",
+              role: session.user?.role || null,
             },
           });
         }
@@ -783,7 +783,7 @@ export async function POST(request: NextRequest) {
           fcr: Number(data.fcr) || 0,
           revenueGhs: revenue,
           recordedDate: data.recordedDate || today,
-          recordedByName: data.recordedByName || "Farm Staff",
+          recordedByName: session.user?.name || "Farm Staff",
         })
         .returning();
 
@@ -855,9 +855,9 @@ export async function POST(request: NextRequest) {
           tracking: false,
           linkCustomer: false,
           actor: {
-            id: data.recordedByUserId ? Number(data.recordedByUserId) : null,
-            name: data.recordedByName || "Poultry Farm User",
-            role: data.recordedByRole || null,
+            id: session.user?.id != null ? Number(session.user.id) : null,
+            name: session.user?.name || "Poultry Farm User",
+            role: session.user?.role || null,
           },
         });
       }

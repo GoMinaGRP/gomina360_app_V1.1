@@ -88,3 +88,35 @@ export async function isDeletedBusiness(code: string): Promise<boolean> {
   if (!code) return false;
   return (await getSystemMarker(`${DELETED_BIZ_PREFIX}${code.toUpperCase()}`)) !== null;
 }
+
+/** The most recently SET marker whose key starts with `prefix`, newest first.
+ *
+ *  F-14: a daily-ops marker is written only when the whole sweep SUCCEEDS,
+ *  so "the newest `daily-ops:` marker" is precisely "the last time overdue
+ *  activities were actually processed". `setSystemMarker` never overwrites an
+ *  existing row, but each day uses a DIFFERENT key (`daily-ops:<date>`), so
+ *  one row is created per successful sweep and its `created_at` is that
+ *  sweep's timestamp.
+ *
+ *  Returns [] when the table is unavailable or nothing has ever run — the
+ *  caller decides whether that is an error or simply "never yet". */
+export async function latestMarkerWithPrefix(
+  prefix: string,
+  limit = 1
+): Promise<{ key: string; value: string | null; createdAt: Date | null }[]> {
+  try {
+    if (!(await ensureTable())) return [];
+    return await db
+      .select({
+        key: systemMarkers.key,
+        value: systemMarkers.value,
+        createdAt: systemMarkers.createdAt,
+      })
+      .from(systemMarkers)
+      .where(sql`${systemMarkers.key} LIKE ${prefix + "%"}`)
+      .orderBy(sql`${systemMarkers.createdAt} DESC NULLS LAST, ${systemMarkers.id} DESC`)
+      .limit(limit);
+  } catch {
+    return [];
+  }
+}

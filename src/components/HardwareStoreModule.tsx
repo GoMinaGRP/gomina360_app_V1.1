@@ -308,7 +308,6 @@ export default function HardwareStoreModule({
             discount: Number(data.discount) || 0,
             discountPercent: data.discountPct ? Number(data.discountPct) : undefined,
             cartItems: [{ inventoryId: Number(data.inventoryId), quantity: Number(data.quantity), sellingPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, originalPrice: data.sellingPrice ? Number(data.sellingPrice) : undefined, customPriceReason: data.customPriceReason }],
-            createdByUserId: currentUser?.id, createdByName: currentUser?.name, createdByRole: currentUser?.role,
           }),
         });
         d = await res.json();
@@ -326,7 +325,6 @@ export default function HardwareStoreModule({
             type: "EXPENSE", category: data.category, amountGhs: Number(data.amountGhs) || 0,
             paymentMethod: data.paymentMethod || "CASH", description: data.description || data.category,
             date: data.date || today,
-            recordedBy: currentUser?.name || "Staff", recordedByRole: currentUser?.role || "STAFF", recordedByUserId: currentUser?.id || null,
             status: "COMPLETED",
           }),
         });
@@ -342,7 +340,6 @@ export default function HardwareStoreModule({
             unitCostGhs: Number(data.unitCostGhs) || 0,
             condition: data.condition || "GOOD",
             receivedBy: data.receivedBy || currentUser?.name,
-            recordedByRole: currentUser?.role, recordedByUserId: currentUser?.id,
             paymentMethod: data.paymentMethod || "BANK_TRANSFER",
             recordExpense: data.recordExpense !== false,
           }),
@@ -355,7 +352,6 @@ export default function HardwareStoreModule({
             entity,
             data: {
               ...data, businessId: bizId, branchCode: bizCode,
-              createdByName: currentUser?.name, createdByRole: currentUser?.role, createdByUserId: currentUser?.id,
             },
           }),
         });
@@ -376,7 +372,7 @@ export default function HardwareStoreModule({
     try {
       const res = await fetch("/api/hardware", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entity, id, data: { ...data, actorName: currentUser?.name, actorRole: currentUser?.role } }),
+        body: JSON.stringify({ entity, id, data: { ...data } }),
       });
       const d = await res.json();
       if (!d.success) throw new Error(d.error);
@@ -762,6 +758,7 @@ export default function HardwareStoreModule({
       {tab === "FINANCE" && (
         <div className="space-y-4">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}

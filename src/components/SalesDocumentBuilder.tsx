@@ -201,9 +201,6 @@ export default function SalesDocumentBuilder({
           terms,
           validUntil: documentType === "QUOTATION" ? validUntil : null,
           dueDate: documentType === "INVOICE" ? dueDate : null,
-          createdByUserId: currentUser?.id,
-          createdByName: currentUser?.name || "Sales Team",
-          createdByRole: currentUser?.role || "Staff",
         }),
       });
 

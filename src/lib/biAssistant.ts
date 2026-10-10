@@ -31,7 +31,25 @@ import { customerInsights } from "@/lib/customerInsights";
 
 export interface AssistantScope {
   businessIds: number[] | null;
+  /**
+   * Whether the OWNER has authorised this viewer for financial data.
+   *
+   * The Assistant is reachable by every UNIT_ADMIN (Owner, General Manager,
+   * Branch Manager) on ROLE alone, but it answers questions straight off the
+   * real books — "how is this month's finance?" returned income, expenses and
+   * net to a manager the policy withholds those figures from. Role is not a
+   * financial authorisation, so every money-bearing answer and feed signal now
+   * asks this flag instead. Defaults to DENIED when a caller forgets it.
+   */
+  financialsAuthorized?: boolean;
 }
+
+/** Money-bearing intents; refused outright without the finance grant. */
+const FINANCIAL_INTENTS = new Set(["FINANCE_SUMMARY", "BUDGET_VARIANCE", "CASH_FORECAST", "TOP_CUSTOMERS", "OVERDUE_ITEMS"]);
+const DENIED_ANSWER =
+  "That question is about money, and financial figures are restricted to the OWNER " +
+  "and the users the OWNER has authorised. Operational signals — stock levels, " +
+  "orders, approvals, checklists and documents — stay available to you.";
 
 const ghs = (n: number) => `GH₵ ${Number(n || 0).toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const r2 = (n: number) => Math.round(Number(n || 0) * 100) / 100;
@@ -189,24 +207,45 @@ export async function buildAssistantFeed(scope: AssistantScope): Promise<FeedIte
   ]);
   const items: FeedItem[] = [];
 
-  items.push({
-    module: "FINANCE",
-    kind: "MONTH_SUMMARY",
-    title: `This month: ${ghs(fin.monthIncomeGhs)} in · ${ghs(fin.monthExpenseGhs)} out (net ${ghs(fin.monthNetGhs)})`,
-    detail: fin.topExpenseCategories.length
-      ? `Biggest expense lines (30d): ${fin.topExpenseCategories.map((c) => `${c.category} ${ghs(c.amountGhs)}`).join(", ")}`
-      : "No expenses recorded in the last 30 days.",
-    severity: fin.monthNetGhs < 0 ? "WARN" : "INFO",
-    amountGhs: fin.monthNetGhs,
-  });
-  items.push({
-    module: "FINANCE",
-    kind: "ROLLING_30",
-    title: `Rolling 30 days: ${ghs(fin.last30NetGhs)} net (${ghs(fin.last30IncomeGhs)} in / ${ghs(fin.last30ExpenseGhs)} out)`,
-    detail: `${fin.transactionCount} transactions on record.`,
-    severity: "INFO",
-    amountGhs: fin.last30NetGhs,
-  });
+  const financialsAuthorized = scope.financialsAuthorized === true;
+  if (financialsAuthorized) {
+    items.push({
+      module: "FINANCE",
+      kind: "MONTH_SUMMARY",
+      title: `This month: ${ghs(fin.monthIncomeGhs)} in · ${ghs(fin.monthExpenseGhs)} out (net ${ghs(fin.monthNetGhs)})`,
+      detail: fin.topExpenseCategories.length
+        ? `Biggest expense lines (30d): ${fin.topExpenseCategories.map((c) => `${c.category} ${ghs(c.amountGhs)}`).join(", ")}`
+        : "No expenses recorded in the last 30 days.",
+      severity: fin.monthNetGhs < 0 ? "WARN" : "INFO",
+      amountGhs: fin.monthNetGhs,
+    });
+    items.push({
+      module: "FINANCE",
+      kind: "ROLLING_30",
+      title: `Rolling 30 days: ${ghs(fin.last30NetGhs)} net (${ghs(fin.last30IncomeGhs)} in / ${ghs(fin.last30ExpenseGhs)} out)`,
+      detail: `${fin.transactionCount} transactions on record.`,
+      severity: "INFO",
+      amountGhs: fin.last30NetGhs,
+    });
+  } else {
+    // Keep the SIGNALS (there were expenses, the month is running negative)
+    // but not the figures behind them — the same masking contract the Command
+    // Center uses, so an unauthorised viewer learns nothing numeric.
+    items.push({
+      module: "FINANCE",
+      kind: "MONTH_SUMMARY_RESTRICTED",
+      title: `This month: ${fin.transactionCount} transaction${fin.transactionCount === 1 ? "" : "s"} recorded · figures restricted`,
+      detail: "Revenue, expenses and net are restricted to the OWNER and authorised users.",
+      severity: "INFO",
+    });
+    items.push({
+      module: "FINANCE",
+      kind: "ROLLING_30_RESTRICTED",
+      title: `Rolling 30 days: ${fin.transactionCount} transaction${fin.transactionCount === 1 ? "" : "s"} on record · figures restricted`,
+      detail: "Income, expenses and net are restricted to the OWNER and authorised users.",
+      severity: "INFO",
+    });
+  }
 
   if (stock.outCount > 0) {
     items.push({ module: "STOCK", kind: "OUT_OF_STOCK", title: `${stock.outCount} item${stock.outCount === 1 ? "" : "s"} out of stock`, detail: stock.lowItems.filter((l) => l.severity === "OUT").slice(0, 5).map((l) => l.name).join(", "), severity: "URGENT" });
@@ -222,21 +261,25 @@ export async function buildAssistantFeed(scope: AssistantScope): Promise<FeedIte
   }
 
   if (credit.overdueCount > 0) {
-    items.push({ module: "CREDIT", kind: "OVERDUE", title: `${credit.overdueCount} overdue credit sale${credit.overdueCount === 1 ? "" : "s"} — ${ghs(credit.overdueBalanceGhs)} outstanding`, detail: credit.overdue.slice(0, 5).map((o) => `${o.creditCode} (${o.customerName}, ${o.daysOverdue}d)`).join(", "), severity: credit.overdue.some((o) => o.daysOverdue >= 30) ? "URGENT" : "WARN", amountGhs: credit.overdueBalanceGhs });
+    // The COUNTS and the dunning detail stay operational — a manager still has
+    // to chase these. The BALANCE roll-up is a money figure and is masked.
+    items.push({ module: "CREDIT", kind: "OVERDUE", title: `${credit.overdueCount} overdue credit sale${credit.overdueCount === 1 ? "" : "s"}${financialsAuthorized ? ` — ${ghs(credit.overdueBalanceGhs)} outstanding` : " — balance restricted"}`, detail: credit.overdue.slice(0, 5).map((o) => `${o.creditCode} (${o.customerName}, ${o.daysOverdue}d)`).join(", "), severity: credit.overdue.some((o) => o.daysOverdue >= 30) ? "URGENT" : "WARN", amountGhs: financialsAuthorized ? credit.overdueBalanceGhs : undefined });
   }
   if (credit.activeCount > 0) {
-    items.push({ module: "CREDIT", kind: "ACTIVE_CREDIT", title: `${credit.activeCount} active credit sale${credit.activeCount === 1 ? "" : "s"} — ${ghs(credit.activeBalanceGhs)} receivable`, detail: "Dunning reminders fire at T+1 / T+7 / T+30 past due.", severity: "INFO", amountGhs: credit.activeBalanceGhs });
+    items.push({ module: "CREDIT", kind: "ACTIVE_CREDIT", title: `${credit.activeCount} active credit sale${credit.activeCount === 1 ? "" : "s"}${financialsAuthorized ? ` — ${ghs(credit.activeBalanceGhs)} receivable` : " — balance restricted"}`, detail: "Dunning reminders fire at T+1 / T+7 / T+30 past due.", severity: "INFO", amountGhs: financialsAuthorized ? credit.activeBalanceGhs : undefined });
   }
 
   if (appr.pendingCount > 0) {
-    items.push({ module: "APPROVALS", kind: "PENDING", title: `${appr.pendingCount} approval${appr.pendingCount === 1 ? "" : "s"} waiting on a decision`, detail: appr.pending.slice(0, 5).map((a) => `${a.action}${a.amountGhs ? ` (${ghs(Number(a.amountGhs))})` : ""} — ${a.targetLabel || ""}`).join("; "), severity: "WARN" });
+    items.push({ module: "APPROVALS", kind: "PENDING", title: `${appr.pendingCount} approval${appr.pendingCount === 1 ? "" : "s"} waiting on a decision`, detail: appr.pending.slice(0, 5).map((a) => `${a.action}${a.amountGhs && financialsAuthorized ? ` (${ghs(Number(a.amountGhs))})` : ""} — ${a.targetLabel || ""}`).join("; "), severity: "WARN" });
   }
 
   if (docs.expiringCount > 0) {
     items.push({ module: "DOCUMENTS", kind: "EXPIRING", title: `${docs.expiringCount} document${docs.expiringCount === 1 ? "" : "s"} expiring within 30 days`, detail: docs.expiring.slice(0, 5).map((d) => `${d.title} (${d.expiresOn})`).join(", "), severity: docs.expiredCount > 0 ? "URGENT" : "WARN" });
   }
 
-  items.push({ module: "ORDERS", kind: "OPEN_ORDERS", title: `${orders.openCount} open customer order${orders.openCount === 1 ? "" : "s"} worth ${ghs(orders.openValueGhs)}`, detail: orders.recent.map((o) => `${o.trackingCode} — ${o.customerName} (${o.status})`).join("; "), severity: "INFO", amountGhs: orders.openValueGhs });
+  // Per-order VALUES stay out of the feed entirely (only codes and statuses are
+// listed below); the "worth GH₵ X" total is the roll-up, so it follows the grant.
+  items.push({ module: "ORDERS", kind: "OPEN_ORDERS", title: `${orders.openCount} open customer order${orders.openCount === 1 ? "" : "s"}${financialsAuthorized ? ` worth ${ghs(orders.openValueGhs)}` : ""}`, detail: orders.recent.map((o) => `${o.trackingCode} — ${o.customerName} (${o.status})`).join("; "), severity: "INFO", amountGhs: financialsAuthorized ? orders.openValueGhs : undefined });
   if (tasksSnap.overdueTaskCount > 0) {
     items.push({ module: "TASKS", kind: "OVERDUE", title: `${tasksSnap.overdueTaskCount} overdue task${tasksSnap.overdueTaskCount === 1 ? "" : "s"}`, detail: `${tasksSnap.openTaskCount} open tasks in total.`, severity: "WARN" });
   }
@@ -284,6 +327,18 @@ export async function answerQuestion(question: string, scope: AssistantScope): P
   const intent = detectIntent(question);
   const suggestions = ["How is this month's finance?", "Who are my top customers?", "What's low in stock?", "What credit is overdue?", "Am I over budget?", "Show pending approvals"];
 
+  // Refuse before computing anything, so no snapshot of the books is built for
+  // a viewer who is not allowed to see it.
+  if (scope.financialsAuthorized !== true && FINANCIAL_INTENTS.has(intent)) {
+    return {
+      intent,
+      question,
+      answer: DENIED_ANSWER,
+      data: null,
+      suggestions: ["What's low in stock?", "Show pending approvals"],
+    };
+  }
+
   if (intent === "FINANCE_SUMMARY") {
     const fin = await financeSnapshot(scope);
     return {
@@ -319,7 +374,10 @@ export async function answerQuestion(question: string, scope: AssistantScope): P
       intent,
       question,
       answer:
-        `Stock position: ${stock.itemCount} items worth ${ghs(stock.stockValueGhs)} at cost. ` +
+        // Inventory VALUATION is a financial figure per the policy table, so it
+        // follows the grant; the counts, names and reorder points stay
+        // operational — a stock sweep needs them and none of them is money.
+        `Stock position: ${stock.itemCount} items${scope.financialsAuthorized === true ? ` worth ${ghs(stock.stockValueGhs)} at cost` : ""}. ` +
         (stock.outCount > 0 ? `${stock.outCount} OUT of stock and ` : "") +
         (stock.lowCount > 0
           ? `${stock.lowCount} below their reorder point${stock.lowItems.length ? `:\n${stock.lowItems.slice(0, 8).map((l) => `• ${l.name} — ${l.quantity} left (reorder at ${l.minStockThreshold})`).join("\n")}` : "."} The daily sweep auto-drafts purchase requisitions for these.`
@@ -402,7 +460,7 @@ export async function answerQuestion(question: string, scope: AssistantScope): P
     const [appr, docs, tasksSnap, credit] = await Promise.all([approvalsSnapshot(scope), documentsSnapshot(scope), tasksSnapshot(scope), creditSnapshot(scope)]);
     const lines: string[] = [];
     if (appr.pendingCount) lines.push(`• ${appr.pendingCount} approval${appr.pendingCount === 1 ? "" : "s"} awaiting a decision (Action Center inbox).`);
-    if (credit.overdueCount) lines.push(`• ${credit.overdueCount} overdue credit sale${credit.overdueCount === 1 ? "" : "s"} to chase (${ghs(credit.overdueBalanceGhs)}).`);
+    if (credit.overdueCount) lines.push(`• ${credit.overdueCount} overdue credit sale${credit.overdueCount === 1 ? "" : "s"} to chase${scope.financialsAuthorized === true ? ` (${ghs(credit.overdueBalanceGhs)})` : ""}.`);
     if (docs.expiringCount) lines.push(`• ${docs.expiringCount} document${docs.expiringCount === 1 ? "" : "s"} expiring within 30 days.`);
     if (tasksSnap.overdueTaskCount) lines.push(`• ${tasksSnap.overdueTaskCount} overdue task${tasksSnap.overdueTaskCount === 1 ? "" : "s"}.`);
     return {

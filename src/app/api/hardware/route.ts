@@ -222,8 +222,8 @@ export async function POST(request: NextRequest) {
           dueDate: data.dueDate || null,
           deliverySite: data.deliverySite || null,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -249,8 +249,8 @@ export async function POST(request: NextRequest) {
           orderDate: data.orderDate || today,
           receivedDate: status === "RECEIVED" ? data.receivedDate || today : data.receivedDate || null,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
 
@@ -265,11 +265,11 @@ export async function POST(request: NextRequest) {
         totalGhs: row.totalGhs,
         status: row.status,
         recordId: row.id,
-        actorName: data.createdByName || null,
+        actorName: __authSession.user?.name || null,
       });
 
       if (status === "RECEIVED") {
-        const refusal = await applyPurchaseReceipt(row, data, biz);
+        const refusal = await applyPurchaseReceipt(row, data, biz, __authSession.user);
         if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
       }
       return NextResponse.json({ success: true, item: row });
@@ -296,8 +296,8 @@ export async function POST(request: NextRequest) {
           status: ["SCHEDULED", "EN_ROUTE", "DELIVERED", "CANCELLED"].includes(data.status) ? data.status : "SCHEDULED",
           dispatchDate: data.dispatchDate || today,
           notes: data.notes || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
       return NextResponse.json({ success: true, item: row });
@@ -315,7 +315,14 @@ export async function POST(request: NextRequest) {
  * product that needs a size/colour choice — the caller answers 400 with it
  * instead of booking a receipt that moved no stock.
  */
-async function applyPurchaseReceipt(purchase: any, data: any, biz: any): Promise<string | null> {
+async function applyPurchaseReceipt(purchase: any, data: any, biz: any, actor?: any): Promise<string | null> {
+  // F-15: the actor is threaded in from the SESSION by the calling handler.
+  // This helper has no request context of its own, so it must never read an
+  // identity off `data` — that is how a branch manager could book a purchase
+  // expense against the Owner's name.
+  const actorName = actor?.name ?? null;
+  const actorRole = actor?.role ?? null;
+  const actorUserId = actor?.id ?? null;
   const qty = Number(purchase.quantity) || 0;
   const cost = Number(purchase.unitCostGhs) || 0;
   if (qty <= 0) return null;
@@ -407,9 +414,9 @@ async function applyPurchaseReceipt(purchase: any, data: any, biz: any): Promise
       "Stock Purchase (Hardware)",
       `Purchase ${purchase.purchaseNumber} — ${qty} x ${purchase.itemName} from ${purchase.supplierName}`,
       data.paymentMethod || "BANK_TRANSFER",
-      data.createdByName || purchase.createdByName,
-      data.createdByRole || purchase.createdByRole,
-      data.createdByUserId
+      actorName || purchase.createdByName,
+      actorRole || purchase.createdByRole,
+      actorUserId
     );
   }
 
@@ -486,7 +493,7 @@ export async function PATCH(request: NextRequest) {
         .returning();
       if (row.status === "RECEIVED" && before?.status !== "RECEIVED") {
         const [biz] = await db.select().from(businesses).where(eq(businesses.id, row.businessId));
-        const refusal = await applyPurchaseReceipt(row, { ...data, inventoryId: data?.inventoryId }, biz);
+        const refusal = await applyPurchaseReceipt(row, { ...data, inventoryId: data?.inventoryId }, biz, __authSession.user);
         if (refusal) return NextResponse.json({ success: false, error: refusal }, { status: 400 });
         await notifyPurchase({
           businessId: row.businessId,

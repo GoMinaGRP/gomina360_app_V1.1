@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { canSeeFinancials } from "@/lib/permissions";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -20,6 +21,7 @@ import {
   TrendingDown,
   TrendingUp,
   Truck,
+  Lock,
 } from "lucide-react";
 import {
   Bar,
@@ -82,6 +84,9 @@ interface Props {
   transactions: any[];
   inventory?: any[];
   customers?: any[];
+  /** The signed-in user — REQUIRED for the financial-authorisation gate.
+   *  Omitting it is treated as NOT authorised (see the note below). */
+  currentUser?: any;
   currentCurrency: CurrencyCode;
   /** Module-specific real-time links (orders, production, washes, harvests…). */
   opsLinks?: FinanceOpsLink[];
@@ -186,6 +191,7 @@ export default function FinancialReportSection({
   transactions,
   inventory = [],
   customers = [],
+  currentUser,
   currentCurrency,
   opsLinks = [],
   salesDocuments,
@@ -207,6 +213,25 @@ export default function FinancialReportSection({
   const [docs, setDocs] = useState<any[] | null>(salesDocuments ?? null);
 
   const isEnterprise = mode === "enterprise";
+
+  // ── FINANCIAL AUTHORISATION GATE ───────────────────────────────────────
+  // This component derives a full P&L (revenue, expenses, net profit, cash
+  // flow, margins, avg ticket, per-branch and per-month series) from the
+  // transactions it is handed. `/api/init` deliberately KEEPS transaction
+  // amounts for every scoped viewer, because recording a sale requires them —
+  // which means a viewer denied finance still arrives here holding enough
+  // data to reconstruct exactly the report they must not see.
+  //
+  // So the gate has to live in the component, not in each caller: eight
+  // dashboards render this and the Command Center Enterprise Report — the
+  // widest one, covering every unit in the workspace — was unguarded even
+  // though the Command Center's own KPI tiles masked their figures correctly.
+  // One chokepoint, so a future caller cannot forget it.
+  //
+  // A missing `currentUser` denies. Denying by default matters: a caller that
+  // forgets to thread the prop must fail CLOSED, not open.
+  const financialsAuthorized = canSeeFinancials(currentUser);
+
   // Enterprise: null = "All businesses"; business mode: locked to own id.
   const activeBizId = isEnterprise ? scopeBizId : businessInfo?.id ?? null;
   const activeBiz = isEnterprise
@@ -436,6 +461,45 @@ export default function FinancialReportSection({
       : t.type === "EXPENSE"
       ? "bg-rose-500/15 text-rose-300 border-rose-500/40"
       : "bg-sky-500/15 text-sky-300 border-sky-500/40";
+
+  // ── Denied: render the lock, not the report ───────────────────────────
+  // No KPI cards, no baseline strip, no per-branch table, no charts — none of
+  // the derived figures are computed into the DOM at all, so a denied viewer
+  // cannot read them out of the page source either.
+  if (!financialsAuthorized) {
+    return (
+      <div data-testid={testid} className="space-y-4">
+        <div
+          data-testid={`${testid}-restricted`}
+          className="rounded-2xl border border-amber-500/40 bg-slate-800/90 p-5 flex items-start gap-3"
+        >
+          <div
+            className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+              ACCENT_ICONBOX[accent] || ACCENT_ICONBOX.emerald
+            }`}
+          >
+            <Landmark className="w-5 h-5 text-amber-300" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-lg font-extrabold text-white flex items-center gap-2 flex-wrap">
+              <Lock className="w-4 h-4 text-amber-300" />
+              {hdrTitle}
+            </h3>
+            <p className="text-[11px] text-slate-400 mt-0.5">{hdrSub}</p>
+            <div className="mt-3 inline-flex items-start gap-2 px-3 py-2 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs font-semibold max-w-2xl">
+              <span aria-hidden>🔒</span>
+              <span>
+                Financial figures are restricted to the OWNER and users the OWNER has authorised.
+                Operational indicators stay live; ask the OWNER for the{" "}
+                <strong>Finance &amp; Reports</strong> authorisation to see revenue, expenses,
+                profit, cash flow and ROI.
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div data-testid={testid} className="space-y-4">

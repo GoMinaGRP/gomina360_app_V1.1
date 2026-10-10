@@ -512,7 +512,7 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
     const res = await fetch("/api/exports", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: row.id, action, actorUserId: currentUser.id }),
+      body: JSON.stringify({ id: row.id, action }),
     });
     const p = await res.json();
     setMessage(p.success ? `${row.exportId} ${action.toLowerCase()}d` : p.error);
@@ -549,7 +549,6 @@ export default function UniversalExportCenter({ activeModule, currentUser, busin
         body: JSON.stringify({
           id: row.id,
           action: "COMPLETE",
-          actorUserId: currentUser.id,
           qrCodeData: result.qrCodeData,
           qrCodePayload: result.qrPayload,
           recordCount: records.length,

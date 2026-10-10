@@ -22,74 +22,37 @@ import webpush from "web-push";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { pushConfig, pushSubscriptions, userPushSettings } from "@/db/schema";
+import { bellCategoryFor, bellDestinationTab } from "@/lib/bellTypes";
 
 export type PushCategory = "orders" | "approvals" | "alerts" | "tasks" | "messages" | "reports";
 export const PUSH_CATEGORIES: PushCategory[] = ["orders", "approvals", "alerts", "tasks", "messages", "reports"];
 
-const TYPE_CATEGORY: Record<string, PushCategory> = {
-  ONLINE_ORDER_RECEIVED: "orders",
-  ORDER_ASSIGNED: "orders",
-  ORDER_TRACKING_STATUS: "orders",
-  ORDER_STOCK_OVERRIDE: "alerts",
-  PURCHASE_RECORDED: "orders",
-  PURCHASE_RECEIVED: "orders",
-  AUDIT_ISSUE_ASSIGNED: "approvals",
-  AUDIT_CORRECTION_REQUIRED: "approvals",
-  AUDIT_ISSUE_RESOLVED: "approvals",
-  AUDIT_ISSUE_VERIFIED: "approvals",
-  AUDIT_ISSUE_RESPONSE: "messages",
-  ADVISOR_NOTE_ADDED: "alerts",
-  ADVISOR_NOTE_RESPONSE: "messages",
-  ADVISOR_FOLLOWUP_STATUS: "tasks",
-  // Platform-level events — the Super Admin's own pipeline, not a tenant's.
-  PLATFORM_REQUEST_NEW: "messages",
-  // Activity notifications: money movement is a report-style summary the
-  // OWNER opted into; stock/notes are operational alerts.
-  SALE_RECORDED: "reports",
-  EXPENSE_RECORDED: "reports",
-  STOCK_LOW: "alerts",
-  STOCK_OUT: "alerts",
-  AUDIT_EVENT: "approvals",
-  OPS_NOTE_FLAGGED: "alerts",
-};
-
+/**
+ * The push toggle a type belongs to is declared ONCE, in `bellTypes.ts` — the
+ * same registry that decides the bell's label and where a tap lands. This local
+ * map used to be a fourth parallel copy of the same knowledge and drifted from
+ * all the others.
+ */
 export function categoryForType(type: string): PushCategory {
-  const t = String(type || "").toUpperCase();
-  if (TYPE_CATEGORY[t]) return TYPE_CATEGORY[t];
-  if (t.startsWith("TASK") || t.startsWith("CHECKLIST")) return "tasks";
-  if (t.startsWith("REPORT") || t.startsWith("EXPORT")) return "reports";
-  return "alerts";
+  return bellCategoryFor(type) as PushCategory;
 }
 
-/** Where a tap on the notification should land inside the staff app. */
+/**
+ * Where a tap on the notification should land inside the staff app.
+ *
+ * Delegates to the registry (`bellTypes.ts`). The previous implementation was a
+ * long `if`-chain whose catch-all was `/?tab=TRACKING`, so 18 of the 42 types
+ * the app emits — credit dunning, document expiry, checklist overdue, poultry
+ * stage, every purchase, every feed-mill and block-factory batch, transport
+ * alerts — opened Customer Order & Tracking, a page with nothing to do with
+ * them. An unregistered type now falls back to the Command Center rather than
+ * silently opening an unrelated console.
+ */
 export function urlForNotification(
   type: string,
   opts?: { branchCode?: string | null; issueId?: number | null; platformRequestRef?: string | null },
 ): string {
-  const t = String(type || "").toUpperCase();
-  // Platform registration requests land on the Platform Owners console, with the
-  // request itself focused/expanded when the reference is known.
-  if (t.startsWith("PLATFORM_REQUEST")) {
-    const ref = String(opts?.platformRequestRef || "").trim();
-    return ref ? `/?tab=PLATFORM_ADMIN&request=${encodeURIComponent(ref)}` : "/?tab=PLATFORM_ADMIN";
-  }
-  if (t.startsWith("AUDIT")) return "/?tab=AUDIT";
-  if (t.startsWith("APPROVAL")) return "/?tab=ACTION_CENTER";
-  if (t.startsWith("TASK") || t === "DAILY_DIGEST") return "/?tab=ACTION_CENTER";
-  if (t === "LOW_STOCK" || t === "STOCK_LOW" || t === "STOCK_OUT") return "/?tab=INVENTORY";
-  if (t === "SALE_RECORDED" || t === "EXPENSE_RECORDED") {
-    return opts?.branchCode ? `/?tab=${encodeURIComponent(opts.branchCode)}` : "/?tab=COMMAND_CENTER";
-  }
-  if (t === "AUDIT_EVENT") return "/?tab=AUDIT";
-  if (t.startsWith("ADVISOR")) {
-    // Advisor note events: staff land on the unit's dashboard; the advisor's
-    // own console carries their cross-unit follow-ups.
-    if (t === "ADVISOR_NOTE_ADDED" && opts?.branchCode) return `/?tab=${encodeURIComponent(opts.branchCode)}`;
-    return "/?tab=ADVISOR";
-  }
-  if (t === "ONLINE_ORDER_RECEIVED" || t === "ORDER_TRACKING_STATUS" || t === "ORDER_ASSIGNED") return "/?tab=TRACKING";
-  if (opts?.branchCode) return `/?tab=${encodeURIComponent(opts.branchCode)}`;
-  return "/?tab=TRACKING";
+  return `/?tab=${bellDestinationTab(type, opts)}`;
 }
 
 let cachedVapid: { publicKey: string; privateKey: string } | null = null;

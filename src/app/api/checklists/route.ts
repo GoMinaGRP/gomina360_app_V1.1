@@ -226,7 +226,7 @@ export async function POST(request: NextRequest) {
         }
         const forked = await forkFlockPlan(businessId, branchCode, flock, {
           id: (__authSession.user as any).id,
-          name: data.actorName || (__authSession.user as any).name,
+          name: (__authSession.user as any).name,
           role,
         });
         const scope = forked.rows.map((t: any) => t.taskKey);
@@ -276,8 +276,8 @@ export async function POST(request: NextRequest) {
           assignedToUserId: data.assignedToUserId ? Number(data.assignedToUserId) : null,
           assignedToName: data.assignedToName || null,
           assignedToRole: data.assignedToRole || null,
-          createdByName: data.createdByName || null,
-          createdByRole: data.createdByRole || null,
+          createdByName: __authSession.user?.name || null,
+          createdByRole: __authSession.user?.role || null,
         })
         .returning();
       if (flock) {
@@ -386,7 +386,7 @@ export async function POST(request: NextRequest) {
       }
       const actor = {
         id: (__authSession.user as any).id,
-        name: data.actorName || (__authSession.user as any).name || null,
+        name: (__authSession.user as any).name || null,
         role,
       };
       const orgId = (await ownerOrgOfBusiness(businessId).catch(() => null)) ?? null;

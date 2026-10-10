@@ -25,6 +25,31 @@ import { runDailyOps } from "@/lib/dailyOps";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * F-14 · the sweep now runs on a scheduler, not on somebody opening the app.
+ *
+ * `maxDuration` was left implicit, so the budget was whatever the plan
+ * default happened to be. The pipeline is 18 sequential, database-backed
+ * steps behind a cold start; if it overran, Vercel killed the function
+ * mid-run. That is SAFE — the `daily-ops:<date>` marker is only written on
+ * success, so a killed run simply re-runs the next day and every step is
+ * individually idempotent — but it silently loses a whole day of escalations.
+ * State the budget explicitly instead of inheriting a plan default.
+ *
+ * Keep this in step with the plan: 60s on Pro, 10-60s elsewhere. Raise it
+ * (and split the pipeline) only if the Vercel cron log shows a timeout.
+ */
+export const maxDuration = 60;
+
+/**
+ * F-14 · make the schedule self-describing so a silent stall is visible.
+ *
+ * Vercel does NOT retry a failed cron and does NOT alert on one. The only
+ * evidence a sweep happened is the `daily-ops:<date>` marker row. Exposing
+ * it here (and on /api/health) turns "escalations quietly stopped" from an
+ * invisible condition into something an operator can read in one request.
+ */
+
 async function handle(request: NextRequest): Promise<NextResponse> {
   try {
     const secret = process.env.CRON_SECRET;

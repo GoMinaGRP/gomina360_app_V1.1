@@ -276,9 +276,6 @@ export default function BlockFactoryModule({
                 customPriceReason: data.customPriceReason,
               },
             ],
-            createdByUserId: currentUser?.id,
-            createdByName: currentUser?.name,
-            createdByRole: currentUser?.role,
           }),
         });
         d = await res.json();
@@ -304,8 +301,6 @@ export default function BlockFactoryModule({
                 ...data.__newBlock,
                 businessId: bizId,
                 branchCode: businessInfo?.code,
-                createdByName: currentUser?.name,
-                createdByRole: currentUser?.role,
               },
             }),
           });
@@ -324,11 +319,6 @@ export default function BlockFactoryModule({
               businessId: bizId,
               branchCode: businessInfo?.code,
               branchName: businessInfo?.name,
-              createdByName: currentUser?.name,
-              createdByRole: currentUser?.role,
-              recordedBy: currentUser?.name,
-              recordedByRole: currentUser?.role,
-              recordedByUserId: currentUser?.id,
             },
           }),
         });
@@ -589,6 +579,7 @@ export default function BlockFactoryModule({
       {tab === "FINANCE" && (
         <div className="space-y-5">
           <FinancialReportSection
+            currentUser={currentUser}
             mode="business"
             businessInfo={businessInfo}
             businessMetric={businessMetrics}
