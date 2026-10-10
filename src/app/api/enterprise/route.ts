@@ -923,7 +923,6 @@ export async function POST(request: Request) {
           .where(eq(assets.businessId, businessIdNum));
         let seq = branchAssets.length + 1;
         // Guard against gaps/collisions by probing until a free code is found
-        // eslint-disable-next-line no-constant-condition
         while (true) {
           const candidate = `${branchCode}-AST-${String(seq).padStart(4, "0")}`;
           const [exists] = await db

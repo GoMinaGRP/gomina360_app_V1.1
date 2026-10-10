@@ -79,7 +79,6 @@ export async function GET(request: Request) {
 
     let seq = branchAssets.length + 1;
     let suggestion = "";
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const candidate = `${branch}-AST-${String(seq).padStart(4, "0")}`;
       const [exists] = inScope

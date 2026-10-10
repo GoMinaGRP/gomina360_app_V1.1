@@ -675,7 +675,10 @@ section("Z · Cleanup");
   ok("fixture stock items removed", leftoverItems === 0, `left=${leftoverItems}`);
   const leftoverPolicies = Number((await pg.query("SELECT count(*)::int AS c FROM approval_policies WHERE created_by_name = $1", [TAG])).rows[0].c);
   ok("fixture approval policies removed", leftoverPolicies === 0, `left=${leftoverPolicies}`);
-  const users = Number((await pg.query("SELECT count(*)::int AS c FROM users")).rows[0].c);
+  // Role-matrix fixtures (*.e2e@gomina360.com) are owned by verify-roles-matrix
+  // and roles-perrole-walkthrough, not by this suite, so they are excluded from
+  // the census: this suite must leave the 18 demo users exactly as it found them.
+  const users = Number((await pg.query("SELECT count(*)::int AS c FROM users WHERE email NOT LIKE '%.e2e@gomina360.com'")).rows[0].c);
   ok("workspace census restored (18 demo users)", users === 18, `users=${users}`);
 }
 await pg.end();

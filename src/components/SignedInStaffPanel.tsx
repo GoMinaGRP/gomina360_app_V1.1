@@ -62,7 +62,11 @@ export default function SignedInStaffPanel({ currentUser }: { currentUser: any }
 
   useEffect(() => {
     load();
-    const t = setInterval(() => { load(true); setNow(Date.now()); }, 15000);
+    // Visibility-aware: a hidden tab issues no presence polling requests.
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      load(true); setNow(Date.now());
+    }, 15000);
     const onVis = () => { if (document.visibilityState === "visible") load(true); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };

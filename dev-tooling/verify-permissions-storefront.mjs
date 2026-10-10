@@ -518,7 +518,10 @@ async function cleanup() {
   ok("Z3 the owner's live GH₵55 sale GM-POULTRY-ESY6GN intact", sale?.status === "RECEIVED");
   const gps = (await pg.query(`SELECT gps_lat, gps_lng FROM businesses WHERE id=1`)).rows[0];
   ok("Z4 temp GPS anchor fully restored to NULL", gps.gps_lat == null && gps.gps_lng == null);
-  const grants = (await pg.query(`SELECT count(*)::int c FROM users WHERE can_create_business=true`)).rows[0].c;
+  // Role-matrix fixtures (*.e2e@gomina360.com) are owned by verify-roles-matrix
+  // and roles-perrole-walkthrough; this suite's own grantees are demo users, so
+  // they are the ones checked here.
+  const grants = (await pg.query(`SELECT count(*)::int c FROM users WHERE can_create_business=true AND email NOT LIKE '%.e2e@gomina360.com'`)).rows[0].c;
   ok("Z5 no stray New Branch/Unit grants left behind", grants === 0);
   const bizLeft = (await pg.query(`SELECT count(*)::int c FROM businesses WHERE name LIKE 'TEST%'`)).rows[0].c;
   ok("Z6 TEST business fully removed (incl. metrics/templates/access)", bizLeft === 0);

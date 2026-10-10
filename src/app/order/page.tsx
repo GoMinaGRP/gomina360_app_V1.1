@@ -702,7 +702,6 @@ function OrderInner() {
       }
     }, 100);
     return () => clearInterval(poll);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareKey, menu, bizId, allMode]);
 
   // All images registered for a product (primary photo + extras), as the

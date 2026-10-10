@@ -114,7 +114,10 @@ try {
   await clickTid("audit-tab");
   await waitSel('[data-testid="aud-root"]');
   await waitSel('[data-testid="aud-scope"]');
-  ok("A1 audit center renders (owner full control)", (await textOf('[data-testid="aud-scope"]')).includes("OWNER"));
+  // The scope badge renders only once the audit payload has loaded; wait for its
+  // text rather than the first [data-testid=aud-scope] node (the scope bar shares it).
+  await page.waitForFunction(() => (document.querySelector('[data-testid="aud-root"]')?.innerText || "").includes("OWNER · full control"), { timeout: 15000 }).catch(() => {});
+  ok("A1 audit center renders (owner full control)", (await page.$eval('[data-testid="aud-root"]', (e) => e.innerText || "")).includes("OWNER · full control"));
   await setTid("aud-f-type", "CHECKLIST");
   await sleep(900);
   const chkRows = await page.$$eval('[data-testid^="aud-rec-row-CHECKLIST:"]', (n) => n.length).catch(() => 0);
@@ -227,7 +230,8 @@ try {
   await login(KWABENA);
   await clickTid("audit-tab");
   await waitSel('[data-testid="aud-scope"]');
-  ok("D1 auditor scope enforced (no OPERATIONS/checklists)", (await textOf('[data-testid="aud-scope"]')).includes("AUDITOR") &&
+  await page.waitForFunction(() => (document.querySelector('[data-testid="aud-root"]')?.innerText || "").includes("AUDITOR · authorized scope only"), { timeout: 15000 }).catch(() => {});
+  ok("D1 auditor scope enforced (no OPERATIONS/checklists)", (await page.$eval('[data-testid="aud-root"]', (e) => e.innerText || "")).includes("AUDITOR · authorized scope only") &&
     (await page.$$eval('[data-testid^="aud-rec-row-CHECKLIST:"]', (x) => x.length).catch(() => 0)) === 0);
   await logout();
   const f = await q1(`SELECT

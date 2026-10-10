@@ -1227,6 +1227,7 @@ export const fulfillmentOptions = pgTable("fulfillment_options", {
     index("fulfillment_options_business_id_idx").on(t.businessId),
     index("fulfillment_options_owner_id_idx").on(t.ownerId),
     index("fulfillment_options_inventory_id_idx").on(t.inventoryId),
+    index("fulfillment_options_supplier_id_idx").on(t.supplierId),
   ]
 );
 
@@ -1678,7 +1679,7 @@ export const poultryFeedFormulationItems = pgTable("poultry_feed_formulation_ite
   sharePct: doublePrecision("share_pct").notNull(), // % of batch — items must sum to 100
   sequence: integer("sequence").default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("poultry_feed_formulation_items_formulation_id_idx").on(t.formulationId)]);
 
 // FM3. Production batches — the mix run (batch-tracking head + cost engine).
 export const poultryFeedBatches = pgTable("poultry_feed_batches", {
@@ -1738,7 +1739,7 @@ export const poultryFeedBatchInputs = pgTable("poultry_feed_batch_inputs", {
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0), // costPriceGhs snapshot at draw
   lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("poultry_feed_batch_inputs_batch_id_idx").on(t.batchId)]);
 
 // FM5. Feed QC checks — cloned (poultry-flavoured) from block_qc_checks:
 // one row per check at any mill stage, result vs standard, PASS/FAIL, photo.
@@ -2050,7 +2051,7 @@ export const fishFeedFormulationItems = pgTable("fish_feed_formulation_items", {
   sharePct: doublePrecision("share_pct").notNull(), // Must sum to 100 across the BOM
   sequence: integer("sequence").default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("fish_feed_formulation_items_formulation_id_idx").on(t.formulationId)]);
 
 // FF3. Production batches (the mix run head + cost engine)
 export const fishFeedBatches = pgTable("fish_feed_batches", {
@@ -2111,7 +2112,7 @@ export const fishFeedBatchInputs = pgTable("fish_feed_batch_inputs", {
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0),
   lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("fish_feed_batch_inputs_batch_id_idx").on(t.batchId)]);
 
 // FF5. Feed QC checks — stages incl. FLOATING (float test + water stability)
 export const fishFeedQcChecks = pgTable("fish_feed_qc_checks", {
@@ -2190,7 +2191,7 @@ export const blockMixFormulationItems = pgTable("block_mix_formulation_items", {
   sharePct: doublePrecision("share_pct").notNull(), // Must sum to 100
   sequence: integer("sequence").default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("block_mix_formulation_items_formulation_id_idx").on(t.formulationId)]);
 
 // BM3. Mixer batches — status machine QC_HOLD → RELEASED → CONSUMED (1:1) /
 // REJECTED (terminal, optional material recovery)
@@ -2247,7 +2248,7 @@ export const blockMixBatchInputs = pgTable("block_mix_batch_inputs", {
   unitCostGhs: doublePrecision("unit_cost_ghs").notNull().default(0),
   lineCostGhs: doublePrecision("line_cost_ghs").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => [index("block_mix_batch_inputs_mix_batch_id_idx").on(t.mixBatchId)]);
 export const aquacultureWaterQualityLogs = pgTable("aquaculture_water_quality_logs", {
   id: serial("id").primaryKey(),
   businessId: integer("business_id").notNull(),

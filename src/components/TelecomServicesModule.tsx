@@ -299,14 +299,14 @@ export default function TelecomServicesModule({
   const PIE_COLORS = ["#22d3ee", "#facc15", "#f472b6", "#34d399", "#818cf8", "#fb923c"];
   const txnRow = (t: any) => [
     ...(t.status === "FAILED" ? ["__FAILED__"] : []),
-    <span className="font-mono text-[10px]">{t.txnNumber}</span>,
+    <span key="cell-0" className="font-mono text-[10px]">{t.txnNumber}</span>,
     t.txnDate,
     TYPE_LABEL[t.type] || t.type,
-    <NetBadge s={t.network} />,
+    <NetBadge key="cell-1" s={t.network} />,
     t.customerName || "—",
     money(t.amountGhs, currentCurrency),
     t.chargeGhs ? money(t.chargeGhs, currentCurrency) : "—",
-    <span className="text-emerald-300 font-bold">{t.commissionGhs ? money(t.commissionGhs, currentCurrency) : "—"}</span>,
+    <span key="cell-2" className="text-emerald-300 font-bold">{t.commissionGhs ? money(t.commissionGhs, currentCurrency) : "—"}</span>,
     t.status === "FAILED"
       ? <span className="text-rose-300"><Badge s="FAILED" /><span className="ml-1 text-[10px]">{t.failReason}</span></span>
       : <Badge s={t.status} />,
@@ -626,13 +626,13 @@ export default function TelecomServicesModule({
             <Card title="Float & Cash Reconciliation per Line" icon={Gauge} testid="tel-fin-lines">
               <DataTable testid="tel-fin-lines-table" headers={["Line", "Network", "Type", "Float", "Cash", "Total", "Status"]}
                 rows={lines.map((l) => [
-                  <span className="font-bold text-white">{l.label}</span>,
-                  <NetBadge s={l.network} />,
+                  <span key="cell-3" className="font-bold text-white">{l.label}</span>,
+                  <NetBadge key="cell-4" s={l.network} />,
                   l.kind.replaceAll("_", " "),
-                  <span className="text-purple-300 font-bold">{money(l.floatGhs, currentCurrency)}</span>,
-                  <span className="text-orange-300 font-bold">{money(l.cashGhs, currentCurrency)}</span>,
-                  <span className="font-black text-white">{money((l.floatGhs || 0) + (l.cashGhs || 0), currentCurrency)}</span>,
-                  <Badge s={l.active ? "ACTIVE" : "INACTIVE"} />,
+                  <span key="cell-5" className="text-purple-300 font-bold">{money(l.floatGhs, currentCurrency)}</span>,
+                  <span key="cell-6" className="text-orange-300 font-bold">{money(l.cashGhs, currentCurrency)}</span>,
+                  <span key="cell-7" className="font-black text-white">{money((l.floatGhs || 0) + (l.cashGhs || 0), currentCurrency)}</span>,
+                  <Badge key="cell-8" s={l.active ? "ACTIVE" : "INACTIVE"} />,
                 ])} />
             </Card>
             <Card title="Branch Finance Ledger (shared)" icon={FileText} testid="tel-fin-ledger">
@@ -640,10 +640,10 @@ export default function TelecomServicesModule({
                 <DataTable testid="tel-fin-ledger-table" headers={["Date", "Type", "Category", "Amount", "Description"]}
                   rows={branchLedger.slice(0, 40).map((t: any) => [
                     t.date,
-                    <span className={t.type === "INCOME" ? "text-emerald-300 font-bold" : "text-rose-300 font-bold"}>{t.type}</span>,
+                    <span key="cell-9" className={t.type === "INCOME" ? "text-emerald-300 font-bold" : "text-rose-300 font-bold"}>{t.type}</span>,
                     t.category,
                     money(t.amountGhs, currentCurrency),
-                    <span className="text-slate-400">{t.description}</span>,
+                    <span key="cell-10" className="text-slate-400">{t.description}</span>,
                   ])} />
               </div>
             </Card>
@@ -661,7 +661,7 @@ export default function TelecomServicesModule({
               rows={branchCustomers.map((c) => {
                 const mine = successTxns.filter((t) => t.customerName === c.name || (c.phone !== "—" && t.customerPhone === c.phone));
                 return [
-                  <span className="font-bold text-white">{c.name}</span>,
+                  <span key="cell-11" className="font-bold text-white">{c.name}</span>,
                   c.phone || "—",
                   money(c.totalSpentGhs, currentCurrency),
                   c.loyaltyPoints ?? 0,

@@ -426,7 +426,9 @@ const pg = new Client({ connectionString: PG_URL });
     // storm the bell. Silently dropping the overflow would mean an Owner can
     // lose sight of a deletion with no trace in the bell at all — so the cap
     // must summarise what it held back rather than swallow it.
-    const CAP = 12;
+    // Mirrors AUDIT_EVENT_DAILY_CAP in src/lib/notifyActivity.ts (raised to 40
+    // deliberately: a low ceiling would hide real deletions from the bell).
+    const CAP = 40;
     await pg.query("DELETE FROM notifications WHERE user_id=$1 AND type='AUDIT_EVENT'", [ownerId]);
     const FIRE = CAP + 3;
     const codes = [];
@@ -464,6 +466,9 @@ const pg = new Client({ connectionString: PG_URL });
     const held = Number(String(capRows.rows[0]?.body || "").split(" ")[0]) || 0;
     ok("G3 the summary accounts for exactly what was held back", held === FIRE - CAP, `held=${held}, expected=${FIRE - CAP}`);
     await pg.query("DELETE FROM notifications WHERE user_id=$1 AND type='AUDIT_EVENT'", [ownerId]);
+    // The probe's cap roll-up also lands on every other recipient in the org
+    // (e.g. the co-owner), so sweep those too — this suite must leave no trace.
+    await pg.query("DELETE FROM notifications WHERE type='AUDIT_EVENT' AND record_ref LIKE 'audit-event:cap:%'");
   }
 
   /* ══ E3 · transport reaches the canonical workspace ══════════════════════ */

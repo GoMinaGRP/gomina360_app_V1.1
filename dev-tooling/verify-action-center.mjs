@@ -84,7 +84,7 @@ try {
 
   const notif1 = await q1(
     "select * from notifications where user_id = $1 and type = 'TASK_ASSIGNED' and record_ref = $2",
-    [AKUA.id, t1?.taskNumber],
+    [AKUA.id, `task:${t1?.id}:raised`],
   );
   ok("TASK_ASSIGNED bell row for the assignee", !!notif1);
   if (notif1) created.notifs.push(notif1.id);
@@ -107,7 +107,7 @@ try {
     s2.status === 200 && s2.data?.task?.status === "DONE" && /Akua/.test(s2.data?.task?.completedByName || ""));
   const doneNotif = await q1(
     "select * from notifications where type = 'TASK_COMPLETED' and record_ref = $1",
-    [`${t1?.taskNumber}:done`],
+    [`task:${t1?.id}:done`],
   );
   ok("TASK_COMPLETED reaches the creator", !!doneNotif);
   if (doneNotif) created.notifs.push(doneNotif.id);
@@ -291,7 +291,7 @@ try {
   ok("escalation sweep runs inside the pipeline", esc.status === 200 && typeof esc.data?.tasksEscalated === "number");
   const escNotif = await q1(
     "select * from notifications where user_id = $1 and type = 'TASK_OVERDUE' and record_ref like $2",
-    [AKUA.id, `task-overdue:${p3.data?.task?.id}:%`],
+    [AKUA.id, `task:${p3.data?.task?.id}:overdue:%`],
   );
   ok("overdue task escalates to the assignee", !!escNotif);
   if (escNotif) created.notifs.push(escNotif.id);
