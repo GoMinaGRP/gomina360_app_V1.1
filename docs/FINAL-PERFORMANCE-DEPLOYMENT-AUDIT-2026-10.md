@@ -21,7 +21,7 @@ build and migration path, environment configuration, production behaviour, and t
 | VAPID keypair first-run race | Two concurrent first callers → unique-key error; the loser could sign with keys that differ from the database | `ON CONFLICT DO NOTHING` + re-read; all instances converge on the stored keypair |
 | `/api/init` payload at 60k transactions, multi-year history | 34.3 MB (all history) · cold 1.43 s | **8.0 MB** bootstrap (recent 370-day window) · cold 0.53 s · warm 76 ms; full history on demand |
 | Stale test expectations (owner-bell cap, action-center keys, census) | 3 suites failing | **reconciled** — all pass |
-| Lint | 166 warnings, 0 errors | 159 warnings, **0 errors** (`react/jsx-key` cleared) |
+| Lint | 166 warnings, 0 errors | 147 warnings, **0 errors** (`react/jsx-key` cleared) |
 | TypeScript | 0 errors | 0 errors |
 | Production build | passes | passes |
 
