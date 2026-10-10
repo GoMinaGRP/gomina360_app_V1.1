@@ -19,7 +19,9 @@ build and migration path, environment configuration, production behaviour, and t
 | Vulnerable client code shipped | `xlsx` / SheetJS in the export bundle | **removed**; exports use `exceljs` (already a dependency) |
 | Background polling in hidden tabs | Staff presence (15 s) and transport GPS (30 s) polled while hidden | Skip while hidden (visibility-aware, like the notification bell) |
 | VAPID keypair first-run race | Two concurrent first callers → unique-key error; the loser could sign with keys that differ from the database | `ON CONFLICT DO NOTHING` + re-read; all instances converge on the stored keypair |
-| Lint | 166 warnings, 0 errors | 159 warnings, **0 errors** |
+| `/api/init` payload at 60k transactions, multi-year history | 34.3 MB (all history) · cold 1.43 s | **8.0 MB** bootstrap (recent 370-day window) · cold 0.53 s · warm 76 ms; full history on demand |
+| Stale test expectations (owner-bell cap, action-center keys, census) | 3 suites failing | **reconciled** — all pass |
+| Lint | 166 warnings, 0 errors | 159 warnings, **0 errors** (`react/jsx-key` cleared) |
 | TypeScript | 0 errors | 0 errors |
 | Production build | passes | passes |
 
@@ -105,17 +107,67 @@ with the server confirmed to be serving that build.
 | Browser login (headless Chromium, real form) | ✓ dashboard loads; session survives reload |
 | `/api/health`, `/api/cron/daily` (no/wrong secret → 401) | ✓ |
 
-### Known failing checks (pre-existing test-suite drift, not product regressions)
+### Stale test expectations — reconciled
 
-These three suites fail on this branch. The product code they exercise is **unchanged from the
-previous commit**, so these are test expectations that no longer match the implementation. They
-should be reconciled by a product owner, not silently edited:
+The three suites that had drifted from the implementation now match the intended behaviour.
+The product code was not changed for them.
 
-| Suite | Failing checks | Cause |
+| Suite | Was | Fix (test side only) |
 |---|---|---|
-| `verify-owner-bell` (40/3) | "cap holds the Owner to **12** itemised rows" | The suite expects `12`. `AUDIT_EVENT_DAILY_CAP` in `src/lib/notifyActivity.ts` is `40`, documented as intentional. |
-| `verify-action-center` (4 failing) | `TASK_ASSIGNED` row looked up by `record_ref = taskNumber` | The code stores `task:<id>:<event>` as `record_ref`, a deliberate per-event dedupe key. The suite assumes the task number. |
-| `verify-notify-activity` (99/1) | "workspace census restored (18 demo users)" | Four `*.e2e@gomina360.com` accounts left by the role-walkthrough suite on this database. Test-data pollution, not a code defect. |
+| `verify-owner-bell` | cap expected `12`; code is `AUDIT_EVENT_DAILY_CAP = 40` (deliberate) | Expectation set to 40 with a pointer to the constant; cap roll-up rows cleaned for every recipient (Z4 is a global check). **43 / 43** |
+| `verify-action-center` | `record_ref` looked up by task number | Uses the real per-event key `task:<id>:raised|done|overdue:<step>`. **38 / 38** |
+| `verify-notify-activity` | census expected 18 users; four `*.e2e@gomina360.com` fixtures present | Census excludes role-matrix fixtures owned by other suites. **100 / 100** |
+
+Two further fixture-scoped checks were corrected while re-running the regression:
+
+- `verify-permissions-storefront` Z5 (stray grants) excluded the same e2e fixtures. **48 / 0**.
+- `verify-live` A1 / D1 raced the audit scope badge (the scope bar shares its test id and renders
+  first). The check now waits for the badge text. **A1 and D1 pass.**
+
+**Still failing, not caused by this change:** `verify-live` D4 expects seeded audit issue #2 and its
+notification #1 (`AUDIT_ISSUE_ASSIGNED`). On this database that notification no longer exists, so the
+seeded-state assertion fails. The suite does not recreate it. Re-seed the demo state (or update the
+suite to create its own issue) before treating this suite as green.
+
+Not run as a plain regression: `route-parity` needs a second server on port 3002 running a reference
+build of the pre-change code. `multiowner-verify` and `verify-financial-permissions` print their own
+summaries (118/0 and 110/0) and exit 0.
+
+### Bootstrap transaction window (scale)
+
+`/api/init` now ships the transactions of the most recent 370 days (`LEDGER_WINDOW_DAYS`, by business
+`date`). Rows older than the window are not lost:
+
+- The bootstrap reports `ledger: { windowFrom, transactionsTotal, transactionsLoaded, complete }`.
+- When `complete` is false the client fetches the full history from **`GET /api/init/ledger`** in the
+  background and replaces the array. The full array is kept through routine refreshes so all-time totals
+  do not dip. Stale responses are dropped by a sequence number, and sign-in resets the state.
+- The notification watermark (`isSeededBaselineTxn`) is unaffected: the seeded baseline rows
+  `TRX-YYYY-1001..1006` are always inside the window, so the watermark is identical either way.
+- The new endpoint applies the same rules as the bootstrap: tenant scope, worker sees own sales only,
+  farm advisor receives none, receipt images are stripped, gzip + ETag + 304.
+- `credit_sales` remains complete in the bootstrap (no date column; receivables must stay complete).
+
+Measured on `app_scale` (60,036 transactions spread 2019–2026 by date, 5k customers, 3k inventory):
+
+| Measure | Before (all history in `/api/init`) | After |
+|---|---|---|
+| `/api/init` payload | 34.3 MB (all rows) | **8.0 MB** (6,987 rows in window) |
+| Cold `/api/init` | 1.43 s | **0.53 s** |
+| Warm `/api/init` | 70–90 ms | 76 ms |
+| Full-history feed (background) | — | 60,036 rows, ~1.1–1.3 s cold, 304 when unchanged |
+
+The 34.3 MB "before" figure is from the same 60k rows; the old code shipped every row whatever its date.
+The 60k rows in the earlier dataset all fell inside one year, so the window had no effect there (34.3 MB
+both before and after) — the window only helps once history is older than a year.
+
+**Residual, not yet windowed:** `customers` (≈2.3 MB at 5k rows) and `inventory` (≈1.9 MB at 3k rows)
+still ship in full, because the screens compute totals from those arrays. They are the next candidates for
+the same treatment, with server-side aggregates. A business-date index on `transactions (business_id, date)`
+would also reduce the server-side scan; it was not added in this change.
+
+Browser smoke on the multi-year dataset: dashboard renders, `/api/init` then `/api/init/ledger` are both
+requested, zero page errors.
 
 `verify-tenant-isolation` and `verify-business-scope` depend on a second-organisation fixture
 (`fixtures-watermarks-demo.mjs`) and fixed IDs (organisation 2, business 12). They pass when run
@@ -148,6 +200,8 @@ migration, and build are verified.
   string is set, and skips it on Vercel Preview builds unless `GOMINA_MIGRATE_ON_PREVIEW=1`.
 - `/api/health` reports database region pairing and the daily-ops status.
 - `/api/cron/daily` fails closed (401) without `CRON_SECRET`.
+- New server contract: `/api/init/ledger` (GET, authenticated, same scope rules). Covered by
+  `dev-tooling/verify-init-ledger.mjs` (20 checks, passes on both the demo and the multi-year database).
 
 ---
 
@@ -173,15 +227,10 @@ These cannot be set from the repository.
 6. **Optional:** `ENABLE_HSTS=1` once you serve real TLS, and `FRAME_ANCESTORS` if the preview
    host must be added to the frame allow-list.
 
-### Open product decision (scale, not a defect)
+### Remaining scale item
 
-`/api/init` returns the complete transaction, customer, employee, inventory and credit-sale
-history for the user's scope. The client computes totals from those arrays, so the payload grows
-with company history. Only the activity feed is capped (500 rows). Today the payload is small. As
-history accumulates, the right fix is a windowed bootstrap (for example, the last 12 months of
-ledger rows) with on-demand history endpoints, plus client changes to request older data. That is
-a contract change across many screens, so it needs a product decision and its own test pass; it
-was deliberately not made in this audit.
+Transactions are windowed (§ bootstrap window). Customers and inventory still ship in full; see the
+residual note above. Extending the window to them requires server-side aggregates for their totals.
 
 ---
 

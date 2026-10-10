@@ -315,6 +315,12 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
   // isSeededBaselineTxn). Every transaction above it is real live activity and
   // must layer onto the seeded quarter — across sessions, not only in-session.
   const baselineMaxTxnId = useRef<number | null>(null);
+  // Transaction history: /api/init ships a recent window; the complete ledger
+  // is fetched in the background (see `ledger` in the bootstrap payload).
+  // `fullLedgerLoaded` keeps the complete array through routine refreshes so
+  // all-time totals never dip; `ledgerRequestSeq` drops stale responses.
+  const fullLedgerLoaded = useRef(false);
+  const ledgerRequestSeq = useRef(0);
 
   // In-flight refresh dedupe: multiple components calling onChanged ->
   // refreshAllData in one burst used to fan out N identical /api/init
@@ -392,7 +398,24 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
             0
           );
         }
-        setTransactions(txns);
+        const ledgerSeq = ++ledgerRequestSeq.current;
+        if (data.ledger && data.ledger.complete === false) {
+          // Windowed bootstrap: the recent window paints first (only until the
+          // full history has been loaded once), then the complete ledger
+          // replaces it. Every all-time total is computed from the full set.
+          if (!fullLedgerLoaded.current) setTransactions(txns);
+          fetch("/api/init/ledger")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((full) => {
+              if (!full?.success || ledgerRequestSeq.current !== ledgerSeq) return;
+              fullLedgerLoaded.current = true;
+              setTransactions(Array.isArray(full.transactions) ? full.transactions : []);
+            })
+            .catch(() => {});
+        } else {
+          fullLedgerLoaded.current = true;
+          setTransactions(txns);
+        }
         setAiInsights(data.aiInsights || []);
         setScenarios(data.scenarios || []);
         setIntegrations(data.integrations || []);
@@ -521,6 +544,10 @@ export default function GoMinaApp({ loginRegistrationInvite = false }: { loginRe
     setCurrentUser(user);
     setSignedIn(true);
     baselineMaxTxnId.current = null;
+    // New session: forget the previous user's full history and cancel any
+    // in-flight ledger request so it cannot land in the new session.
+    fullLedgerLoaded.current = false;
+    ledgerRequestSeq.current += 1;
     const status = await refreshAllData();
     if (status === "unauthorized") {
       // The login POST succeeded but the very next authenticated call came

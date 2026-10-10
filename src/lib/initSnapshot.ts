@@ -66,6 +66,8 @@ export interface InitReadScope {
   orgIdForSettings: number | null;
   /** Super Admin also gets the platform organization directory. */
   isSuperAdmin: boolean;
+  /** ISO date (YYYY-MM-DD) the transaction window starts at; null ⇒ full history. */
+  ledgerFrom?: string | null;
 }
 
 const ints = (ids: number[]): string =>
@@ -78,6 +80,63 @@ const whereIn = (col: string, ids: number[] | null): string =>
 const orIn = (col: string, ids: number[] | null): string =>
   ids === null ? "" : ` OR ${col} IN (${ints(ids)})`;
 const intLit = (n: number): number => Math.trunc(Number(n)) || 0;
+
+/**
+ * TRANSACTION HISTORY WINDOW (bootstrap only).
+ *
+ * `/api/init` ships the newest `LEDGER_WINDOW_DAYS` of the operational ledger
+ * (by business date). Older rows are NOT removed from the product: the client
+ * fetches the complete ledger from `/api/init/ledger` in the background whenever
+ * `ledger.complete` is false, so every all-time total is still computed from the
+ * full history. The first paint therefore scales with one year of activity,
+ * not with the platform's whole life.
+ *
+ * Seeded notification-baseline rows (TRX-YYYY-1001..1006) are always inside the
+ * window, so the client watermark (`isSeededBaselineTxn`) is identical whether
+ * the array is windowed or complete. The regex MUST match `isSeededBaselineTxn`
+ * in src/lib/financeReport.ts.
+ */
+export const LEDGER_WINDOW_DAYS = 370;
+
+export function ledgerWindowStart(now: Date = new Date()): string {
+  return new Date(now.getTime() - LEDGER_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+}
+
+const SEEDED_BASELINE_TXN_SQL = `"transaction_number" ~ '^TRX-[0-9]{4}-100[1-6]$'`;
+
+/** Live ledger predicate: completed (or legacy NULL-status) rows in scope. */
+function ledgerScopeSql(bids: number[] | null): string {
+  const conds: string[] = [];
+  if (bids !== null) conds.push(`"business_id" IN (${ints(bids)})`);
+  conds.push(`("status" = 'COMPLETED' OR "status" IS NULL)`);
+  return conds.join(" AND ");
+}
+
+function ledgerWindowSql(ledgerFrom: string): string {
+  return `("date" >= '${ledgerFrom}' OR ${SEEDED_BASELINE_TXN_SQL})`;
+}
+
+/** Strips receipt images (kept as a count). Shared by every ledger reader. */
+export function toLedgerTransaction(t: any): any {
+  const { receiptImage, receiptImages, ...rest } = t;
+  const count = Array.isArray(receiptImages) && receiptImages.length > 0
+    ? receiptImages.length
+    : receiptImage
+      ? 1
+      : 0;
+  return { ...rest, receiptCount: count };
+}
+
+/**
+ * Complete (un-windowed) live ledger for a business scope (null ⇒ all).
+ * Same scope and status rules as the bootstrap; used by /api/init/ledger.
+ */
+export async function readFullLedgerTransactions(bids: number[] | null): Promise<any[]> {
+  const result: any = await getPool().query(
+    `SELECT ${selectList(transactions)} FROM "transactions" WHERE ${ledgerScopeSql(bids)}${NEWEST_FIRST}`
+  );
+  return mapRawRows(transactions, result.rows);
+}
 
 function selectList(table: PgTable, opts: { exclude?: string[]; extra?: string[] } = {}): string {
   const cols = getTableColumns(table as any) as Record<string, { name: string }>;
@@ -144,6 +203,8 @@ export interface InitReadResult {
   assets: any[];
   inventory: any[];
   transactions: any[];
+  /** Completeness of `transactions` (windowed vs. full history). */
+  ledger: { windowFrom: string | null; transactionsTotal: number; transactionsLoaded: number; complete: boolean };
   creditSales: any[];
   aiInsights: any[];
   scenarios: any[];
@@ -213,11 +274,11 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
       extra: [`coalesce(jsonb_array_length(case when jsonb_typeof(photos) = 'array' then photos else '[]'::jsonb end), 0) AS "photoCount"`],
     })} FROM "inventory_items"${whereIn("business_id", bids)}${NEWEST_FIRST}`
   );
+  const ledgerFrom = scope.ledgerFrom && /^\d{4}-\d{2}-\d{2}$/.test(scope.ledgerFrom) ? scope.ledgerFrom : null;
   {
-    const trxScope = whereIn("business_id", bids);
-    const trxStatusFilter = `("status" = 'COMPLETED' OR "status" IS NULL)`;
+    const windowCond = ledgerFrom ? ` AND ${ledgerWindowSql(ledgerFrom)}` : "";
     stmts.push(
-      `SELECT ${selectList(transactions)} FROM "transactions"${trxScope ? `${trxScope} AND ${trxStatusFilter}` : ` WHERE ${trxStatusFilter}`}${NEWEST_FIRST}`
+      `SELECT ${selectList(transactions)} FROM "transactions" WHERE ${ledgerScopeSql(bids)}${windowCond}${NEWEST_FIRST}`
     );
   }
   stmts.push(`SELECT ${selectList(creditSales)} FROM "credit_sales"${whereIn("business_id", bids)}${NEWEST_FIRST}`);
@@ -288,6 +349,11 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
       : `SELECT NULL AS "logoHash" WHERE FALSE`
   );
 
+  // Ledger completeness: live rows in total vs. rows inside the window.
+  stmts.push(
+    `SELECT count(*)::int AS "total", count(*) FILTER (WHERE ${ledgerFrom ? ledgerWindowSql(ledgerFrom) : "TRUE"})::int AS "windowed" FROM "transactions" WHERE ${ledgerScopeSql(bids)}`
+  );
+
   const results = (await getPool().query(stmts.join(";\n") + ";")) as unknown as any[];
 
   const [
@@ -295,8 +361,11 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
     inventoryRows, txnRows, creditRows, insightRows, scenarioRows, integrationRows,
     templateRows, entryRows, poultryRows, blockRows, aquaRows, liveRows, restRows,
     elecRows, washRows, hwRows, memberRows, restrictedRows, bizTypeKeyRows, orgRows,
-    directoryRows, logoHashRows,
+    directoryRows, logoHashRows, ledgerCountRows,
   ] = results;
+  const ledgerCounts = (ledgerCountRows.rows as any[])[0] || { total: 0, windowed: 0 };
+  const ledgerTotal = Number(ledgerCounts.total) || 0;
+  const ledgerWindowed = Number(ledgerCounts.windowed) || 0;
 
   const businessLogoHashes = new Map<number, string>();
   for (const r of bizRows.rows as any[]) {
@@ -323,6 +392,12 @@ export async function readInitSnapshot(scope: InitReadScope): Promise<InitReadRe
     // one-time data backfill has run.
     inventory: mapRawRows(inventoryItems, inventoryRows.rows).map((i: any) => normalizeInventoryItem(i)),
     transactions: mapRawRows(transactions, txnRows.rows),
+    ledger: {
+      windowFrom: ledgerFrom,
+      transactionsTotal: ledgerTotal,
+      transactionsLoaded: ledgerWindowed,
+      complete: ledgerWindowed >= ledgerTotal,
+    },
     creditSales: mapRawRows(creditSales, creditRows.rows),
     aiInsights: mapRawRows(aiInsights, insightRows.rows),
     scenarios: mapRawRows(scenarioSimulations, scenarioRows.rows),

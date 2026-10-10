@@ -1,6 +1,6 @@
 import { NextResponse, after } from "next/server";
 import { db } from "@/db";
-import { readInitSnapshot, brandingVersionOf } from "@/lib/initSnapshot";
+import { readInitSnapshot, brandingVersionOf, ledgerWindowStart, toLedgerTransaction } from "@/lib/initSnapshot";
 import { ttlGet, ttlSet } from "@/lib/ttlCache";
 import { getSessionInfo, accessibleBusinessIds, filterByAccess, isFarmAdvisor, advisorSectionsMap } from "@/lib/auth";
 import { canViewSection, anySectionAllowed, farmModuleOfBusiness } from "@/lib/advisorSections";
@@ -213,6 +213,9 @@ export async function GET(request: Request) {
       execMemberOrgs: isExecutive && !me.isSuperAdmin ? (myOrgs.length ? myOrgs : [-1]) : null,
       orgIdForSettings,
       isSuperAdmin: !!me.isSuperAdmin,
+      // Operational ledger ships as a recent window; the client pulls the
+      // complete history from /api/init/ledger when `ledger.complete` is false.
+      ledgerFrom: ledgerWindowStart(),
     });
 
     // ── Scope everything to the user's accessible businesses ────────────
@@ -353,15 +356,9 @@ export async function GET(request: Request) {
       // approval endpoints read the full images server-side on demand. A
       // workspace with 300 photographed receipts used to pay ~80-100 MB of
       // base64 on every login; now it pays a few dozen bytes per row.
-      transactions: filterByAccess(snap.transactions, allowed).map((t: any) => {
-        const { receiptImage, receiptImages, ...rest } = t;
-        const count = Array.isArray(receiptImages) && receiptImages.length > 0
-          ? receiptImages.length
-          : receiptImage
-            ? 1
-            : 0;
-        return { ...rest, receiptCount: count };
-      }),
+      transactions: filterByAccess(snap.transactions, allowed).map(toLedgerTransaction),
+      // Completeness of the transactions array (see initSnapshot LEDGER_WINDOW_DAYS).
+      ledger: { ...snap.ledger },
       aiInsights: (allowed === null
         ? snap.aiInsights
         : snap.aiInsights.filter(
@@ -462,6 +459,7 @@ export async function GET(request: Request) {
       (payload as any).employees = [];
       (payload as any).assets = [];
       (payload as any).transactions = [];
+      (payload as any).ledger = { ...payload.ledger, complete: true };
       (payload as any).scenarios = [];
       (payload as any).integrations = [];
       // Inventory: keep stock LEVELS (feed availability matters to an
